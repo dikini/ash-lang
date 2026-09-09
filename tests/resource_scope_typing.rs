@@ -1002,9 +1002,8 @@ fn immediate_outward_row_escape_labels_the_user_computation_not_its_final_value(
         roots: ModuleRoots::empty(),
     })
     .unwrap_err();
-    let ash::driver::FileFailure::Pipeline(ash::driver::PipelineFailure::Typing(
-        ash::elaborate::TypeError::Source(diagnostic),
-    )) = error
+    let ash::driver::PipelineFailure::Typing(ash::elaborate::TypeError::Source(diagnostic)) =
+        error.pipeline_failure().expect("pipeline failure")
     else {
         panic!("resource escape diagnostic: {error:?}")
     };

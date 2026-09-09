@@ -701,6 +701,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/driver.rs::ObservationValue._heap", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation, Shared),
     kind_site!("src/driver.rs::ObservationValue.value", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation, Shared),
     kind_site!("src/driver.rs::PipelineFailure.Typing.0", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation),
+    kind_site!("src/driver.rs::PipelineDiagnostic.failure", FieldTransientCarrierRetentionPreservedCarrierPipelineObservationPipelineTypeObservation),
     kind_site!("src/elaborate.rs::$fn_collect_unsolved_inference::Task.Slice.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_collect_unsolved_inference::Task.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_compare_concrete_types::Task.Pair.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
@@ -5671,6 +5672,9 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "MethodEvidenceProducer"
                     | "ScopeRequirement"
                     | "ScopeRequirementKey"
+                    // Diagnostic causes for lexical scope metadata, not interface machinery.
+                    | "MissingCaptureRequirement"
+                    | "MissingTypeRequirementSlot"
                     | "ScopeRequirements"
                     | "authenticated_method_evidence"
                     | "enclosing_implementation_replacements"

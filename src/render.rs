@@ -2,6 +2,11 @@
 
 use std::fmt::Write;
 
+mod runtime;
+pub use runtime::{
+    PreparedRuntimeMessages, write_runtime_diagnostic, write_runtime_human, write_runtime_short,
+};
+
 use crate::{
     diagnostic::{Diagnostic, compare_source_spans},
     driver::{FileFailure, Observation, PipelineFailure, SyntaxFailure},
@@ -46,6 +51,140 @@ pub fn write_runtime_report(
     writer.flush()
 }
 
+/// Writes one locale-independent JSON v1 runtime diagnostic.
+///
+/// This path reads only the existing fixed-size failure data. It constructs no
+/// owned JSON tree, allocates no storage and invokes no catalogue formatter.
+/// The writer supplies its own storage policy. Unknown amounts are omitted;
+/// teardown facts remain distinct from the original failure.
+///
+/// # Errors
+/// Stops at the first write or flush failure, including `Interrupted`, without
+/// retrying or attempting to report the reporting failure.
+pub fn write_runtime_json(
+    writer: &mut impl std::io::Write,
+    failure: crate::eval::RuntimeFailure,
+) -> std::io::Result<()> {
+    use crate::eval::{CleanupStatus, RuntimeFailure};
+    fragment(writer, b"{\"schema_version\":1,\"reason\":")?;
+    runtime_json_string(writer, failure.reason_code())?;
+    fragment(
+        writer,
+        b",\"responsibility\":\"runtime\",\"labels\":[],\"facts\":[",
+    )?;
+    let cleanup = match failure {
+        RuntimeFailure::Report(report) => report.cleanup,
+        _ => CleanupStatus::Unknown,
+    };
+    fragment(
+        writer,
+        b"{\"name\":\"cleanup\",\"kind\":\"cleanup-status\",\"value\":",
+    )?;
+    runtime_json_string(writer, cleanup.label())?;
+    fragment(writer, b"}")?;
+    if let RuntimeFailure::Report(report) = failure {
+        if let Some(resource) = report.primary.resource() {
+            runtime_json_resource(writer, resource, "")?;
+        }
+        if let Some(resource) = report.teardown {
+            runtime_json_resource(writer, resource, "teardown_")?;
+        }
+    }
+    fragment(writer, b"]}\n")?;
+    writer.flush()
+}
+
+fn runtime_json_resource(
+    writer: &mut impl std::io::Write,
+    failure: RuntimeResourceFailure,
+    prefix: &'static str,
+) -> std::io::Result<()> {
+    for (name, kind, value) in [
+        ("cause", "reason", failure.cause.reason_code()),
+        ("phase", "runtime-phase", failure.phase.label()),
+        ("resource", "runtime-resource", failure.resource.label()),
+    ] {
+        runtime_json_fact_start(writer, prefix, name, kind)?;
+        runtime_json_string(writer, value)?;
+        fragment(writer, b"}")?;
+    }
+    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+        runtime_json_fact_start(writer, prefix, "underlying_cause", "resource-cause")?;
+        runtime_json_string(writer, "undetermined")?;
+        fragment(writer, b"}")?;
+    }
+    for (name, amount) in [
+        ("requested", failure.requested),
+        ("available", failure.available),
+    ] {
+        if let Some(amount) = amount {
+            runtime_json_fact_start(writer, prefix, name, "integer")?;
+            decimal(writer, amount)?;
+            fragment(writer, b"}")?;
+        }
+    }
+    Ok(())
+}
+
+fn runtime_json_fact_start(
+    writer: &mut impl std::io::Write,
+    prefix: &'static str,
+    name: &'static str,
+    kind: &'static str,
+) -> std::io::Result<()> {
+    // Prefixes and names are private fixed ASCII identifiers, not user text.
+    fragment(writer, b",{\"name\":\"")?;
+    fragment(writer, prefix.as_bytes())?;
+    fragment(writer, name.as_bytes())?;
+    fragment(writer, b"\",\"kind\":")?;
+    runtime_json_string(writer, kind)?;
+    fragment(writer, b",\"value\":")
+}
+
+fn runtime_json_string(writer: &mut impl std::io::Write, value: &str) -> std::io::Result<()> {
+    fragment(writer, b"\"")?;
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if byte < 0x20 || byte == b'"' || byte == b'\\' {
+            fragment(writer, &bytes[start..index])?;
+            if byte < 0x20 {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                fragment(
+                    writer,
+                    &[
+                        b'\\',
+                        b'u',
+                        b'0',
+                        b'0',
+                        HEX[(byte >> 4) as usize],
+                        HEX[(byte & 15) as usize],
+                    ],
+                )?;
+            } else {
+                fragment(writer, &[b'\\', byte])?;
+            }
+            start = index + 1;
+        }
+    }
+    fragment(writer, &bytes[start..])?;
+    fragment(writer, b"\"")
+}
+
+fn decimal(writer: &mut impl std::io::Write, mut amount: usize) -> std::io::Result<()> {
+    let mut digits = [0; usize::BITS as usize];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (amount % 10) as u8;
+        amount /= 10;
+        if amount == 0 {
+            break;
+        }
+    }
+    fragment(writer, &digits[start..])
+}
+
 fn resource_details(
     writer: &mut impl std::io::Write,
     failure: RuntimeResourceFailure,
@@ -63,23 +202,30 @@ fn resource_details(
         (b"requested: ".as_slice(), failure.requested),
         (b"available: ".as_slice(), failure.available),
     ] {
-        if let Some(mut amount) = amount {
+        if let Some(amount) = amount {
             fragment(writer, label)?;
-            let mut digits = [0; usize::BITS as usize];
-            let mut start = digits.len();
-            loop {
-                start -= 1;
-                digits[start] = b'0' + (amount % 10) as u8;
-                amount /= 10;
-                if amount == 0 {
-                    break;
-                }
-            }
-            fragment(writer, &digits[start..])?;
+            decimal(writer, amount)?;
             fragment(writer, b"\n")?;
         }
     }
     Ok(())
+}
+
+/// Gives formatting and serialization the same no-retry write policy as runtime reporting.
+pub(crate) struct DiagnosticWriter<'a, W>(pub(crate) &'a mut W);
+
+impl<W: std::io::Write> std::io::Write for DiagnosticWriter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.write(bytes)
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        fragment(self.0, bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
 }
 
 fn fragment(writer: &mut impl std::io::Write, mut bytes: &[u8]) -> std::io::Result<()> {
@@ -109,7 +255,7 @@ pub fn observation(observation: &Observation) -> String {
 #[must_use]
 pub fn file_failure(failure: &FileFailure) -> String {
     let mut output = match failure {
-        FileFailure::Graph(error) => graph_failure(error),
+        FileFailure::Graph(error) => graph_failure(error.failure()),
         FileFailure::Read { path, kind } => {
             format!("input.read\n{}: {kind}", path.display())
         }
@@ -117,7 +263,7 @@ pub fn file_failure(failure: &FileFailure) -> String {
             format!("input.invalid-utf8\n{} is not UTF-8", path.display())
         }
         FileFailure::Source(error) => format!("input.source-model\n{error}"),
-        FileFailure::Pipeline(failure) => pipeline_failure(failure),
+        FileFailure::Pipeline(context) => pipeline_failure(context.failure()),
     };
     output.push('\n');
     output
@@ -186,6 +332,7 @@ fn graph_failure(error: &LoadGraphError) -> String {
             path,
             error,
             import_span,
+            ..
         } => {
             let mut output = String::from("input.source-model");
             append_optional_import_primary(
@@ -203,7 +350,7 @@ fn graph_failure(error: &LoadGraphError) -> String {
             append_detail(&mut output, "path", failure.source.display_path());
             output
         }
-        LoadGraphError::Projection { source, error } => {
+        LoadGraphError::Projection { source, error, .. } => {
             let mut output = projection_failure(*error);
             append_detail(&mut output, "path", source.display_path());
             output
@@ -250,14 +397,7 @@ const fn module_primary_message(reason: ModuleReason) -> &'static str {
 }
 
 const fn module_resource(resource: ModuleResource) -> &'static str {
-    match resource {
-        ModuleResource::GraphIdentities => "graph-identities",
-        ModuleResource::Sources => "sources",
-        ModuleResource::Edges => "edges",
-        ModuleResource::PathSegments => "path-segments",
-        ModuleResource::OwnerFacts => "owner-facts",
-        ModuleResource::PendingWork => "pending-work",
-    }
+    resource.diagnostic_name()
 }
 
 fn append_optional_import_primary(output: &mut String, span: Option<Span>, message: &str) {

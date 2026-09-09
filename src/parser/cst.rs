@@ -53,7 +53,7 @@ pub enum InternalReason {
     UnexpectedFinish,
     /// One or more start events were not finished.
     UnclosedNode,
-    /// The stream produced no root or more than one root.
+    /// The stream produced missing/multiple roots or content outside a root.
     InvalidRootCount,
     /// A token index was outside the retained token stream.
     TokenOutOfRange,
@@ -67,8 +67,25 @@ pub enum InternalReason {
     UnexpectedShape,
     /// A projected span attempted to join different source files.
     ForeignSpan,
-    /// A projected span could not be represented by the source model.
+    /// Source spans or retained end-of-input markers are inconsistent.
     InvalidSpan,
+}
+
+impl InternalReason {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::UnexpectedFinish => "unexpected-finish",
+            Self::UnclosedNode => "unclosed-node",
+            Self::InvalidRootCount => "invalid-root-count",
+            Self::TokenOutOfRange => "token-out-of-range",
+            Self::DuplicateToken => "duplicate-token",
+            Self::MissingToken => "missing-token",
+            Self::TokenOutOfOrder => "token-out-of-order",
+            Self::UnexpectedShape => "unexpected-shape",
+            Self::ForeignSpan => "foreign-span",
+            Self::InvalidSpan => "invalid-span",
+        }
+    }
 }
 
 /// The parser's lossless token boundary and error-bearing tree.

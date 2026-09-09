@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    diagnostic::{Diagnostic, SourceLabel},
+    diagnostic::SourceLabel,
     elaborate::{TypeError, check_module},
     interface::InterfaceReason,
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
@@ -77,12 +77,62 @@ fn check_graph(graph: &ModuleGraph) -> Result<Vec<CheckedModule>, TypeError> {
             .collect::<Vec<_>>();
         let resolved = resolve_module(module, &dependencies)
             .expect("the diagnostic fixture should resolve before checking");
-        checked.push(check_module(resolved)?);
+        let result = check_module(resolved);
+        if let Err(TypeError::Interface(error)) = &result
+            && matches!(
+                error.reason,
+                InterfaceReason::Unsatisfied | InterfaceReason::Ambiguous | InterfaceReason::Cycle
+            )
+        {
+            use ash::{
+                message::{Catalogue, Locale},
+                presentation::{compile_interface_diagnostic, write_human, write_json},
+            };
+            let sources: Vec<_> = graph.modules().iter().map(LoadedModule::source).collect();
+            let view = compile_interface_diagnostic(error, &sources).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(
+                json["labels"].as_array().unwrap().len(),
+                1 + error.related.len()
+            );
+            for (label, original) in json["labels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .skip(1)
+                .zip(&error.related)
+            {
+                let expected = match original.message() {
+                    "this declaration introduced the interface obligation" => {
+                        "obligation_declaration"
+                    }
+                    "this import made the declaration available" => "declaration_import",
+                    "this interface declaration participates in the failing selection" => {
+                        "selection_interface"
+                    }
+                    "selection followed this available implementation" => "selected_implementation",
+                    "this implementation method supplies the selected evidence" => {
+                        "selected_method"
+                    }
+                    "this import made the selected implementation available" => {
+                        "implementation_import"
+                    }
+                    other => panic!("unexpected fixture cause: {other}"),
+                };
+                assert_eq!(label["relationship"], expected);
+            }
+        }
+        checked.push(result?);
     }
     Ok(checked)
 }
 
-fn interface_diagnostic(error: TypeError) -> Box<Diagnostic<InterfaceReason>> {
+fn interface_diagnostic(error: TypeError) -> Box<ash::interface::InterfaceDiagnostic> {
     match error {
         TypeError::Interface(diagnostic) => diagnostic,
         other => panic!("the fixture should retain an interface diagnostic: {other:?}"),

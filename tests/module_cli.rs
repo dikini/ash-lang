@@ -7,7 +7,7 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{PipelineFailure, RunConfiguration, run_path},
     elaborate::{TypeError, TypeReason},
     interface::InterfaceReason,
     kind::{KindFailure, KindReason},
@@ -65,9 +65,19 @@ fn root_argument(name: &str, path: &Path) -> OsString {
 
 fn ash(arguments: impl IntoIterator<Item = OsString>) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ash"))
+        .env("LC_ALL", "C")
         .args(arguments)
         .output()
         .expect("the Ash executable should start")
+}
+
+fn human_diagnostic(failure: &ash::driver::FileFailure) -> String {
+    let catalogue = ash::message::Catalogue::new(ash::message::Locale::English).unwrap();
+    let mut output = Vec::new();
+    for diagnostic in ash::presentation::compile_file_diagnostics(failure).unwrap() {
+        ash::presentation::write_human(&mut output, &diagnostic, &catalogue).unwrap();
+    }
+    String::from_utf8(output).unwrap()
 }
 
 fn canonicalize_source_ids(rendered: &str) -> String {
@@ -239,7 +249,7 @@ fn same_spelled_imported_effects_are_handled_independently() {
 fn malformed_root_options_are_usage_failures() {
     let tree = TempTree::create();
     let entry = tree.write("entry.ash", "main : Unit -> Unit\nmain value = value\n");
-    let usage = b"usage: ash [--root name=path]... <entry-file>\n";
+    let usage = b"Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Options must precede the entry file; format and locale may each be supplied only once.\nreason: invocation.usage\n";
 
     for arguments in [
         vec![OsString::from("--root")],
@@ -278,7 +288,7 @@ fn multiple_entry_paths_are_usage_failures() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         output.stderr,
-        b"usage: ash [--root name=path]... <entry-file>\n"
+        b"Expected: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Options must precede the entry file; format and locale may each be supplied only once.\nreason: invocation.usage\n"
     );
 }
 
@@ -299,7 +309,10 @@ fn duplicate_root_names_are_invocation_failures() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"invocation.duplicate-root\nroot: std\n");
+    assert_eq!(
+        output.stderr,
+        b"The module root `std` is configured more than once.\nreason: invocation.duplicate-root\n"
+    );
 }
 
 #[test]
@@ -316,7 +329,7 @@ fn invalid_root_names_are_invocation_failures() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"invocation.invalid-root-name\nroot: Std\n");
+    assert_eq!(output.stderr, b"`Std` is not a valid lowercase Ash identifier for a module root.\nreason: invocation.invalid-root-name\n");
 }
 
 #[test]
@@ -336,7 +349,7 @@ fn unavailable_root_paths_are_invocation_failures() {
     assert_eq!(
         output.stderr,
         format!(
-            "invocation.root-unavailable\npath: {}\nroot: std\nio: NotFound\n",
+            "Cannot use `{}` for module root `std`: the file or directory does not exist.\nreason: invocation.root-unavailable\n",
             unavailable.display()
         )
         .as_bytes()
@@ -360,9 +373,9 @@ fn source_caused_module_failures_use_status_one() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
-    assert!(stderr.starts_with("module.not-found\nprimary: source "));
-    assert!(stderr.contains(": this import target does not exist\n"));
-    assert!(stderr.ends_with(&format!("path: {}\n", tree.path("missing.ash").display())));
+    assert!(stderr.ends_with("reason: module.not-found\n"));
+    assert!(stderr.contains("The failure occurred while processing this import."));
+    assert!(stderr.contains(&format!("`{}`", tree.path("missing.ash").display())));
 }
 
 #[test]
@@ -384,9 +397,9 @@ fn imported_input_failures_retain_the_import_cause_and_target_path() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
-    assert!(stderr.starts_with("input.invalid-utf8\nprimary: source "));
-    assert!(stderr.contains(": this import selected the invalid UTF-8 source\n"));
-    assert!(stderr.ends_with(&format!("path: {}\n", invalid.display())));
+    assert!(stderr.ends_with("reason: input.invalid-utf8\n"));
+    assert!(stderr.contains("The failure occurred while processing this import."));
+    assert!(stderr.contains(&format!("`{}`", invalid.display())));
 }
 
 #[test]
@@ -398,16 +411,9 @@ fn entry_contract_failures_retain_a_causal_source_label() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(
-        output
-            .stderr
-            .starts_with(b"entry.missing-main\nprimary: source ")
-    );
-    assert!(
-        output
-            .stderr
-            .ends_with(b": this entry module declares no local main\n")
-    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.ends_with("reason: entry.missing-main\n"));
+    assert!(stderr.contains("This is the entry module."));
 }
 
 #[test]
@@ -426,13 +432,13 @@ fn cli_renders_the_structured_interface_diagnostic_without_reclassifying_it() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the interface obligation should remain unsatisfied");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
-        &structured
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        structured.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the programmatic boundary should retain the structured interface diagnostic");
     };
     assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
-    let expected = format!("{}\n", diagnostic.render_plain());
+    let expected = human_diagnostic(&structured);
 
     let output = ash([entry.into_os_string()]);
 
@@ -494,8 +500,8 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("an absent method binder list should retain predecessor rejection");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(absent))) =
-        &absent_failure
+    let PipelineFailure::Typing(TypeError::Interface(absent)) =
+        absent_failure.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the absent-list failure should remain an interface diagnostic");
     };
@@ -523,7 +529,7 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
         absent.related[0].message(),
         "the interface parameter is declared here"
     );
-    let absent_expected = format!("{}\n", absent.render_plain());
+    let absent_expected = human_diagnostic(&absent_failure);
     let absent_output = ash([absent_entry.into_os_string()]);
     assert_eq!(absent_output.status.code(), Some(1));
     assert!(absent_output.stdout.is_empty());
@@ -548,8 +554,9 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("a method-local recursive self-use must remain monomorphic");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(recursive))) =
-        &recursive_failure
+    let PipelineFailure::Typing(TypeError::Source(recursive)) = recursive_failure
+        .pipeline_failure()
+        .expect("pipeline failure")
     else {
         panic!("method-local polymorphic recursion should retain a source diagnostic");
     };
@@ -580,7 +587,7 @@ fn method_parameter_cli_diagnostics_preserve_library_structure_exactly() {
             label.message() == "this recursive function is checked monomorphically"
         })
     );
-    let recursive_expected = format!("{}\n", recursive.render_plain());
+    let recursive_expected = human_diagnostic(&recursive_failure);
     let recursive_output = ash([recursive_entry.into_os_string()]);
     assert_eq!(recursive_output.status.code(), Some(1));
     assert!(recursive_output.stdout.is_empty());
@@ -628,14 +635,14 @@ fn cli_renders_a_selected_facade_prerequisite_route_without_reclassifying_it() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the selected implementation prerequisite should remain unsatisfied");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) =
-        &structured
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        structured.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the programmatic boundary should retain the facade prerequisite diagnostic");
     };
     assert_eq!(diagnostic.reason, InterfaceReason::Unsatisfied);
     assert_eq!(diagnostic.related.len(), 8);
-    let expected = format!("{}\n", diagnostic.render_plain());
+    let expected = human_diagnostic(&structured);
 
     let output = ash([entry.into_os_string()]);
 
@@ -710,8 +717,8 @@ fn cli_renders_each_structured_kind_reason_without_reclassifying_it() {
             roots: ModuleRoots::empty(),
         })
         .expect_err("the fixture should fail during kind checking");
-        let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(diagnostic))) =
-            &structured
+        let PipelineFailure::Kind(KindFailure::Source(diagnostic)) =
+            structured.pipeline_failure().expect("pipeline failure")
         else {
             panic!(
                 "{} should retain the structured Kind failure, found {structured:?}",
@@ -783,7 +790,7 @@ fn cli_renders_each_structured_kind_reason_without_reclassifying_it() {
             assert_eq!(diagnostic.expected_kind(), Some(&expected_kind));
             assert_eq!(diagnostic.found_kind(), Some(&found_kind));
         }
-        let expected = format!("{}\n", diagnostic.render_plain());
+        let expected = human_diagnostic(&structured);
 
         let output = ash([entry.into_os_string()]);
         assert_eq!(output.status.code(), Some(1), "case: {}", case.name);

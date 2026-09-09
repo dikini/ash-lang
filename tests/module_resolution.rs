@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{PipelineFailure, RunConfiguration, run_path},
     module::{LoadedModule, ModuleGraph, ModuleRoots, load_module_graph},
     resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
     resolved::{Binder, ResolvedDefinition, ResolvedDefinitionKind, ResolvedModule},
@@ -13,6 +13,139 @@ use ash::{
 };
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn qualified_non_effect_retains_the_selected_name() {
+    use ash::presentation::{compile_resolve_diagnostic, write_json};
+    let tree = TempTree::create();
+    tree.write("library.ash", "pub type Thing = Thing\n");
+    let failure = run_path(RunConfiguration {
+        entry: tree.write(
+            "entry.ash",
+            "import library as Lib\nprobe : Unit -> Unit ! {Lib.Thing}\nprobe () = ()\n",
+        ),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, ResolveReason::EffectKind);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_resolve_diagnostic(error, &sources).unwrap();
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["value"], "Thing");
+    assert_eq!(json["facts"][1]["value"], "effect-required");
+}
+
+#[test]
+fn inaccessible_names_render_access_causes_and_cross_file_declarations() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    for (entry, name, reason, access, english, related) in [
+        (
+            "import library as Lib\nmain : Unit -> Int\nmain () = Lib.hidden ()\n",
+            "hidden",
+            ResolveReason::UnavailableExport,
+            "private",
+            "The declaration `hidden` is private to its defining module.",
+            true,
+        ),
+        (
+            "import library as Lib\nmain : Unit -> Int\nmain () = Lib.absent ()\n",
+            "absent",
+            ResolveReason::UnavailableExport,
+            "not-exported",
+            "No imported declaration named `absent` is available in this namespace.",
+            false,
+        ),
+        (
+            "main : Unit -> Int\nmain () = Missing.absent ()\n",
+            "Missing",
+            ResolveReason::UnavailableExport,
+            "unknown-module-alias",
+            "No module alias named `Missing` is in scope.",
+            false,
+        ),
+        (
+            "import library as Lib\nmain : Unit -> Lib.Box\nmain () = Lib.Box 1\n",
+            "Box",
+            ResolveReason::OpaqueConstructor,
+            "opaque-constructor",
+            "The constructor `Box` belongs to an opaque type and is not accessible here.",
+            true,
+        ),
+        (
+            "import library (Box as Renamed)\nmain : Unit -> Renamed\nmain () = Renamed 1\n",
+            "Renamed",
+            ResolveReason::OpaqueConstructor,
+            "opaque-constructor",
+            "The constructor `Renamed` belongs to an opaque type and is not accessible here.",
+            true,
+        ),
+    ] {
+        let tree = TempTree::create();
+        tree.write(
+            "library.ash",
+            "pub opaque type Box = Box(Int)\nhidden : Unit -> Int\nhidden () = 1\n",
+        );
+        let failure = run_path(RunConfiguration {
+            entry: tree.write("entry.ash", entry),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+            if related {
+                assert!(output.contains("library.ash"));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        assert_eq!(json["facts"][1]["name"], "access");
+        assert_eq!(json["facts"][1]["value"], access);
+        if related {
+            assert_eq!(
+                json["labels"][1]["relationship"],
+                "inaccessible_declaration"
+            );
+            // The local spelling may be an alias, not the declaration's own name.
+            assert!(json["labels"][1]["facts"].as_array().unwrap().is_empty());
+            assert!(
+                json["labels"][1]["path"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("library.ash")
+            );
+            let entry_sources: Vec<_> = sources
+                .iter()
+                .copied()
+                .filter(|source| source.id() == error.primary.span().source())
+                .collect();
+            assert!(compile_resolve_diagnostic(error, &entry_sources).is_err());
+        } else {
+            assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+        }
+    }
+}
 
 struct TempTree(PathBuf);
 
@@ -291,7 +424,8 @@ fn repeated_summary_imports_share_one_graph_type_work_budget() {
     })
     .expect_err("repeated dependency-summary retention must share graph type work");
 
-    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+    let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("graph type work should remain owned by resolution: {failure:?}");
     };
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
@@ -326,7 +460,8 @@ fn repeated_targeted_nominal_metadata_shares_one_graph_type_work_budget() {
     })
     .expect_err("repeated nominal metadata retention must share graph type work");
 
-    let FileFailure::Pipeline(PipelineFailure::Resolution(error)) = failure else {
+    let PipelineFailure::Resolution(error) = failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("graph type work should remain owned by resolution: {failure:?}");
     };
     assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);

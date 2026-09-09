@@ -7,7 +7,7 @@ use std::{
 mod support;
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
+    driver::{PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason, check_module},
     interface::InterfaceReason,
     kind::{KindExpectation, KindFailure, KindReason},
@@ -148,6 +148,625 @@ fn failure(name: &str, text: &str) -> PipelineFailure {
     run_module(name, text).expect_err("diagnostic fixture should be rejected")
 }
 
+#[test]
+fn unresolved_term_retains_its_spelling_independently_of_legacy_prose() {
+    let PipelineFailure::Resolution(error) = failure("unknown-term.ash", R001) else {
+        panic!("the missing term must fail during resolution");
+    };
+    assert_eq!(error.reason, ResolveReason::UnknownName);
+    assert_eq!(error.found.as_deref(), Some("missing"));
+}
+
+#[test]
+fn unknown_name_presentation_distinguishes_terms_from_effect_operations() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, scope, english, bulgarian) in [
+        (
+            R001,
+            "term",
+            "No term named `missing` is in scope.",
+            "Няма име `missing` за стойност в текущия обхват.",
+        ),
+        (
+            "effect E {\nrun : Unit -> Unit\n}\nprobe : Unit -> Unit ! {E}\nprobe () = perform E.missing ()\n",
+            "effect-operation",
+            "The selected effect declares no operation named `missing`.",
+            "Избраният ефект не декларира операция с име `missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("unknown.ash", text);
+        let ResolveModuleError::Resolution(error) =
+            resolve_module(fixture.loaded(), &[]).unwrap_err()
+        else {
+            panic!("expected resolution failure");
+        };
+        assert_eq!(error.found.as_deref(), Some("missing"));
+        let diagnostic = compile_resolve_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for (locale, expected) in [(Locale::English, english), (Locale::Bulgarian, bulgarian)] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "resolve.unknown-name");
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([
+                {"name":"name", "kind":"identifier", "value":"missing"},
+                {"name":"lookup_scope", "kind":"lookup-scope", "value":scope},
+            ])
+        );
+        assert_eq!(json["labels"][0]["relationship"], "unresolved_name");
+    }
+}
+
+#[test]
+fn unknown_type_presentation_retains_the_actual_parameter_scope() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, scope, en, bg) in [
+        (
+            "type Wrapped<A> = Wrapped(Missing)\n",
+            "type",
+            "No type named `Missing` is in scope.",
+            "Няма тип с име `Missing` в текущия обхват.",
+        ),
+        (
+            "probe<A> : A -> Unit ! {| Missing}\nprobe value = ()\n",
+            "effect-row-parameter",
+            "No effect-row parameter named `Missing` is in scope.",
+            "Няма параметър за ред от ефекти с име `Missing` в текущия обхват.",
+        ),
+        (
+            "fn probe(value : Unit) -> Unit ! {| Missing} {\n()\n}\n",
+            "effect-row-parameter",
+            "No effect-row parameter named `Missing` is in scope.",
+            "Няма параметър за ред от ефекти с име `Missing` в текущия обхват.",
+        ),
+        (
+            "interface Relation<A, B> where Missing -> B {\nrelate : A -> B\n}\n",
+            "interface-parameter",
+            "The owning interface has no parameter named `Missing`.",
+            "Интерфейсът собственик няма параметър с име `Missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("unknown-type.ash", text);
+        let ResolveModuleError::Resolution(error) =
+            resolve_module(fixture.loaded(), &[]).unwrap_err()
+        else {
+            panic!("expected resolution failure");
+        };
+        assert_eq!(error.reason, ResolveReason::UnknownType);
+        let diagnostic = compile_resolve_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for (locale, expected) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([
+                {"name":"name", "kind":"identifier", "value":"Missing"},
+                {"name":"lookup_scope", "kind":"lookup-scope", "value":scope},
+            ])
+        );
+    }
+}
+
+#[test]
+fn remaining_lookup_scopes_render_from_driver_retained_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, scope, english) in [
+        (
+            "main : Unit -> Int\nmain () = Missing\n",
+            ResolveReason::UnknownConstructor,
+            "constructor",
+            "No constructor named `Missing` is in scope.",
+        ),
+        (
+            "impl Missing<Int> {\n}\n",
+            ResolveReason::UnknownInterface,
+            "interface",
+            "No interface named `Missing` is in scope.",
+        ),
+        (
+            "probe : Unit -> Unit ! {Missing}\nprobe () = ()\n",
+            ResolveReason::UnknownEffect,
+            "effect",
+            "No effect named `Missing` is in scope.",
+        ),
+        (
+            "import @builtin.cell as Cell\nprobe : Unit -> Unit ! {Cell.Missing}\nprobe () = ()\n",
+            ResolveReason::UnknownEffect,
+            "exported-effect",
+            "The selected module exports no effect named `Missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("lookup.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected resolution failure: {failure:?}");
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let text = String::from_utf8(output).unwrap();
+            if locale == Locale::English {
+                assert!(text.contains(english));
+            } else {
+                assert!(text.contains("`Missing`"));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], "Missing");
+        assert_eq!(json["facts"][1]["value"], scope);
+    }
+}
+
+#[test]
+fn duplicate_declarations_render_names_and_original_locations() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    for (text, reason, name, english) in [
+        (
+            R002,
+            ResolveReason::DuplicateGlobal,
+            "value",
+            "The name `value` is already declared in this scope.",
+        ),
+        (
+            "effect Read {\nread : Unit -> Int\nread : Unit -> Int\n}\n",
+            ResolveReason::DuplicateGlobal,
+            "read",
+            "The name `read` is already declared in this scope.",
+        ),
+        (
+            "type Thing = First\ntype Thing = Second\n",
+            ResolveReason::DuplicateType,
+            "Thing",
+            "The name `Thing` is already used by a type, interface, or effect.",
+        ),
+        (
+            "type Equal = Equal\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            ResolveReason::DuplicateType,
+            "Equal",
+            "The name `Equal` is already used by a type, interface, or effect.",
+        ),
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\nequal : Unit -> Bool\nequal () = true\n",
+            ResolveReason::DuplicateGlobal,
+            "equal",
+            "The name `equal` is already declared in this scope.",
+        ),
+        (
+            "equal : Unit -> Bool\nequal () = true\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            ResolveReason::DuplicateGlobal,
+            "equal",
+            "The name `equal` is already declared in this scope.",
+        ),
+        (
+            "type One = Same\ntype Two = Same\n",
+            ResolveReason::DuplicateConstructor,
+            "Same",
+            "The constructor `Same` is already declared.",
+        ),
+        (
+            "import @builtin.cell as Cell\nimport @builtin.cell as Cell\n",
+            ResolveReason::DuplicateModuleAlias,
+            "Cell",
+            "The module alias `Cell` is already bound.",
+        ),
+        (
+            "type Pair<A, A> = Pair(Int, Int)\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A, A> {\nbad : A -> A\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A> {\nbad<A> : A -> A\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A> {\nbad<B, B> : (A, B) -> B\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "B",
+            "The type parameter `B` is already declared in this scope.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n",
+            ResolveReason::DuplicatePatternBinder,
+            "value",
+            "The pattern binds `value` more than once.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = {\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n",
+            ResolveReason::DuplicateRecursiveMember,
+            "same",
+            "The recursive group defines `same` more than once.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("duplicate.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected resolution failure: {failure:?}");
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+                assert!(output.contains("First declaration of this name."));
+            } else {
+                assert!(output.contains("Първа декларация на това име."));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), error.related.len() + 1);
+        assert_eq!(labels[0]["relationship"], "duplicate_name");
+        assert_eq!(labels[1]["relationship"], "first_declaration");
+        for (rendered, original) in labels
+            .iter()
+            .zip(std::iter::once(&error.primary).chain(&error.related))
+        {
+            assert_eq!(rendered["byte_start"], original.span().range().start());
+            assert_eq!(rendered["byte_end"], original.span().range().end());
+            assert_eq!(rendered["facts"][0]["value"], name);
+        }
+        if labels.len() == 3 {
+            assert_eq!(labels[2]["relationship"], "first_definition");
+        }
+        assert!(compile_resolve_diagnostic(error, &[]).is_err());
+    }
+}
+
+#[test]
+fn declaration_name_requirements_render_retained_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    for (text, reason, name, expected, english) in [
+        (
+            "value : Unit -> Int\nother () = 1\n",
+            ResolveReason::EquationNameMismatch,
+            "other",
+            Some("value"),
+            "The equation is named `other`, but its signature declares `value`. Rename the equation to `value`.",
+        ),
+        (
+            "newtype Wrapper = Other(Int)\n",
+            ResolveReason::NewtypeConstructorName,
+            "Other",
+            Some("Wrapper"),
+            "The constructor is named `Other`, but this newtype requires `Wrapper`.",
+        ),
+        (
+            "interface Bad<A> {\nbad<B, C> : (A, B) -> B\n}\n",
+            ResolveReason::UnusedTypeParameter,
+            "C",
+            None,
+            "The explicit type parameter `C` is not used in the declaration header.",
+        ),
+        (
+            "import @builtin.cell as Cell\ntype Cell = Make\n",
+            ResolveReason::ImportConflict,
+            "Cell",
+            None,
+            "The name `Cell` conflicts with a binding already in scope for this file.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("name-requirement.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        assert_eq!(error.expected.as_deref(), expected);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+            if let Some(expected) = expected {
+                assert!(output.contains(&format!("`{expected}`")));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
+        if let Some(expected) = expected {
+            assert_eq!(json["facts"][1]["name"], "expected_name");
+            assert_eq!(json["facts"][1]["value"], expected);
+            assert_eq!(
+                json["labels"][1]["relationship"],
+                "required_name_declaration"
+            );
+            assert_eq!(json["labels"][1]["facts"][0]["value"], expected);
+        }
+    }
+}
+
+#[test]
+fn resolver_name_roles_have_distinct_messages_and_machine_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, name, usage, english) in [
+        (
+            "interface Marker<A> {\nmark : A -> Bool\n}\ntype Bad = Bad(Marker)\n",
+            ResolveReason::TypeKind,
+            "Marker",
+            "interface-as-type",
+            "The interface `Marker` cannot be used as a value type.",
+        ),
+        (
+            "type Thing = Thing\nimpl Thing<Int> {\n}\n",
+            ResolveReason::InterfaceKind,
+            "Thing",
+            "interface-required",
+            "The name `Thing` does not refer to an interface.",
+        ),
+        (
+            "type Thing = Thing\nprobe : Unit -> Unit ! {Thing}\nprobe () = ()\n",
+            ResolveReason::EffectKind,
+            "Thing",
+            "effect-required",
+            "The name `Thing` does not refer to an effect.",
+        ),
+        (
+            "probe : R -> Unit ! {| R}\nprobe value = ()\n",
+            ResolveReason::TypeKind,
+            "R",
+            "mixed-type-and-row-tail",
+            "The parameter `R` is used both as a type and as an effect-row tail; these require different kinds.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("name-role.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        assert_eq!(json["facts"][1]["name"], "name_use");
+        assert_eq!(json["facts"][1]["value"], usage);
+        assert_eq!(json["labels"][0]["relationship"], "incompatible_name_role");
+    }
+}
+
+#[test]
+fn resolver_effect_restrictions_render_the_actual_operation_and_import() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, relationship, fact, english) in [
+        (
+            "effect Bad {\nop : Int\n}\n",
+            ResolveReason::EffectOperationShape,
+            "effect_operation_signature",
+            None,
+            "An effect operation needs an outer function arrow without an explicit effect row.",
+        ),
+        (
+            "effect Bad {\nop : Unit -> Int ! {}\n}\n",
+            ResolveReason::EffectOperationShape,
+            "effect_operation_signature",
+            None,
+            "An effect operation needs an outer function arrow without an explicit effect row.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resume 1\n",
+            ResolveReason::ResumeOutsideClause,
+            "continuation_use",
+            Some(("operation", "resume")),
+            "`resume` is only available inside an effect operation clause.",
+        ),
+        (
+            "main : Unit -> Unit\nmain () = discard\n",
+            ResolveReason::ResumeOutsideClause,
+            "continuation_use",
+            Some(("operation", "discard")),
+            "`discard` is only available inside an effect operation clause.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
+            ResolveReason::ResourceBuiltinRequired,
+            "resource_acquisition",
+            Some(("required_builtin", "@builtin.cell")),
+            "This resource acquisition requires a direct import of `@builtin.cell`.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resource native_buffer<R> b = 4 {\n42\n}\n",
+            ResolveReason::ResourceBuiltinRequired,
+            "resource_acquisition",
+            Some(("required_builtin", "@builtin.native_buffer")),
+            "This resource acquisition requires a direct import of `@builtin.native_buffer`.",
+        ),
+        (
+            "import @builtin.cell as Cell\nimpl Cell.Provider<Int> {\nread value = 1\nwrite value = ()\n}\n",
+            ResolveReason::SealedProvider,
+            "sealed_provider_declaration",
+            None,
+            "Only resource acquisition may introduce a compiler-owned resource provider.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("effect-restriction.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+            if let Some((_, value)) = fact {
+                assert!(output.contains(&format!("`{value}`")));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"][0]["relationship"], relationship);
+        if let Some((name, value)) = fact {
+            assert_eq!(json["facts"][0]["name"], name);
+            assert_eq!(json["facts"][0]["value"], value);
+            assert_eq!(
+                json["facts"][0]["kind"],
+                if name == "operation" {
+                    "keyword"
+                } else {
+                    "module-path"
+                }
+            );
+        } else {
+            assert!(json["facts"].as_array().unwrap().is_empty());
+        }
+    }
+}
+
+#[test]
+fn duplicate_effect_presentation_relates_both_exact_instances() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    let text = "effect Read<A> {\nread : Unit -> A\n}\nprobe : Unit -> Unit ! {Read<Int>, Read<Int>}\nprobe () = ()\n";
+    let fixture = ModuleFixture::load("duplicate-effect.ash", text);
+    let failure = run_path(RunConfiguration {
+        entry: fixture.loaded().canonical_path().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, ResolveReason::DuplicateEffect);
+    assert_eq!(error.related.len(), 1);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_resolve_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Read<Int>"));
+        if locale == Locale::English {
+            assert!(
+                output
+                    .contains("This effect row contains the same effect instance more than once.")
+            );
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["labels"][0]["relationship"],
+        "duplicate_effect_instance"
+    );
+    assert_eq!(json["labels"][1]["relationship"], "first_effect_instance");
+    let occurrences: Vec<_> = text
+        .match_indices("Read<Int>")
+        .map(|(start, _)| start)
+        .collect();
+    assert_eq!(json["labels"][0]["byte_start"], occurrences[1]);
+    assert_eq!(json["labels"][1]["byte_start"], occurrences[0]);
+    let distinct = text.replacen("Read<Int>, Read<Int>", "Read<Int>, Read<Bool>", 1);
+    let distinct = ModuleFixture::load("distinct-effects.ash", &distinct);
+    assert!(resolve_module(distinct.loaded(), &[]).is_ok());
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)
@@ -157,6 +776,1405 @@ fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
             panic!("the diagnostic fixture should contain occurrence {occurrence} of {needle:?}")
         });
     (offset(start), offset(start + needle.len()))
+}
+
+#[test]
+fn common_type_failures_render_expected_and_found_types() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, reason, primary, related) in [
+        (
+            T001,
+            TypeReason::DefinitionResult,
+            "definition_result",
+            "result_annotation",
+        ),
+        (
+            T002,
+            TypeReason::OperatorOperand,
+            "operator_operand",
+            "operator_requirement",
+        ),
+        (
+            T003,
+            TypeReason::NotApplicable,
+            "application_function",
+            "application",
+        ),
+        (T004, TypeReason::Argument, "argument", "function_domain"),
+        (
+            EQUATION_INTERFACE_NOT_FUNCTION,
+            TypeReason::EquationInterfaceNotFunction,
+            "equation_signature",
+            "equation_head",
+        ),
+        (
+            BINDING_INITIALIZER,
+            TypeReason::BindingInitializer,
+            "initializer",
+            "binding_annotation",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("type-message.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Typing(TypeError::Source(error))) = failure.pipeline_failure()
+        else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_type_diagnostic(error, &sources).unwrap();
+        let mut missing_cause = error.as_ref().clone();
+        missing_cause.related.clear();
+        assert!(compile_type_diagnostic(&missing_cause, &sources).is_err());
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{}`", error.found.as_deref().unwrap())));
+            if locale == Locale::English {
+                let lead = match reason {
+                    TypeReason::DefinitionResult => "The function body must return",
+                    TypeReason::OperatorOperand => "This operator requires an `Int` operand",
+                    TypeReason::NotApplicable => "This expression cannot be called",
+                    TypeReason::Argument => "This function argument must have type",
+                    TypeReason::EquationInterfaceNotFunction => {
+                        "This equation needs a function signature"
+                    }
+                    _ => "", // Existing initializer tests assert its complete wording.
+                };
+                assert!(output.contains(lead), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["facts"][0]["value"],
+            error.expected.as_deref().unwrap()
+        );
+        assert_eq!(json["facts"][1]["value"], error.found.as_deref().unwrap());
+        assert_eq!(json["labels"][0]["relationship"], primary);
+        assert_eq!(json["labels"][1]["relationship"], related);
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
+        if error.related.len() == 2 {
+            assert_eq!(json["labels"][2]["relationship"], "application");
+        }
+        for (label, original) in json["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(std::iter::once(&error.primary).chain(&error.related))
+        {
+            assert_eq!(label["byte_start"], original.span().range().start());
+            assert_eq!(label["byte_end"], original.span().range().end());
+        }
+    }
+}
+
+#[test]
+fn pattern_and_coverage_messages_render_only_retained_semantic_facts() {
+    use ash::{
+        diagnostic::{Diagnostic, SourceLabel},
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+        source::ByteRange,
+    };
+    let source = source("patterns.ash", "pattern");
+    let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+    for (reason, expected, witness, relationship, lead) in [
+        (
+            TypeReason::PatternMismatch,
+            Some("Bool"),
+            None,
+            "pattern",
+            "This pattern cannot match a value of type `Bool`.",
+        ),
+        (
+            TypeReason::ConstructorMismatch,
+            None,
+            None,
+            "constructor",
+            "This constructor has the wrong payload shape.",
+        ),
+        (
+            TypeReason::ConstructorOwner,
+            None,
+            None,
+            "pattern",
+            "This constructor belongs to a different nominal type than the value being matched.",
+        ),
+        (
+            TypeReason::RefutableBinding,
+            None,
+            Some("false"),
+            "binding_pattern",
+            "This binding pattern can fail",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            None,
+            Some("false"),
+            "function_pattern",
+            "This function parameter pattern can fail",
+        ),
+        (
+            TypeReason::RefutableHandlerPattern,
+            None,
+            Some("false"),
+            "handler_pattern",
+            "This handler operation pattern can fail",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            None,
+            Some("false"),
+            "coverage",
+            "These cases do not cover every possible input",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            None,
+            None,
+            "coverage",
+            "A match requires at least one arm.",
+        ),
+        (
+            TypeReason::RedundantCase,
+            None,
+            None,
+            "case",
+            "This case can never be selected",
+        ),
+    ] {
+        let mut diagnostic =
+            Diagnostic::new(reason, SourceLabel::new(span, "not presentation text"));
+        diagnostic.expected = expected.map(str::to_owned);
+        diagnostic.found = witness.map(str::to_owned);
+        let diagnostic = diagnostic.into();
+        let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(!output.contains("not presentation text"));
+            if locale == Locale::English {
+                assert!(output.contains(lead), "{output}");
+            }
+            if let Some(value) = expected.or(witness) {
+                assert!(output.contains(value), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["labels"][0]["relationship"], relationship);
+        let facts = json["facts"].as_array().unwrap();
+        if let Some(value) = expected.or(witness) {
+            assert_eq!(facts.len(), 1);
+            assert_eq!(
+                facts[0]["name"],
+                if expected.is_some() {
+                    "expected_type"
+                } else {
+                    "uncovered_value"
+                }
+            );
+            assert_eq!(facts[0]["value"], value);
+        } else {
+            assert!(facts.is_empty());
+        }
+    }
+}
+
+#[test]
+fn source_pattern_failures_reach_human_and_json_presentation() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (reason, text) in [
+        (
+            TypeReason::PatternMismatch,
+            "main : Unit -> Int\nmain () = match true {\n() => 1\n}\n",
+        ),
+        (
+            TypeReason::ConstructorMismatch,
+            "type Maybe =\nNone\n| Some(Int)\nmain : Unit -> Int\nmain () = match Some(1) {\nSome => 1\nNone => 0\n}\n",
+        ),
+        (
+            TypeReason::ConstructorOwner,
+            "newtype UserId = UserId(Int)\nnewtype OrderId = OrderId(Int)\nread : UserId -> Int\nread value = match value {\nOrderId(number) => number\n}\n",
+        ),
+        (
+            TypeReason::RefutableBinding,
+            "main : Unit -> Int\nmain () = {\nlet true = false\n1\n}\n",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            "fn unsafe(true : Bool) -> Int {\n1\n}\nmain : Unit -> Int\nmain () = unsafe false\n",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            "main : Unit -> Int\nmain () = {\nlet unsafe : Bool -> Int = fn(true) {\n1\n}\nunsafe false\n}\n",
+        ),
+        (
+            TypeReason::RefutableHandlerPattern,
+            "effect Gate {\nchoose : Bool -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Gate.choose true) with Gate {\nchoose true => resume 1\n}\n",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            "main : Unit -> Int\nmain () = match true {\ntrue => 1\n}\n",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            "read : Bool -> Int\nread true = 1\n",
+        ),
+        (
+            TypeReason::RedundantCase,
+            "main : Unit -> Int\nmain () = match true {\n_ => 1\nfalse => 2\n}\n",
+        ),
+        (
+            TypeReason::RedundantCase,
+            "read : Bool -> Int\nread _ = 1\nread false = 2\n",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("pattern-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected a source failure: {text}");
+        };
+        assert_eq!(error.reason, reason, "{text}");
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(!output.is_empty());
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason.to_string());
+        assert_eq!(
+            json["labels"][0]["byte_start"],
+            error.primary.span().range().start()
+        );
+        assert_eq!(
+            json["labels"][0]["byte_end"],
+            error.primary.span().range().end()
+        );
+        assert_eq!(json["labels"][0]["facts"], json["facts"]);
+    }
+}
+
+#[test]
+fn inference_and_continuation_messages_preserve_source_locations_without_invented_types() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let handler = |body: &str| {
+        format!(
+            "effect Choice {{\nchoose : Unit -> Int\n}}\nmain : Unit -> Int\nmain () = handle (perform Choice.choose ()) with Choice {{\nchoose ignored => {body}\n}}\n"
+        )
+    };
+    for (reason, text, lead, relation) in [
+        (TypeReason::InfiniteType, "main : Unit -> Int\nmain () = {\nlet omega = fn(value) {\nvalue(value)\n}\nomega\n}\n".to_owned(), "This expression would require an infinite type", "infinite_type"),
+        (TypeReason::AmbiguousType, "main : Unit -> Unit\nmain () = {\nlet result = {\nlet constant = fn(ignored) {\n42\n}\nconstant\n}\n()\n}\n".to_owned(), "Ash cannot determine a complete type for this expression.", "ambiguous_type"),
+        (TypeReason::UnguardedRecursiveUse, "type Stream =\nNext(Int, Stream)\nfn identity(value : Stream) -> Stream {\nvalue\n}\nmain : Unit -> Stream\nmain () = {\nlet rec stream : Stream = Next(1, identity stream)\nstream\n}\n".to_owned(), "This recursive value cannot be passed through this expression during initialization.", "recursive_use"),
+        (TypeReason::ResumeNotConsumed, handler("1"), "This path can finish without resuming or safely discarding the continuation.", "continuation_usage"),
+        (TypeReason::ResumeNotConsumed, handler("match true {\ntrue => resume 1\nfalse => 2\n}"), "This path can finish without resuming or safely discarding the continuation.", "continuation_usage"),
+        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet first = resume 1\nresume 2\n}"), "This path has already resumed or discarded the continuation; it cannot do so again.", "continuation_usage"),
+        (TypeReason::ResumeAlreadyConsumed, handler("{\nlet _ = discard\nresume 1\n}"), "This path has already resumed or discarded the continuation; it cannot do so again.", "continuation_usage"),
+        (TypeReason::ResumeCapture, handler("{\nlet deferred : Unit -> Int = fn(ignored) {\nresume 1\n}\nresume 2\n}"), "This nested scope cannot capture the enclosing clause's right to resume or discard.", "continuation_capture"),
+        (TypeReason::ResumeCapture, handler("{\nlet rec deferred : Unit -> Unit = fn(ignored) {\ndiscard\n}\nresume 1\n}"), "This nested scope cannot capture the enclosing clause's right to resume or discard.", "continuation_capture"),
+    ] {
+        let fixture = ModuleFixture::load("inference-continuation.ash", &text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else { panic!("expected source error: {text}"); };
+        assert_eq!(error.reason, reason, "{text}");
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            if locale == Locale::English { assert!(output.contains(lead), "{output}"); }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["facts"], serde_json::json!([]));
+        assert_eq!(json["labels"][0]["relationship"], relation);
+        assert_eq!(json["labels"][0]["byte_start"], error.primary.span().range().start());
+        assert_eq!(json["labels"][0]["byte_end"], error.primary.span().range().end());
+    }
+}
+
+#[test]
+fn recursive_and_cleanup_messages_retain_every_causal_label() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let cleanup = "effect Stop {\nstop : Unit -> Unit\n}\neffect Log {\nlog : Unit -> Unit\n}\naction : Unit -> Unit ! {Log}\naction ignored = perform Log.log ()\nmain : Unit -> Int\nmain () = handle {\nlet logged = perform Log.log ()\nhandle (handle (cleanup action {\nlet ignored = perform Stop.stop ()\n42\n}) with Log {\nlog ignored => (resume ()) + 1\n}) with Stop {\nstop ignored => {\nlet done = discard\n7\n}\n}\n} with Log {\nlog ignored => resume ()\n}\n";
+    for (reason, text, lead, relations) in [
+        (
+            TypeReason::UnsafeRecursiveInitializer,
+            "main : Unit -> Int\nmain () = {\nlet rec value : Unit -> Int = {\nlet candidate : Unit -> Int = fn(ignored) {\n1\n}\ncandidate\n}\nvalue ()\n}\n",
+            "This recursive initializer must be a direct `fn` expression.",
+            vec!["recursive_group", "member_annotation"],
+        ),
+        (
+            TypeReason::UnsafeRecursiveRoot,
+            "type Stream =\nNext(Int, Stream)\nmain : Unit -> Stream\nmain () = {\nlet rec stream : Stream = {\nNext(1, stream)\n}\nstream\n}\n",
+            "This recursive data initializer must start with a fully applied constructor of its declared nominal type.",
+            vec!["recursive_group", "member_annotation"],
+        ),
+        (
+            TypeReason::NewtypeRecursiveRepresentation,
+            "newtype First = First(Second)\nnewtype Second = Second(First)\n",
+            "These newtype representations form a recursive cycle.",
+            vec!["representation_cycle", "representation_cycle"],
+        ),
+        (
+            TypeReason::CleanupContext,
+            cleanup,
+            "Discard would remove a handler that this cleanup action still needs.",
+            vec!["cleanup_action", "abandoned_handler"],
+        ),
+    ] {
+        let fixture = ModuleFixture::load("causal-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source failure");
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(lead));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), error.related.len() + 1);
+        assert_eq!(error.related.len(), relations.len());
+        for ((label, original), relation) in labels[1..].iter().zip(&error.related).zip(relations) {
+            assert_eq!(label["relationship"], relation);
+            assert_eq!(label["byte_start"], original.span().range().start());
+            assert_eq!(label["byte_end"], original.span().range().end());
+        }
+        let mut missing = (*error).clone();
+        missing.related.clear();
+        assert!(compile_type_diagnostic(&missing, &[fixture.loaded().source()]).is_err());
+    }
+}
+
+#[test]
+fn escape_messages_relate_outward_dependencies_to_their_scope() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let resource = |body: &str| {
+        format!(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource cell<R> c = 41 {{\n{body}\n}}\n42\n}}\n"
+        )
+    };
+    for (reason, text, lead, relation) in [
+        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope"),
+        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+    ] {
+        let fixture = ModuleFixture::load("escape-message.ash", &text);
+        let failure = run_path(RunConfiguration { entry: fixture.loaded().canonical_path().to_path_buf(), roots: ModuleRoots::empty() }).unwrap_err();
+        let Some(PipelineFailure::Typing(TypeError::Source(error))) = failure.pipeline_failure() else { panic!("expected escape: {failure:?}"); };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_type_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English { assert!(String::from_utf8(output).unwrap().contains(lead)); }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["facts"], serde_json::json!([]));
+        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        assert_eq!(json["labels"][0]["relationship"], "escaping_dependency");
+        assert_eq!(json["labels"][1]["relationship"], relation);
+        assert_eq!(json["labels"][1]["byte_start"], error.related[0].span().range().start());
+        assert_eq!(json["labels"][1]["byte_end"], error.related[0].span().range().end());
+    }
+}
+
+#[test]
+fn general_type_mismatch_renders_retained_types_and_expression_span() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_mismatch_diagnostic, write_human, write_json},
+    };
+    for (ty, body) in [
+        ("Int -> Unit", "()"),
+        ("Unit -> Int", "42"),
+        ("Count -> Unit", "()"),
+    ] {
+        let text = format!(
+            "newtype Count = Count(Int)\naction : {ty}\naction ignored = {body}\nmain : Unit -> Int\nmain () = cleanup action {{\n42\n}}\n"
+        );
+        let fixture = ModuleFixture::load("general-mismatch.ash", &text);
+        let TypeError::Mismatch(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected general mismatch");
+        };
+        let view = compile_type_mismatch_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(ty), "{output}");
+            if locale == Locale::English {
+                assert!(
+                    output.contains("This expression must have type"),
+                    "{output}"
+                );
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "type.mismatch");
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["facts"][0]["name"], "expected");
+        assert_eq!(json["facts"][1]["name"], "found");
+        assert_eq!(json["facts"][1]["value"], ty);
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+        assert_eq!(json["labels"][0]["relationship"], "expression");
+        assert_eq!(
+            json["labels"][0]["byte_start"],
+            error.span().range().start()
+        );
+        assert_eq!(json["labels"][0]["byte_end"], error.span().range().end());
+    }
+}
+
+#[test]
+fn anonymous_function_presentation_uses_the_producers_retained_context() {
+    use ash::presentation::{compile_type_diagnostic, write_json};
+    for (text, context) in [
+        (FUNCTION_NEEDS_CONTEXT, "binding"),
+        (FUNCTION_RESULT_NEEDS_CONTEXT, "expected-function"),
+        (FUNCTION_NON_FUNCTION_CONTEXT, "expected-function"),
+        (
+            "main : Unit -> Int\nmain () = (fn(value) {\nvalue\n}) 1\n",
+            "application",
+        ),
+        (
+            "main : Unit -> Int\nmain () = (fn(value) {\nvalue\n}) + 1\n",
+            "operator",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("function-context-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source diagnostic");
+        };
+        assert_eq!(error.reason, TypeReason::FunctionNeedsContext);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], context);
+        assert_eq!(json["labels"][0]["relationship"], "anonymous_function");
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
+    }
+}
+
+#[test]
+fn equation_arity_presentation_distinguishes_pattern_count_from_declared_arrows() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, cause, explanation) in [
+        (
+            "choose : Bool -> Int -> Int\nchoose true value = value\nchoose false = fn(value) {\nvalue\n}\n",
+            "pattern-count",
+            "Every equation in this group must have the same positive number of parameter patterns.",
+        ),
+        (
+            "choose : Bool -> Int\nchoose flag value = value\n",
+            "declared-arrows",
+            "This equation has more parameter patterns than function arrows in its declared type.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("equation-arity-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source diagnostic");
+        };
+        assert_eq!(error.reason, TypeReason::EquationArity);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "arity_requirement");
+        assert_eq!(json["facts"][0]["kind"], "equation-arity-requirement");
+        assert_eq!(json["facts"][0]["value"], cause);
+        assert_eq!(json["labels"][0]["relationship"], "equation_group");
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn hook_api_messages_explain_declaration_level_equality_for_hooks_and_registration() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human},
+    };
+    for (declaration, target) in [
+        ("effect Bad {\nask : Int -> Int\n}\n", "Bad"),
+        (
+            "effect Bad {\npublish : Int -> Int\nask : Int -> Int\n}\n",
+            "Bad",
+        ),
+        (
+            "effect Convert<A, B> {\npublish : A -> B\n}\n",
+            "Convert<Int, Int>",
+        ),
+    ] {
+        for expression in [
+            format!("hook {target} {{\n42\n}}"),
+            format!("register {target} identity {{\n42\n}}"),
+        ] {
+            let text = format!(
+                "{declaration}identity : Int -> Int\nidentity value = value\nmain : Unit -> Int ! {{{target}}}\nmain () = {expression}\n"
+            );
+            let fixture = ModuleFixture::load("hook-api-message.ash", &text);
+            let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+                panic!("expected source diagnostic");
+            };
+            assert_eq!(error.reason, TypeReason::HookApi);
+            let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains("`publish`"));
+                if locale == Locale::English {
+                    assert!(output.contains("before type arguments are substituted"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn handler_coverage_presentation_distinguishes_missing_and_duplicate_clauses() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (clauses, cause, explanation) in [
+        (
+            "read ignored => resume 1\n",
+            "clause-count",
+            "This handler must contain exactly one clause for every operation of the handled effect.",
+        ),
+        (
+            "read ignored => resume 1\nread ignored => resume 2\n",
+            "duplicate-operation",
+            "This handler repeats a clause for the same operation.",
+        ),
+    ] {
+        let text = format!(
+            "effect Cell {{\nread : Unit -> Int\nwrite : Int -> Unit\n}}\nmain : Unit -> Int\nmain () = handle (perform Cell.read ()) with Cell {{\n{clauses}}}\n"
+        );
+        let fixture = ModuleFixture::load("handler-coverage-message.ash", &text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source error");
+        };
+        assert_eq!(error.reason, TypeReason::HandlerCoverage);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "coverage_failure");
+        assert_eq!(json["facts"][0]["value"], cause);
+    }
+}
+
+#[test]
+fn effect_row_messages_distinguish_union_and_declared_effects() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, cause) in [
+        (
+            "effect First {\nread : Unit -> Int\n}\neffect Second {\nread : Unit -> Int\n}\nbad : Unit -> Int ! {First}\nbad () = perform Second.read ()\n",
+            "function-outside-declared",
+        ),
+        (
+            "effect Choice {\nchoose : Unit -> Int\n}\nambiguous<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {| R}\nambiguous action = {\nlet value = action ()\nvalue + perform Choice.choose ()\n}\n",
+            "union",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("effect-row-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source error")
+        };
+        assert_eq!(error.reason, TypeReason::AmbiguousEffectRow);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "row_failure");
+        assert_eq!(json["facts"][0]["value"], cause);
+    }
+}
+
+#[test]
+fn missing_handled_effect_explains_exact_instance_requirement() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human},
+    };
+    let text = "effect State<S> {\nget : Unit -> S\n}\nmain : Unit -> Int\nmain () = handle (perform State<Int>.get ()) with State<Bool> {\nget ignored => resume false\n}\n";
+    let fixture = ModuleFixture::load("missing-effect.ash", text);
+    let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected source error")
+    };
+    assert_eq!(error.reason, TypeReason::MissingHandledEffect);
+    let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        if locale == Locale::English {
+            assert!(String::from_utf8(output).unwrap().contains("The handled computation must explicitly request this exact effect instance, including its type arguments."));
+        }
+    }
+}
+
+#[test]
+fn polymorphic_recursion_presentation_retains_types_and_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let text = "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\nimpl Repeat<Int> {\nrepeat (owner, value) = repeat((owner, (value, value)))\n}\n";
+    let fixture = ModuleFixture::load("recursive-message.ash", text);
+    let TypeError::Source(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected source error")
+    };
+    assert_eq!(error.reason, TypeReason::PolymorphicRecursion);
+    for label in &mut error.related {
+        *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+    }
+    let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("ignored legacy prose"));
+        if locale == Locale::English {
+            assert!(output.contains("This recursive call requires type A, but uses (A, A)."));
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["value"], "A");
+    assert_eq!(json["facts"][1]["value"], "(A, A)");
+}
+
+#[test]
+fn interface_method_messages_explain_declaration_and_implementation_failures() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Read<A> {\nread : A\n}\n",
+            InterfaceReason::MethodNotFunction,
+            "An interface method must have a function type with a top-level arrow.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Int> {\n}\n",
+            InterfaceReason::ImplMissingMethod,
+            "This implementation does not supply a required interface method.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Int> {\nother x = 1\n}\n",
+            InterfaceReason::ImplExtraMethod,
+            "This method is not declared by the implemented interface.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\nwrite : A -> Int\n}\nimpl Read<Int> {\nread x = 1\nwrite x = 2\nread x = 3\n}\n",
+            InterfaceReason::ImplDuplicateMethod,
+            "This implementation supplies the same interface method more than once.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-method-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason.to_string());
+        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+    }
+}
+
+#[test]
+fn implementation_head_and_prerequisite_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<A> {\nequal value = value\n}\n",
+            InterfaceReason::ImplVariableHead,
+            "An implementation's selection key cannot consist only of bare type variables.",
+        ),
+        (
+            "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<B> Relation<Int, B> where Relation<Int, C> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplPrerequisiteVariable,
+            "This prerequisite uses a type variable that does not occur in the implementation head.",
+        ),
+        (
+            "type Pair<Left, Right> = Pair(Left, Right)\ninterface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\ninterface Inspect<A> {\ninspect : A -> Bool\n}\nimpl<Left : Type, Right : Type> Inspect<Pair<Left, Right>> where Construct<Pair<Right>> {\ninspect value = true\n}\n",
+            InterfaceReason::ImplPrerequisiteNotDecreasing,
+            "This generic prerequisite does not have a strictly smaller selection key than the implementation head.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("implementation-header-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+    }
+}
+
+#[test]
+fn interface_privacy_and_duplicate_requirement_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason) in [
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\npub same : A -> Bool where Equal<A>\nsame value = true\n",
+            InterfaceReason::ConstraintPrivateInterface,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\npub impl Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::ImplPrivateInterface,
+        ),
+        (
+            "type Option<A> =\nNone\n| Some(A)\ninterface Equal<A> {\nequal : A -> A\n}\npub interface Render<A> {\nrender : A -> A\n}\npub impl Render<Option<A>> where Equal<A> {\nrender value = value\n}\n",
+            InterfaceReason::ImplPrivateInterface,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nsame : A -> A where Equal<A>, Equal<A>\nsame value = value\n",
+            InterfaceReason::DuplicateRequirement,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<Int> where Equal<Int>, Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::DuplicateRequirement,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-requirement-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn orphan_implementation_message_explains_selection_key_ownership() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    let fixture = ModuleFixture::load(
+        "provider.ash",
+        "pub interface Equal<A> {\nequal : A -> A\n}\n",
+    );
+    let entry = fixture.directory.join("client.ash");
+    fs::write(
+        &entry,
+        "import provider (Equal)\nimpl Equal<Int> {\nequal value = value\n}\n",
+    )
+    .unwrap();
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Typing(TypeError::Interface(error))) = failure.pipeline_failure()
+    else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, InterfaceReason::ImplOrphan);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_interface_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        if locale == Locale::English {
+            assert!(String::from_utf8(output).unwrap().contains("This module owns neither the interface nor an outer nominal type in the implementation's selection key."));
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["labels"][1]["relationship"],
+        "selected_foreign_interface"
+    );
+}
+
+#[test]
+fn unsatisfied_selection_preserves_typed_causal_labels() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    let fixture = ModuleFixture::load(
+        "selection-message.ash",
+        "interface Equal<A> {\nequal : A -> A\n}\nmain : Unit -> Int\nmain () = equal 1\n",
+    );
+    let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected interface error")
+    };
+    assert_eq!(error.reason, InterfaceReason::Unsatisfied);
+    for label in &mut error.related {
+        *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+    }
+    let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        assert!(
+            !String::from_utf8(output)
+                .unwrap()
+                .contains("ignored legacy prose")
+        );
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["reason"], "constraint.unsatisfied");
+    assert_eq!(json["labels"][0]["relationship"], "interface_obligation");
+}
+
+#[test]
+fn ambiguous_and_cyclic_selection_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason) in [
+        (
+            "interface Render<A> {\nrender : A -> Int\n}\nimpl Render<Int> {\nrender value = value\n}\nprobe : Unit -> Unit\nprobe () = {\nlet use = fn(value) {\nrender value\n}\n()\n}\n",
+            InterfaceReason::Ambiguous,
+        ),
+        (
+            "interface First<A> {\nfirst : A -> A\n}\ninterface Second<A> {\nsecond : A -> A\n}\nimpl First<Int> where Second<Int> {\nfirst value = value\n}\nimpl Second<Int> where First<Int> {\nsecond value = value\n}\nmain : Unit -> Int\nmain () = first(1)\n",
+            InterfaceReason::Cycle,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("selection-cause-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+        if !error.related.is_empty() {
+            error.related.pop();
+            assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+        }
+    }
+}
+
+#[test]
+fn interface_argument_counts_reach_presentation_from_source() {
+    use ash::presentation::{compile_interface_diagnostic, write_json};
+    for (declaration, supplied) in [
+        ("value : Unit -> Unit where Pair<Int>\nvalue () = ()\n", 1),
+        (
+            "value : Unit -> Unit where Pair<Int, Bool, Unit>\nvalue () = ()\n",
+            3,
+        ),
+        ("impl Pair<Int> {\npair value = 1\n}\n", 1),
+        ("impl Pair<Int, Bool, Unit> {\npair value = 1\n}\n", 3),
+        (
+            "impl Keep<Int> where Pair<Int> {\nkeep value = value\n}\n",
+            1,
+        ),
+        (
+            "impl Keep<Int> where Pair<Int, Bool, Unit> {\nkeep value = value\n}\n",
+            3,
+        ),
+    ] {
+        let text = format!(
+            "interface Pair<Left, Right> {{\npair : (Left, Right) -> Left\n}}\ninterface Keep<Value> {{\nkeep : Value -> Value\n}}\n{declaration}"
+        );
+        let fixture = ModuleFixture::load("arity-source.ash", &text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, InterfaceReason::ArgumentCount);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "expected_count");
+        assert_eq!(json["facts"][0]["value"], 2);
+        assert_eq!(json["facts"][1]["name"], "supplied_count");
+        assert_eq!(json["facts"][1]["value"], supplied);
+    }
+}
+
+#[test]
+fn implementation_pair_and_undetermined_parameter_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (text, reason) in [
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\nsame : A -> Bool where Equal<B>\nsame value = true\n",
+            InterfaceReason::UndeterminedParameter,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<Int> {\nequal value = value\n}\nimpl Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::ImplOverlap,
+        ),
+        (
+            "type List<A> =\nNil\n| Cons(A, List<A>)\ninterface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<A> Relation<List<A>, A> {\nrelate value = 0\n}\nimpl Relation<List<Int>, Bool> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplDeterminationConflict,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-pair-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        for label in &mut error.related {
+            *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+        }
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(
+                !String::from_utf8(output)
+                    .unwrap()
+                    .contains("ignored legacy prose")
+            );
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["labels"][1]["relationship"],
+            if reason == InterfaceReason::UndeterminedParameter {
+                "undetermined_parameter"
+            } else {
+                "earlier_implementation"
+            }
+        );
+    }
+}
+
+#[test]
+fn interface_parameter_causes_are_precise() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Bad<A> {\nbad : G<Int> -> A\n}\n",
+            InterfaceReason::MethodParameter,
+            "Method type parameters must be explicitly declared in the method's parameter list.",
+        ),
+        (
+            "interface Test<A> {\nmethod : Int -> Int\n}\n",
+            InterfaceReason::MethodParameter,
+            "This method type must mention every interface parameter.",
+        ),
+        (
+            "interface Test<A, B> where A -> B {\nmethod : B -> B\n}\n",
+            InterfaceReason::MethodParameter,
+            "This method type must mention every determining interface parameter.",
+        ),
+        (
+            "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<B> Relation<Int, B> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplDeterminationCoverage,
+            "This dependent argument uses a type variable that does not occur in the implementation's determining arguments.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("parameter-cause-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+    }
+}
+
+#[test]
+fn elaboration_failures_identify_resources_and_the_core_path() {
+    use ash::{
+        elaborate::ElaborationFailure,
+        message::{Catalogue, Locale},
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (error, name, value, explanation) in [
+        (
+            ElaborationFailure::InvalidState,
+            "cause",
+            "invalid-state",
+            "The compiler could not construct typed Core because its elaboration state is inconsistent.",
+        ),
+        (
+            ElaborationFailure::TypeResourceExhausted,
+            "resource",
+            "type-work",
+            "The compiler ran out of resources for type checking and type construction.",
+        ),
+        (
+            ElaborationFailure::ConstraintResourceExhausted,
+            "resource",
+            "constraint-work",
+            "The compiler ran out of resources for interface and constraint processing.",
+        ),
+        (
+            ElaborationFailure::EffectCoreUnavailable,
+            "cause",
+            "effect-core-unavailable",
+            "The compiler tried to lower effect syntax through its pure Core path.",
+        ),
+    ] {
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], error.reason_code());
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], name);
+        assert_eq!(json["facts"][0]["value"], value);
+    }
+}
+
+#[test]
+fn coverage_resource_messages_preserve_the_exhausted_limit() {
+    use ash::{
+        message::{Catalogue, Locale},
+        pattern::UsefulnessError,
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (cause, name, explanation) in [
+        (
+            UsefulnessError::StateLimit,
+            "coverage-states",
+            "Pattern coverage analysis reached the compiler's state limit.",
+        ),
+        (
+            UsefulnessError::WorkLimit,
+            "coverage-work",
+            "The compiler could not complete pattern coverage analysis within its work resources.",
+        ),
+    ] {
+        let TypeError::Internal(error) = TypeError::from(cause) else {
+            panic!("expected compiler failure")
+        };
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.resource.coverage");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], "resource");
+        assert_eq!(json["facts"][0]["value"], name);
+    }
+}
+
+#[test]
+fn core_construction_messages_preserve_failure_causes() {
+    use ash::{
+        core::BuildError,
+        elaborate::ElaborationFailure,
+        message::{Catalogue, Locale},
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (cause, name, explanation) in [
+        (
+            BuildError::ArenaIdExhausted,
+            "arena-id-exhausted",
+            "The compiler has exhausted its Core arena identities.",
+        ),
+        (
+            BuildError::NodeIdExhausted,
+            "node-id-exhausted",
+            "The compiler has exhausted the node identities in this Core arena.",
+        ),
+        (
+            BuildError::BinderIdExhausted,
+            "binder-id-exhausted",
+            "The compiler has exhausted its Core binder identities.",
+        ),
+        (
+            BuildError::DuplicateBinderReservation,
+            "duplicate-binder-reservation",
+            "The compiler reserved the same resolved binder identity more than once.",
+        ),
+        (
+            BuildError::BinderReservationPhaseStarted,
+            "binder-reservation-phase-started",
+            "The compiler tried to reserve resolved binder identities after Core binder construction had begun.",
+        ),
+        (
+            BuildError::UnreservedResolvedBinder,
+            "unreserved-resolved-binder",
+            "The compiler tried to construct a Core binder without reserving its resolved identity.",
+        ),
+        (
+            BuildError::DuplicateResolvedBinder,
+            "duplicate-resolved-binder",
+            "The compiler tried to construct a resolved Core binder more than once.",
+        ),
+        (
+            BuildError::ForeignBinder,
+            "foreign-binder",
+            "The compiler used a binder from a different Core arena.",
+        ),
+        (
+            BuildError::TypeDepthExceeded,
+            "type-depth-exceeded",
+            "A type exceeds the compiler's Core type nesting limit.",
+        ),
+        (
+            BuildError::TypeWorkExceeded,
+            "type-work-exceeded",
+            "Core construction exhausted the compiler's type-work budget.",
+        ),
+        (
+            BuildError::OriginDepthExceeded,
+            "origin-depth-exceeded",
+            "Source-origin metadata exceeds the compiler's Core nesting limit.",
+        ),
+        (
+            BuildError::PatternDepthExceeded,
+            "pattern-depth-exceeded",
+            "A pattern exceeds the compiler's Core pattern nesting limit.",
+        ),
+        (
+            BuildError::InvalidPayload,
+            "invalid-payload",
+            "The compiler encountered inconsistent state while rebuilding a Core payload.",
+        ),
+        (
+            BuildError::InvalidNodeId,
+            "invalid-node-id",
+            "The compiler requested a root node that does not belong to this Core arena.",
+        ),
+    ] {
+        let error = ElaborationFailure::Core(cause);
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.core-build");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["value"], name);
+        assert!(json["labels"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn conflicting_determination_requirements_have_distinct_roles() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (declaration, relationship, explanation) in [
+        (
+            "use_value : Int -> Int where Relation<Int, Bool>, Relation<Int, Unit>\nuse_value value = value\n",
+            "earlier_requirement",
+            "These requirements have the same determining arguments but different dependent arguments.",
+        ),
+        (
+            "interface Target<A> {\ntarget : A -> A\n}\nimpl Target<Int> where Relation<Int, Bool>, Relation<Int, Unit> {\ntarget value = value\n}\n",
+            "earlier_prerequisite",
+            "These prerequisites have the same determining arguments but different dependent arguments.",
+        ),
+    ] {
+        let text = format!(
+            "interface Relation<Key, Value> where Key -> Value {{\nrelate : Key -> Int\n}}\n{declaration}"
+        );
+        let fixture = ModuleFixture::load("conflicting-requirements.ash", &text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, InterfaceReason::DeterminationConflict);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"][1]["relationship"], relationship);
+    }
+}
+
+#[test]
+fn determination_parameter_messages_preserve_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (edge, explanation, relationship) in [
+        (
+            "(A, A) -> (B, C)",
+            "This parameter is repeated on the same side of the determination.",
+            "earlier_parameter_occurrence",
+        ),
+        (
+            "(B, A) -> C",
+            "Parameters on each side of a determination must follow their interface declaration order.",
+            "preceding_parameter_occurrence",
+        ),
+        (
+            "(A, B) -> (B, C)",
+            "An interface parameter cannot occur on both sides of a determination.",
+            "determinant_occurrence",
+        ),
+        (
+            "A -> B",
+            "The determination must include every interface parameter.",
+            "omitted_parameter",
+        ),
+    ] {
+        let text = format!("interface Bad<A, B, C> where {edge} {{\nbad : (A, B) -> C\n}}\n");
+        let fixture = ModuleFixture::load("determination-message.ash", &text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected determination error for {edge}")
+        };
+        assert_eq!(error.reason, InterfaceReason::DeterminationParameter);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut json = Vec::new();
+        write_json(&mut json, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["labels"][1]["relationship"], relationship);
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -178,8 +2196,13 @@ struct KindDiagnosticCase {
 }
 
 fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
-    let failure = failure(case.name, &case.source);
-    let PipelineFailure::Kind(KindFailure::Source(error)) = failure else {
+    let fixture = ModuleFixture::load(case.name, &case.source);
+    let failure = run_path(RunConfiguration {
+        entry: fixture.loaded().canonical_path().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Kind(KindFailure::Source(error))) = failure.pipeline_failure() else {
         panic!("{} should fail at the public kind boundary", case.name);
     };
     let diagnostic = error.diagnostic();
@@ -244,6 +2267,73 @@ fn assert_public_kind_diagnostic(case: &KindDiagnosticCase) {
             assert_eq!(diagnostic.found.as_deref(), Some("Type"));
         }
     }
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_kind_diagnostic, write_human, write_json},
+    };
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_kind_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(&format!("`{}`", diagnostic.found.as_deref().unwrap())));
+        if locale == Locale::English {
+            let expected = diagnostic.expected.as_deref().unwrap();
+            let found = diagnostic.found.as_deref().unwrap();
+            let title = match case.reason {
+                KindReason::ExpectedType => format!(
+                    "This position requires a complete value type (kind `Type`), but has kind `{found}`."
+                ),
+                KindReason::NotApplicable => {
+                    format!("The applied type has kind `{found}` and cannot take type arguments.")
+                }
+                KindReason::Argument => {
+                    format!("This argument needs kind `{expected}`, but has kind `{found}`.")
+                }
+            };
+            assert!(output.contains(&title), "{output}");
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["name"], "expected_kind");
+    assert_eq!(
+        json["facts"][0]["value"],
+        diagnostic.expected.as_deref().unwrap()
+    );
+    assert_eq!(json["facts"][1]["name"], "found_kind");
+    assert_eq!(
+        json["facts"][1]["value"],
+        diagnostic.found.as_deref().unwrap()
+    );
+    assert_eq!(
+        json["facts"][2]["value"],
+        if case.reason == KindReason::NotApplicable {
+            "function"
+        } else {
+            "exact"
+        }
+    );
+    assert_eq!(
+        json["labels"][1]["relationship"],
+        if case.reason == KindReason::Argument {
+            "required_kind_declaration"
+        } else {
+            "found_kind_declaration"
+        }
+    );
+    for (label, original) in json["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(std::iter::once(&diagnostic.primary).chain(&diagnostic.related))
+    {
+        assert_eq!(label["byte_start"], original.span().range().start());
+        assert_eq!(label["byte_end"], original.span().range().end());
+    }
+    assert!(compile_kind_diagnostic(error, &[]).is_err());
 }
 
 #[test]
@@ -264,7 +2354,7 @@ fn syntax_failure_reason_and_rendering_follow_source_order_across_stages() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the module should retain both independent syntax failures");
-    let FileFailure::Graph(LoadGraphError::Syntax(syntax)) = &file_error else {
+    let Some(LoadGraphError::Syntax(syntax)) = file_error.graph_failure() else {
         panic!("the independent lexical and parser failures should retain graph syntax ownership")
     };
     let parser = syntax
@@ -485,7 +2575,7 @@ fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() 
     );
     assert!(error.related.is_empty());
     assert!(error.expected.is_none());
-    assert!(error.found.is_none());
+    assert_eq!(error.found.as_deref(), Some("missing"));
     assert!(error.help.is_none());
 }
 
@@ -506,7 +2596,8 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     assert_eq!(error.primary.span().range().start(), offset(second));
     assert_eq!(error.related.len(), 1);
     assert_eq!(error.related[0].span().range().start(), offset(first));
-    assert!(error.expected.is_none() && error.found.is_none() && error.help.is_none());
+    assert!(error.expected.is_none() && error.help.is_none());
+    assert_eq!(error.found.as_deref(), Some("Thing"));
 
     let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
     let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
@@ -708,7 +2799,7 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     assert!(error.related.iter().any(|label| label.span() == first.span));
     assert_ne!(error.primary.span(), second.span);
     assert!(error.expected.is_none());
-    assert!(error.found.is_none());
+    assert_eq!(error.found.as_deref(), Some("value"));
 }
 
 #[test]
@@ -2273,6 +4364,58 @@ fn public_kind_failure_precedence_follows_causal_and_owner_order() {
             ),
             occurrence_range(&source, primary.0, primary.1),
             "case: {name}",
+        );
+    }
+}
+
+#[test]
+fn kind_presentation_handles_effect_and_type_arguments() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_kind_diagnostic, write_json, write_short},
+    };
+    for (text, reason, related_count) in [
+        (
+            "bad<A> : A<Int> -> Unit\nbad value = ()\n",
+            KindReason::NotApplicable,
+            1,
+        ),
+        (
+            "effect E<F : Type -> Type> {\nop : Unit -> F<Int>\n}\nprobe : Unit -> Unit ! {E<Int>}\nprobe () = ()\n",
+            KindReason::Argument,
+            1,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("kind-origin.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Kind(KindFailure::Source(error))) = failure.pipeline_failure()
+        else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.related.len(), related_count);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_kind_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains("`Type`"));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"].as_array().unwrap().len(), related_count + 1);
+        assert_eq!(
+            json["labels"][1]["facts"][0]["value"],
+            if reason == KindReason::Argument {
+                "Type -> Type"
+            } else {
+                "Type"
+            }
         );
     }
 }

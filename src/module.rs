@@ -322,6 +322,16 @@ pub struct ModuleGraph {
 }
 
 impl ModuleGraph {
+    /// Moves admitted sources out of a finished graph for compile diagnostics.
+    pub(crate) fn into_sources(self) -> Box<[SourceFile]> {
+        self.modules
+            .into_vec()
+            .into_iter()
+            .map(|module| module.source)
+            .collect::<Vec<_>>()
+            .into_boxed_slice()
+    }
+
     /// Returns modules in deterministic dependency order.
     #[must_use]
     pub fn modules(&self) -> &[LoadedModule] {
@@ -362,7 +372,7 @@ pub enum ModuleReason {
     InvalidRootName,
     /// A configured root path cannot be used as a directory.
     RootUnavailable,
-    /// Projected module data contains no path segment where one is required.
+    /// Internal module data lacks required path segments or a canonical parent.
     InvalidPath,
     /// Module graph work exceeded an implementation budget.
     ResourceLimit,
@@ -386,6 +396,52 @@ impl fmt::Display for ModuleReason {
     }
 }
 
+/// Stable I/O fact names, independent of operating-system message text.
+pub(crate) const fn io_kind_name(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::NotFound => "not-found",
+        io::ErrorKind::PermissionDenied => "permission-denied",
+        io::ErrorKind::ConnectionRefused => "connection-refused",
+        io::ErrorKind::ConnectionReset => "connection-reset",
+        io::ErrorKind::HostUnreachable => "host-unreachable",
+        io::ErrorKind::NetworkUnreachable => "network-unreachable",
+        io::ErrorKind::ConnectionAborted => "connection-aborted",
+        io::ErrorKind::NotConnected => "not-connected",
+        io::ErrorKind::AddrInUse => "addr-in-use",
+        io::ErrorKind::AddrNotAvailable => "addr-not-available",
+        io::ErrorKind::NetworkDown => "network-down",
+        io::ErrorKind::BrokenPipe => "broken-pipe",
+        io::ErrorKind::AlreadyExists => "already-exists",
+        io::ErrorKind::WouldBlock => "would-block",
+        io::ErrorKind::NotADirectory => "not-a-directory",
+        io::ErrorKind::IsADirectory => "is-a-directory",
+        io::ErrorKind::DirectoryNotEmpty => "directory-not-empty",
+        io::ErrorKind::ReadOnlyFilesystem => "read-only-filesystem",
+        io::ErrorKind::StaleNetworkFileHandle => "stale-network-file-handle",
+        io::ErrorKind::InvalidInput => "invalid-input",
+        io::ErrorKind::InvalidData => "invalid-data",
+        io::ErrorKind::TimedOut => "timed-out",
+        io::ErrorKind::WriteZero => "write-zero",
+        io::ErrorKind::StorageFull => "storage-full",
+        io::ErrorKind::NotSeekable => "not-seekable",
+        io::ErrorKind::QuotaExceeded => "quota-exceeded",
+        io::ErrorKind::FileTooLarge => "file-too-large",
+        io::ErrorKind::ResourceBusy => "resource-busy",
+        io::ErrorKind::ExecutableFileBusy => "executable-file-busy",
+        io::ErrorKind::Deadlock => "deadlock",
+        io::ErrorKind::CrossesDevices => "crosses-devices",
+        io::ErrorKind::TooManyLinks => "too-many-links",
+        io::ErrorKind::InvalidFilename => "invalid-filename",
+        io::ErrorKind::ArgumentListTooLong => "argument-list-too-long",
+        io::ErrorKind::Interrupted => "interrupted",
+        io::ErrorKind::Unsupported => "unsupported",
+        io::ErrorKind::UnexpectedEof => "unexpected-eof",
+        io::ErrorKind::OutOfMemory => "out-of-memory",
+        io::ErrorKind::Other => "other",
+        _ => "uncategorized",
+    }
+}
+
 /// The graph resource whose budget was exhausted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleResource {
@@ -405,12 +461,32 @@ pub enum ModuleResource {
 
 static NEXT_MODULE_GRAPH: AtomicU32 = AtomicU32::new(1);
 
+impl ModuleResource {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::GraphIdentities => "graph-identities",
+            Self::Sources => "sources",
+            Self::Edges => "edges",
+            Self::PathSegments => "path-segments",
+            Self::OwnerFacts => "owner-facts",
+            Self::PendingWork => "pending-work",
+        }
+    }
+}
+
 fn allocate_module_graph_identity() -> Result<u32, LoadGraphError> {
     NEXT_MODULE_GRAPH
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .map_err(|_| ModuleFailure::resource(ModuleResource::GraphIdentities).into())
+}
+
+/// The internal module-path relationship that failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModulePathCause {
+    MissingParent,
+    MissingSegments,
 }
 
 /// A typed module-stage or root-configuration failure.
@@ -423,9 +499,48 @@ pub struct ModuleFailure {
     root: Option<String>,
     io_kind: Option<io::ErrorKind>,
     resource: Option<ModuleResource>,
+    path_cause: Option<ModulePathCause>,
 }
 
 impl ModuleFailure {
+    pub(crate) const fn responsibility(&self) -> &'static str {
+        match self.reason {
+            ModuleReason::ReservedRoot
+            | ModuleReason::DuplicateRoot
+            | ModuleReason::InvalidRootName
+            | ModuleReason::RootUnavailable => "invocation",
+            ModuleReason::UnknownBuiltin
+            | ModuleReason::UnknownRoot
+            | ModuleReason::NotFound
+            | ModuleReason::PathEscape
+            | ModuleReason::ImportCycle => "source",
+            ModuleReason::InvalidPath | ModuleReason::ResourceLimit => "compiler",
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        use crate::message::Message;
+        Some(match self.reason {
+            ModuleReason::ReservedRoot => Message::module_reserved_root(self.root()?),
+            ModuleReason::DuplicateRoot => Message::module_duplicate_root(self.root()?),
+            ModuleReason::InvalidRootName => Message::module_invalid_root_name(self.root()?),
+            ModuleReason::UnknownRoot => Message::module_unknown_root(self.root()?),
+            ModuleReason::UnknownBuiltin => Message::module_unknown_builtin(),
+            ModuleReason::NotFound => Message::module_not_found(self.path()?),
+            ModuleReason::ImportCycle => Message::module_import_cycle(self.path()?),
+            ModuleReason::PathEscape => Message::module_path_escape(self.path()?),
+            ModuleReason::ResourceLimit => Message::module_resource(self.resource_kind()?),
+            ModuleReason::RootUnavailable => match self.io_kind() {
+                Some(kind) => Message::module_root_io(self.path()?, self.root()?, kind),
+                None => Message::module_root_unavailable(self.path()?, self.root()?),
+            },
+            ModuleReason::InvalidPath => match self.path_cause? {
+                ModulePathCause::MissingParent => Message::module_missing_parent(),
+                ModulePathCause::MissingSegments => Message::module_missing_segments(),
+            },
+        })
+    }
+
     fn source(reason: ModuleReason, primary: Span, path: Option<PathBuf>) -> Self {
         Self {
             reason,
@@ -435,6 +550,7 @@ impl ModuleFailure {
             root: None,
             io_kind: None,
             resource: None,
+            path_cause: None,
         }
     }
 
@@ -442,6 +558,21 @@ impl ModuleFailure {
         let mut failure = Self::source(ModuleReason::UnknownRoot, primary, None);
         failure.root = Some(root);
         failure
+    }
+
+    fn invalid_path(primary: Span, path: Option<PathBuf>, cause: ModulePathCause) -> Self {
+        let mut failure = Self::source(ModuleReason::InvalidPath, primary, path);
+        failure.source_rejection = false;
+        failure.path_cause = Some(cause);
+        failure
+    }
+
+    pub(crate) const fn path_cause_name(&self) -> Option<&'static str> {
+        match self.path_cause {
+            Some(ModulePathCause::MissingParent) => Some("missing-canonical-parent"),
+            Some(ModulePathCause::MissingSegments) => Some("missing-path-segments"),
+            None => None,
+        }
     }
 
     fn invocation(
@@ -458,6 +589,7 @@ impl ModuleFailure {
             root,
             io_kind,
             resource: None,
+            path_cause: None,
         }
     }
 
@@ -470,6 +602,7 @@ impl ModuleFailure {
             root: None,
             io_kind: None,
             resource: Some(resource),
+            path_cause: None,
         }
     }
 
@@ -485,7 +618,7 @@ impl ModuleFailure {
         self.source_rejection
     }
 
-    /// Returns the import occurrence that caused a source rejection.
+    /// Returns the import occurrence associated with this failure.
     #[must_use]
     pub const fn primary_span(&self) -> Option<Span> {
         self.primary
@@ -524,11 +657,220 @@ impl fmt::Display for ModuleFailure {
 
 impl Error for ModuleFailure {}
 
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    #[test]
+    fn corrupt_projected_paths_report_compiler_failures_with_specific_causes() {
+        for (input, missing_parent, expected_cause) in [
+            ("import child as Child\n", true, "missing-canonical-parent"),
+            ("import child as Child\n", false, "missing-path-segments"),
+            (
+                "import @std.child as Child\n",
+                false,
+                "missing-path-segments",
+            ),
+        ] {
+            let (source, mut surface) = parse_surface_module(
+                Path::new("entry.ash"),
+                input.into(),
+                None,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            if !missing_parent {
+                match &mut surface.imports[0].path {
+                    SurfaceModulePath::Relative(segments)
+                    | SurfaceModulePath::Absolute { segments, .. } => segments.clear(),
+                }
+            }
+            let module = StagedModule {
+                id: ModuleId::new(0),
+                canonical_path: if missing_parent {
+                    PathBuf::new()
+                } else {
+                    PathBuf::from("entry.ash")
+                },
+                owners: OwnerSet {
+                    ordered: Vec::new(),
+                    membership: HashSet::new(),
+                },
+                source,
+                surface,
+                dependencies: Vec::new(),
+                relative_edges: Vec::new(),
+                state: VisitState::Active,
+            };
+            let roots = ModuleRoots {
+                named: HashMap::from([(ModuleRootName::new("std").unwrap(), PathBuf::from("."))]),
+            };
+            let failure = resolve_import(&module, &module.surface.imports[0], &roots).unwrap_err();
+            assert_eq!(failure.module_reason(), Some(ModuleReason::InvalidPath));
+            assert!(
+                !failure.is_source_rejection(),
+                "corrupt compiler data must not reject source"
+            );
+            let context = GraphDiagnostic {
+                failure: Box::new(failure),
+                sources: vec![module.source].into_boxed_slice(),
+            };
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&context).unwrap();
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert!(
+                json["facts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|fact| fact["name"] == "cause" && fact["value"] == expected_cause)
+            );
+            assert_eq!(json["labels"][0]["path"], "entry.ash");
+            for locale in [
+                crate::message::Locale::English,
+                crate::message::Locale::Bulgarian,
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert!(String::from_utf8(output).unwrap().contains("Ash"));
+            }
+        }
+    }
+    #[test]
+    fn unavailable_root_retains_io_facts_without_inventing_a_directory_cause() {
+        for kind in [None, Some(io::ErrorKind::PermissionDenied)] {
+            let failure = GraphDiagnostic::from(LoadGraphError::Module(ModuleFailure::invocation(
+                ModuleReason::RootUnavailable,
+                Some(PathBuf::from("library")),
+                Some("std".into()),
+                kind,
+            )));
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&failure).unwrap();
+            for (locale, expected) in [
+                (
+                    crate::message::Locale::English,
+                    if kind.is_some() {
+                        "Cannot use `library` for module root `std`: access is denied."
+                    } else {
+                        "Cannot use `library` as a directory for module root `std`."
+                    },
+                ),
+                (
+                    crate::message::Locale::Bulgarian,
+                    if kind.is_some() {
+                        "Не може да се използва `library` за корен за модули `std`: достъпът е отказан."
+                    } else {
+                        "Не може да се използва `library` като директория за корен за модули `std`."
+                    },
+                ),
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    String::from_utf8(output).unwrap(),
+                    format!("{expected} [invocation.root-unavailable]\n")
+                );
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "invocation");
+            assert_eq!(json["labels"], serde_json::json!([]));
+            let facts = json["facts"].as_array().unwrap();
+            assert_eq!(facts.len(), if kind.is_some() { 3 } else { 2 });
+            if kind.is_some() {
+                assert_eq!(facts[2]["value"], "permission-denied");
+            }
+        }
+    }
+    #[test]
+    fn module_resource_messages_preserve_compiler_responsibility_and_kind() {
+        for (resource, name, en, bg) in [
+            (
+                ModuleResource::GraphIdentities,
+                "graph-identities",
+                "module graph identities",
+                "идентичности на графи от модули",
+            ),
+            (
+                ModuleResource::Sources,
+                "sources",
+                "module sources",
+                "изходни файлове на модули",
+            ),
+            (
+                ModuleResource::Edges,
+                "edges",
+                "import edges",
+                "ребра на импорти",
+            ),
+            (
+                ModuleResource::PathSegments,
+                "path-segments",
+                "module path segments",
+                "сегменти на пътища към модули",
+            ),
+            (
+                ModuleResource::OwnerFacts,
+                "owner-facts",
+                "module ownership facts",
+                "факти за принадлежност на модули",
+            ),
+            (
+                ModuleResource::PendingWork,
+                "pending-work",
+                "pending module-loading work",
+                "чакаща работа по зареждане на модули",
+            ),
+        ] {
+            let failure =
+                GraphDiagnostic::from(LoadGraphError::Module(ModuleFailure::resource(resource)));
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&failure).unwrap();
+            for (locale, detail) in [
+                (crate::message::Locale::English, en),
+                (crate::message::Locale::Bulgarian, bg),
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert!(String::from_utf8(output).unwrap().contains(detail));
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["reason"], "internal.resource.module-graph");
+            assert_eq!(json["labels"], serde_json::json!([]));
+            assert_eq!(
+                json["facts"],
+                serde_json::json!([{"name":"resource", "kind":"resource", "value":name}])
+            );
+        }
+    }
+}
+
 /// Structured syntax facts retained for one rejected module source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleSyntaxFailure {
     /// The admitted source needed to render retained spans.
     pub source: SourceFile,
+    /// The import selecting this source, or `None` for the entry source.
+    pub import_span: Option<Span>,
     /// Independent lexical diagnostics.
     pub lexical: Vec<Diagnostic<LexReason>>,
     /// Structured parser diagnostics.
@@ -564,6 +906,8 @@ pub enum LoadGraphError {
         path: PathBuf,
         /// The source-model failure.
         error: SourceError,
+        /// Distinguishes input admission from checked operations on admitted text.
+        operation: crate::source::SourceOperation,
         /// The causing import, or `None` for the entry path.
         import_span: Option<Span>,
     },
@@ -575,10 +919,24 @@ pub enum LoadGraphError {
         source: SourceFile,
         /// The projection failure.
         error: ProjectionError,
+        /// The import selecting this source, or `None` for the entry source.
+        import_span: Option<Span>,
     },
 }
 
 impl LoadGraphError {
+    /// Returns the import occurrence that caused this load failure, if any.
+    #[must_use]
+    pub const fn import_span(&self) -> Option<Span> {
+        match self {
+            Self::Module(failure) => failure.primary_span(),
+            Self::Read { import_span, .. }
+            | Self::InvalidUtf8 { import_span, .. }
+            | Self::SourceModel { import_span, .. }
+            | Self::Projection { import_span, .. } => *import_span,
+            Self::Syntax(failure) => failure.import_span,
+        }
+    }
     /// Returns the module-stage payload, when this is a module failure.
     #[must_use]
     pub const fn as_module_failure(&self) -> Option<&ModuleFailure> {
@@ -647,6 +1005,73 @@ impl fmt::Display for LoadGraphError {
 }
 
 impl Error for LoadGraphError {}
+
+/// A graph-loading failure with the admitted sources needed for diagnostics.
+/// Sources are moved out of traversal state only after loading fails.
+#[derive(Debug)]
+pub struct GraphDiagnostic {
+    failure: Box<LoadGraphError>,
+    sources: Box<[SourceFile]>,
+}
+
+impl GraphDiagnostic {
+    /// Borrows the unchanged graph-loading failure.
+    #[must_use]
+    pub const fn failure(&self) -> &LoadGraphError {
+        &self.failure
+    }
+
+    /// Consumes the diagnostic when only its semantic failure is needed.
+    #[must_use]
+    pub fn into_failure(self) -> LoadGraphError {
+        *self.failure
+    }
+
+    /// Borrows all admitted sources, including a rejected syntax source.
+    pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
+        let rejected = match &*self.failure {
+            LoadGraphError::Syntax(failure) => Some(&failure.source),
+            LoadGraphError::Projection { source, .. } => Some(source),
+            _ => None,
+        };
+        self.sources.iter().chain(rejected)
+    }
+
+    /// Returns the module-stage failure, if present.
+    #[must_use]
+    pub const fn as_module_failure(&self) -> Option<&ModuleFailure> {
+        self.failure.as_module_failure()
+    }
+
+    /// Returns the stable module-stage reason, if present.
+    #[must_use]
+    pub const fn module_reason(&self) -> Option<ModuleReason> {
+        self.failure.module_reason()
+    }
+
+    /// Preserves the original source-rejection classification.
+    #[must_use]
+    pub fn is_source_rejection(&self) -> bool {
+        self.failure.is_source_rejection()
+    }
+}
+
+impl fmt::Display for GraphDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.failure.fmt(formatter)
+    }
+}
+
+impl Error for GraphDiagnostic {}
+
+impl From<LoadGraphError> for GraphDiagnostic {
+    fn from(failure: LoadGraphError) -> Self {
+        Self {
+            failure: Box::new(failure),
+            sources: Box::default(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum VisitState {
@@ -860,170 +1285,187 @@ fn charge(
 ///
 /// # Errors
 ///
-/// Returns [`LoadGraphError`] from the first failing input or compiler stage in
-/// source-ordered depth-first traversal.
-pub fn load_module_graph(entry: &Path, roots: &ModuleRoots) -> Result<ModuleGraph, LoadGraphError> {
-    let canonical_entry = fs::canonicalize(entry).map_err(|error| LoadGraphError::Read {
-        path: entry.to_path_buf(),
-        kind: error.kind(),
-        import_span: None,
-    })?;
-    let entry_root = canonical_entry
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| LoadGraphError::Read {
-            path: canonical_entry.clone(),
-            kind: io::ErrorKind::InvalidInput,
+/// Returns the first failing input or compiler stage in source-ordered
+/// depth-first traversal, with the admitted diagnostic sources retained.
+pub fn load_module_graph(
+    entry: &Path,
+    roots: &ModuleRoots,
+) -> Result<ModuleGraph, GraphDiagnostic> {
+    let mut staged = Vec::new();
+    let result: Result<ModuleGraph, LoadGraphError> = (|| {
+        let canonical_entry = fs::canonicalize(entry).map_err(|error| LoadGraphError::Read {
+            path: entry.to_path_buf(),
+            kind: error.kind(),
             import_span: None,
         })?;
+        let entry_root = canonical_entry
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| LoadGraphError::Read {
+                path: canonical_entry.clone(),
+                kind: io::ErrorKind::InvalidInput,
+                import_span: None,
+            })?;
 
-    let graph_identity = allocate_module_graph_identity()?;
-    let mut budget = GraphBudget::default();
-    let mut staged = Vec::new();
-    let mut by_path = HashMap::new();
-    let entry_id = admit_module(
-        canonical_entry,
-        OwnerSet::from_paths(std::slice::from_ref(&entry_root), &mut budget)?,
-        None,
-        &mut staged,
-        &mut by_path,
-        &mut budget,
-        graph_identity,
-    )?;
-    budget.retain_pending_work()?;
-    let mut frames = vec![TraversalFrame {
-        module: entry_id,
-        next_import: 0,
-    }];
-    let mut dependency_order = Vec::new();
-    let mut builtin_cell = None;
-    let mut builtin_native_buffer = None;
+        let graph_identity = allocate_module_graph_identity()?;
+        let mut budget = GraphBudget::default();
+        let mut by_path = HashMap::new();
+        let entry_id = admit_module(
+            canonical_entry,
+            OwnerSet::from_paths(std::slice::from_ref(&entry_root), &mut budget)?,
+            None,
+            &mut staged,
+            &mut by_path,
+            &mut budget,
+            graph_identity,
+        )?;
+        budget.retain_pending_work()?;
+        let mut frames = vec![TraversalFrame {
+            module: entry_id,
+            next_import: 0,
+        }];
+        let mut dependency_order = Vec::new();
+        let mut builtin_cell = None;
+        let mut builtin_native_buffer = None;
 
-    while let Some(frame) = frames.last() {
-        let module = frame.module;
-        let module_index = module.index();
-        let import_index = frame.next_import;
-        if import_index == staged[module_index].surface.imports.len() {
-            let completed = module;
-            staged[module_index].state = VisitState::Finished;
-            dependency_order.push(completed);
-            frames.pop();
-            budget.release_pending_work();
-            continue;
-        }
-
-        budget.charge_edge()?;
-        budget.charge_path_segments(import_segment_count(
-            &staged[module_index].surface.imports[import_index],
-        ))?;
-        let import = staged[module_index].surface.imports[import_index].clone();
-        frames
-            .last_mut()
-            .expect("the loop observed one traversal frame")
-            .next_import += 1;
-
-        if let SurfaceModulePath::Absolute { root, segments } = &import.path
-            && root.text == "builtin"
-        {
-            if segments.len() != 1 || !matches!(segments[0].text.as_str(), "cell" | "native_buffer")
-            {
-                return Err(
-                    ModuleFailure::source(ModuleReason::UnknownBuiltin, import.span, None).into(),
-                );
+        while let Some(frame) = frames.last() {
+            let module = frame.module;
+            let module_index = module.index();
+            let import_index = frame.next_import;
+            if import_index == staged[module_index].surface.imports.len() {
+                let completed = module;
+                staged[module_index].state = VisitState::Finished;
+                dependency_order.push(completed);
+                frames.pop();
+                budget.release_pending_work();
+                continue;
             }
-            let native_buffer = segments[0].text == "native_buffer";
-            let cached = if native_buffer {
-                &mut builtin_native_buffer
+
+            budget.charge_edge()?;
+            budget.charge_path_segments(import_segment_count(
+                &staged[module_index].surface.imports[import_index],
+            ))?;
+            let import = staged[module_index].surface.imports[import_index].clone();
+            frames
+                .last_mut()
+                .expect("the loop observed one traversal frame")
+                .next_import += 1;
+
+            if let SurfaceModulePath::Absolute { root, segments } = &import.path
+                && root.text == "builtin"
+            {
+                if segments.len() != 1
+                    || !matches!(segments[0].text.as_str(), "cell" | "native_buffer")
+                {
+                    return Err(ModuleFailure::source(
+                        ModuleReason::UnknownBuiltin,
+                        import.span,
+                        None,
+                    )
+                    .into());
+                }
+                let native_buffer = segments[0].text == "native_buffer";
+                let cached = if native_buffer {
+                    &mut builtin_native_buffer
+                } else {
+                    &mut builtin_cell
+                };
+                let target = if let Some(id) = *cached {
+                    id
+                } else {
+                    let id = admit_builtin_resource(
+                        native_buffer,
+                        graph_identity,
+                        import.span,
+                        &mut budget,
+                        &mut staged,
+                        &mut dependency_order,
+                    )?;
+                    *cached = Some(id);
+                    id
+                };
+                staged[module_index]
+                    .dependencies
+                    .try_reserve(1)
+                    .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+                staged[module_index].dependencies.push(ModuleDependency {
+                    target,
+                    import_span: import.span,
+                });
+                continue;
+            }
+
+            let (target_path, owners, relative) =
+                resolve_import(&staged[module_index], &import, roots)?;
+            let existing = by_path.get(&target_path).copied();
+            let target = if let Some(target) = existing {
+                propagate_owners(target, owners, import.span, &mut staged, &mut budget)?;
+                target
             } else {
-                &mut builtin_cell
-            };
-            let target = if let Some(id) = *cached {
-                id
-            } else {
-                let id = admit_builtin_resource(
-                    native_buffer,
-                    graph_identity,
-                    import.span,
-                    &mut budget,
+                let owners = admitted_owners(owners, &staged, &mut budget)?;
+                admit_module(
+                    target_path.clone(),
+                    owners,
+                    Some(import.span),
                     &mut staged,
-                    &mut dependency_order,
-                )?;
-                *cached = Some(id);
-                id
+                    &mut by_path,
+                    &mut budget,
+                    graph_identity,
+                )?
             };
-            staged[module_index]
-                .dependencies
-                .try_reserve(1)
-                .map_err(|_| ModuleFailure::resource(ModuleResource::Edges))?;
+
             staged[module_index].dependencies.push(ModuleDependency {
                 target,
                 import_span: import.span,
             });
-            continue;
-        }
-
-        let (target_path, owners, relative) =
-            resolve_import(&staged[module_index], &import, roots)?;
-        let existing = by_path.get(&target_path).copied();
-        let target = if let Some(target) = existing {
-            propagate_owners(target, owners, import.span, &mut staged, &mut budget)?;
-            target
-        } else {
-            let owners = admitted_owners(owners, &staged, &mut budget)?;
-            admit_module(
-                target_path.clone(),
-                owners,
-                Some(import.span),
-                &mut staged,
-                &mut by_path,
-                &mut budget,
-                graph_identity,
-            )?
-        };
-
-        staged[module_index].dependencies.push(ModuleDependency {
-            target,
-            import_span: import.span,
-        });
-        if relative {
-            staged[module_index].relative_edges.push(RelativeEdge {
-                target,
-                canonical_target: target_path,
-                import_span: import.span,
-            });
-        }
-
-        if existing.is_some() {
-            if staged[target.index()].state == VisitState::Active {
-                return Err(ModuleFailure::source(
-                    ModuleReason::ImportCycle,
-                    import.span,
-                    Some(staged[target.index()].canonical_path.clone()),
-                )
-                .into());
+            if relative {
+                staged[module_index].relative_edges.push(RelativeEdge {
+                    target,
+                    canonical_target: target_path,
+                    import_span: import.span,
+                });
             }
-        } else {
-            budget.retain_pending_work()?;
-            frames.push(TraversalFrame {
-                module: target,
-                next_import: 0,
-            });
-        }
-    }
 
-    let mut positions = vec![0_usize; staged.len()];
-    for (position, module) in dependency_order.into_iter().enumerate() {
-        positions[module.index()] = position;
-    }
-    staged.sort_by_key(|module| positions[module.id.index()]);
-    let modules = staged
-        .into_iter()
-        .map(StagedModule::into_loaded)
-        .collect::<Vec<_>>()
-        .into_boxed_slice();
-    Ok(ModuleGraph {
-        modules,
-        entry: entry_id,
+            if existing.is_some() {
+                if staged[target.index()].state == VisitState::Active {
+                    return Err(ModuleFailure::source(
+                        ModuleReason::ImportCycle,
+                        import.span,
+                        Some(staged[target.index()].canonical_path.clone()),
+                    )
+                    .into());
+                }
+            } else {
+                budget.retain_pending_work()?;
+                frames.push(TraversalFrame {
+                    module: target,
+                    next_import: 0,
+                });
+            }
+        }
+
+        let mut positions = vec![0_usize; staged.len()];
+        for (position, module) in dependency_order.into_iter().enumerate() {
+            positions[module.index()] = position;
+        }
+        staged.sort_by_key(|module| positions[module.id.index()]);
+        let modules = std::mem::take(&mut staged)
+            .into_iter()
+            .map(StagedModule::into_loaded)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(ModuleGraph {
+            modules,
+            entry: entry_id,
+        })
+    })();
+    result.map_err(|failure| GraphDiagnostic {
+        failure: Box::new(failure),
+        sources: staged
+            .into_iter()
+            .map(|module| module.source)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     })
 }
 
@@ -1139,6 +1581,7 @@ fn parse_surface_module(
         LoadGraphError::SourceModel {
             path: path.to_path_buf(),
             error,
+            operation: crate::source::SourceOperation::Admission,
             import_span,
         }
     })?;
@@ -1146,6 +1589,7 @@ fn parse_surface_module(
         lex_with_budget(&source, syntax_budget).map_err(|error| LoadGraphError::SourceModel {
             path: path.to_path_buf(),
             error,
+            operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
     let tree = parse_with_budget(lexed, syntax_budget);
@@ -1158,12 +1602,19 @@ fn parse_surface_module(
             parser: tree.parse_diagnostics().to_vec(),
             resource: tree.resource_failure(),
             source,
+            import_span,
         })));
     }
-    let surface = project_module(&source, &tree).map_err(|error| LoadGraphError::Projection {
-        source: source.clone(),
-        error,
-    })?;
+    let surface = match project_module(&source, &tree) {
+        Ok(surface) => surface,
+        Err(error) => {
+            return Err(LoadGraphError::Projection {
+                source,
+                error,
+                import_span,
+            });
+        }
+    };
     Ok((source, surface))
 }
 
@@ -1175,16 +1626,20 @@ fn resolve_import(
     match &import.path {
         SurfaceModulePath::Relative(segments) => {
             let parent = module.canonical_path.parent().ok_or_else(|| {
-                ModuleFailure::source(
-                    ModuleReason::InvalidPath,
+                ModuleFailure::invalid_path(
                     import.span,
                     Some(module.canonical_path.clone()),
+                    ModulePathCause::MissingParent,
                 )
             })?;
             let candidate =
                 target_path(parent, segments.iter().map(|segment| segment.text.as_str()))
                     .ok_or_else(|| {
-                        ModuleFailure::source(ModuleReason::InvalidPath, import.span, None)
+                        ModuleFailure::invalid_path(
+                            import.span,
+                            None,
+                            ModulePathCause::MissingSegments,
+                        )
                     })?;
             let canonical = canonical_import_target(candidate, import.span)?;
             for owner in &module.owners.ordered {
@@ -1200,7 +1655,11 @@ fn resolve_import(
             let candidate =
                 target_path(owner, segments.iter().map(|segment| segment.text.as_str()))
                     .ok_or_else(|| {
-                        ModuleFailure::source(ModuleReason::InvalidPath, import.span, None)
+                        ModuleFailure::invalid_path(
+                            import.span,
+                            None,
+                            ModulePathCause::MissingSegments,
+                        )
                     })?;
             let canonical = canonical_import_target(candidate, import.span)?;
             require_within_owner(&canonical, owner, import.span)?;

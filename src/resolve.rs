@@ -100,11 +100,16 @@ fn build_source_effect_row_with_provenance(
                 })?
                 == std::cmp::Ordering::Equal
             {
-                return Err(error(
+                let mut failure = error(
                     ResolveReason::DuplicateEffect,
                     written[index].1,
                     "this exact effect instance is already present in the written row",
+                );
+                failure.0.diagnostic.related.push(SourceLabel::new(
+                    written[earlier].1,
+                    "the first exact effect instance is here",
                 ));
+                return Err(failure);
             }
         }
     }
@@ -827,25 +832,612 @@ impl fmt::Display for ResolveReason {
 
 /// A structured name-resolution failure kept compact in pipeline results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolveError(Box<Diagnostic<ResolveReason>>);
+pub struct ResolveError(Box<ResolveErrorData>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolveErrorData {
+    diagnostic: Diagnostic<ResolveReason>,
+    context: Option<ResolveContext>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResolveContext {
+    WorkState {
+        part: &'static str,
+        problem: &'static str,
+    },
+    DeclarationOrder {
+        kind: &'static str,
+        problem: &'static str,
+    },
+    MissingFileScope,
+    MissingLexicalScope,
+    MissingNominalScope,
+    MissingConstructorScope,
+    DependencySummaryMismatch,
+    DependencySummaryInvalid,
+    Kind(crate::kind::KindFailureContext),
+    Term,
+    EffectOperation,
+    Type,
+    EffectRowParameter,
+    InterfaceParameter,
+    Constructor,
+    Interface,
+    Effect,
+    ExportedEffect,
+    PrivateExport,
+    MissingExport,
+    MissingModuleAlias,
+    MixedTypeRowRoles,
+    IdentityExhaustion(ResolveIdentitySpace),
+}
+
+/// The compiler identity space exhausted during resolution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolveIdentitySpace {
+    /// Identifiers for interfaces in a module.
+    Interface,
+    /// Identifiers for methods in an interface.
+    Method,
+    /// Identifiers for effects in a module.
+    Effect,
+    /// Identifiers for operations in an effect.
+    Operation,
+    /// Identifiers for implementations in a module.
+    Implementation,
+    /// Identifiers for interface requirements in a declaration.
+    Requirement,
+    /// Identifiers for nominal types in a module.
+    Nominal,
+    /// Identifiers for constructors in a declaration.
+    Constructor,
+    /// Value binders, including generated implementation binders.
+    TermBinder,
+    /// Type binders, including lexical method parameters.
+    TypeBinder,
+    /// Local nominal declarations.
+    LocalNominal,
+    /// Handler, hook and registration continuations.
+    Continuation,
+    /// Lexical evidence identities, including resource providers.
+    LexicalEvidence,
+}
+
+impl ResolveIdentitySpace {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::TermBinder => "term-binder",
+            Self::Interface => "interface",
+            Self::Method => "method",
+            Self::Effect => "effect",
+            Self::Operation => "operation",
+            Self::Implementation => "implementation",
+            Self::Requirement => "requirement",
+            Self::Nominal => "nominal",
+            Self::Constructor => "constructor",
+            Self::TypeBinder => "type-binder",
+            Self::LocalNominal => "local-nominal",
+            Self::Continuation => "continuation",
+            Self::LexicalEvidence => "lexical-evidence",
+        }
+    }
+}
 
 impl ResolveError {
-    /// Returns the phase-owned structured diagnostic.
-    #[must_use]
-    pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
-        &self.0
+    fn new(diagnostic: Diagnostic<ResolveReason>, context: Option<ResolveContext>) -> Self {
+        Self(Box::new(ResolveErrorData {
+            diagnostic,
+            context,
+        }))
     }
 
-    /// Consumes the failure and returns its structured diagnostic.
+    fn with_context(mut self, context: ResolveContext) -> Self {
+        // A contextual boundary must not replace a more specific retained cause.
+        if self.0.context.is_none() {
+            self.0.context = Some(context);
+        }
+        self
+    }
+
+    fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        match self.0.context {
+            Some(ResolveContext::WorkState { part, problem }) => {
+                Some((Message::resolve_work_state(part, problem), "work-state"))
+            }
+            Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((
+                Message::resolve_declaration_order(kind, problem),
+                "declaration-order",
+            )),
+            Some(ResolveContext::MissingFileScope) => {
+                Some((Message::resolve_missing_file_scope(), "missing-file-scope"))
+            }
+            Some(ResolveContext::MissingLexicalScope) => Some((
+                Message::resolve_missing_lexical_scope(),
+                "missing-lexical-scope",
+            )),
+            Some(ResolveContext::MissingNominalScope) => Some((
+                Message::resolve_missing_nominal_scope(),
+                "missing-nominal-scope",
+            )),
+            Some(ResolveContext::MissingConstructorScope) => Some((
+                Message::resolve_missing_constructor_scope(),
+                "missing-constructor-scope",
+            )),
+            Some(ResolveContext::DependencySummaryMismatch) => Some((
+                Message::resolve_dependency_summary_mismatch(),
+                "dependency-summary-mismatch",
+            )),
+            Some(ResolveContext::DependencySummaryInvalid) => Some((
+                Message::resolve_dependency_summary_invalid(),
+                "dependency-summary-invalid",
+            )),
+            _ => None,
+        }
+    }
+    pub(crate) fn kind_context(&self) -> Option<crate::kind::KindFailureContext> {
+        match self.0.context {
+            Some(ResolveContext::Kind(context)) => Some(context),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn declaration_order_context(&self) -> Option<(&'static str, &'static str)> {
+        match self.0.context {
+            Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((kind, problem)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn work_state_context(&self) -> Option<(&'static str, &'static str)> {
+        match self.0.context {
+            Some(ResolveContext::WorkState { part, problem }) => Some((part, problem)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn resource_name(&self) -> Option<&'static str> {
+        match self.reason {
+            ResolveReason::TypeResourceExhausted => Some("type-work"),
+            ResolveReason::ConstraintResourceExhausted => Some("constraint-work"),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn is_source_rejection(&self) -> bool {
+        !matches!(
+            self.0.diagnostic.reason,
+            ResolveReason::BinderIdExhausted
+                | ResolveReason::TypeResourceExhausted
+                | ResolveReason::ConstraintResourceExhausted
+                | ResolveReason::InternalState
+        )
+    }
+
+    fn identity_space(&self) -> Option<ResolveIdentitySpace> {
+        match self.0.context {
+            Some(ResolveContext::IdentityExhaustion(space)) => Some(space),
+            _ => None,
+        }
+    }
+
+    const fn is_duplicate_declaration(&self) -> bool {
+        matches!(
+            self.0.diagnostic.reason,
+            ResolveReason::DuplicateGlobal
+                | ResolveReason::DuplicateType
+                | ResolveReason::DuplicateConstructor
+                | ResolveReason::DuplicateModuleAlias
+                | ResolveReason::DuplicateTypeParameter
+                | ResolveReason::DuplicatePatternBinder
+                | ResolveReason::DuplicateRecursiveMember
+        )
+    }
+
+    pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if self.identity_space().is_some() {
+            return Some((self.message()?, "identity_allocation"));
+        }
+        if let Some((message, _)) = self.internal_message() {
+            return Some((message, "resolution_site"));
+        }
+        if let Some(context) = self.kind_context() {
+            return Some((
+                if context.span() == self.primary.span() {
+                    context.message()
+                } else {
+                    crate::message::Message::resolve_kind_use()
+                },
+                "resolution_site",
+            ));
+        }
+        if self.resource_name().is_some() {
+            return Some((self.message()?, "resolution_site"));
+        }
+        match self.reason {
+            ResolveReason::BinderIdExhausted => {
+                return Some((self.message()?, "identity_allocation"));
+            }
+            ResolveReason::DuplicateEffect => {
+                return Some((
+                    crate::message::Message::resolve_duplicate_effect(),
+                    "duplicate_effect_instance",
+                ));
+            }
+            ResolveReason::EffectOperationShape => {
+                return Some((self.message()?, "effect_operation_signature"));
+            }
+            ResolveReason::SealedProvider => {
+                return Some((self.message()?, "sealed_provider_declaration"));
+            }
+            ResolveReason::ResourceBuiltinRequired => {
+                return Some((self.message()?, "resource_acquisition"));
+            }
+            ResolveReason::ResumeOutsideClause => {
+                return Some((self.message()?, "continuation_use"));
+            }
+            ResolveReason::TypeKind | ResolveReason::InterfaceKind | ResolveReason::EffectKind => {
+                return Some((
+                    crate::message::Message::incompatible_name_role(),
+                    "incompatible_name_role",
+                ));
+            }
+            ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                return Some((crate::message::Message::incorrect_name(), "incorrect_name"));
+            }
+            ResolveReason::UnusedTypeParameter => {
+                return Some((
+                    crate::message::Message::unused_parameter(),
+                    "unused_parameter",
+                ));
+            }
+            ResolveReason::ImportConflict => {
+                return Some((
+                    crate::message::Message::conflicting_binding(),
+                    "conflicting_binding",
+                ));
+            }
+            ResolveReason::UnavailableExport | ResolveReason::OpaqueConstructor => {
+                return Some((
+                    crate::message::Message::inaccessible_name(),
+                    "inaccessible_name",
+                ));
+            }
+            _ => {}
+        }
+        if self.is_duplicate_declaration() {
+            Some((crate::message::Message::duplicate_name(), "duplicate_name"))
+        } else if self.0.context.is_some() {
+            Some((
+                crate::message::Message::unresolved_name(),
+                "unresolved_name",
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn related_message(
+        &self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if index == 0 {
+            match self.reason {
+                ResolveReason::DuplicateEffect => {
+                    return Some((
+                        crate::message::Message::first_effect_instance(),
+                        "first_effect_instance",
+                    ));
+                }
+                ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                    return Some((
+                        crate::message::Message::required_name_declaration(),
+                        "required_name_declaration",
+                    ));
+                }
+                ResolveReason::UnavailableExport | ResolveReason::OpaqueConstructor => {
+                    return Some((
+                        crate::message::Message::inaccessible_declaration(),
+                        "inaccessible_declaration",
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if !self.is_duplicate_declaration() {
+            return None;
+        }
+        match index {
+            0 => Some((
+                crate::message::Message::first_declaration(),
+                "first_declaration",
+            )),
+            1 if self.reason == ResolveReason::DuplicateGlobal => Some((
+                crate::message::Message::first_definition(),
+                "first_definition",
+            )),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
+        match self.0.context {
+            Some(ResolveContext::Term) => Some("term"),
+            Some(ResolveContext::EffectOperation) => Some("effect-operation"),
+            Some(ResolveContext::Type) => Some("type"),
+            Some(ResolveContext::EffectRowParameter) => Some("effect-row-parameter"),
+            Some(ResolveContext::InterfaceParameter) => Some("interface-parameter"),
+            Some(ResolveContext::Constructor) => Some("constructor"),
+            Some(ResolveContext::Interface) => Some("interface"),
+            Some(ResolveContext::Effect) => Some("effect"),
+            Some(ResolveContext::ExportedEffect) => Some("exported-effect"),
+            None
+            | Some(
+                ResolveContext::PrivateExport
+                | ResolveContext::MissingExport
+                | ResolveContext::MissingModuleAlias
+                | ResolveContext::MixedTypeRowRoles
+                | ResolveContext::Kind(_)
+                | ResolveContext::DependencySummaryMismatch
+                | ResolveContext::DependencySummaryInvalid
+                | ResolveContext::DeclarationOrder { .. }
+                | ResolveContext::WorkState { .. }
+                | ResolveContext::MissingFileScope
+                | ResolveContext::MissingLexicalScope
+                | ResolveContext::MissingNominalScope
+                | ResolveContext::MissingConstructorScope
+                | ResolveContext::IdentityExhaustion(_),
+            ) => None,
+        }
+    }
+
+    pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        if let Some(space) = self.identity_space() {
+            return Some((
+                "identity_space",
+                "resolver-identity-space",
+                space.diagnostic_name(),
+            ));
+        }
+        if let Some((_, cause)) = self.internal_message() {
+            return Some(("cause", "resolver-internal-cause", cause));
+        }
+        if let Some(context) = self.kind_context() {
+            return Some(("kind_cause", "kind-internal-cause", context.name()));
+        }
+        if let Some(resource) = self.resource_name() {
+            return Some(("resource", "resource", resource));
+        }
+        match self.reason {
+            ResolveReason::BinderIdExhausted => Some((
+                "identity_space",
+                "resolver-identity-space",
+                self.identity_space()?.diagnostic_name(),
+            )),
+            ResolveReason::ResourceBuiltinRequired => {
+                Some(("required_builtin", "module-path", self.expected.as_deref()?))
+            }
+            ResolveReason::ResumeOutsideClause => {
+                Some(("operation", "keyword", self.found.as_deref()?))
+            }
+            ResolveReason::EffectOperationShape
+            | ResolveReason::SealedProvider
+            | ResolveReason::DuplicateEffect => None,
+            _ => Some(("name", "identifier", self.found.as_deref()?)),
+        }
+    }
+
+    pub(crate) fn name_use(&self) -> Option<&'static str> {
+        match self.reason {
+            ResolveReason::TypeKind
+                if self.0.context == Some(ResolveContext::MixedTypeRowRoles) =>
+            {
+                Some("mixed-type-and-row-tail")
+            }
+            ResolveReason::TypeKind => Some("interface-as-type"),
+            ResolveReason::InterfaceKind => Some("interface-required"),
+            ResolveReason::EffectKind => Some("effect-required"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn related_name(&self) -> Option<&str> {
+        if self.is_duplicate_declaration() {
+            self.found.as_deref()
+        } else {
+            // An imported spelling may differ from the inaccessible declaration's name.
+            self.expected_name()
+        }
+    }
+
+    pub(crate) fn expected_name(&self) -> Option<&str> {
+        match self.reason {
+            ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                self.expected.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn access_name(&self) -> Option<&'static str> {
+        if self.reason == ResolveReason::OpaqueConstructor {
+            return Some("opaque-constructor");
+        }
+        match self.0.context {
+            Some(ResolveContext::PrivateExport) => Some("private"),
+            Some(ResolveContext::MissingExport) => Some("not-exported"),
+            Some(ResolveContext::MissingModuleAlias) => Some("unknown-module-alias"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        if let Some(space) = self.identity_space() {
+            return Some(crate::message::Message::resolve_identity_exhausted(space));
+        }
+        if let Some((message, _)) = self.internal_message() {
+            return Some(message);
+        }
+        if let Some(context) = self.kind_context() {
+            return Some(context.message());
+        }
+        match self.reason {
+            ResolveReason::TypeResourceExhausted => {
+                return Some(crate::message::Message::resolve_type_resources());
+            }
+            ResolveReason::ConstraintResourceExhausted => {
+                return Some(crate::message::Message::resolve_constraint_resources());
+            }
+            ResolveReason::BinderIdExhausted => {
+                return Some(crate::message::Message::resolve_identity_exhausted(
+                    self.identity_space()?,
+                ));
+            }
+            ResolveReason::DuplicateEffect => {
+                return Some(crate::message::Message::resolve_duplicate_effect());
+            }
+            ResolveReason::EffectOperationShape => {
+                return Some(crate::message::Message::resolve_operation_shape());
+            }
+            ResolveReason::SealedProvider => {
+                return Some(crate::message::Message::resolve_sealed_provider());
+            }
+            ResolveReason::ResourceBuiltinRequired => {
+                return Some(crate::message::Message::resolve_builtin_required(
+                    self.expected.as_deref()?,
+                ));
+            }
+            ResolveReason::ResumeOutsideClause => {
+                return Some(crate::message::Message::resolve_continuation_outside(
+                    self.found.as_deref()?,
+                ));
+            }
+            _ => {}
+        }
+        let name = self.found.as_deref()?;
+        match self.reason {
+            ResolveReason::TypeKind
+                if self.0.context == Some(ResolveContext::MixedTypeRowRoles) =>
+            {
+                return Some(crate::message::Message::resolve_mixed_type_row_roles(name));
+            }
+            ResolveReason::TypeKind => {
+                return Some(crate::message::Message::resolve_type_kind(name));
+            }
+            ResolveReason::InterfaceKind => {
+                return Some(crate::message::Message::resolve_interface_kind(name));
+            }
+            ResolveReason::EffectKind => {
+                return Some(crate::message::Message::resolve_effect_kind(name));
+            }
+            ResolveReason::EquationNameMismatch => {
+                return Some(crate::message::Message::resolve_equation_name(
+                    name,
+                    self.expected_name()?,
+                ));
+            }
+            ResolveReason::NewtypeConstructorName => {
+                return Some(crate::message::Message::resolve_newtype_name(
+                    name,
+                    self.expected_name()?,
+                ));
+            }
+            ResolveReason::UnusedTypeParameter => {
+                return Some(crate::message::Message::resolve_unused_parameter(name));
+            }
+            ResolveReason::ImportConflict => {
+                return Some(crate::message::Message::resolve_import_conflict(name));
+            }
+            ResolveReason::OpaqueConstructor => {
+                return Some(crate::message::Message::resolve_opaque_constructor(name));
+            }
+            _ => {}
+        }
+        if self.is_duplicate_declaration() {
+            return Some(match self.reason {
+                ResolveReason::DuplicateGlobal => {
+                    crate::message::Message::resolve_duplicate_global(name)
+                }
+                ResolveReason::DuplicateType => {
+                    crate::message::Message::resolve_duplicate_type(name)
+                }
+                ResolveReason::DuplicateConstructor => {
+                    crate::message::Message::resolve_duplicate_constructor(name)
+                }
+                ResolveReason::DuplicateModuleAlias => {
+                    crate::message::Message::resolve_duplicate_alias(name)
+                }
+                ResolveReason::DuplicateTypeParameter => {
+                    crate::message::Message::resolve_duplicate_parameter(name)
+                }
+                ResolveReason::DuplicatePatternBinder => {
+                    crate::message::Message::resolve_duplicate_binder(name)
+                }
+                ResolveReason::DuplicateRecursiveMember => {
+                    crate::message::Message::resolve_duplicate_recursive_member(name)
+                }
+                _ => return None,
+            });
+        }
+        Some(match self.0.context? {
+            ResolveContext::Term => crate::message::Message::resolve_unknown_term(name),
+            ResolveContext::EffectOperation => {
+                crate::message::Message::resolve_unknown_operation(name)
+            }
+            ResolveContext::Type => crate::message::Message::resolve_unknown_type(name),
+            ResolveContext::EffectRowParameter => {
+                crate::message::Message::resolve_unknown_row_parameter(name)
+            }
+            ResolveContext::InterfaceParameter => {
+                crate::message::Message::resolve_unknown_interface_parameter(name)
+            }
+            ResolveContext::Constructor => {
+                crate::message::Message::resolve_unknown_constructor(name)
+            }
+            ResolveContext::Interface => crate::message::Message::resolve_unknown_interface(name),
+            ResolveContext::Effect => crate::message::Message::resolve_unknown_effect(name),
+            ResolveContext::ExportedEffect => {
+                crate::message::Message::resolve_unexported_effect(name)
+            }
+            ResolveContext::PrivateExport => crate::message::Message::resolve_private_export(name),
+            ResolveContext::MissingExport => crate::message::Message::resolve_missing_export(name),
+            ResolveContext::MissingModuleAlias => {
+                crate::message::Message::resolve_missing_module_alias(name)
+            }
+            ResolveContext::MixedTypeRowRoles => {
+                crate::message::Message::resolve_mixed_type_row_roles(name)
+            }
+            ResolveContext::IdentityExhaustion(_)
+            | ResolveContext::Kind(_)
+            | ResolveContext::DependencySummaryMismatch
+            | ResolveContext::DependencySummaryInvalid
+            | ResolveContext::DeclarationOrder { .. }
+            | ResolveContext::WorkState { .. }
+            | ResolveContext::MissingFileScope
+            | ResolveContext::MissingLexicalScope
+            | ResolveContext::MissingNominalScope
+            | ResolveContext::MissingConstructorScope => return None,
+        })
+    }
+    /// Returns the common structured diagnostic fields.
+    /// Phase-specific diagnostic context remains on this failure owner.
+    #[must_use]
+    pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
+        &self.0.diagnostic
+    }
+
+    /// Consumes the failure and returns its common diagnostic fields.
+    /// This legacy conversion does not retain phase-specific diagnostic context.
     #[must_use]
     pub fn into_diagnostic(self) -> Diagnostic<ResolveReason> {
-        *self.0
+        self.0.diagnostic
     }
 }
 
 impl From<Diagnostic<ResolveReason>> for ResolveError {
     fn from(diagnostic: Diagnostic<ResolveReason>) -> Self {
-        Self(Box::new(diagnostic))
+        Self::new(diagnostic, None)
     }
 }
 
@@ -859,7 +1451,7 @@ impl Deref for ResolveError {
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0.render_plain())
+        formatter.write_str(&self.0.diagnostic.render_plain())
     }
 }
 
@@ -987,7 +1579,8 @@ fn resolve_module_names_with_budget(
             ResolveReason::InternalState,
             surface.span,
             "the resolver received incomplete or mismatched dependency summaries",
-        ));
+        )
+        .with_context(ResolveContext::DependencySummaryMismatch));
     }
 
     for dependency in dependencies {
@@ -996,6 +1589,13 @@ fn resolve_module_names_with_budget(
             .authenticate(type_work, constraint_work)
             .map_err(|failure| {
                 let (reason, message) = match failure {
+                    ResolvedBuildFailure::Kind(context) => {
+                        return kind_context_error(
+                            context,
+                            dependency.edge.import_span(),
+                            "a dependency summary failed body-free authentication",
+                        );
+                    }
                     ResolvedBuildFailure::TypeResource => (
                         ResolveReason::TypeResourceExhausted,
                         "dependency-summary authentication exceeded its type-work budget",
@@ -1004,10 +1604,14 @@ fn resolve_module_names_with_budget(
                         ResolveReason::ConstraintResourceExhausted,
                         "dependency-summary authentication exceeded its constraint-work budget",
                     ),
-                    ResolvedBuildFailure::InvalidState => (
-                        ResolveReason::InternalState,
-                        "a dependency summary failed body-free authentication",
-                    ),
+                    ResolvedBuildFailure::InvalidState => {
+                        return error(
+                            ResolveReason::InternalState,
+                            dependency.edge.import_span(),
+                            "a dependency summary failed body-free authentication",
+                        )
+                        .with_context(ResolveContext::DependencySummaryInvalid);
+                    }
                 };
                 error(reason, dependency.edge.import_span(), message)
             })?;
@@ -1249,6 +1853,10 @@ fn build_export_candidate(
                         constructor.span,
                         "the resolver lost a private constructor",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "private-constructor",
+                        problem: "missing",
+                    })
                 })?;
                 candidate
                     .try_insert_withheld(
@@ -1278,7 +1886,11 @@ fn build_export_candidate(
                     ResolveReason::InternalState,
                     source.name.span,
                     "a private nominal reached public export candidate construction",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-nominal-visibility",
+                    problem: "wrong",
+                }));
             }
         };
         candidate
@@ -1306,6 +1918,10 @@ fn build_export_candidate(
                         constructor.span,
                         "the resolver lost an opaque constructor",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "opaque-constructor",
+                        problem: "missing",
+                    })
                 })?;
                 candidate
                     .try_insert_withheld(
@@ -1334,6 +1950,10 @@ fn build_export_candidate(
                     constructor.span,
                     "the resolver lost a public constructor",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-constructor",
+                    problem: "missing",
+                })
             })?;
             candidate
                 .try_insert_constructor(
@@ -1572,14 +2192,22 @@ fn validate_newtype_shape(
             ResolveReason::InternalState,
             declaration.span,
             "a projected newtype does not retain exactly one constructor",
-        ));
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "projected-newtype-constructor",
+            problem: "not-single",
+        }));
     };
     let [representation] = constructor.fields.as_slice() else {
         return Err(error(
             ResolveReason::InternalState,
             constructor.span,
             "a projected newtype does not retain exactly one representation",
-        ));
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "projected-newtype-representation",
+            problem: "not-single",
+        }));
     };
     if constructor.name.text != declaration.name.text {
         let mut diagnostic = Diagnostic::new(
@@ -1593,6 +2221,8 @@ fn validate_newtype_shape(
             declaration.name.span,
             "this nominal declaration defines the required spelling",
         ));
+        diagnostic.expected = Some(declaration.name.text.clone());
+        diagnostic.found = Some(constructor.name.text.clone());
         return Err(diagnostic.into());
     }
     Ok((constructor, representation))
@@ -1873,6 +2503,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid type index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -1887,6 +2521,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid interface index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "interface",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -1904,6 +2542,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid effect index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "effect",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -1925,6 +2567,7 @@ impl Resolver {
                             diagnostic
                                 .related
                                 .push(SourceLabel::new(first, "the first operation is here"));
+                            diagnostic.found = Some(operation.name.text.clone());
                             return Err(diagnostic.into());
                         }
                     }
@@ -1936,6 +2579,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let name = surface_definition_name(definition);
                     self.validate_local_term_name(name, Some(definition.span), &mut term_names)?;
@@ -1946,7 +2593,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        }));
                     }
                 }
             }
@@ -1978,6 +2629,7 @@ impl Resolver {
                 diagnostic
                     .related
                     .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
@@ -2024,6 +2676,7 @@ impl Resolver {
                     first_definition,
                     "the first complete definition is here",
                 ));
+                diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
@@ -2057,6 +2710,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many interface declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Interface,
+                ))
             })?;
             let id = InterfaceId::new(self.module, index);
             self.interface_names
@@ -2069,6 +2725,9 @@ impl Resolver {
                         method.span,
                         "the interface contains too many method declarations",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Method,
+                    ))
                 })?;
                 let method_id = MethodId::new(id, method_index);
                 self.method_names.insert(
@@ -2106,6 +2765,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many effect declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Effect,
+                ))
             })?;
             let id = EffectId::new(self.module, declaration_index);
             self.effect_names.insert(declaration.name.text.clone(), id);
@@ -2158,6 +2820,9 @@ impl Resolver {
                         operation.span,
                         "the effect contains too many operations",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Operation,
+                    ))
                 })?;
                 let operation_id = OperationId::new(id, operation_index);
                 let operation_name = try_clone_resolution_string(
@@ -2209,7 +2874,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 module_span,
                 "the resolver retained mismatched effect preparation records",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "effect-preparation",
+                problem: "mismatch",
+            }));
         }
         let mut resolved_effects = Vec::new();
         let mut registry_parameters = Vec::new();
@@ -2230,7 +2899,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     declaration.span,
                     "the resolver retained mismatched operation identities",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "operation-identities",
+                    problem: "mismatch",
+                }));
             }
             for parameter in &parameters {
                 registry_parameters.push(self.clone_type_variable_for_retention(
@@ -2310,7 +2983,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 declaration.span,
                 "the projected interface parameter vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-parameters",
+                problem: "empty",
+            }));
         }
         validate_interface_type_parameters(
             &declaration.parameters,
@@ -2340,6 +3017,10 @@ impl Resolver {
                 declaration.span,
                 "the projected interface parameter vector is empty",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-parameters",
+                problem: "empty",
+            })
         })?;
         let mut methods = Vec::new();
         methods
@@ -2415,7 +3096,11 @@ impl Resolver {
                     .last()
                     .map_or(module_span, |declaration| declaration.span),
                 "the resolver retained mismatched interface preparation records",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-preparation",
+                problem: "mismatch",
+            }));
         }
 
         let mut resolved = ResolvedInterfaceBuffer(Vec::with_capacity(declarations.len()));
@@ -2430,7 +3115,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     declaration.span,
                     "the resolver retained mismatched interface method preparation records",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "interface-method-preparation",
+                    problem: "mismatch",
+                }));
             }
             retained_type_variables
                 .try_reserve(pending.parameters.len())
@@ -2511,7 +3200,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             method.span,
                             "an interface method type scope repeats a prepared binder",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "prepared-method-binder",
+                            problem: "duplicate",
+                        }));
                     }
                 }
                 self.type_scopes.try_reserve(1).map_err(|_| {
@@ -2566,6 +3259,9 @@ impl Resolver {
                 implementation.span,
                 "the file contains too many implementation declarations",
             )
+            .with_context(ResolveContext::IdentityExhaustion(
+                ResolveIdentitySpace::Implementation,
+            ))
         })?;
         let id = ImplId::new(self.module, index);
 
@@ -2578,7 +3274,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 implementation.head.span,
                 "the projected implementation head argument vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-head-arguments",
+                problem: "empty",
+            }));
         }
         for head_argument in &implementation.head.arguments {
             collect_free_type_names(
@@ -2714,6 +3414,7 @@ impl Resolver {
                                     *span,
                                     "the resolver lost the file scope",
                                 )
+                                .with_context(ResolveContext::MissingFileScope)
                             })?;
                             if scope.contains_key(&local.text) {
                                 return Err(import_conflict(local.span, &local.text));
@@ -3193,7 +3894,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate term spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-term-name",
+                    problem: "duplicate",
+                }));
             }
         }
 
@@ -3220,7 +3925,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate interface spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-interface-name",
+                    problem: "duplicate",
+                }));
             }
         }
 
@@ -3234,7 +3943,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     import_span,
                     "an export summary contains duplicate effect spellings",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-effect-name",
+                    problem: "duplicate",
+                }));
             }
             let fact = summary.effect(spelling).ok_or_else(|| {
                 error(
@@ -3242,6 +3955,10 @@ impl Resolver {
                     import_span,
                     "an export summary lost an effect fact",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-effect-fact",
+                    problem: "missing",
+                })
             })?;
             self.retain_imported_effect(fact, import_span)?;
         }
@@ -3293,7 +4010,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate effect routes disagree on the canonical fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-effect-fact",
+                    problem: "mismatch",
+                }));
             }
             return Ok(());
         }
@@ -3357,7 +4078,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an interface summary contains an identity at the wrong visibility boundary",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-visibility",
+                problem: "wrong",
+            }));
         }
         if let Some(existing) = self.imported.interface(exported.id) {
             let mut nominal_identities = MatchedNominalIdentities::default();
@@ -3374,7 +4099,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate interface routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-interface-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             self.imported.merge_interface_route(
@@ -3430,7 +4159,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an interface summary contains a method from another interface",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-interface-owner",
+                    problem: "wrong",
+                }));
             }
             let authority_work = method.authoritative_type_parameters().len();
             if authority_work != 0 {
@@ -3502,6 +4235,15 @@ impl Resolver {
                     &mut self.constraint_work,
                 )
                 .map_err(|failure| match failure {
+                    ResolvedBuildFailure::Kind(context) => kind_context_error(
+                        context,
+                        span,
+                        "an imported method authority disagrees with its checked mirror",
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "imported-method-authority",
+                        problem: "mismatch",
+                    }),
                     ResolvedBuildFailure::TypeResource => error(
                         ResolveReason::TypeResourceExhausted,
                         span,
@@ -3516,7 +4258,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "an imported method authority disagrees with its checked mirror",
-                    ),
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "imported-method-authority",
+                        problem: "mismatch",
+                    }),
                 })?,
             );
             if authority_work != 0 {
@@ -3601,7 +4347,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an implementation summary contains an invalid authorization route",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-authorization",
+                problem: "wrong",
+            }));
         }
         if let Some(existing) = self.imported.implementation(fact.id) {
             let mut nominal_identities = MatchedNominalIdentities::default();
@@ -3618,7 +4368,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate implementation routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-implementation-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
         }
@@ -3698,6 +4452,10 @@ impl Resolver {
                         span,
                         "an effective implementation route lost its transient ordering rank",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "effective-route-rank",
+                        problem: "missing",
+                    })
                 })?;
             let existing_public_rank = self
                 .public_implementation_route_ranks
@@ -3712,6 +4470,10 @@ impl Resolver {
                         span,
                         "an implementation route rank has no selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "route-selected-fact",
+                        problem: "missing",
+                    })
                 })?;
             let replace_effective_rank = effective_implementation_route_precedes(
                 &authorization,
@@ -3726,7 +4488,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "a public implementation route lost its transient ordering rank",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-route-rank",
+                    problem: "missing",
+                }));
             }
             let replace_public_rank = if let Some(candidate) = &public_authorization {
                 match (&existing.public_authorization, existing_public_rank) {
@@ -3744,7 +4510,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             span,
                             "a public implementation route lost its transient ordering rank",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "public-route-rank",
+                            problem: "missing",
+                        }));
                     }
                 }
             } else {
@@ -3767,6 +4537,10 @@ impl Resolver {
                         span,
                         "an implementation route rank has no selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "route-selected-fact",
+                        problem: "missing",
+                    })
                 })?;
             if replace_effective_rank {
                 self.implementation_route_ranks
@@ -3831,7 +4605,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an invalid prerequisite identity",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-prerequisite",
+                    problem: "wrong",
+                }));
             }
             for argument in prerequisite.arguments() {
                 self.constraint_work.charge_type(argument).map_err(|()| {
@@ -3894,6 +4672,10 @@ impl Resolver {
                     span,
                     "an implementation summary has no defining interface fact",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-interface-fact",
+                    problem: "missing",
+                })
             })?;
         for (index, method) in fact.methods.iter().enumerate() {
             let method_retention_work = method
@@ -3924,6 +4706,10 @@ impl Resolver {
                     span,
                     "an implementation summary has an incomplete method relation",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-relation",
+                    problem: "incomplete",
+                })
             })?;
             let expected_parameter_count = fact
                 .head_parameters
@@ -3949,7 +4735,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an unauthenticated method scheme",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-scheme",
+                    problem: "unvalidated",
+                }));
             }
             let parameters_match = same_kinded_parameters_with_two_binder_slices(
                 &method.scheme.type_parameters,
@@ -3981,7 +4771,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an implementation summary contains an unauthenticated method scheme",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-method-scheme",
+                    problem: "unvalidated",
+                }));
             }
             self.constraint_work
                 .charge_type(&method.scheme.value_type)
@@ -4036,6 +4830,10 @@ impl Resolver {
                             span,
                             "an implementation capture graph references missing effect metadata",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "implementation-capture-effect",
+                            problem: "missing",
+                        })
                     })?;
                     self.retain_imported_effect(declaration, span)?;
                 }
@@ -4112,7 +4910,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "an implementation route rank was retained twice",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-route-rank",
+                problem: "duplicate",
+            }));
         }
         if public_authorization.is_some()
             && self
@@ -4124,7 +4926,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 span,
                 "a public implementation route rank was retained twice",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "public-implementation-route-rank",
+                problem: "duplicate",
+            }));
         }
         self.imported
             .insert_implementation(cloned_fact, authorization, public_authorization);
@@ -4137,6 +4943,10 @@ impl Resolver {
                         span,
                         "a public implementation lost its selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "public-implementation-fact",
+                        problem: "missing",
+                    })
                 })?;
         }
         Ok(())
@@ -4174,7 +4984,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate global routes disagree on the checked fact",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-global-fact",
+                    problem: "mismatch",
+                }));
             }
             self.compare_retained_nominal_closure(&nominal_identities, summary, span)?;
             return Ok(());
@@ -4292,6 +5106,10 @@ impl Resolver {
                         span,
                         "an exported capture graph references missing effect metadata",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "export-capture-effect",
+                        problem: "missing",
+                    })
                 })?;
                 self.retain_imported_effect(declaration, span)?;
             }
@@ -4679,6 +5497,10 @@ impl Resolver {
                     span,
                     "an exported scheme references missing effect metadata",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-scheme-effect",
+                    problem: "missing",
+                })
             })?;
             self.retain_imported_effect(exported, span)?;
         }
@@ -4696,6 +5518,10 @@ impl Resolver {
                 span,
                 "an exported scheme references missing nominal metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "export-scheme-nominal",
+                problem: "missing",
+            })
         })?;
         if exported.declaration_kind == ResolvedNominalDeclarationKind::Newtype
             && exported.access == ImportedTypeAccess::Opaque
@@ -4706,6 +5532,10 @@ impl Resolver {
                     span,
                     "an opaque newtype scheme is missing its canonical representation",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-scheme-representation",
+                    problem: "missing",
+                })
             });
         }
         Ok(exported)
@@ -4724,6 +5554,10 @@ impl Resolver {
                     span,
                     "an alternate route lost its retained nominal closure",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "route-nominal-closure",
+                    problem: "missing",
+                })
             })?;
             let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
             let matches = same_imported_nominal_closure_with_constraint_budget(
@@ -4737,7 +5571,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "alternate routes disagree on retained nominal metadata",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "alternate-nominal-metadata",
+                    problem: "mismatch",
+                }));
             }
         }
         Ok(())
@@ -4809,7 +5647,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an opaque newtype export is missing its canonical representation",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-export-representation",
+                    problem: "missing",
+                }));
             }
             if exported.declaration_kind == ResolvedNominalDeclarationKind::Data
                 && canonical_representation.is_some()
@@ -4818,7 +5660,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an ordinary opaque type cannot retain a canonical representation",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-data-representation",
+                    problem: "extra",
+                }));
             }
             let prepared = self
                 .imported
@@ -4919,6 +5765,10 @@ impl Resolver {
                     span,
                     "a transparent type summary lost one of its constructors",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "transparent-constructor",
+                    problem: "missing",
+                })
             })?;
             if let Some(existing) = self.imported.constructor(*identity) {
                 let matches = same_imported_constructor_fact_observing_nominals_with_budget(
@@ -4934,7 +5784,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "alternate constructor routes disagree on the checked fact",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "alternate-constructor-fact",
+                        problem: "mismatch",
+                    }));
                 }
                 constructor_routes.push(ValidatedImportedConstructorRoute {
                     exported,
@@ -4969,6 +5823,10 @@ impl Resolver {
                     span,
                     "an exported constructor references missing nominal metadata",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "constructor-nominal-metadata",
+                    problem: "missing",
+                })
             })?;
             if *id == owner.id {
                 owner_metadata_observed = true;
@@ -4992,7 +5850,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         span,
                         "alternate constructor routes disagree on retained nominal metadata",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "constructor-route-nominal",
+                        problem: "mismatch",
+                    }));
                 }
             } else {
                 let validated = self
@@ -5242,6 +6104,10 @@ impl Resolver {
                 span,
                 "an exported constructor references missing owner metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "constructor-owner-metadata",
+                problem: "missing",
+            })
         })?;
         self.retain_imported_constructor_family_once_per_route(
             owner,
@@ -5264,6 +6130,10 @@ impl Resolver {
                 span,
                 "an exported constructor references missing owner metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "constructor-owner-metadata",
+                problem: "missing",
+            })
         })?;
         self.retain_imported_constructor_family(owner, summary, span)
     }
@@ -5301,7 +6171,12 @@ impl Resolver {
             .get(&qualified.qualifier.text)
             .map(Some)
             .ok_or_else(|| {
-                withheld_export_error(qualified.qualifier.span, &qualified.qualifier.text, None)
+                lookup_error(
+                    ResolveContext::MissingModuleAlias,
+                    qualified.qualifier.span,
+                    &qualified.qualifier.text,
+                    "this module alias is not bound",
+                )
             })
     }
 
@@ -5357,7 +6232,7 @@ impl Resolver {
                 SourceLabel::new(name.span, "this nominal type is not declared"),
             );
             diagnostic.found = Some(name.text.clone());
-            ResolveError::from(diagnostic)
+            ResolveError::new(diagnostic, Some(ResolveContext::Type))
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -5429,15 +6304,12 @@ impl Resolver {
             if namespace.nominals.contains_key(&member.text)
                 || namespace.interfaces.contains_key(&member.text)
             {
-                return Err(error(
-                    ResolveReason::EffectKind,
-                    member.span,
-                    "this uppercase name does not denote an effect",
-                ));
+                return Err(effect_kind_error(member.span, &member.text));
             }
-            return Err(error(
-                ResolveReason::UnknownEffect,
+            return Err(lookup_error(
+                ResolveContext::ExportedEffect,
                 member.span,
+                &member.text,
                 "this effect is not exported by the selected module",
             ));
         }
@@ -5447,15 +6319,12 @@ impl Resolver {
         if self.type_names.contains_key(&member.text)
             || self.interface_names.contains_key(&member.text)
         {
-            return Err(error(
-                ResolveReason::EffectKind,
-                member.span,
-                "this uppercase name does not denote an effect",
-            ));
+            return Err(effect_kind_error(member.span, &member.text));
         }
-        Err(error(
-            ResolveReason::UnknownEffect,
+        Err(lookup_error(
+            ResolveContext::Effect,
             member.span,
+            &member.text,
             "this effect is not declared",
         ))
     }
@@ -5566,9 +6435,10 @@ impl Resolver {
                     .copied()
                     .map(EffectRowVariable::rigid)
                     .ok_or_else(|| {
-                        error(
-                            ResolveReason::UnknownType,
+                        lookup_error(
+                            ResolveContext::EffectRowParameter,
                             tail.span,
+                            &tail.text,
                             "this effect-row tail parameter is not declared",
                         )
                     })
@@ -5667,9 +6537,10 @@ impl Resolver {
                 })
             })
             .ok_or_else(|| {
-                error(
-                    ResolveReason::UnknownName,
+                lookup_error(
+                    ResolveContext::EffectOperation,
                     operation.span,
+                    &operation.text,
                     "this operation is not declared by the selected effect",
                 )
             })
@@ -5698,6 +6569,9 @@ impl Resolver {
                     requirement.span,
                     "the declaration contains too many interface requirements",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Requirement,
+                ))
             })?;
             let application = self.resolve_interface_application(requirement)?;
             resolved.0.push(ResolvedRequirement {
@@ -5718,7 +6592,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 application.span,
                 "the projected interface argument vector is empty",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "interface-arguments",
+                problem: "empty",
+            }));
         }
         let mut arguments = ResolvedTypeOccurrenceBuffer(Vec::new());
         arguments
@@ -5881,7 +6759,10 @@ impl Resolver {
             SourceLabel::new(reference.member().span, "this constructor is not declared"),
         );
         diagnostic.found = Some(reference.member().text.clone());
-        Err(diagnostic.into())
+        Err(ResolveError::new(
+            diagnostic,
+            Some(ResolveContext::Constructor),
+        ))
     }
 
     fn allocate_global_binder(
@@ -5895,7 +6776,11 @@ impl Resolver {
                         ResolveReason::InternalState,
                         definition.span,
                         "the equational definition has no clause",
-                    ));
+                    )
+                    .with_context(ResolveContext::WorkState {
+                        part: "definition-clause",
+                        problem: "missing",
+                    }));
                 }
                 for equation in &equational.equations {
                     if equational.interface.name.text != equation.name.text {
@@ -5942,6 +6827,7 @@ impl Resolver {
                 first.definition_span,
                 "the first complete definition is here",
             ));
+            diagnostic.found = Some(global_name.to_owned());
             return Err(diagnostic.into());
         }
         if self.expression_name_is_bound(global_name) {
@@ -5959,7 +6845,8 @@ impl Resolver {
                 ResolveReason::InternalState,
                 definition.span,
                 "the resolver lost the file scope",
-            ));
+            )
+            .with_context(ResolveContext::MissingFileScope));
         };
         file_scope.insert(
             global.spelling.clone(),
@@ -6043,20 +6930,28 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid type index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < nominal_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders a nominal declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "nominal", problem: "repeated-or-reordered" }));
                     }
                     if index > nominal_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders a nominal declaration",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "skipped-or-reordered",
+                        }));
                     }
                     let identity = nominal_identities.get(index).ok_or_else(|| {
                         error(
@@ -6064,6 +6959,10 @@ impl Resolver {
                             source.span,
                             "the resolver lost a nominal declaration identity",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "nominal-identity",
+                            problem: "missing",
+                        })
                     })?;
                     nominal_type_parameters
                         .push((identity.id, self.allocate_nominal_type_parameters(source)?));
@@ -6075,20 +6974,24 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid interface index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "interface",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < interface_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders an interface declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "interface", problem: "repeated-or-reordered" }));
                     }
                     if index > interface_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders an interface declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "interface", problem: "skipped-or-reordered" }));
                     }
                     interface_type_parameters.push(self.prepare_interface_type_parameters(source)?);
                 }
@@ -6099,13 +7002,17 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid effect index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "effect",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index != effect_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats, skips, or reorders an effect declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "effect", problem: "repeated-skipped-or-reordered" }));
                     }
                     effect_type_parameters.push(self.allocate_effect_type_parameters(source)?);
                 }
@@ -6116,20 +7023,28 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < global_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders a global declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "global", problem: "repeated-or-reordered" }));
                     }
                     if index > global_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders a global declaration",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "skipped-or-reordered",
+                        }));
                     }
                     global_type_parameters.push(self.allocate_global_type_parameters(source)?);
                 }
@@ -6140,20 +7055,24 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < pending_implementations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders an implementation declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "implementation", problem: "repeated-or-reordered" }));
                     }
                     if index > pending_implementations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders an implementation declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "implementation", problem: "skipped-or-reordered" }));
                     }
                     pending_implementations.push(self.prepare_implementation(index, source)?);
                 }
@@ -6168,7 +7087,11 @@ impl Resolver {
                     .get(nominal_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits a nominal declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "nominal",
+                problem: "omitted",
+            }));
         }
         if interface_type_parameters.len() != surface.interfaces.len() {
             return Err(error(
@@ -6178,7 +7101,11 @@ impl Resolver {
                     .get(interface_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits an interface declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "interface",
+                problem: "omitted",
+            }));
         }
         if global_type_parameters.len() != surface.definitions.len() {
             return Err(error(
@@ -6188,14 +7115,22 @@ impl Resolver {
                     .get(global_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits a global declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "global",
+                problem: "omitted",
+            }));
         }
         if effect_type_parameters.len() != surface.effects.len() {
             return Err(error(
                 ResolveReason::InternalState,
                 surface.span,
                 "the surface declaration order omits an effect declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "effect",
+                problem: "omitted",
+            }));
         }
         if pending_implementations.len() != surface.implementations.len() {
             return Err(error(
@@ -6205,7 +7140,11 @@ impl Resolver {
                     .get(pending_implementations.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits an implementation declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "implementation",
+                problem: "omitted",
+            }));
         }
 
         let (registry, constructor_payload_provenance) = self.resolve_registry_with_prepared(
@@ -6285,6 +7224,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let binder = self.allocate_global_binder(definition)?;
                     let slot = global_binders.get_mut(index).ok_or_else(|| {
@@ -6293,6 +7236,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a global binder slot",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "global-binder-slot",
+                            problem: "missing",
+                        })
                     })?;
                     *slot = Some(binder);
                 }
@@ -6303,6 +7250,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let pending = pending_implementations.get_mut(index).ok_or_else(|| {
                         error(
@@ -6310,6 +7261,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost an implementation plan",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "implementation-plan",
+                            problem: "missing",
+                        })
                     })?;
                     for group in &mut pending.method_groups {
                         let first = implementation
@@ -6320,6 +7275,12 @@ impl Resolver {
                                     ResolveReason::InternalState,
                                     implementation.span,
                                     "an implementation method group is empty",
+                                )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "implementation-method-group",
+                                        problem: "empty",
+                                    },
                                 )
                             })?;
                         group.binder =
@@ -6342,6 +7303,10 @@ impl Resolver {
                         surface_definitions[index].span,
                         "the resolver did not allocate a global binder",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "global-binder",
+                        problem: "missing",
+                    })
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -6402,7 +7367,11 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 definition.span,
                                 "the resolver produced no equation",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "equation",
+                                problem: "missing",
+                            }));
                         }
                         ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
                             interface: ResolvedExternalInterface {
@@ -6457,6 +7426,12 @@ impl Resolver {
                                     parameter.span,
                                     "the resolver lost an operational parameter pattern",
                                 )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "operational-pattern",
+                                        problem: "missing",
+                                    },
+                                )
                             })?;
                             let pattern = ResolvedPatternOwner::new(pattern);
                             let annotation = ResolvedTypeOccurrenceOwner::new(
@@ -6473,14 +7448,22 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 operational.header.span,
                                 "the resolver retained an extra operational parameter pattern",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-pattern",
+                                problem: "extra",
+                            }));
                         }
                         if parameters.is_empty() {
                             return Err(error(
                                 ResolveReason::InternalState,
                                 operational.header.span,
                                 "the resolver produced no operational parameter",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-parameter",
+                                problem: "missing",
+                            }));
                         }
                         let result_type = ResolvedTypeOccurrenceOwner::new(
                             self.resolve_type(&operational.header.result_type)?,
@@ -6507,7 +7490,11 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 operational.body.span,
                                 "the resolver produced the wrong operational body payload",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-body",
+                                problem: "wrong",
+                            }));
                         }
                         let ResolvedExprKind::Block(body) = body.into_inner().kind else {
                             unreachable!("the operational body shape was checked")
@@ -6600,7 +7587,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 module_span,
                 "the resolver retained mismatched implementation plans",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "implementation-plans",
+                problem: "mismatch",
+            }));
         }
 
         let mut implementations =
@@ -6653,6 +7644,10 @@ impl Resolver {
                                 implementation.span,
                                 "the resolver retained an invalid method-group range",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "method-group-range",
+                                problem: "wrong",
+                            })
                         })?;
                     let first = equations.first().ok_or_else(|| {
                         error(
@@ -6660,6 +7655,10 @@ impl Resolver {
                             implementation.span,
                             "the resolver retained an empty method group",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group",
+                            problem: "empty",
+                        })
                     })?;
                     let last = equations.last().ok_or_else(|| {
                         error(
@@ -6667,6 +7666,10 @@ impl Resolver {
                             implementation.span,
                             "the resolver retained an empty method group",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group",
+                            problem: "empty",
+                        })
                     })?;
                     let span = first.span.cover(last.span).ok_or_else(|| {
                         error(
@@ -6674,6 +7677,10 @@ impl Resolver {
                             implementation.span,
                             "one implementation method group crosses source files",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-group-source",
+                            problem: "mismatch",
+                        })
                     })?;
                     let binder = group.binder.ok_or_else(|| {
                         error(
@@ -6681,6 +7688,10 @@ impl Resolver {
                             first.span,
                             "the resolver did not allocate a hidden method binder",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "hidden-method-binder",
+                            problem: "missing",
+                        })
                     })?;
                     let method = self.method_names.get(&first.name.text).and_then(|binding| {
                         match binding.term {
@@ -6763,6 +7774,7 @@ impl Resolver {
                 diagnostic
                     .related
                     .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.found = Some(declaration.name.text.clone());
                 return Err(diagnostic.into());
             }
             if self.module_aliases.contains_key(&declaration.name.text)
@@ -6780,6 +7792,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many type declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Nominal,
+                ))
             })?;
             let id = NominalTypeId::new(self.module, index);
             self.type_names.insert(declaration.name.text.clone(), id);
@@ -6807,6 +7822,7 @@ impl Resolver {
                     diagnostic
                         .related
                         .push(SourceLabel::new(first, "the first constructor is here"));
+                    diagnostic.found = Some(constructor.name.text.clone());
                     return Err(diagnostic.into());
                 }
                 if self.module_aliases.contains_key(&constructor.name.text)
@@ -6828,6 +7844,9 @@ impl Resolver {
                         constructor.span,
                         "the declaration contains too many constructors",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Constructor,
+                    ))
                 })?;
                 let id = ConstructorId::new(*owner, index);
                 self.constructor_names
@@ -6881,7 +7900,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 declaration.span,
                 "a block-local nominal is not a newtype",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "local-nominal-kind",
+                problem: "wrong",
+            }));
         }
         let (constructor, representation) = validate_newtype_shape(declaration)?;
 
@@ -6941,6 +7964,7 @@ impl Resolver {
                 declaration.span,
                 "the resolver lost the local nominal scope",
             )
+            .with_context(ResolveContext::MissingNominalScope)
         })?;
         nominal_scope.try_reserve(1).map_err(|_| {
             error(
@@ -6955,6 +7979,7 @@ impl Resolver {
                 declaration.span,
                 "the resolver lost the local constructor scope",
             )
+            .with_context(ResolveContext::MissingConstructorScope)
         })?;
         constructor_scope.try_reserve(1).map_err(|_| {
             error(
@@ -6977,8 +8002,8 @@ impl Resolver {
         let id = NominalTypeId::lexical(self.module, self.next_lexical_nominal);
         let constructor_id = ConstructorId::new(id, 0);
         let next = self.next_lexical_nominal.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::LocalNominal,
                 declaration.span,
                 "the program contains too many lexical nominal declarations",
             )
@@ -7218,6 +8243,10 @@ impl Resolver {
                                 constructor.span,
                                 "a resolved newtype has no representation",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "newtype-representation",
+                                problem: "missing",
+                            })
                         })?;
                         let representation_provenance =
                             field_provenance.first().cloned().ok_or_else(|| {
@@ -7225,6 +8254,12 @@ impl Resolver {
                                     ResolveReason::InternalState,
                                     constructor.span,
                                     "a resolved newtype has no representation provenance",
+                                )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "newtype-representation-origin",
+                                        problem: "missing",
+                                    },
                                 )
                             })?;
                         let (nominal, constructor_fact) = resolved_newtype_fact_pair(
@@ -7446,6 +8481,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a tuple type element",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "tuple-type-element",
+                            problem: "missing",
+                        })
                     })?;
                     let elements = completed.split_off(split);
                     let roots = elements
@@ -7480,6 +8519,12 @@ impl Resolver {
                                     surface.span,
                                     "the resolver lost an effect-row type argument",
                                 )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "effect-row-argument",
+                                        problem: "missing",
+                                    },
+                                )
                             })?,
                     );
                     let (codomain, codomain_root) = completed.pop_owned().ok_or_else(|| {
@@ -7488,6 +8533,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a function codomain",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-codomain",
+                            problem: "missing",
+                        })
                     })?;
                     let (domain, domain_root) = completed.pop_owned().ok_or_else(|| {
                         error(
@@ -7495,140 +8544,160 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a function domain",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-domain",
+                            problem: "missing",
+                        })
                     })?;
-                    let (ty, effect_argument_roots) =
-                        if let Some(effects) = effects {
-                            self.type_work.charge(effects.effects.len()).map_err(|()| {
+                    let (ty, effect_argument_roots) = if let Some(effects) = effects {
+                        self.type_work.charge(effects.effects.len()).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                effects.span,
+                                "effect-row storage exceeded its type-work budget",
+                            )
+                        })?;
+                        let mut written = Vec::new();
+                        written
+                            .try_reserve_exact(effects.effects.len())
+                            .map_err(|_| {
                                 error(
                                     ResolveReason::TypeResourceExhausted,
                                     effects.span,
                                     "effect-row storage exceeded its type-work budget",
                                 )
                             })?;
-                            let mut written = Vec::new();
-                            written
-                                .try_reserve_exact(effects.effects.len())
-                                .map_err(|_| {
+                        for source_instance in effects.effects.iter().rev() {
+                            let count = source_instance.arguments.len();
+                            self.type_work
+                                .charge(count.checked_mul(2).ok_or_else(|| {
                                     error(
                                         ResolveReason::TypeResourceExhausted,
-                                        effects.span,
-                                        "effect-row storage exceeded its type-work budget",
+                                        source_instance.span,
+                                        "effect-argument provenance exceeded its type-work budget",
                                     )
-                                })?;
-                            for source_instance in effects.effects.iter().rev() {
-                                let count = source_instance.arguments.len();
-                                self.type_work.charge(count.checked_mul(2).ok_or_else(|| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    source_instance.span,
-                                    "effect-argument provenance exceeded its type-work budget",
-                                )
-                            })?).map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    source_instance.span,
-                                    "effect-argument storage exceeded its type-work budget",
-                                )
-                            })?;
-                                let mut arguments = Vec::new();
-                                let mut roots = Vec::new();
-                                arguments.try_reserve_exact(count).map_err(|_| {
+                                })?)
+                                .map_err(|()| {
                                     error(
                                         ResolveReason::TypeResourceExhausted,
                                         source_instance.span,
                                         "effect-argument storage exceeded its type-work budget",
                                     )
                                 })?;
-                                roots.try_reserve_exact(count).map_err(|_| {
-                                    error(
-                                        ResolveReason::TypeResourceExhausted,
-                                        source_instance.span,
-                                        "effect-argument provenance could not reserve storage",
-                                    )
-                                })?;
-                                for _ in source_instance.arguments.iter().rev() {
-                                    let (argument, root) =
-                                        effect_arguments.pop_owned().ok_or_else(|| {
-                                            error(
-                                                ResolveReason::InternalState,
-                                                source_instance.span,
-                                                "the resolver lost an effect-row type argument",
-                                            )
-                                        })?;
-                                    arguments.push(argument);
-                                    roots.push(root);
-                                }
-                                arguments.reverse();
-                                roots.reverse();
-                                written.push((
-                                    EffectInstance::new(
-                                        self.effect_reference(&source_instance.effect)?,
-                                        arguments
-                                            .into_iter()
-                                            .map(IterativeTypeOwner::into_inner)
-                                            .collect::<Vec<_>>()
-                                            .into_boxed_slice(),
-                                    ),
+                            let mut arguments = Vec::new();
+                            let mut roots = Vec::new();
+                            arguments.try_reserve_exact(count).map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
                                     source_instance.span,
-                                    roots.into_boxed_slice(),
-                                ));
+                                    "effect-argument storage exceeded its type-work budget",
+                                )
+                            })?;
+                            roots.try_reserve_exact(count).map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    source_instance.span,
+                                    "effect-argument provenance could not reserve storage",
+                                )
+                            })?;
+                            for _ in source_instance.arguments.iter().rev() {
+                                let (argument, root) =
+                                    effect_arguments.pop_owned().ok_or_else(|| {
+                                        error(
+                                            ResolveReason::InternalState,
+                                            source_instance.span,
+                                            "the resolver lost an effect-row type argument",
+                                        )
+                                        .with_context(
+                                            ResolveContext::WorkState {
+                                                part: "effect-row-argument",
+                                                problem: "missing",
+                                            },
+                                        )
+                                    })?;
+                                arguments.push(argument);
+                                roots.push(root);
                             }
-                            written.reverse();
-                            if !effect_arguments.is_empty() {
-                                return Err(error(
-                                    ResolveReason::InternalState,
-                                    effects.span,
-                                    "the resolver retained an extra effect-row type argument",
-                                ));
-                            }
-                            let tail = effects
-                                .tail
-                                .as_ref()
-                                .map(|tail| {
-                                    self.type_scopes
-                                        .iter()
-                                        .rev()
-                                        .find_map(|scope| scope.get(&tail.text))
-                                        .copied()
-                                        .map(EffectRowVariable::rigid)
-                                        .ok_or_else(|| {
-                                            error(
-                                                ResolveReason::UnknownType,
-                                                tail.span,
-                                                "this effect-row tail parameter is not declared",
-                                            )
-                                        })
-                                })
-                                .transpose()?;
-                            let (row, roots) = build_source_effect_row_with_provenance(
-                                written,
-                                tail,
+                            arguments.reverse();
+                            roots.reverse();
+                            written.push((
+                                EffectInstance::new(
+                                    self.effect_reference(&source_instance.effect)?,
+                                    arguments
+                                        .into_iter()
+                                        .map(IterativeTypeOwner::into_inner)
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
+                                ),
+                                source_instance.span,
+                                roots.into_boxed_slice(),
+                            ));
+                        }
+                        written.reverse();
+                        if !effect_arguments.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
                                 effects.span,
-                                &mut self.type_work,
-                            )?;
-                            (
-                                Type::function_computation(
-                                    domain.into_inner(),
-                                    ComputationType::new(codomain.into_inner(), row),
-                                ),
-                                roots,
+                                "the resolver retained an extra effect-row type argument",
                             )
-                        } else {
-                            if effect_argument_count != 0 || !effect_arguments.is_empty() {
-                                return Err(error(
-                                    ResolveReason::InternalState,
-                                    span,
-                                    "a pure function retained effect-argument provenance",
-                                ));
-                            }
-                            (
-                                Type::Function(
-                                    Box::new(domain.into_inner()),
-                                    Box::new(codomain.into_inner()),
-                                ),
-                                Vec::<usize>::new().into_boxed_slice(),
+                            .with_context(ResolveContext::WorkState {
+                                part: "effect-row-argument",
+                                problem: "extra",
+                            }));
+                        }
+                        let tail = effects
+                            .tail
+                            .as_ref()
+                            .map(|tail| {
+                                self.type_scopes
+                                    .iter()
+                                    .rev()
+                                    .find_map(|scope| scope.get(&tail.text))
+                                    .copied()
+                                    .map(EffectRowVariable::rigid)
+                                    .ok_or_else(|| {
+                                        lookup_error(
+                                            ResolveContext::EffectRowParameter,
+                                            tail.span,
+                                            &tail.text,
+                                            "this effect-row tail parameter is not declared",
+                                        )
+                                    })
+                            })
+                            .transpose()?;
+                        let (row, roots) = build_source_effect_row_with_provenance(
+                            written,
+                            tail,
+                            effects.span,
+                            &mut self.type_work,
+                        )?;
+                        (
+                            Type::function_computation(
+                                domain.into_inner(),
+                                ComputationType::new(codomain.into_inner(), row),
+                            ),
+                            roots,
+                        )
+                    } else {
+                        if effect_argument_count != 0 || !effect_arguments.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                span,
+                                "a pure function retained effect-argument provenance",
                             )
-                        };
+                            .with_context(ResolveContext::WorkState {
+                                part: "pure-effect-origin",
+                                problem: "extra",
+                            }));
+                        }
+                        (
+                            Type::Function(
+                                Box::new(domain.into_inner()),
+                                Box::new(codomain.into_inner()),
+                            ),
+                            Vec::<usize>::new().into_boxed_slice(),
+                        )
+                    };
                     provenance.push(ResolvedTypeProvenanceNode::Function {
                         span,
                         domain: domain_root,
@@ -7652,6 +8721,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a type argument",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "type-argument",
+                            problem: "missing",
+                        })
                     })?;
                     let arguments = completed.split_off(split);
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
@@ -7681,7 +8754,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 surface.span,
                 "the resolver retained incomplete type state",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "type",
+                problem: "incomplete",
+            }));
         }
         let (ty, root) = completed.pop_owned().ok_or_else(|| {
             error(
@@ -7689,6 +8766,10 @@ impl Resolver {
                 surface.span,
                 "the resolver produced no type",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "type",
+                problem: "missing",
+            })
         })?;
         Ok(ResolvedType {
             ty: ty.into_inner(),
@@ -7730,6 +8811,7 @@ impl Resolver {
                     diagnostic
                         .related
                         .push(SourceLabel::new(first, "the first pattern binder is here"));
+                    diagnostic.found = Some(surface.name.text.clone());
                     return Err(diagnostic.into());
                 }
                 let binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
@@ -7774,7 +8856,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 block.span,
                 "the resolver produced the wrong block payload",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "block",
+                problem: "wrong",
+            }));
         };
         Ok(block)
     }
@@ -7804,8 +8890,8 @@ impl Resolver {
         let input = self.allocate_binder("", target_span)?;
         let resume = ResumeId::new(self.next_resume);
         self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::Continuation,
                 span,
                 "hook resume identity space is exhausted",
             )
@@ -7964,8 +9050,8 @@ impl Resolver {
         let next = self.allocate_binder("", target_span)?;
         let resume = ResumeId::new(self.next_resume);
         self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::Continuation,
                 span,
                 "registration resume identity space is exhausted",
             )
@@ -8088,8 +9174,8 @@ impl Resolver {
     ) -> Result<Binder, ResolveError> {
         let id = BinderId::resolved(self.module, self.next_binder);
         self.next_binder = self.next_binder.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::TermBinder,
                 span,
                 "the program contains too many binders",
             )
@@ -8142,8 +9228,8 @@ impl Resolver {
         )?;
         let id = TypeVariableId::resolved(self.module, self.next_type_variable);
         self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::TypeBinder,
                 name.span,
                 "the program contains too many type binders",
             )
@@ -8329,6 +9415,10 @@ impl Resolver {
                             first.span,
                             "method parameters are unavailable",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-parameters",
+                            problem: "missing",
+                        })
                     })?;
                 self.type_work
                     .charge(interface.methods.len())
@@ -8351,6 +9441,10 @@ impl Resolver {
                         first.span,
                         "method parameters are unavailable",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "method-parameters",
+                        problem: "missing",
+                    })
                 })?;
                 self.type_work
                     .charge(interface.methods.len())
@@ -8371,6 +9465,10 @@ impl Resolver {
                     first.span,
                     "method parameters are unavailable",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-parameters",
+                    problem: "missing",
+                })
             })?;
             self.type_work.charge(parameters.len()).map_err(|()| {
                 error(
@@ -8402,8 +9500,8 @@ impl Resolver {
                 fresh.origin = Origin::Source(first.span);
                 self.next_type_variable =
                     self.next_type_variable.checked_add(1).ok_or_else(|| {
-                        error(
-                            ResolveReason::BinderIdExhausted,
+                        identity_error(
+                            ResolveIdentitySpace::TypeBinder,
                             first.span,
                             "lexical method parameter identities exhausted",
                         )
@@ -8450,6 +9548,10 @@ impl Resolver {
                     source.span,
                     "method equations cross source files",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-equation-source",
+                    problem: "mismatch",
+                })
             })?;
         Ok((
             ResolvedImplementationMethodGroup {
@@ -8483,6 +9585,10 @@ impl Resolver {
                 span,
                 "resource builtin origin is missing",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "resource-builtin-origin",
+                problem: "missing",
+            })
         })?;
         let api = ResourceApi::for_module(builtin).ok_or_else(|| {
             error(
@@ -8490,6 +9596,10 @@ impl Resolver {
                 span,
                 "resource builtin origin is invalid",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "resource-builtin-origin",
+                problem: "wrong",
+            })
         })?;
         // Each fixed method retains its forwarding equation, pattern, operand
         // and effect argument alongside one complete provider application.
@@ -8515,8 +9625,8 @@ impl Resolver {
             crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
         self.next_lexical_evidence =
             self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
-                error(
-                    ResolveReason::BinderIdExhausted,
+                identity_error(
+                    ResolveIdentitySpace::LexicalEvidence,
                     span,
                     "resource provider identities exhausted",
                 )
@@ -8711,6 +9821,10 @@ impl Resolver {
                             span,
                             "hook body resolution produced no expression",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "hook-body",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_hook(effect, span, body)?);
                 }
@@ -8721,6 +9835,10 @@ impl Resolver {
                             span,
                             "missing registration body",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "registration-body",
+                            problem: "missing",
+                        })
                     })?;
                     let initializer = expressions.pop_owned().ok_or_else(|| {
                         error(
@@ -8728,12 +9846,20 @@ impl Resolver {
                             span,
                             "missing registration initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "registration-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_registration(effect, span, initializer, body)?);
                 }
                 ResolveTask::FinishCleanup { span } => {
                     let body = expressions.pop_owned().ok_or_else(|| {
                         error(ResolveReason::InternalState, span, "missing cleanup body")
+                            .with_context(ResolveContext::WorkState {
+                                part: "cleanup-body",
+                                problem: "missing",
+                            })
                     })?;
                     let initializer = expressions.pop_owned().ok_or_else(|| {
                         error(
@@ -8741,6 +9867,10 @@ impl Resolver {
                             span,
                             "missing cleanup initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "cleanup-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     expressions.push(self.finish_cleanup(span, initializer, body)?);
                 }
@@ -8785,6 +9915,10 @@ impl Resolver {
                             span,
                             "resource initializer is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "resource-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     let identity =
                         self.allocate_type_variable(&source.identity, None, Kind::Type)?;
@@ -8891,6 +10025,10 @@ impl Resolver {
                             span,
                             "resource body is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "resource-body",
+                            problem: "missing",
+                        })
                     })?;
                     self.scopes.truncate(scope_checkpoint);
                     self.type_scopes.truncate(type_scope_checkpoint);
@@ -8938,7 +10076,8 @@ impl Resolver {
                             ResolveReason::InternalState,
                             group.span,
                             "the resolver lost the current lexical scope",
-                        ));
+                        )
+                        .with_context(ResolveContext::MissingLexicalScope));
                     };
                     for binder in binders.iter() {
                         scope.insert(
@@ -8987,6 +10126,10 @@ impl Resolver {
                             binding.pattern.span,
                             "the resolver produced no binding pattern",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "binding-pattern",
+                            problem: "missing",
+                        })
                     })?;
                     let pattern = ResolvedPatternOwner::new(pattern);
                     let annotation = binding
@@ -9001,13 +10144,18 @@ impl Resolver {
                             binding.span,
                             "the resolver lost a binding initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "binding-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     let Some(scope) = self.scopes.last_mut() else {
                         return Err(error(
                             ResolveReason::InternalState,
                             binding.span,
                             "the resolver lost the current lexical scope",
-                        ));
+                        )
+                        .with_context(ResolveContext::MissingLexicalScope));
                     };
                     for binder in binders {
                         scope.insert(
@@ -9039,6 +10187,11 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 source.span,
                                 "lexical evidence identity space is exhausted",
+                            )
+                            .with_context(
+                                ResolveContext::IdentityExhaustion(
+                                    ResolveIdentitySpace::LexicalEvidence,
+                                ),
                             )
                         })?;
                     self.constraint_work.charge(1).map_err(|()| {
@@ -9107,6 +10260,12 @@ impl Resolver {
                                         state.source.span,
                                         "lexical evidence application is missing",
                                     )
+                                    .with_context(
+                                        ResolveContext::WorkState {
+                                            part: "lexical-evidence-application",
+                                            problem: "missing",
+                                        },
+                                    )
                                 })?,
                                 method_groups: std::mem::replace(
                                     &mut state.groups,
@@ -9160,6 +10319,10 @@ impl Resolver {
                             equation.span,
                             "lexical method body is missing",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "lexical-method-body",
+                            problem: "missing",
+                        })
                     })?;
                     let binder = state
                         .groups
@@ -9171,6 +10334,10 @@ impl Resolver {
                                 equation.span,
                                 "lexical method group is missing",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "lexical-method-group",
+                                problem: "missing",
+                            })
                         })?
                         .binder
                         .id;
@@ -9195,7 +10362,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             group.span,
                             "the resolver lost a recursive group member",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "recursive-member",
+                            problem: "missing",
+                        }));
                     }
                     let mut annotations = ResolvedTypeOccurrenceBuffer(Vec::new());
                     annotations
@@ -9249,13 +10420,21 @@ impl Resolver {
                             span,
                             "the resolver lost a block result",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "block-result",
+                            problem: "missing",
+                        })
                     })?;
                     if declaration_start > declarations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver lost a block binding",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "block-binding",
+                            problem: "missing",
+                        }));
                     }
                     let block_declarations = declarations.split_off(declaration_start).into_vec();
                     self.scopes.truncate(scope_checkpoint);
@@ -9283,13 +10462,21 @@ impl Resolver {
                             span,
                             "the resolver lost a function body",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-body",
+                            problem: "missing",
+                        })
                     })?;
                     if !matches!(body_expression.kind, ResolvedExprKind::Block(_)) {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver produced the wrong function body payload",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-body",
+                            problem: "wrong",
+                        }));
                     }
                     let ResolvedExprKind::Block(body) = body_expression.into_inner().kind else {
                         unreachable!("the function body shape was checked")
@@ -9310,6 +10497,10 @@ impl Resolver {
                             span,
                             "the resolver lost a tuple element",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "tuple-element",
+                            problem: "missing",
+                        })
                     })?;
                     let elements = expressions.split_off(split).into_vec();
                     expressions.push(ResolvedExpr {
@@ -9326,13 +10517,21 @@ impl Resolver {
                 initial_span,
                 "the resolver produced no expression",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "expression",
+                problem: "missing",
+            })
         })?;
         if !expressions.is_empty() || !declarations.is_empty() {
             return Err(error(
                 ResolveReason::InternalState,
                 initial_span,
                 "the resolver retained incomplete expression state",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "expression",
+                problem: "incomplete",
+            }));
         }
         Ok(result.into_inner())
     }
@@ -9353,6 +10552,10 @@ impl Resolver {
                 span,
                 "request operand resolution produced no expression",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "request-operand",
+                problem: "missing",
+            })
         })?;
         expressions.push(ResolvedExpr {
             kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
@@ -9388,6 +10591,10 @@ impl Resolver {
                     arm.span,
                     "the resolver produced no match pattern",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "match-pattern",
+                    problem: "missing",
+                })
             })?;
             let pattern = ResolvedPatternOwner::new(pattern);
             self.push_binder_scope_many(&binders);
@@ -9494,18 +10701,23 @@ impl Resolver {
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
             SurfaceExprKind::Resource(source) if self.resource_builtin(source.kind).is_none() => {
-                return Err(error(
+                let (builtin, message) = match source.kind {
+                    crate::surface::SurfaceResourceKind::Cell => (
+                        "@builtin.cell",
+                        "resource acquisition requires a direct import of @builtin.cell",
+                    ),
+                    crate::surface::SurfaceResourceKind::NativeBuffer => (
+                        "@builtin.native_buffer",
+                        "resource acquisition requires a direct import of @builtin.native_buffer",
+                    ),
+                };
+                let mut failure = error(
                     ResolveReason::ResourceBuiltinRequired,
                     expression.span,
-                    match source.kind {
-                        crate::surface::SurfaceResourceKind::Cell => {
-                            "resource acquisition requires a direct import of @builtin.cell"
-                        }
-                        crate::surface::SurfaceResourceKind::NativeBuffer => {
-                            "resource acquisition requires a direct import of @builtin.native_buffer"
-                        }
-                    },
-                ));
+                    message,
+                );
+                failure.0.diagnostic.expected = Some(builtin.to_owned());
+                return Err(failure);
             }
             SurfaceExprKind::Resource(source) => {
                 self.type_work.charge(2).map_err(|()| {
@@ -9654,11 +10866,12 @@ impl Resolver {
                                 SourceLabel::new(member.span, "this constructor is not declared"),
                             );
                             diagnostic.found = Some(member.text.clone());
-                            ResolveError::from(diagnostic)
+                            ResolveError::new(diagnostic, Some(ResolveContext::Constructor))
                         } else {
-                            error(
-                                ResolveReason::UnknownName,
+                            lookup_error(
+                                ResolveContext::Term,
                                 member.span,
+                                &member.text,
                                 "this name is not in scope",
                             )
                         },
@@ -9692,6 +10905,10 @@ impl Resolver {
                         function.parameter.span,
                         "the resolver produced no function pattern",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "function-pattern",
+                        problem: "missing",
+                    })
                 })?;
                 let scope_checkpoint = self.scopes.len();
                 self.push_binder_scope_many(&binders);
@@ -9779,8 +10996,8 @@ impl Resolver {
                         self.resolved_operation(effect.instance.effect(), &clause.operation)?;
                     let resume = ResumeId::new(self.next_resume);
                     self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-                        error(
-                            ResolveReason::BinderIdExhausted,
+                        identity_error(
+                            ResolveIdentitySpace::Continuation,
                             clause.span,
                             "handler resume identity space is exhausted",
                         )
@@ -9794,6 +11011,10 @@ impl Resolver {
                             clause.pattern.span,
                             "the resolver produced no handler pattern",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "handler-pattern",
+                            problem: "missing",
+                        })
                     })?);
                     let scope_checkpoint = self.scopes.len();
                     let resume_checkpoint = self.active_resumes.len();
@@ -9839,13 +11060,11 @@ impl Resolver {
                 });
             }
             SurfaceExprKind::Resume(value) => {
-                let owner = self.active_resumes.last().copied().ok_or_else(|| {
-                    error(
-                        ResolveReason::ResumeOutsideClause,
-                        expression.span,
-                        "resume and discard are available only inside an operation clause",
-                    )
-                })?;
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .ok_or_else(|| continuation_outside_clause(expression.span, "resume"))?;
                 let value = self.resolve_expr(value)?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
@@ -9856,13 +11075,11 @@ impl Resolver {
                 });
             }
             SurfaceExprKind::Discard => {
-                let owner = self.active_resumes.last().copied().ok_or_else(|| {
-                    error(
-                        ResolveReason::ResumeOutsideClause,
-                        expression.span,
-                        "resume and discard are available only inside an operation clause",
-                    )
-                })?;
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .ok_or_else(|| continuation_outside_clause(expression.span, "discard"))?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
                         owner: Some(owner),
@@ -10098,6 +11315,10 @@ fn take_expression_pair(
             span,
             "the resolver lost a right operand",
         )
+        .with_context(ResolveContext::WorkState {
+            part: "right-operand",
+            problem: "missing",
+        })
     })?;
     let left = expressions.pop_owned().ok_or_else(|| {
         error(
@@ -10105,12 +11326,66 @@ fn take_expression_pair(
             span,
             "the resolver lost a left operand",
         )
+        .with_context(ResolveContext::WorkState {
+            part: "left-operand",
+            problem: "missing",
+        })
     })?;
     Ok((left.into_inner(), right.into_inner()))
 }
 
+fn identity_error(space: ResolveIdentitySpace, span: Span, message: &str) -> ResolveError {
+    let mut failure = error(ResolveReason::BinderIdExhausted, span, message);
+    failure.0.context = Some(ResolveContext::IdentityExhaustion(space));
+    failure
+}
+
+fn kind_context_error(
+    context: crate::kind::KindFailureContext,
+    span: crate::source::Span,
+    message: &str,
+) -> ResolveError {
+    let mut failure = error(ResolveReason::InternalState, span, message);
+    failure.0.context = Some(ResolveContext::Kind(context));
+    failure
+}
+
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
+}
+
+fn lookup_error(
+    scope: ResolveContext,
+    span: crate::source::Span,
+    name: &str,
+    message: &str,
+) -> ResolveError {
+    let reason = match scope {
+        ResolveContext::Term | ResolveContext::EffectOperation => ResolveReason::UnknownName,
+        ResolveContext::Type
+        | ResolveContext::EffectRowParameter
+        | ResolveContext::InterfaceParameter => ResolveReason::UnknownType,
+        ResolveContext::Constructor => ResolveReason::UnknownConstructor,
+        ResolveContext::Interface => ResolveReason::UnknownInterface,
+        ResolveContext::Effect | ResolveContext::ExportedEffect => ResolveReason::UnknownEffect,
+        ResolveContext::MixedTypeRowRoles => ResolveReason::TypeKind,
+        ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
+        ResolveContext::Kind(_)
+        | ResolveContext::DependencySummaryMismatch
+        | ResolveContext::DependencySummaryInvalid
+        | ResolveContext::DeclarationOrder { .. }
+        | ResolveContext::WorkState { .. }
+        | ResolveContext::MissingFileScope
+        | ResolveContext::MissingLexicalScope
+        | ResolveContext::MissingNominalScope
+        | ResolveContext::MissingConstructorScope => ResolveReason::InternalState,
+        ResolveContext::PrivateExport
+        | ResolveContext::MissingExport
+        | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
+    };
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
+    diagnostic.found = Some(name.to_owned());
+    ResolveError::new(diagnostic, Some(scope))
 }
 
 fn imported_nominal_merge_error(
@@ -10118,11 +11393,24 @@ fn imported_nominal_merge_error(
     span: crate::source::Span,
 ) -> ResolveError {
     match failure {
+        ImportedNominalMergeFailure::Kind(context) => kind_context_error(
+            context,
+            span,
+            "imported routes disagree about nominal metadata",
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-nominal-metadata",
+            problem: "mismatch",
+        }),
         ImportedNominalMergeFailure::Conflict => error(
             ResolveReason::InternalState,
             span,
             "imported routes disagree about nominal metadata",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-nominal-metadata",
+            problem: "mismatch",
+        }),
         ImportedNominalMergeFailure::TypeResource => error(
             ResolveReason::TypeResourceExhausted,
             span,
@@ -10141,6 +11429,15 @@ fn imported_fact_comparison_error(
     span: crate::source::Span,
 ) -> ResolveError {
     match failure {
+        ResolvedBuildFailure::Kind(context) => kind_context_error(
+            context,
+            span,
+            "alternate imported-fact comparison encountered invalid retained state",
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-fact-comparison",
+            problem: "wrong",
+        }),
         ResolvedBuildFailure::TypeResource => error(
             ResolveReason::TypeResourceExhausted,
             span,
@@ -10155,7 +11452,11 @@ fn imported_fact_comparison_error(
             ResolveReason::InternalState,
             span,
             "alternate imported-fact comparison encountered invalid retained state",
-        ),
+        )
+        .with_context(ResolveContext::WorkState {
+            part: "imported-fact-comparison",
+            problem: "wrong",
+        }),
     }
 }
 
@@ -10216,18 +11517,21 @@ fn withheld_export_error(
     spelling: &str,
     withheld: Option<WithheldImport>,
 ) -> ResolveError {
-    let (reason, message) = match withheld.map(|withheld| withheld.kind) {
+    let (reason, message, context) = match withheld.map(|withheld| withheld.kind) {
         Some(WithheldExportKind::Private) => (
             ResolveReason::UnavailableExport,
             "this declaration is private to its defining module",
+            Some(ResolveContext::PrivateExport),
         ),
         Some(WithheldExportKind::OpaqueConstructor) => (
             ResolveReason::OpaqueConstructor,
             "this constructor belongs to an opaque type",
+            None,
         ),
         None => (
             ResolveReason::UnavailableExport,
             "the dependency exports no declaration with this spelling",
+            Some(ResolveContext::MissingExport),
         ),
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
@@ -10238,7 +11542,7 @@ fn withheld_export_error(
         ));
     }
     diagnostic.found = Some(spelling.to_owned());
-    diagnostic.into()
+    ResolveError::new(diagnostic, context)
 }
 
 fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -10247,7 +11551,7 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
         SourceLabel::new(span, "this interface is not declared"),
     );
     diagnostic.found = Some(spelling.to_owned());
-    diagnostic.into()
+    ResolveError::new(diagnostic, Some(ResolveContext::Interface))
 }
 
 fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
@@ -10260,7 +11564,7 @@ fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
     );
     diagnostic.expected = Some("interface parameter".to_owned());
     diagnostic.found = Some(name.text.clone());
-    diagnostic.into()
+    ResolveError::new(diagnostic, Some(ResolveContext::InterfaceParameter))
 }
 
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -10269,6 +11573,26 @@ fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveErr
         SourceLabel::new(span, "this name does not denote an interface"),
     );
     diagnostic.expected = Some("interface".to_owned());
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
+fn continuation_outside_clause(span: crate::source::Span, operation: &str) -> ResolveError {
+    let mut failure = error(
+        ResolveReason::ResumeOutsideClause,
+        span,
+        "resume and discard are available only inside an operation clause",
+    );
+    failure.0.diagnostic.found = Some(operation.to_owned());
+    failure
+}
+
+fn effect_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::EffectKind,
+        SourceLabel::new(span, "this uppercase name does not denote an effect"),
+    );
+    diagnostic.expected = Some("effect".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
 }
@@ -10347,6 +11671,7 @@ fn validate_interface_type_parameters(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
     }
@@ -10374,6 +11699,7 @@ fn validate_explicit_type_parameters(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
         declared.insert(parameter.name.text.as_str());
@@ -10462,6 +11788,7 @@ fn validate_method_type_parameters<'a>(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
         declared.insert(parameter.name.text.as_str());
@@ -10572,9 +11899,10 @@ fn retain_free_type_name<'a>(
             Ok(())
         }
         std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
-            Some(existing) if reject_mixed_roles && *existing != role => Err(error(
-                ResolveReason::TypeKind,
+            Some(existing) if reject_mixed_roles && *existing != role => Err(lookup_error(
+                ResolveContext::MixedTypeRowRoles,
                 name.span,
+                &name.text,
                 "this parameter name is used both as an ordinary type and as an effect-row tail",
             )),
             None | Some(_) => Ok(()),
@@ -10698,6 +12026,66 @@ mod module_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_kind_context_reaches_presentation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_resolve_diagnostic, write_human, write_json},
+        };
+        let declaration = crate::source::SourceFile::new("declaration.ash", "binder").unwrap();
+        let importer = crate::source::SourceFile::new("importer.ash", "import").unwrap();
+        let origin = declaration
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let import = importer
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let kind = Kind::Type;
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        for span in [origin, import] {
+            for failure in [
+                imported_fact_comparison_error(ResolvedBuildFailure::Kind(context), span),
+                imported_nominal_merge_error(ImportedNominalMergeFailure::Kind(context), span),
+                kind_context_error(context, span, "ignored legacy description"),
+            ] {
+                assert_eq!(failure.reason, ResolveReason::InternalState);
+                assert_eq!(failure.kind_context(), Some(context));
+                let view =
+                    compile_resolve_diagnostic(&failure, &[&declaration, &importer]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(
+                            String::from_utf8(output)
+                                .unwrap()
+                                .contains("duplicate type-variable identity")
+                        );
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["facts"][0]["name"], "kind_cause");
+                assert_eq!(json["facts"][0]["value"], "duplicate-binder");
+                let labels = json["labels"].as_array().unwrap();
+                assert_eq!(labels.len(), if span == origin { 1 } else { 2 });
+                if span != origin {
+                    assert_eq!(labels[1]["relationship"], "kind_failure_origin");
+                }
+                assert!(compile_resolve_diagnostic(&failure, &[&importer]).is_err());
+            }
+        }
+    }
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -13532,6 +14920,1013 @@ mod tests {
     }
 
     #[test]
+    fn resolver_resources_preserve_the_resource_and_resolution_stage() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_resolve_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("resolve-resource.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (reason, resource, explanation) in [
+            (
+                ResolveReason::TypeResourceExhausted,
+                "type-work",
+                "The compiler ran out of resources while resolving types.",
+            ),
+            (
+                ResolveReason::ConstraintResourceExhausted,
+                "constraint-work",
+                "The compiler ran out of resources while resolving interfaces and constraints.",
+            ),
+        ] {
+            let error = error(reason, span, "ignored");
+            let view = compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(String::from_utf8(output).unwrap().contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], reason.to_string());
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], resource);
+            assert_eq!(json["facts"][1]["value"], "resolution");
+            assert_eq!(json["labels"][0]["relationship"], "resolution_site");
+        }
+    }
+
+    #[test]
+    fn identity_exhaustion_preserves_each_space_in_localized_messages_and_json() {
+        use crate::message::{Catalogue, Locale};
+
+        let source = SourceFile::new("exhaustion.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let english = Catalogue::new(Locale::English).unwrap();
+        let bulgarian = Catalogue::new(Locale::Bulgarian).unwrap();
+        for (space, fact, en, bg) in [
+            (
+                ResolveIdentitySpace::TermBinder,
+                "term-binder",
+                "value bindings",
+                "обвързвания на стойности",
+            ),
+            (
+                ResolveIdentitySpace::TypeBinder,
+                "type-binder",
+                "type parameters",
+                "типови параметри",
+            ),
+            (
+                ResolveIdentitySpace::LocalNominal,
+                "local-nominal",
+                "local nominal types",
+                "локални номинални типове",
+            ),
+            (
+                ResolveIdentitySpace::Continuation,
+                "continuation",
+                "continuations",
+                "продължения",
+            ),
+            (
+                ResolveIdentitySpace::LexicalEvidence,
+                "lexical-evidence",
+                "lexical evidence and resource providers",
+                "лексикални свидетелства и доставчици на ресурси",
+            ),
+        ] {
+            let error = identity_error(space, span, "legacy wording must not drive presentation");
+            assert!(!error.is_source_rejection());
+            let message = error.message().unwrap();
+            assert_eq!(
+                english.format(&message).unwrap(),
+                format!("Ash exhausted its identifier space for {en}.")
+            );
+            assert_eq!(
+                bulgarian.format(&message).unwrap(),
+                format!("Ash изчерпа пространството от идентификатори за {bg}.")
+            );
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["name"], "identity_space");
+            assert_eq!(json["facts"][0]["kind"], "resolver-identity-space");
+            assert_eq!(json["facts"][0]["value"], fact);
+            assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+        }
+    }
+
+    #[test]
+    fn declaration_capacity_messages_keep_the_existing_internal_reason() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("capacity.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (space, name, en, bg) in [
+            (
+                ResolveIdentitySpace::LexicalEvidence,
+                "lexical-evidence",
+                "lexical evidence and resource providers",
+                "лексикални свидетелства и доставчици на ресурси",
+            ),
+            (
+                ResolveIdentitySpace::Interface,
+                "interface",
+                "interfaces in a module",
+                "интерфейси в модул",
+            ),
+            (
+                ResolveIdentitySpace::Method,
+                "method",
+                "methods in an interface",
+                "методи в интерфейс",
+            ),
+            (
+                ResolveIdentitySpace::Effect,
+                "effect",
+                "effects in a module",
+                "ефекти в модул",
+            ),
+            (
+                ResolveIdentitySpace::Operation,
+                "operation",
+                "operations in an effect",
+                "операции в ефект",
+            ),
+            (
+                ResolveIdentitySpace::Implementation,
+                "implementation",
+                "implementations in a module",
+                "реализации в модул",
+            ),
+            (
+                ResolveIdentitySpace::Requirement,
+                "requirement",
+                "interface requirements in a declaration",
+                "изисквания за интерфейси в декларация",
+            ),
+            (
+                ResolveIdentitySpace::Nominal,
+                "nominal",
+                "nominal types in a module",
+                "номинални типове в модул",
+            ),
+            (
+                ResolveIdentitySpace::Constructor,
+                "constructor",
+                "constructors in a declaration",
+                "конструктори в декларация",
+            ),
+        ] {
+            let error = error(ResolveReason::InternalState, span, "legacy description")
+                .with_context(ResolveContext::IdentityExhaustion(space));
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains(subject));
+                assert!(!output.contains("legacy description"));
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["name"], "identity_space");
+            assert_eq!(json["facts"][0]["value"], name);
+            assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+            assert_eq!(json["labels"][0]["byte_end"], 4);
+        }
+    }
+
+    #[test]
+    fn internal_messages_do_not_depend_on_legacy_prose() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("import.ash", "import dep as Dep").unwrap();
+        let span = source.span(ByteRange::new(0, 17).unwrap()).unwrap();
+        for (context, cause, explanation) in [
+            (
+                ResolveContext::DependencySummaryMismatch,
+                "dependency-summary-mismatch",
+                "The compiler received incomplete or mismatched checked information for this module's imports.",
+            ),
+            (
+                ResolveContext::DependencySummaryInvalid,
+                "dependency-summary-invalid",
+                "The compiler could not validate the checked information for this imported module.",
+            ),
+            (
+                ResolveContext::MissingFileScope,
+                "missing-file-scope",
+                "The compiler lost the file's name-resolution scope.",
+            ),
+            (
+                ResolveContext::MissingLexicalScope,
+                "missing-lexical-scope",
+                "The compiler lost the current lexical scope while resolving a binding.",
+            ),
+            (
+                ResolveContext::MissingNominalScope,
+                "missing-nominal-scope",
+                "The compiler lost the scope for local nominal types.",
+            ),
+            (
+                ResolveContext::MissingConstructorScope,
+                "missing-constructor-scope",
+                "The compiler lost the scope for local constructors.",
+            ),
+        ] {
+            let error = error(
+                ResolveReason::InternalState,
+                span,
+                "legacy wording is not presentation input",
+            )
+            .with_context(context);
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(!output.contains("legacy wording"));
+                if locale == Locale::English {
+                    assert!(output.contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], cause);
+            assert_eq!(json["labels"][0]["byte_end"], 17);
+            let failure =
+                crate::driver::FileFailure::from(crate::driver::PipelineFailure::Resolution(error));
+            let gap = crate::presentation::compile_file_diagnostics(&failure)
+                .err()
+                .unwrap();
+            output.clear();
+            crate::presentation::write_unadapted_file_diagnostic(&mut output, &failure, gap)
+                .unwrap();
+            let fallback: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(fallback["facts"], json["facts"]);
+            assert_eq!(
+                fallback["developer_details"]["presentation_error"],
+                "missing-source"
+            );
+        }
+    }
+
+    #[test]
+    fn work_state_messages_keep_each_existing_part_and_problem() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("state.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (part, problem, en, bg) in [
+            (
+                "public-nominal-visibility",
+                "wrong",
+                "visibility of a nominal type in public exports",
+                "видимост на номинален тип в публичните експорти",
+            ),
+            (
+                "projected-newtype-constructor",
+                "not-single",
+                "the constructor of a projected newtype",
+                "конструктора на проектиран newtype",
+            ),
+            (
+                "projected-newtype-representation",
+                "not-single",
+                "the representation of a projected newtype",
+                "представянето на проектиран newtype",
+            ),
+            (
+                "effect-preparation",
+                "mismatch",
+                "effect preparation records",
+                "подготвителни записи за ефекти",
+            ),
+            (
+                "operation-identities",
+                "mismatch",
+                "operation identities",
+                "идентичности на операции",
+            ),
+            (
+                "interface-parameters",
+                "empty",
+                "the parameter vector of a projected interface",
+                "вектора от параметри на проектиран интерфейс",
+            ),
+            (
+                "interface-preparation",
+                "mismatch",
+                "interface preparation records",
+                "подготвителни записи за интерфейси",
+            ),
+            (
+                "interface-method-preparation",
+                "mismatch",
+                "interface method preparation records",
+                "подготвителни записи за методи на интерфейс",
+            ),
+            (
+                "prepared-method-binder",
+                "duplicate",
+                "a prepared binder in an interface method's type scope",
+                "подготвено обвързване в типовия обхват на метод на интерфейс",
+            ),
+            (
+                "implementation-head-arguments",
+                "empty",
+                "the argument vector of a projected implementation head",
+                "вектора от аргументи на проектирана глава на реализация",
+            ),
+            (
+                "export-term-name",
+                "duplicate",
+                "a term name in checked module information",
+                "име на терм в проверена информация за модул",
+            ),
+            (
+                "export-interface-name",
+                "duplicate",
+                "an interface name in checked module information",
+                "име на интерфейс в проверена информация за модул",
+            ),
+            (
+                "export-effect-name",
+                "duplicate",
+                "an effect name in checked module information",
+                "име на ефект в проверена информация за модул",
+            ),
+            (
+                "alternate-effect-fact",
+                "mismatch",
+                "canonical effect information from alternate import routes",
+                "канонична информация за ефект от алтернативни пътища на импорт",
+            ),
+            (
+                "interface-visibility",
+                "wrong",
+                "the visibility boundary of an imported interface identity",
+                "границата на видимост на импортирана идентичност на интерфейс",
+            ),
+            (
+                "alternate-interface-fact",
+                "mismatch",
+                "checked interface information from alternate import routes",
+                "проверена информация за интерфейс от алтернативни пътища на импорт",
+            ),
+            (
+                "method-interface-owner",
+                "wrong",
+                "interface ownership of an imported method",
+                "собствеността на импортиран метод от интерфейс",
+            ),
+            (
+                "imported-method-authority",
+                "mismatch",
+                "an imported method and its checked authority information",
+                "импортиран метод и проверената информация за неговите правомощия",
+            ),
+            (
+                "implementation-authorization",
+                "wrong",
+                "an imported implementation's authorization route",
+                "пътя на упълномощаване на импортирана реализация",
+            ),
+            (
+                "alternate-implementation-fact",
+                "mismatch",
+                "checked implementation information from alternate import routes",
+                "проверена информация за реализация от алтернативни пътища на импорт",
+            ),
+            (
+                "implementation-prerequisite",
+                "wrong",
+                "an imported implementation's prerequisite identity",
+                "идентичността на предпоставка на импортирана реализация",
+            ),
+            (
+                "implementation-method-relation",
+                "incomplete",
+                "an imported implementation's method relation",
+                "връзката между методите на импортирана реализация",
+            ),
+            (
+                "implementation-method-scheme",
+                "unvalidated",
+                "an imported implementation's method type scheme",
+                "типовата схема на метод на импортирана реализация",
+            ),
+            (
+                "implementation-route-rank",
+                "duplicate",
+                "an implementation route rank",
+                "ранг на път към реализация",
+            ),
+            (
+                "public-implementation-route-rank",
+                "duplicate",
+                "a public implementation route rank",
+                "ранг на публичен път към реализация",
+            ),
+            (
+                "alternate-global-fact",
+                "mismatch",
+                "checked global information from alternate import routes",
+                "проверена информация за глобална стойност от алтернативни пътища на импорт",
+            ),
+            (
+                "alternate-nominal-metadata",
+                "mismatch",
+                "nominal metadata retained through alternate import routes",
+                "номинални метаданни, запазени чрез алтернативни пътища на импорт",
+            ),
+            (
+                "opaque-data-representation",
+                "extra",
+                "a canonical representation for an opaque type that is not a newtype",
+                "канонично представяне на непрозрачен тип, който не е newtype",
+            ),
+            (
+                "alternate-constructor-fact",
+                "mismatch",
+                "checked constructor information from alternate import routes",
+                "проверена информация за конструктор от алтернативни пътища на импорт",
+            ),
+            (
+                "constructor-route-nominal",
+                "mismatch",
+                "nominal metadata retained through alternate constructor routes",
+                "номинални метаданни, запазени чрез алтернативни пътища към конструктор",
+            ),
+            (
+                "interface-arguments",
+                "empty",
+                "the argument vector of a projected interface application",
+                "вектора от аргументи на проектирано прилагане на интерфейс",
+            ),
+            (
+                "definition-clause",
+                "missing",
+                "a clause of an equational definition",
+                "клауза на уравнителна дефиниция",
+            ),
+            (
+                "implementation-method-group",
+                "empty",
+                "an implementation method group",
+                "група методи на реализация",
+            ),
+            (
+                "implementation-plans",
+                "mismatch",
+                "implementation plans",
+                "планове на реализации",
+            ),
+            (
+                "method-group-range",
+                "wrong",
+                "a method-group range",
+                "диапазон на група методи",
+            ),
+            ("method-group", "empty", "a method group", "група методи"),
+            (
+                "method-group-source",
+                "mismatch",
+                "source-file ownership within an implementation method group",
+                "принадлежност към изходен файл в група методи на реализация",
+            ),
+            (
+                "local-nominal-kind",
+                "wrong",
+                "the newtype declaration kind required for a block-local nominal",
+                "изисквания вид декларация newtype за локален номинален тип в блок",
+            ),
+            (
+                "method-equation-source",
+                "mismatch",
+                "source-file ownership of method equations",
+                "принадлежност към изходен файл на уравнения на метод",
+            ),
+            (
+                "imported-nominal-metadata",
+                "mismatch",
+                "nominal metadata from imported routes",
+                "номинални метаданни от пътища на импорт",
+            ),
+            (
+                "imported-fact-comparison",
+                "wrong",
+                "retained state used to compare imported information",
+                "запазено състояние за сравняване на импортирана информация",
+            ),
+            (
+                "private-constructor",
+                "missing",
+                "a private constructor",
+                "частен конструктор",
+            ),
+            (
+                "opaque-constructor",
+                "missing",
+                "an opaque constructor",
+                "непрозрачен конструктор",
+            ),
+            (
+                "public-constructor",
+                "missing",
+                "a public constructor",
+                "публичен конструктор",
+            ),
+            (
+                "export-effect-fact",
+                "missing",
+                "checked effect information for an exported module",
+                "проверена информация за ефект в експортиран модул",
+            ),
+            (
+                "effective-route-rank",
+                "missing",
+                "the ordering rank of an effective implementation route",
+                "пореден ранг на действащ път към реализация",
+            ),
+            (
+                "public-route-rank",
+                "missing",
+                "the ordering rank of a public implementation route",
+                "пореден ранг на публичен път към реализация",
+            ),
+            (
+                "route-selected-fact",
+                "missing",
+                "the selected implementation information for a route rank",
+                "избрана информация за реализация за ранг на път",
+            ),
+            (
+                "implementation-interface-fact",
+                "missing",
+                "the defining interface information for an implementation",
+                "информация за определящия интерфейс на реализация",
+            ),
+            (
+                "implementation-capture-effect",
+                "missing",
+                "effect metadata referenced by an implementation capture graph",
+                "метаданни за ефект, посочен от графа на прихващанията на реализация",
+            ),
+            (
+                "public-implementation-fact",
+                "missing",
+                "the selected public implementation information",
+                "избрана информация за публична реализация",
+            ),
+            (
+                "export-capture-effect",
+                "missing",
+                "effect metadata referenced by an exported capture graph",
+                "метаданни за ефект, посочен от експортиран граф на прихващанията",
+            ),
+            (
+                "export-scheme-effect",
+                "missing",
+                "effect metadata referenced by an exported type scheme",
+                "метаданни за ефект, посочен от експортирана типова схема",
+            ),
+            (
+                "export-scheme-nominal",
+                "missing",
+                "nominal metadata referenced by an exported type scheme",
+                "номинални метаданни, посочени от експортирана типова схема",
+            ),
+            (
+                "opaque-scheme-representation",
+                "missing",
+                "the canonical representation of an opaque newtype scheme",
+                "каноничното представяне на схема на непрозрачен newtype",
+            ),
+            (
+                "route-nominal-closure",
+                "missing",
+                "the nominal dependency closure retained for an alternate import route",
+                "номиналното затваряне на зависимостите за алтернативен път на импорт",
+            ),
+            (
+                "opaque-export-representation",
+                "missing",
+                "the canonical representation of an exported opaque newtype",
+                "каноничното представяне на експортиран непрозрачен newtype",
+            ),
+            (
+                "transparent-constructor",
+                "missing",
+                "a constructor of an exported transparent type",
+                "конструктор на експортиран прозрачен тип",
+            ),
+            (
+                "constructor-nominal-metadata",
+                "missing",
+                "nominal metadata referenced by an exported constructor",
+                "номинални метаданни, посочени от експортиран конструктор",
+            ),
+            (
+                "constructor-owner-metadata",
+                "missing",
+                "owner metadata referenced by an exported constructor",
+                "метаданни за собственика на експортиран конструктор",
+            ),
+            (
+                "nominal-identity",
+                "missing",
+                "a nominal declaration identity",
+                "идентичност на номинална декларация",
+            ),
+            (
+                "global-binder-slot",
+                "missing",
+                "a global binder slot",
+                "позиция за глобално обвързване",
+            ),
+            (
+                "implementation-plan",
+                "missing",
+                "an implementation plan",
+                "план на реализация",
+            ),
+            (
+                "global-binder",
+                "missing",
+                "a global binder",
+                "глобално обвързване",
+            ),
+            (
+                "hidden-method-binder",
+                "missing",
+                "a hidden method binder",
+                "скрито обвързване на метод",
+            ),
+            (
+                "newtype-representation",
+                "missing",
+                "the representation of a resolved newtype",
+                "представянето на разрешен newtype",
+            ),
+            (
+                "newtype-representation-origin",
+                "missing",
+                "source provenance for a resolved newtype representation",
+                "произход в източника на представянето на разрешен newtype",
+            ),
+            (
+                "pure-effect-origin",
+                "extra",
+                "effect-argument provenance on a pure function",
+                "произход на аргументи на ефекти върху чиста функция",
+            ),
+            (
+                "method-parameters",
+                "missing",
+                "method parameters",
+                "параметри на метод",
+            ),
+            (
+                "resource-builtin-origin",
+                "missing",
+                "the source origin of a resource builtin",
+                "произход в източника на вградена ресурсна операция",
+            ),
+            (
+                "resource-builtin-origin",
+                "wrong",
+                "the source origin of a resource builtin",
+                "произход в източника на вградена ресурсна операция",
+            ),
+            ("hook-body", "missing", "a hook body", "тяло на кука"),
+            (
+                "registration-body",
+                "missing",
+                "a registration body",
+                "тяло на регистрация",
+            ),
+            (
+                "registration-initializer",
+                "missing",
+                "a registration initializer",
+                "начален израз на регистрация",
+            ),
+            (
+                "cleanup-body",
+                "missing",
+                "a cleanup body",
+                "тяло на почистване",
+            ),
+            (
+                "cleanup-initializer",
+                "missing",
+                "a cleanup initializer",
+                "начален израз на почистване",
+            ),
+            (
+                "resource-initializer",
+                "missing",
+                "a resource initializer",
+                "начален израз на ресурс",
+            ),
+            (
+                "resource-body",
+                "missing",
+                "a resource body",
+                "тяло на ресурс",
+            ),
+            (
+                "lexical-evidence-application",
+                "missing",
+                "a lexical evidence application",
+                "прилагане на лексикално свидетелство",
+            ),
+            (
+                "lexical-method-body",
+                "missing",
+                "a lexical method body",
+                "тяло на лексикален метод",
+            ),
+            (
+                "lexical-method-group",
+                "missing",
+                "a lexical method group",
+                "група лексикални методи",
+            ),
+            (
+                "request-operand",
+                "missing",
+                "a request operand",
+                "операнд на заявка",
+            ),
+            ("equation", "missing", "an equation", "уравнение"),
+            (
+                "operational-pattern",
+                "missing",
+                "an operational parameter pattern",
+                "шаблон на операционен параметър",
+            ),
+            (
+                "operational-pattern",
+                "extra",
+                "an operational parameter pattern",
+                "шаблон на операционен параметър",
+            ),
+            (
+                "operational-parameter",
+                "missing",
+                "an operational parameter",
+                "операционен параметър",
+            ),
+            (
+                "operational-body",
+                "wrong",
+                "an operational body",
+                "операционно тяло",
+            ),
+            (
+                "tuple-type-element",
+                "missing",
+                "a tuple type element",
+                "елемент на кортежен тип",
+            ),
+            (
+                "effect-row-argument",
+                "missing",
+                "an effect-row type argument",
+                "типов аргумент на ред от ефекти",
+            ),
+            (
+                "effect-row-argument",
+                "extra",
+                "an effect-row type argument",
+                "типов аргумент на ред от ефекти",
+            ),
+            (
+                "function-codomain",
+                "missing",
+                "a function result type",
+                "тип на резултата на функция",
+            ),
+            (
+                "function-domain",
+                "missing",
+                "a function argument type",
+                "тип на аргумента на функция",
+            ),
+            (
+                "type-argument",
+                "missing",
+                "a type argument",
+                "типов аргумент",
+            ),
+            ("type", "incomplete", "a type", "тип"),
+            ("type", "missing", "a type", "тип"),
+            ("block", "wrong", "a block", "блок"),
+            (
+                "binding-pattern",
+                "missing",
+                "a binding pattern",
+                "шаблон на обвързване",
+            ),
+            (
+                "binding-initializer",
+                "missing",
+                "a binding initializer",
+                "начален израз на обвързване",
+            ),
+            (
+                "recursive-member",
+                "missing",
+                "a recursive group member",
+                "член на рекурсивна група",
+            ),
+            (
+                "block-result",
+                "missing",
+                "a block result",
+                "резултат на блок",
+            ),
+            (
+                "block-binding",
+                "missing",
+                "a block binding",
+                "обвързване в блок",
+            ),
+            (
+                "function-body",
+                "missing",
+                "a function body",
+                "тяло на функция",
+            ),
+            (
+                "function-body",
+                "wrong",
+                "a function body",
+                "тяло на функция",
+            ),
+            (
+                "tuple-element",
+                "missing",
+                "a tuple element",
+                "елемент на кортеж",
+            ),
+            ("expression", "missing", "an expression", "израз"),
+            ("expression", "incomplete", "an expression", "израз"),
+            (
+                "match-pattern",
+                "missing",
+                "a match pattern",
+                "шаблон на съпоставяне",
+            ),
+            (
+                "function-pattern",
+                "missing",
+                "a function parameter pattern",
+                "шаблон на параметър на функция",
+            ),
+            (
+                "handler-pattern",
+                "missing",
+                "a handler parameter pattern",
+                "шаблон на параметър на обработчик",
+            ),
+            (
+                "right-operand",
+                "missing",
+                "a right operand",
+                "десен операнд",
+            ),
+            ("left-operand", "missing", "a left operand", "ляв операнд"),
+        ] {
+            let error = error(
+                ResolveReason::InternalState,
+                span,
+                "legacy wording is not presentation input",
+            )
+            .with_context(ResolveContext::WorkState { part, problem });
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains(subject), "{part}: {output}");
+                assert!(!output.contains("legacy wording"));
+                if locale == Locale::English {
+                    let expected = match problem {
+                        "missing" => "is missing",
+                        "extra" => "unexpectedly retains",
+                        "wrong" => "has the wrong value for",
+                        "incomplete" => "is incomplete for",
+                        "not-single" => "does not retain exactly one value for",
+                        "mismatch" => "contains conflicting information for",
+                        "empty" => "is empty for",
+                        "duplicate" => "repeats",
+                        "unvalidated" => "cannot validate",
+                        _ => unreachable!(),
+                    };
+                    assert!(output.contains(expected));
+                }
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], "work-state");
+            assert_eq!(json["facts"][1]["value"], part);
+            assert_eq!(json["facts"][2]["value"], problem);
+            assert_eq!(json["labels"][0]["byte_end"], 4);
+        }
+    }
+
+    #[test]
+    fn declaration_order_messages_preserve_kind_and_problem() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("order.ash", "type T = T").unwrap();
+        let span = source.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        for (kind, en, bg) in [
+            ("nominal", "nominal types", "номиналните типове"),
+            ("interface", "interfaces", "интерфейсите"),
+            ("effect", "effects", "ефектите"),
+            ("global", "global values", "глобалните стойности"),
+            ("implementation", "implementations", "реализациите"),
+        ] {
+            for (problem, explanation) in [
+                ("invalid-index", "a declaration index is out of range"),
+                (
+                    "repeated-or-reordered",
+                    "a declaration is repeated or out of order",
+                ),
+                (
+                    "skipped-or-reordered",
+                    "a declaration is skipped or out of order",
+                ),
+                ("omitted", "a declaration is missing"),
+                (
+                    "repeated-skipped-or-reordered",
+                    "a declaration is repeated, skipped, or out of order",
+                ),
+            ] {
+                let error = error(ResolveReason::InternalState, span, "unused legacy prose")
+                    .with_context(ResolveContext::DeclarationOrder { kind, problem });
+                let view =
+                    crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+                for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                    let mut output = Vec::new();
+                    crate::presentation::write_human(
+                        &mut output,
+                        &view,
+                        &Catalogue::new(locale).unwrap(),
+                    )
+                    .unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(output.contains(subject));
+                    assert!(!output.contains("legacy prose"));
+                    if locale == Locale::English {
+                        assert!(output.contains(explanation));
+                    }
+                }
+                let mut output = Vec::new();
+                crate::presentation::write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "resolve.internal-state");
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["facts"][0]["value"], "declaration-order");
+                assert_eq!(json["facts"][1]["value"], kind);
+                assert_eq!(json["facts"][2]["value"], problem);
+                assert_eq!(json["labels"][0]["byte_end"], 10);
+            }
+        }
+    }
+
+    #[test]
     fn binder_identity_allocation_reports_exhaustion_without_wrapping() {
         let source =
             SourceFile::new("exhaustion.ash", "name").expect("the allocator fixture should fit");
@@ -13547,6 +15942,13 @@ mod tests {
 
         assert_eq!(error.reason, ResolveReason::BinderIdExhausted);
         assert_eq!(resolver.next_binder, u32::MAX);
+        let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+        let mut output = Vec::new();
+        crate::presentation::write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], "identity_space");
+        assert_eq!(json["facts"][0]["value"], "term-binder");
     }
 
     #[test]

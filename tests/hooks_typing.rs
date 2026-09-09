@@ -85,9 +85,8 @@ fn hook_argument_kinds_keep_original_nested_source_spans() {
         );
         let error = check_result(&source).unwrap_err();
         assert_eq!(error.reason_code(), reason, "{error:?}");
-        let ash::driver::FileFailure::Pipeline(ash::driver::PipelineFailure::Kind(
-            ash::kind::KindFailure::Source(error),
-        )) = error
+        let ash::driver::PipelineFailure::Kind(ash::kind::KindFailure::Source(error)) =
+            error.pipeline_failure().expect("pipeline failure")
         else {
             panic!("source kind failure: {error:?}")
         };

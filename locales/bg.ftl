@@ -1,0 +1,1266 @@
+# „Начален израз“ означава израза, който задава стойността на променливата.
+binding-initializer = Тази променлива изисква стойност от тип `{ $expected }`, но началният израз има тип `{ $found }`.
+initializer = Този начален израз има тип `{ $found }`.
+binding-annotation = Тази анотация изисква тип `{ $expected }`.
+lex-bare-carriage-return = След символ за връщане на каретката трябва да има символ за нов ред (CRLF); самостоятелен символ за нов ред (LF) също е допустим.
+lex-byte-order-mark = Изходните файлове на Ash не трябва да съдържат маркер за реда на байтовете (BOM).
+lex-unicode-identifier = Имената в Ash използват само ASCII букви, цифри и долни черти.
+lex-comment = Ash не поддържа коментари.
+lex-negative-literal = Ash не поддържа отрицателни целочислени литерали.
+lex-invalid-integer-literal = Целочисленият литерал трябва да е 0 или поредица от ASCII цифри без водеща нула.
+lex-invalid-identifier = Името в Ash трябва да започва с ASCII буква или долна черта и да продължава с ASCII букви, цифри или долни черти.
+lex-unknown-character = Този символ не може да започва лексикална единица в Ash.
+parse-expected =
+    { $expected ->
+        *[expression] Тук се очаква израз.
+        [operand] Тук се очаква операнд.
+        [identifier] Тук се очаква име.
+        [type] Тук се очаква тип.
+        [effect-row] Тук се очаква ред от ефекти.
+        [kind] Тук се очаква вид.
+        [pattern] Тук се очаква образец.
+        [interface-parameter] Тук се очаква типов параметър на интерфейса.
+        [interface-method] Тук се очаква сигнатура на метод на интерфейса.
+        [effect-operation] Тук се очаква сигнатура на операция на ефекта.
+        [interface-application] Тук се очаква прилагане на интерфейс.
+        [implementation-method] Тук се очаква уравнение за метод на реализацията.
+        [comma] Тук се очаква `,`.
+        [left-paren] Тук се очаква `(`.
+        [right-paren] Тук се очаква `)`.
+        [left-brace] Тук се очаква `{ "{" }`.
+        [right-brace] Тук се очаква `{ "}" }`.
+        [greater] Тук се очаква `>`.
+        [colon] Тук се очаква `:`.
+        [equal] Тук се очаква `=`.
+        [arrow] Тук се очаква `->`.
+        [fat-arrow] Тук се очаква `=>`.
+        [line-end] Тук се очаква край на логически ред.
+        [end-of-file] Входът трябва да свършва тук.
+    }
+parse-found =
+    { $found ->
+        [identifier] Тук има име.
+        [uppercase-identifier] Тук има име с начална главна буква.
+        [integer] Тук има целочислен литерал.
+        [line-end] Тук свършва логически ред.
+        [end-of-file] Входът свършва тук.
+       *[other] Тук има `{ $found }`.
+    }
+parse-operand = Операторът изисква десен операнд.
+parse-unclosed-group = Тази отваряща скоба няма съответстваща `)`.
+parse-repeated-equality = Сравненията за равенство не могат да се свързват във верига без скоби.
+parse-recursive-member = Тук се очаква член на групата от рекурсивни свързвания.
+parse-unexpected-and = `and` е допустимо само в група от рекурсивни свързвания.
+parse-semicolon = Ash не поддържа точки и запетаи.
+parse-unexpected-token = Тази лексикална единица не е допустима на това място в граматиката.
+parse-recovery = Разборът продължава от това място.
+parse-synchronization = Разборът се възобновява на тази граница.
+input-invalid-utf8 = `{ $path }` не е валиден изходен файл в UTF-8.
+import-target = Неуспехът възникна при обработката на този импорт.
+module-root-unavailable = Не може да се използва `{ $path }` като директория за корен за модули `{ $root }`.
+module-root-io = Не може да се използва `{ $path }` за корен за модули `{ $root }`: { io-cause }
+input-read = Не може да се прочете `{ $path }`: { io-cause }
+io-cause = { $kind ->
+        [not-found] файлът или директорията не съществува.
+        [permission-denied] достъпът е отказан.
+        [connection-refused] връзката е отказана.
+        [connection-reset] връзката е прекъсната принудително.
+        [host-unreachable] хостът е недостъпен.
+        [network-unreachable] мрежата е недостъпна.
+        [connection-aborted] връзката е прекратена.
+        [not-connected] връзката не е установена.
+        [addr-in-use] адресът вече се използва.
+        [addr-not-available] адресът е недостъпен.
+        [network-down] мрежата не работи.
+        [broken-pipe] каналът е затворен.
+        [already-exists] целевият обект вече съществува.
+        [would-block] операцията би блокирала.
+        [not-a-directory] компонент от пътя не е директория.
+        [is-a-directory] целевият обект е директория.
+        [directory-not-empty] директорията не е празна.
+        [read-only-filesystem] файловата система е само за четене.
+        [stale-network-file-handle] дескрипторът на мрежовия файл вече е невалиден.
+        [invalid-input] входен параметър е невалиден.
+        [invalid-data] операцията срещна невалидни данни.
+        [timed-out] времето за изпълнение на операцията изтече.
+        [write-zero] операцията за запис не записа данни.
+        [storage-full] хранилището е пълно.
+        [not-seekable] файлът не поддържа позициониране.
+        [quota-exceeded] квота за ресурс е превишена.
+        [file-too-large] файлът надвишава ограничение за размер.
+        [resource-busy] ресурсът е зает.
+        [executable-file-busy] изпълнимият файл е зает.
+        [deadlock] операцията би причинила взаимно блокиране.
+        [crosses-devices] операцията пресича граници между файлови системи.
+        [too-many-links] файлът има твърде много връзки.
+        [invalid-filename] името на файла е невалидно или твърде дълго.
+        [argument-list-too-long] списъкът с аргументи е твърде дълъг.
+        [interrupted] операцията е прекъсната.
+        [unsupported] операцията не се поддържа.
+        [unexpected-eof] файлът свърши неочаквано.
+        [out-of-memory] заделянето на памет е неуспешно.
+        [other] възникна некатегоризирана входно-изходна грешка.
+       *[uncategorized] възникна некатегоризирана входно-изходна грешка.
+    }
+syntax-depth = Разборът на `{ $path }` достигна лимита на компилатора за вложеност от { $limit }.
+module-reserved-root = Коренът за модули `{ $root }` е запазен от Ash.
+module-duplicate-root = Коренът за модули `{ $root }` е зададен повече от веднъж.
+module-invalid-root-name = `{ $root }` не е валиден идентификатор на Ash с малка начална буква за корен за модули.
+module-unknown-root = Не е зададен корен за модули с име `{ $root }`.
+module-unknown-builtin = Този импорт не посочва модул, предоставен от компилатора.
+module-not-found = Импортираният изходен файл `{ $path }` не съществува.
+module-import-cycle = Този импорт създава цикъл от зависимости през `{ $path }`.
+module-path-escape = Импортираният изходен файл `{ $path }` е извън корен, който трябва да го съдържа.
+module-missing-parent = Ash запази път към модул без родителска директория.
+module-missing-segments = Ash запази път за импорт без сегменти с имена на модули.
+entry-missing-main = Входният модул трябва да дефинира собствен `main`; импортирането му не е достатъчно.
+entry-polymorphic = Входната точка `main` не трябва да има типови параметри.
+entry-domain = Входната точка `main` трябва да е функция, която приема `Unit`.
+entry-effects = Извикването на `main` не трябва да изисква ефекти от извикващия го код.
+entry-open-result = Резултатният тип на `main` трябва да е напълно определен, без типови параметри, квантифицирани типове или отворени редове от ефекти.
+entry-constrained = Входната точка `main` не трябва да изисква интерфейсни свидетелства от извикващия го код.
+entry-module = Това е входният модул.
+handler-argument-count = Тази инстанция на ефект има неправилен брой типови аргументи за своята декларация.
+effect-row-union = Ефектните редове на този израз нямат най-общо обединение.
+method-implicit-parameters = Типовите параметри на метод трябва да бъдат изрично декларирани в списъка с параметри на метода.
+method-missing-interface-parameter = Типът на този метод трябва да съдържа всеки параметър на интерфейса.
+method-missing-determinant = Типът на този метод трябва да съдържа всеки определящ параметър на интерфейса.
+interface-parameter-declaration = Тук е деклариран параметър на интерфейса.
+missing-method-parameter = Този задължителен параметър на интерфейса липсва в типа на метода.
+impl-determination-coverage = Този зависим аргумент използва типова променлива, която не се среща в определящите аргументи на реализацията.
+dependent-variable = Тази зависима типова променлива е декларирана тук.
+determinant-missing-variable = Този определящ аргумент не съдържа зависимата типова променлива.
+undetermined-parameter = Типова променлива в ключа за избор на това изискване липсва в стойностния тип на дефиницията. Тя не може да бъде определена от този тип.
+requirement-only-parameter = Този типов параметър не се среща в стойностния тип на дефиницията.
+impl-overlap = Тази реализация може да съвпадне със същото прилагане на интерфейса като предходна налична реализация.
+impl-determination-conflict = Тези реализации могат да съвпаднат с едни и същи определящи аргументи, но изискват несъвместими зависими аргументи.
+earlier-implementation = Предходната реализация е дефинирана тук.
+earlier-implementation-import = Този импорт направи предходната реализация достъпна.
+later-implementation = По-късната реализация е дефинирана тук.
+later-implementation-import = Този импорт направи по-късната реализация достъпна.
+interface-argument-count = Това прилагане на интерфейс има неправилен брой типови аргументи: очаквани { $expected }, подадени { $found }.
+interface-parameters = Списъкът с параметри на интерфейса е деклариран тук.
+constraint-unsatisfied = Няма налично свидетелство, което да удовлетворява това изискване за интерфейс.
+constraint-ambiguous = Типовете в това изискване за интерфейс не са достатъчно определени, за да се избере свидетелство.
+constraint-cycle = Изборът на свидетелство за това изискване се връща към изискване, за което изборът вече е в ход.
+selection-declaration = Тази декларация въведе изискването за интерфейс.
+selection-import = Този импорт направи декларацията достъпна.
+selection-interface = Този интерфейс участва в неуспешния избор на свидетелство.
+selection-implementation = Изборът на свидетелство следваше тази реализация.
+selection-method = Този метод на реализацията предоставя избраното свидетелство.
+selection-implementation-import = Този импорт направи избраната реализация достъпна.
+impl-orphan = Този модул не притежава нито интерфейса, нито външен номинален тип в ключа за избор на реализацията. Зависимите аргументи и вложените номинални типове не установяват собственост.
+impl-foreign-interface = Този избран интерфейс принадлежи на друг модул.
+constraint-private-interface = Тази публична дефиниция разкрива частен интерфейс в своите изисквания.
+impl-private-interface = Публичната реализация трябва да използва публични интерфейси както в главата си, така и в предварителните си изисквания.
+duplicate-requirement = Това точно изискване за интерфейс е декларирано повече от веднъж.
+private-interface-declaration = Този интерфейс е деклариран като частен тук.
+earlier-requirement = Предходното идентично изискване е тук.
+impl-variable-head = Ключът за избор на реализация не може да се състои само от голи типови променливи.
+impl-prerequisite-variable = Това предварително изискване използва типова променлива, която не се среща в главата на реализацията.
+impl-prerequisite-decrease = Това обобщено предварително изискване няма строго по-малък ключ за избор от главата на реализацията.
+impl-selected-interface = Това е интерфейсът, който се реализира.
+impl-head-variables = Всяка типова променлива от предварителните изисквания трябва да се среща в тази глава на реализацията.
+impl-head-decrease = Всеки аргумент в ключа на предварителното изискване трябва да е равен на съответния аргумент в главата или да е негова строга синтактична подчаст, като поне един аргумент трябва строго да намалява.
+interface-method-function = Методът на интерфейс трябва да има функционален тип със стрелка на най-горното ниво.
+interface-method-declaration = Сигнатурата на този метод е декларирана тук.
+impl-missing-method = Тази реализация не предоставя задължителен метод на интерфейса.
+impl-duplicate-method = Тази реализация предоставя един и същ метод на интерфейса повече от веднъж.
+impl-extra-method = Този метод не е деклариран от реализирания интерфейс.
+impl-interface = Реализираният интерфейс е деклариран тук.
+evidence-local-key = Тази декларация за свидетелство изисква активен локален номинален тип в ключа си за избор: определящите аргументи или всички аргументи, когато няма зависимост на определяне.
+evidence-duplicate = Активна декларация за свидетелство вече предоставя това точно прилагане на интерфейса.
+evidence-determination-conflict = Тези декларации за свидетелства имат еднакви определящи аргументи, но различни зависими аргументи.
+evidence-missing-method = Тази декларация за свидетелство не предоставя задължителен метод на интерфейса.
+evidence-duplicate-method = Тази декларация за свидетелство предоставя един и същ метод повече от веднъж.
+evidence-extra-method = Този метод не принадлежи на интерфейса, предоставян от тази декларация за свидетелство.
+evidence-earlier = Предходната активна декларация за свидетелство е тук.
+evidence-required-method = Този метод на интерфейса трябва да бъде предоставен.
+evidence-earlier-method = Този метод вече е предоставен тук.
+evidence-interface = Предоставяният интерфейс е деклариран тук.
+type-polymorphic-recursion = Това рекурсивно извикване изисква тип { $expected }, но използва { $found }. Рекурсивните извиквания трябва да запазват същата типова инстанция.
+recursive-function = Тази рекурсивна функция се проверява с една фиксирана типова инстанция.
+recursive-application = Това прилагане подава рекурсивния аргумент.
+missing-handled-effect = Обработваното изчисление трябва изрично да заявява тази точна инстанция на ефекта, включително типовите ѝ аргументи.
+discard-unknown = Ash не може да докаже, че това продължение може да бъде изоставено, без да се пропусне задължително завършване.
+discard-clause = Това discard би пропуснало клауза, която все още трябва да завърши.
+discard-cleanup = Това discard би пропуснало действие по почистване, което трябва да завърши.
+discard-request = Тази заявка или извикване може да прихване продължението.
+discard-clause-owner = Тази клауза все още трябва да завърши.
+discard-cleanup-owner = Това действие по почистване трябва да завърши.
+effect-row-cleanup-requirement = Ефектите на почистването не съответстват на изисквания ефектен ред.
+effect-row-removal = Ash не може да определи ефектния ред, оставащ след премахването на точната инстанция на ефекта от този обработчик.
+effect-row-infinite-function = Тази функция би изисквала безкраен ефектен ред.
+effect-row-function-mismatch = Ефектите на тялото на тази функция не съответстват на типа ѝ.
+effect-row-function-outside-declared = Тялото на тази функция заявява ефекти извън декларирания си ефектен ред.
+effect-row-cleanup-inference = Ash не може да изведе най-общ ефектен ред за това действие по почистване.
+effect-row-cleanup-outside-expected = Това действие по почистване заявява ефекти извън очаквания си ефектен ред.
+effect-row-discard-cleanup = Ефектите на това discard не съответстват на действията по почистване, които то притежава.
+handler-operation-owner = Тази операция принадлежи на друга декларация на ефект.
+handler-clause-count = Този обработчик трябва да съдържа точно един клон за всяка операция на обработвания ефект.
+handler-operation-index = Тази операция не е декларирана от обработвания ефект.
+handler-duplicate-operation = Този обработчик повтаря клон за една и съща операция.
+equation-pattern-count = Всяко уравнение в тази група трябва да има един и същ положителен брой параметърни шаблони.
+equation-declared-arrows = Това уравнение има повече параметърни шаблони, отколкото функционални стрелки в декларирания си тип.
+hook-api = API, използван от `hook` или `register`, трябва да декларира точно една операция — `publish`, чиито параметърен и резултатен тип са равни преди заместването на типовите аргументи.
+function-needs-context = Тази анонимна функция се нуждае от очакван функционален тип.
+function-context-binding = Добавете анотация с функционален тип към това обвързване.
+function-context-result = Типът на този резултат трябва да бъде изведен без очакван функционален тип.
+function-context-application = Това прилагане изисква първо да бъде изведен типът на функционалния израз.
+function-context-operator = Този оператор изисква първо да бъде изведен типът на операнда.
+type-mismatch = Този израз трябва да има тип `{ $expected }`, но има тип `{ $found }`.
+local-nominal-escape = Този тип или ред от ефекти разкрива локален номинален тип извън неговия обхват.
+local-nominal-scope = Този обхват притежава локалния номинален тип.
+resource-escape = Тази стойност или изчисление зависи от ресурс, който би бил извън обхвата си.
+resource-acquisition = Този ресурс се придобива тук и трябва да остане в своя обхват.
+recursion-initializer = Този рекурсивен инициализатор трябва да бъде пряк израз `fn`.
+recursion-root = Този рекурсивен инициализатор на данни трябва да започва с напълно приложен конструктор на декларирания си номинален тип.
+recursion-group = Тази декларация въвежда рекурсивната група.
+recursion-member-annotation = Типът на рекурсивния член е деклариран тук.
+newtype-representation-cycle = Тези представяния на `newtype` образуват рекурсивен цикъл.
+newtype-cycle-member = Тази декларация участва в цикъла на представянията.
+cleanup-context = Отхвърлянето би премахнало обработчик, от който това действие за почистване все още се нуждае.
+cleanup-required-action = Това действие за почистване изисква обработчика.
+cleanup-abandoned-handler = Отхвърлянето би премахнало този обработчик.
+type-infinite = Този израз би изисквал безкраен тип: типът би трябвало да съдържа самия себе си.
+type-ambiguous = Ash не може да определи напълно типа на този израз.
+recursion-unguarded-use = Тази рекурсивна стойност не може да бъде предадена през този израз по време на инициализацията.
+continuation-not-consumed = Този път може да завърши без възобновяване или безопасно отхвърляне на продължението.
+continuation-already-consumed = Този път вече е възобновил или отхвърлил продължението и не може да го направи отново.
+continuation-capture = Този вложен обхват не може да прихване правото на обхващащия клон да възобнови или отхвърли продължението.
+pattern-type-mismatch = Този шаблон не може да съпостави стойност от тип `{ $expected }`.
+pattern-constructor-payload = Този конструктор има неправилна форма на данните.
+pattern-constructor-owner = Този конструктор принадлежи на номинален тип, различен от типа на съпоставяната стойност.
+pattern-refutable-binding = Този шаблон на обвързване може да се провали; например не съпоставя `{ $witness }`.
+pattern-refutable-function = Този шаблон на функционален параметър може да се провали; например не съпоставя `{ $witness }`.
+pattern-refutable-handler = Този шаблон на операция в обработчик може да се провали; например не съпоставя `{ $witness }`.
+coverage-non-exhaustive = Тези случаи не покриват всички възможни входни стойности; например `{ $witness }` не е покрита.
+coverage-empty-match = Изразът `match` изисква поне един клон.
+coverage-redundant-case = Този случай никога не може да бъде избран, защото предходните случаи вече покриват входните му стойности.
+resolve-identity-exhausted = Ash изчерпа пространството от идентификатори за { $space ->
+    [interface] интерфейси в модул
+    [method] методи в интерфейс
+    [effect] ефекти в модул
+    [operation] операции в ефект
+    [implementation] реализации в модул
+    [requirement] изисквания за интерфейси в декларация
+    [nominal] номинални типове в модул
+    [constructor] конструктори в декларация
+    [type-binder] типови параметри
+    [local-nominal] локални номинални типове
+    [continuation] продължения
+    [lexical-evidence] лексикални свидетелства и доставчици на ресурси
+   *[term-binder] обвързвания на стойности
+    }.
+resolve-duplicate-effect = Този ред от ефекти съдържа една и съща инстанция на ефект повече от веднъж.
+first-effect-instance = Първото срещане на тази инстанция на ефект е тук.
+resolve-operation-shape = Операция на ефект изисква външна функционална стрелка без явен ред от ефекти.
+resolve-sealed-provider = Само придобиването на ресурс може да въведе доставчик на ресурс, притежаван от компилатора.
+resolve-builtin-required = Това придобиване на ресурс изисква пряк импорт на `{ $builtin }`.
+resolve-continuation-outside = `{ $operation }` е достъпно само в клауза за операция на ефект.
+resolve-type-kind = Интерфейсът `{ $name }` не може да се използва като тип на стойност.
+resolve-interface-kind = Името `{ $name }` не обозначава интерфейс.
+resolve-effect-kind = Името `{ $name }` не обозначава ефект.
+resolve-mixed-type-row-roles = Параметърът `{ $name }` се използва и като тип, и като опашка на ред от ефекти; тези роли изискват различни видове.
+incompatible-name-role = Това име има несъвместима роля тук.
+type-definition-result = Тялото на функцията трябва да връща `{ $expected }`, но връща `{ $found }`.
+type-operator-operand = Този оператор изисква операнд от тип `Int`, но този операнд има тип `{ $found }`.
+type-argument = Този аргумент на функцията трябва да има тип `{ $expected }`, но има тип `{ $found }`.
+type-not-applicable = Този израз не може да бъде извикан: типът му е `{ $found }`, а не функционален тип.
+type-equation-signature = Това уравнение изисква функционална сигнатура, но сигнатурата му има тип `{ $found }`.
+type-found = Това има тип `{ $found }`.
+type-result-annotation = Тази сигнатура изисква резултатен тип `{ $expected }`.
+type-operator-requirement = Този оператор изисква операнди от тип `Int`.
+type-function-domain = Тази функция изисква аргумент от тип `{ $expected }`.
+type-application = Това е обхващащото прилагане на функция.
+type-equation-head = Тази глава на уравнение изисква функционална сигнатура.
+entry-main = Това е локалната декларация на `main`.
+kind-expected-type = Тази позиция изисква завършен тип на стойност (вид `Type`), но видът е `{ $found }`.
+kind-not-applicable = Прилаганият тип има вид `{ $found }` и не може да приема типови аргументи.
+kind-argument = Този аргумент изисква вид `{ $expected }`, но има вид `{ $found }`.
+kind-found = Тук е намерен вид `{ $found }`.
+kind-found-declaration = Тази декларация определя вида като `{ $found }`.
+kind-required-declaration = Тази декларация изисква аргумент с вид `{ $expected }`.
+resolve-unknown-term = Няма име `{ $name }` за стойност в текущия обхват.
+resolve-unknown-operation = Избраният ефект не декларира операция с име `{ $name }`.
+unresolved-name = Това име не може да бъде разрешено тук.
+resolve-duplicate-global = Името `{ $name }` вече е декларирано в този обхват.
+resolve-duplicate-type = Името `{ $name }` вече се използва от тип, интерфейс или ефект.
+resolve-duplicate-constructor = Конструкторът `{ $name }` вече е деклариран.
+resolve-duplicate-alias = Псевдонимът на модул `{ $name }` вече е обвързан.
+resolve-duplicate-parameter = Типовият параметър `{ $name }` вече е деклариран в този обхват.
+resolve-duplicate-binder = Шаблонът обвързва `{ $name }` повече от веднъж.
+resolve-duplicate-recursive-member = Рекурсивната група дефинира `{ $name }` повече от веднъж.
+duplicate-name = Това име е в конфликт с по-ранна декларация.
+first-declaration = Първа декларация на това име.
+first-definition = Пълна по-ранна дефиниция.
+resolve-equation-name = Уравнението е с име `{ $name }`, но сигнатурата му декларира `{ $expected }`. Преименувайте уравнението на `{ $expected }`.
+resolve-newtype-name = Конструкторът е с име `{ $name }`, но този newtype изисква `{ $expected }`.
+resolve-unused-parameter = Явният типов параметър `{ $name }` не се използва в заглавната част на декларацията.
+resolve-import-conflict = Името `{ $name }` е в конфликт с обвързване, което вече е в обхвата на този файл.
+resolve-opaque-constructor = Конструкторът `{ $name }` принадлежи на непрозрачен тип и не е достъпен тук.
+resolve-private-export = Декларацията `{ $name }` е частна за модула, който я дефинира.
+resolve-missing-export = Няма достъпна импортирана декларация с име `{ $name }` в това пространство от имена.
+resolve-missing-module-alias = Няма псевдоним на модул с име `{ $name }` в текущия обхват.
+incorrect-name = Това име не съвпада с изискваното изписване.
+unused-parameter = Този параметър не се използва в заглавната част на декларацията.
+conflicting-binding = Това обвързване е в конфликт с име в обхвата на целия файл.
+inaccessible-name = Това име не е достъпно тук.
+required-name-declaration = Тази декларация определя изискваното име.
+inaccessible-declaration = Недостъпната декларация е тук.
+resolve-unknown-type = Няма тип с име `{ $name }` в текущия обхват.
+resolve-unknown-row-parameter = Няма параметър за ред от ефекти с име `{ $name }` в текущия обхват.
+resolve-unknown-interface-parameter = Интерфейсът собственик няма параметър с име `{ $name }`.
+resolve-unknown-constructor = Няма конструктор с име `{ $name }` в текущия обхват.
+resolve-unknown-interface = Няма интерфейс с име `{ $name }` в текущия обхват.
+resolve-unknown-effect = Няма ефект с име `{ $name }` в текущия обхват.
+resolve-unexported-effect = Избраният модул не експортира ефект с име `{ $name }`.
+source-ids = Ash не може да задели нова идентичност за изходния файл `{ $path }`.
+projection-recovery = Ash срещна маркери за възстановяване след синтактични грешки при преобразуване на `{ $path }` във вътрешна форма.
+projection-malformed = Ash откри несъгласуван вътрешен синтаксис за `{ $path }`: { $cause ->
+    [unexpected-finish] затварящо събитие няма отварящо събитие.
+    [unclosed-node] синтактичен възел не е затворен.
+    [invalid-root-count] синтактичните събития не образуват едно завършено дърво с корен.
+    [token-out-of-range] индекс на токен е извън запазения поток от токени.
+    [duplicate-token] токен е запазен повече от веднъж.
+    [missing-token] токен липсва в синтактичното дърво.
+    [token-out-of-order] токените не следват реда в изходния файл.
+    [foreign-span] диапазон принадлежи на друг изходен файл.
+    [invalid-span] диапазони или маркери за край на входа са несъгласувани.
+   *[unexpected-shape] синтактичен възел има неочаквана структура.
+    }
+syntax-depth-unlocated = Обработката на източника достигна лимита на компилатора за структурна дълбочина от { $limit }.
+syntax-work-unlocated = Обработката на източника достигна лимита на компилатора за синтактична работа от { $limit }.
+projection-recovery-unlocated = Ash срещна маркери за възстановяване на синтаксиса при преобразуване на изходния синтаксис във вътрешната му форма.
+projection-malformed-unlocated = Ash откри несъгласуван вътрешен синтаксис: { $cause ->
+    [unexpected-finish] затварящо събитие няма отварящо събитие.
+    [unclosed-node] синтактичен възел не е затворен.
+    [invalid-root-count] синтактичните събития не образуват едно завършено дърво с корен.
+    [token-out-of-range] индекс на токен е извън запазения поток от токени.
+    [duplicate-token] токен е запазен повече от веднъж.
+    [missing-token] токен липсва в синтактичното дърво.
+    [token-out-of-order] токените не следват реда в изходния файл.
+    [foreign-span] диапазон принадлежи на друг изходен файл.
+    [invalid-span] диапазони или маркери за край на входа са несъгласувани.
+   *[unexpected-shape] синтактичен възел има неочаквана структура.
+    }
+source-unrepresentable-span = Ash срещна непредставима дължина на изходен файл или отместване на токен при създаване на диапазон за `{ $path }`.
+source-path-limit = Пътят за показване на `{ $path }` надвишава лимита на модела за изходни файлове на Ash.
+source-text-limit = Текстът в `{ $path }` надвишава лимита за размер на модела за изходни файлове на Ash.
+source-line-limit = `{ $path }` има повече редове, отколкото моделът за изходни файлове на Ash може да представи.
+source-column-limit = Ред в `{ $path }` има повече колони, отколкото моделът за изходни файлове на Ash може да представи.
+source-range = Ash създаде байтов диапазон { $start }..{ $end } извън { $length } байта на `{ $path }`.
+source-foreign-span = Ash използва диапазон от изходен файл { $found }, когато за `{ $path }` се изискваше файл { $expected }.
+source-offset = Ash използва байтово отместване { $offset } извън { $length } байта на `{ $path }`.
+source-code-point = Ash използва байтово отместване { $offset } вътре в кодова точка в UTF-8 в `{ $path }`.
+source-line-state = Вътрешният индекс на редовете на Ash за `{ $path }` е несъгласуван.
+module-resource = Ash изчерпа ресурсите за { $resource ->
+    [graph-identities] идентичности на графи от модули
+    [sources] изходни файлове на модули
+    [edges] ребра на импорти
+    [path-segments] сегменти на пътища към модули
+    [owner-facts] факти за принадлежност на модули
+   *[pending-work] чакаща работа по зареждане на модули
+    }.
+syntax-work = Обработката на `{ $path }` достигна лимита на компилатора за синтактична работа от { $limit }.
+determination-empty-determinant = Определящата страна трябва да съдържа поне един параметър на интерфейса.
+determination-empty-dependent = Зависимата страна трябва да съдържа поне един параметър на интерфейса.
+determination-both-sides = Параметър на интерфейса не може да присъства от двете страни на зависимостта.
+determination-omitted = Зависимостта трябва да включва всеки параметър на интерфейса.
+determination-repeated = Този параметър се повтаря от една и съща страна на зависимостта.
+determination-order = Параметрите от всяка страна на зависимостта трябва да следват реда на декларациите си в интерфейса.
+determination-key-occurrence = Този параметър присъства и от определящата страна.
+determination-missing-parameter = Този параметър на интерфейса липсва в зависимостта.
+determination-earlier-occurrence = Параметърът вече присъства тук от тази страна.
+determination-preceding-occurrence = Това предходно използване не спазва реда на декларациите спрямо посочения параметър.
+determination-requirement-conflict = Тези изисквания имат едни и същи определящи аргументи, но различни зависими аргументи.
+determination-prerequisite-conflict = Тези предпоставки имат едни и същи определящи аргументи, но различни зависими аргументи.
+determination-improvement-conflict = Определящите аргументи `{ $key }` изискват зависими аргументи `{ $expected }`, но тези зависими аргументи са `{ $found }`.
+determination-earlier-requirement = Това по-ранно изискване задава различни зависими аргументи за същите определящи аргументи.
+determination-earlier-prerequisite = Тази по-ранна предпоставка задава различни зависими аргументи за същите определящи аргументи.
+determination-expected-source = Този източник задава очаквания зависим кортеж.
+core-build-arena-id-exhausted = Компилаторът изчерпа идентификаторите за Core арени.
+core-build-node-id-exhausted = Компилаторът изчерпа идентификаторите за възли в тази Core арена.
+core-build-binder-id-exhausted = Компилаторът изчерпа идентификаторите за свързвания в Core.
+core-build-duplicate-binder-reservation = Компилаторът резервира един и същ идентификатор за разрешено свързване повече от веднъж.
+core-build-binder-reservation-phase-started = Компилаторът опита да резервира идентификатори за разрешени свързвания след началото на създаването на свързвания в Core.
+core-build-unreserved-resolved-binder = Компилаторът опита да създаде свързване в Core, без да резервира разрешения му идентификатор.
+core-build-duplicate-resolved-binder = Компилаторът опита да създаде едно разрешено свързване в Core повече от веднъж.
+core-build-foreign-binder = Компилаторът използва свързване от друга Core арена.
+core-build-type-depth-exceeded = Тип надвишава ограничението на компилатора за вложеност на типове в Core.
+core-build-type-work-exceeded = Създаването на Core изчерпа бюджета на компилатора за работа с типове.
+core-build-origin-depth-exceeded = Метаданните за произхода в изходния код надвишават ограничението на компилатора за вложеност в Core.
+core-build-pattern-depth-exceeded = Шаблон надвишава ограничението на компилатора за вложеност на шаблони в Core.
+core-build-invalid-payload = Компилаторът срещна несъгласувано състояние при повторно изграждане на съдържание в Core.
+core-build-invalid-node-id = Компилаторът поиска коренов възел, който не принадлежи на тази Core арена.
+coverage-state-limit = Анализът на покритието на шаблоните достигна ограничението на компилатора за брой състояния.
+coverage-work-limit = Компилаторът не успя да завърши анализа на покритието на шаблоните с наличните работни ресурси.
+compiler-type-resources = Компилаторът изчерпа ресурсите за проверка и конструиране на типове.
+compiler-constraint-resources = Компилаторът изчерпа ресурсите за обработка на интерфейси и ограничения.
+effect-core-unavailable = Компилаторът опита да понижи синтаксис за ефекти чрез своя път за чист Core.
+evidence-unavailable-implementation = Компилаторът избра реализация, която не е достъпна в модула, съдържащ това използване.
+core-validation-dialect = Компилаторът съхрани Core възел от диалект, различен от този на избраната програма.
+core-validation-root = Компилаторът избра коренов възел, който не е валиден в тази Core арена.
+core-validation-cycle = Компилаторът създаде цикъл в графа на Core изразите.
+core-validation-unreachable = Компилаторът запази Core възел, който не е достижим от корена на програмата.
+core-validation-resource = Компилаторът не успя да завърши Core валидацията в рамките на ограниченията за работа или памет.
+core-validation-handler = Компилаторът създаде несъгласувана информация в Core за обработчик или за безопасността на прихванатите стойности.
+core-validation-handler-node = { core-validation-handler } Core възел: { $node }.
+elaboration-invalid-state = Компилаторът не успя да изгради типизиран Core, защото състоянието на елаборацията е несъгласувано.
+core-validation-node-type = Компилаторът създаде несъгласувана информация за типовете на Core възел или неговите проверени доказателства.
+core-validation-node-type-node = { core-validation-node-type } Core възел: { $node }.
+core-validation-application-type = Компилаторът създаде Core прилагане, което не съответства на проверената информация за функцията или аргумента.
+core-validation-application-type-node = { core-validation-application-type } Core възел: { $node }.
+core-validation-registry = Core регистърът на декларациите или модулите на компилатора е несъгласуван.
+core-validation-registry-node = { core-validation-registry } Core възел: { $node }.
+evidence-unknown-identity = Компилаторът не успя да свърже доказателство за интерфейс с еднозначна декларация с очаквания собственик.
+evidence-invalid-root = Избраното от компилатора доказателство не установява изискването за интерфейс на това място.
+core-validation-resource-node = { core-validation-resource } Core възел: { $node }.
+core-validation-dialect-node = { core-validation-dialect } Core възел: { $node }.
+core-validation-root-node = { core-validation-root } Core възел: { $node }.
+core-validation-cycle-node = { core-validation-cycle } Core възел: { $node }.
+core-validation-unreachable-node = { core-validation-unreachable } Core възел: { $node }.
+core-validation-missing-child = Компилаторът е съхранил Core възел, чиято заявена връзка към дъщерен възел не може да бъде прочетена.
+core-validation-missing-child-node = { core-validation-missing-child } Core възел: { $node }.
+core-validation-foreign-arena = Компилаторът е съхранил препратка към Core възел от друга арена.
+core-validation-foreign-arena-node = { core-validation-foreign-arena } Core възел: { $node }.
+core-validation-missing-node = Компилаторът е съхранил препратка към Core възел извън съхранените възли на програмата.
+core-validation-missing-node-node = { core-validation-missing-node } Core възел: { $node }.
+core-validation-identity-range = Компилаторът не може да представи индекса на съхранен Core възел като идентификатор на възел.
+core-validation-identity-range-node = { core-validation-identity-range } Core възел: { $node }.
+core-validation-empty-match = Компилаторът е запазил Core съпоставяне без клонове.
+core-validation-empty-match-node = { core-validation-empty-match } Core възел: { $node }.
+core-validation-redundant-arm = Компилаторът е запазил клон { $arm } на Core съпоставяне, който вече е покрит от предходни клонове.
+core-validation-redundant-arm-node = { core-validation-redundant-arm } Core възел: { $node }.
+core-validation-non-exhaustive = Компилаторът е запазил Core съпоставяне, което не покрива всички възможни входни стойности.
+core-validation-non-exhaustive-node = { core-validation-non-exhaustive } Core възел: { $node }.
+core-validation-missing-origin = Компилаторът е запазил Core възел без произхода му в изходния код.
+core-validation-missing-origin-node = { core-validation-missing-origin } Core възел: { $node }.
+core-validation-origin-depth = Компилаторът е запазил верига за произхода на Core, по-дълбока от поддържаното ограничение.
+core-validation-origin-depth-node = { core-validation-origin-depth } Core възел: { $node }.
+core-validation-related-origin-source = Компилаторът е прикрепил свързан произход на Core от различен източник от основния произход.
+core-validation-related-origin-source-node = { core-validation-related-origin-source } Core възел: { $node }.
+core-validation-unadmitted-origin-source = Компилаторът е запазил произход на Core, сочещ към източник, който не е допуснат в тази компилация.
+core-validation-unadmitted-origin-source-node = { core-validation-unadmitted-origin-source } Core възел: { $node }.
+core-validation-origin-range = Компилаторът е запазил байтов диапазон { $start }..{ $end } за произхода на Core, надхвърлящ дължината на източника от { $length } байта.
+core-validation-origin-range-node = { core-validation-origin-range } Core възел: { $node }.
+core-validation-origin-code-point = Компилаторът е запазил произход на Core, чието байтово отместване { $offset } разделя UTF-8 символ.
+core-validation-origin-code-point-node = { core-validation-origin-code-point } Core възел: { $node }.
+core-validation-origin-text-limit = Компилаторът не може да представи дължината на допуснатия източник при проверка на произхода на Core.
+core-validation-origin-text-limit-node = { core-validation-origin-text-limit } Core възел: { $node }.
+core-validation-origin-index = Компилаторът не може да представи байтовото отместване на произхода на Core като индекс в източника.
+core-validation-origin-index-node = { core-validation-origin-index } Core възел: { $node }.
+core-validation-empty-recursive-group = Компилаторът е запазил Core рекурсивна група без членове.
+core-validation-empty-recursive-group-node = { core-validation-empty-recursive-group } Core възел: { $node }.
+core-validation-recursive-function-initializer = Компилаторът е запазил рекурсивна функция, чийто инициализатор не е функционална стойност.
+core-validation-recursive-function-initializer-node = { core-validation-recursive-function-initializer } Core възел: { $node }.
+core-validation-recursive-type-abstraction = Компилаторът е запазил полиморфна рекурсивна функция без нейната типова абстракция.
+core-validation-recursive-type-abstraction-node = { core-validation-recursive-type-abstraction } Core възел: { $node }.
+core-validation-recursive-type-parameters = Компилаторът е запазил рекурсивна типова абстракция, чиито параметри не съответстват на типа на свързването.
+core-validation-recursive-type-parameters-node = { core-validation-recursive-type-parameters } Core възел: { $node }.
+core-validation-recursive-function-body = Компилаторът е запазил рекурсивна типова абстракция, чието тяло не е функционална стойност.
+core-validation-recursive-function-body-node = { core-validation-recursive-function-body } Core възел: { $node }.
+core-validation-recursive-value-type = Компилаторът е запазил рекурсивно свързване, чийто тип не е нито поддържан функционален тип, нито номинален тип данни.
+core-validation-recursive-value-type-node = { core-validation-recursive-value-type } Core възел: { $node }.
+core-validation-recursive-unknown-constructor = Компилаторът е запазил инициализатор на рекурсивни данни, чийто конструктор липсва в регистъра.
+core-validation-recursive-unknown-constructor-node = { core-validation-recursive-unknown-constructor } Core възел: { $node }.
+core-validation-recursive-constructor-owner = Компилаторът е запазил инициализатор на рекурсивни данни, използващ конструктор на друг номинален тип.
+core-validation-recursive-constructor-owner-node = { core-validation-recursive-constructor-owner } Core възел: { $node }.
+core-validation-recursive-missing-payload = Компилаторът е запазил конструктор на рекурсивни данни без задължителния му полезен товар.
+core-validation-recursive-missing-payload-node = { core-validation-recursive-missing-payload } Core възел: { $node }.
+core-validation-recursive-unexpected-payload = Компилаторът е подал полезен товар на конструктор на рекурсивни данни, който не приема такъв.
+core-validation-recursive-unexpected-payload-node = { core-validation-recursive-unexpected-payload } Core възел: { $node }.
+core-validation-recursive-data-root = Компилаторът е запазил инициализатор на рекурсивни данни, който не започва с конструктор.
+core-validation-recursive-data-root-node = { core-validation-recursive-data-root } Core възел: { $node }.
+core-validation-recursive-payload-call = Компилаторът е запазил полезен товар на рекурсивни данни, който използва рекурсивни свързвания при извикване на нещо, различно от конструктор.
+core-validation-recursive-payload-call-node = { core-validation-recursive-payload-call } Core възел: { $node }.
+core-validation-recursive-payload-form = Компилаторът е запазил полезен товар на рекурсивни данни, който използва рекурсивни свързвания извън разрешените защитени форми.
+core-validation-recursive-payload-form-node = { core-validation-recursive-payload-form } Core възел: { $node }.
+core-validation-foreign-binder-arena = Компилаторът е запазил Core свързващ идентификатор, принадлежащ на друга арена.
+core-validation-foreign-binder-arena-node = { core-validation-foreign-binder-arena } Core възел: { $node }.
+core-validation-duplicate-binder = Компилаторът е декларирал един и същ Core свързващ идентификатор повече от веднъж.
+core-validation-duplicate-binder-node = { core-validation-duplicate-binder } Core възел: { $node }.
+core-validation-unknown-variable-binder = Компилаторът е запазил Core променлива, чийто свързващ идентификатор не е деклариран.
+core-validation-unknown-variable-binder-node = { core-validation-unknown-variable-binder } Core възел: { $node }.
+core-validation-non-lexical-scope-owner = Компилаторът е използвал нелексикален номинален идентификатор като собственик на локален Core обхват.
+core-validation-non-lexical-scope-owner-node = { core-validation-non-lexical-scope-owner } Core възел: { $node }.
+core-validation-unknown-scope-owner = Компилаторът е запазил локален Core обхват, чийто номинален собственик липсва в регистъра.
+core-validation-unknown-scope-owner-node = { core-validation-unknown-scope-owner } Core възел: { $node }.
+core-validation-local-scope-type = Компилаторът е запазил локален Core обхват, чийто резултатен тип се различава от типа на тялото му.
+core-validation-local-scope-type-node = { core-validation-local-scope-type } Core възел: { $node }.
+core-validation-local-scope-effects = Компилаторът е запазил локален Core обхват, чиито ефекти се различават от ефектите на тялото му.
+core-validation-local-scope-effects-node = { core-validation-local-scope-effects } Core възел: { $node }.
+core-validation-incomplete-scope-analysis = Анализът на обхватите на компилатора не е обхванал всички съхранени Core възли.
+core-validation-incomplete-scope-analysis-node = { core-validation-incomplete-scope-analysis } Core възел: { $node }.
+core-validation-unbound-core-binder = Компилаторът е запазил Core използване без обхващащ обхват за свързващия му идентификатор.
+core-validation-unbound-core-binder-node = { core-validation-unbound-core-binder } Core възел: { $node }.
+core-validation-unbound-local-nominal = Компилаторът е запазил изискване за локален номинален тип без обхващащия го Core обхват.
+core-validation-unbound-local-nominal-node = { core-validation-unbound-local-nominal } Core възел: { $node }.
+core-validation-unexpected-local-scope = Компилаторът е запазил локален Core обхват, който не е сред лексикалните номинални идентификатори в регистъра.
+core-validation-unexpected-local-scope-node = { core-validation-unexpected-local-scope } Core възел: { $node }.
+core-validation-duplicate-local-scope = Компилаторът е въвел един и същ локален номинален идентификатор в повече от един Core обхват.
+core-validation-duplicate-local-scope-node = { core-validation-duplicate-local-scope } Core възел: { $node }.
+core-validation-missing-local-scope = Компилаторът е запазил лексикален номинален идентификатор без съответстващ Core обхват.
+core-validation-missing-local-scope-node = { core-validation-missing-local-scope } Core възел: { $node }.
+core-validation-missing-capture-requirement = Записано от компилатора прихващане на имплементация липсва в изискванията за обхват на инициализатора.
+core-validation-missing-capture-requirement-node = { core-validation-missing-capture-requirement } Core възел: { $node }.
+core-validation-missing-root-requirements = Компилаторът няма запазен резултат от анализа на обхватите за корена на Core.
+core-validation-missing-root-requirements-node = { core-validation-missing-root-requirements } Core възел: { $node }.
+core-validation-missing-node-requirements = Компилаторът се нуждае от резултата от анализа на обхватите на Core възел, преди той да е наличен.
+core-validation-missing-node-requirements-node = { core-validation-missing-node-requirements } Core възел: { $node }.
+core-validation-missing-generated-type-binder = Компилаторът е запазил генерирана Core типова променлива без декларирания ѝ род.
+core-validation-missing-generated-type-binder-node = { core-validation-missing-generated-type-binder } Core възел: { $node }.
+core-validation-unresolved-core-inference = Компилаторът е запазил нерешена променлива за извеждане в Core тип.
+core-validation-unresolved-core-inference-node = { core-validation-unresolved-core-inference } Core възел: { $node }.
+core-validation-missing-type-root-requirements = Компилаторът няма запазени изисквания за типовия обхват на корена на Core.
+core-validation-missing-type-root-requirements-node = { core-validation-missing-type-root-requirements } Core възел: { $node }.
+core-validation-unbound-core-type-variables = Компилаторът е запазил изисквания за свободни типови променливи в корена на Core.
+core-validation-unbound-core-type-variables-node = { core-validation-unbound-core-type-variables } Core възел: { $node }.
+core-validation-missing-type-use-count = Компилаторът няма броя използвания на дъщерен възел, необходим за анализа на типовите обхвати на Core.
+core-validation-missing-type-use-count-node = { core-validation-missing-type-use-count } Core възел: { $node }.
+core-validation-exhausted-type-use-count = Компилаторът е използвал изискванията за типовия обхват на дъщерен Core възел повече пъти от записаното.
+core-validation-exhausted-type-use-count-node = { core-validation-exhausted-type-use-count } Core възел: { $node }.
+core-validation-missing-type-requirement-slot = Компилаторът няма място за резултата от анализа на типовите обхвати за посочен дъщерен Core възел.
+core-validation-missing-type-requirement-slot-node = { core-validation-missing-type-requirement-slot } Core възел: { $node }.
+core-validation-missing-type-requirements = Компилаторът се нуждае от изискванията за типовия обхват на дъщерен Core възел, преди те да са налични.
+core-validation-missing-type-requirements-node = { core-validation-missing-type-requirements } Core възел: { $node }.
+core-validation-unresolved-core-row = Компилаторът е запазил нерешена опашка за извеждане в Core ред на ефекти.
+core-validation-unresolved-core-row-node = { core-validation-unresolved-core-row } Core възел: { $node }.
+core-validation-unknown-core-row-binder = Компилаторът е запазил опашка на Core ред на ефекти без деклариран род на свързващия идентификатор.
+core-validation-unknown-core-row-binder-node = { core-validation-unknown-core-row-binder } Core възел: { $node }.
+core-validation-non-row-tail-kind = Компилаторът е запазил опашка на Core ред на ефекти, чийто свързващ идентификатор не е от род EffectRow.
+core-validation-non-row-tail-kind-node = { core-validation-non-row-tail-kind } Core възел: { $node }.
+kind-resources = Компилаторът изчерпа ресурсите при проверка на родовете на типовете.
+resolve-type-resources = Компилаторът изчерпа ресурсите при разрешаване на типове.
+resolve-constraint-resources = Компилаторът изчерпа ресурсите при разрешаване на интерфейси и ограничения.
+kind-internal-missing-effect = Компилаторът няма каноничен запис в регистъра за локален ефект.
+kind-internal-duplicate-effect = Компилаторът запази повтарящ се идентификатор в проверения регистър на ефектите.
+kind-internal-nested-effect-row = Компилаторът запази EffectRow под стрелка на род, където това не е допустимо.
+kind-internal-duplicate-binder = Компилаторът запази повтарящ се идентификатор на типова променлива в списъка със свързвания на собственик.
+kind-internal-owner-effect-row = Компилаторът запази параметър EffectRow за собственик, който не може да го свързва.
+kind-internal-missing-owner-binder = Компилаторът няма каноничен запис в регистъра за свързване на свързан собственик.
+kind-internal-implementation-binder-count = Компилаторът запази различен брой свързвания в изходната и проверената глава на реализацията.
+kind-internal-implementation-binder-identity = Компилаторът запази различни идентификатори за свързвания в изходната и проверената глава на реализацията.
+kind-internal-scheme-binder-count = Компилаторът запази различен брой свързвания в свързана изходна схема и нейната проверена схема.
+kind-internal-scheme-binder-identity = Компилаторът запази различни идентификатори за свързвания в свързана изходна схема и нейната проверена схема.
+kind-internal-retained-binder-kind = Компилаторът запази род на свързване, който не съответства на каноничния му запис в регистъра.
+kind-internal-unused-implementation-binder = Компилаторът запази неизползвано твърдо свързване в глава на свързана реализация.
+kind-internal-unused-scheme-binder = Компилаторът запази неизползвано свързване на собственик в свързана схема на стойност.
+kind-internal-invalid-dependent-allowance = Компилаторът запази невалидно разрешение за свързвания само в зависими позиции в свързана глобална дефиниция.
+kind-internal-linked-value-type = Компилаторът запази свързан изходен тип, който не съответства на проверения тип на стойността.
+kind-internal-linked-computation-row = Компилаторът запази изходен ред на изчисление, който не съответства на проверения му ред.
+kind-internal-duplicate-constructor-mirror = Компилаторът запази две копия за един домейн на свързан конструктор.
+kind-internal-missing-nominal-kind = Компилаторът няма каноничен род за номинален тип.
+kind-internal-duplicate-nominal-kind = Компилаторът регистрира повече от един каноничен род за номинален тип.
+kind-internal-missing-inference-kind = Компилаторът няма фиксиран род за променлива за извеждане.
+kind-internal-duplicate-inference-kind = Компилаторът регистрира повече от един фиксиран род за променлива за извеждане.
+kind-internal-missing-interface-parameters = Компилаторът няма канонични записи за параметрите на интерфейс.
+kind-internal-interface-parameter-count = Компилаторът запази противоречиви канонични бройки параметри за интерфейс.
+kind-internal-interface-parameter-records = Компилаторът запази противоречиви канонични записи за параметрите на интерфейс.
+kind-internal-invalid-type-provenance = Компилаторът запази невалидни данни за изходния произход на разрешен тип.
+kind-internal-type-provenance-owner = Компилаторът съчета разрешен тип с данни за изходен произход, принадлежащи на друг собственик.
+kind-internal-atomic-type-provenance = Компилаторът прикрепи данни за произход на съставен тип към атомарен разрешен тип.
+kind-internal-application-provenance = Компилаторът съчета разрешено типово приложение с данни за произход на друга типова форма.
+kind-internal-function-provenance = Компилаторът съчета разрешен функционален тип с данни за произход на друга типова форма.
+kind-internal-tuple-provenance = Компилаторът съчета разрешен кортежен тип с данни за произход на друга типова форма.
+kind-internal-incomplete-tuple-provenance = Компилаторът запази непълни данни за изходния произход на разрешен кортежен тип.
+kind-internal-tuple-child-provenance = Компилаторът запази непълни данни за произхода на елементите на разрешен кортежен тип.
+kind-internal-effect-type-provenance-owner = Компилаторът съчета тип с ефекти с данни за произход, принадлежащи на друг собственик.
+kind-internal-effect-type-provenance-shape = Компилаторът съчета тип с ефекти с данни за произход на друга типова структура.
+kind-internal-effect-tuple-provenance = Компилаторът запази данни за произход, които не съответстват на елементите на кортежен тип с ефекти.
+kind-internal-effect-function-provenance = Компилаторът запази непълни данни за произхода на функционален тип с ефекти.
+kind-internal-pure-computation-provenance = Компилаторът запази данни за произхода на аргументи на ефекти за чисто изчисление.
+kind-internal-computation-missing-arguments = Компилаторът запази ред на изчисление с липсващ или невалиден запис за произхода на аргумент на ефект.
+kind-internal-computation-surplus-arguments = Компилаторът запази излишни записи за произхода на аргументите на ефекти в ред на изчисление.
+kind-internal-row-missing-arguments = Компилаторът запази твърде малко записи за произхода на аргументите в ред на ефекти.
+kind-internal-row-surplus-arguments = Компилаторът запази излишни записи за произхода на аргументите в ред на ефекти.
+kind-internal-hook-argument-source = Компилаторът запази аргумент на hook без неговото използване в изходния код.
+kind-internal-hook-argument-provenance = Компилаторът запази различен брой аргументи на hook и записи за техния произход.
+kind-internal-hook-missing-effect = Компилаторът няма канонична декларация на ефект за цел на hook.
+kind-internal-constructor-moved-provenance = Компилаторът запази данни за произхода на конструкторен товар, които не съответстват на преместения товар.
+kind-internal-constructor-owner = Компилаторът запази каноничен конструктор, принадлежащ на друг номинален тип.
+kind-internal-payload-cardinality = Компилаторът запази неправилен брой външни записи за произхода на конструкторен товар.
+kind-internal-payload-identity = Компилаторът съчета данни за произхода на конструкторен товар с грешен идентификатор на конструктор.
+kind-internal-nominal-payload-provenance = Компилаторът запази различен брой номинални конструктори и записи за произхода на техните товари.
+kind-internal-newtype-payload = Компилаторът запази обикновен конструкторен товар за конструктор на newtype.
+kind-internal-newtype-constructor-count = Компилаторът запази newtype без точно един идентификатор на конструктор.
+kind-internal-newtype-representation-count = Компилаторът запази newtype без точно един запис за произхода на представянето.
+kind-internal-newtype-representation = Компилаторът не запази каноничното представяне на newtype.
+kind-internal-newtype-field-provenance = Компилаторът запази представяне на newtype без точно един запис за произхода на поле.
+kind-internal-lexical-nominal = Компилаторът запази запис за лексикален номинален тип, който не е лексикален newtype.
+kind-internal-lexical-newtype-constructor = Компилаторът запази конструктор на лексикален newtype с невалидна принадлежност или обикновен товар.
+kind-internal-lexical-newtype-count = Компилаторът запази лексикален newtype без точно един идентификатор на конструктор.
+kind-internal-lexical-newtype-representation = Компилаторът не запази каноничното представяне на лексикален newtype.
+kind-internal-lexical-newtype-provenance = Компилаторът не запази данни за произхода на представянето на лексикален newtype.
+kind-internal-imported-nominal-parameters = Компилаторът запази внесен номинален тип, чиито записи за параметри не съответстват на техния брой.
+kind-internal-payload-scheme-function = Компилаторът запази схема на конструктор с товар без външен функционален тип.
+kind-internal-declaration-order = Компилаторът запази повтарящи се или неподредени индекси на декларации.
+kind-internal-declaration-coverage = Редът на декларациите в компилатора пропуска локални декларации.
+kind-internal-kind-preflight-global = Компилаторът срещна невалиден индекс на глобална дефиниция при предварителната проверка на родовете на интерфейсни приложения.
+kind-internal-kind-preflight-implementation = Компилаторът срещна невалиден индекс на реализация при предварителната проверка на родовете на интерфейсни приложения.
+kind-internal-preflight-global = Компилаторът срещна невалиден индекс на глобална дефиниция при предварителната проверка на интерфейсни приложения.
+kind-internal-preflight-implementation = Компилаторът срещна невалиден индекс на реализация при предварителната проверка на интерфейсни приложения.
+kind-internal-missing-canonical-binder = Компилаторът няма каноничен род за типово свързване.
+kind-internal-conflicting-declaration-binder = Компилаторът запази свързване на декларация, което противоречи на каноничния му запис в регистъра.
+kind-internal-missing-declaration-binder = Компилаторът няма каноничен запис в регистъра за свързване на декларация.
+kind-internal-scheme-in-determination = Компилаторът подаде полиморфна схема към откриването на глобални зависимости, което изисква монотип.
+kind-internal-scheme-in-monotype = Компилаторът подаде полиморфна схема към проверката на родове на разрешени монотипове.
+kind-internal-empty-method-binders = Компилаторът запази празен явен списък със свързвания на метод.
+kind-internal-missing-interface-kind = Компилаторът няма каноничен запис за рода на интерфейса за разрешено интерфейсно приложение.
+kind-internal-empty-interface-parameters = Компилаторът запази разрешен интерфейс без типови параметри.
+kind-internal-missing-variable-kind = Компилаторът няма каноничен род за разрешена типова променлива.
+kind-internal-resource-identity-kind = Компилаторът запази идентификатор на ресурс, чийто род не е Type.
+kind-internal-determinant-position = Компилаторът запази определяща позиция извън пълното интерфейсно приложение.
+kind-internal-source-determination-key = Компилаторът запази невалиден ключ на зависимост в удостоверени изходни данни.
+kind-internal-summary-determination-key = Компилаторът запази невалиден ключ на зависимост в удостоверено обобщение.
+kind-internal-effect-argument-kind = Компилаторът запази аргумент в ред на ефекти с неправилен каноничен род.
+kind-internal-effect-argument-count = Компилаторът запази екземпляр в ред на ефекти с неправилен каноничен брой аргументи.
+kind-internal-missing-row-effect = Компилаторът запази ред на ефекти, който сочи към ефект без канонична проверена декларация.
+kind-internal-non-owner-row-tail = Компилаторът запази опашка на ред на ефекти, която не е свързана от своя собственик.
+kind-internal-row-tail-kind = Компилаторът запази опашка на ред на ефекти, чийто род не е EffectRow.
+kind-internal-missing-row-binder-kind = Компилаторът няма каноничен род на свързване за опашка на ред на ефекти.
+kind-internal-missing-row-inference-kind = Компилаторът няма фиксиран род за извеждане за опашка на ред на ефекти.
+kind-internal-implementation-row-binder = Компилаторът запази параметър EffectRow при собственик на реализация, който не може да го свързва.
+kind-internal-preflight-arity-changed = Компилаторът установи различен брой аргументи на интерфейсно приложение между предварителните проверки на родове.
+kind-internal-method-row-binder = Компилаторът запази параметър EffectRow при интерфейсен метод, който не може да го свързва.
+kind-internal-row-inference-determination = Компилаторът срещна извеждане на редове по време на откриването на глобални зависимости.
+kind-internal-body-free-constructor-owner = Компилаторът запази конструкторна схема, която сочи към променлива извън параметрите на нейния собственик.
+kind-internal-body-free-interface-kind = Компилаторът няма канонични родове на параметрите за интерфейсно използване, проверявано без тяло.
+kind-internal-body-free-constructor-kind = Компилаторът запази проверена конструкторна схема, чийто краен род не е Type.
+kind-internal-body-free-function-kind = Компилаторът запази компонент на функционален тип с неправилен род при проверка без тяло.
+kind-internal-body-free-interface-arity = Компилаторът запази интерфейсно приложение с неправилен брой аргументи при проверка без тяло.
+kind-internal-body-free-interface-argument = Компилаторът запази интерфейсен аргумент с неправилен род при проверка без тяло.
+kind-internal-body-free-determinant-seed = Компилаторът запази празно определящо множество или такова с всички параметри за проверен интерфейс.
+kind-internal-body-free-method-kind = Компилаторът запази проверен интерфейсен метод, чийто краен род не е Type.
+kind-internal-body-free-required-seed = Компилаторът запази проверен интерфейсен метод с празно множество от задължителни параметри.
+kind-internal-body-free-method-function = Компилаторът запази проверен интерфейсен метод без функционален тип.
+kind-internal-body-free-missing-parameter = Компилаторът запази проверен интерфейсен метод, който пропуска задължителен параметър.
+kind-internal-body-free-method-duplicate-parameter = Компилаторът запази повтарящ се типов параметър в проверен интерфейсен метод.
+kind-internal-body-free-interface-duplicate-parameter = Компилаторът запази повтарящ се типов параметър в проверен интерфейс.
+kind-internal-body-free-seed-order = Компилаторът запази множество от интерфейсни параметри, което не е подмножество без повторения в реда на декларациите.
+kind-internal-body-free-monotype-kind = Компилаторът запази проверен монотип с неправилен каноничен род.
+kind-internal-body-free-tuple-kind = Компилаторът запази кортежен елемент с неправилен род при проверка без тяло.
+kind-internal-body-free-application-argument = Компилаторът запази типово приложение с неправилен род на аргумента при проверка без тяло.
+kind-internal-body-free-non-function-kind = Компилаторът запази типово приложение, чийто оператор няма функционален род.
+kind-internal-body-free-value-kind = Компилаторът запази проверена схема на стойност, чийто краен род не е Type.
+kind-internal-body-free-source-diagnostic = Компилаторът опита да запази диагностика за изходен код при проверка на родове без изходни тела.
+kind-internal-lookup-lexical-constructor = Компилаторът запази лексикален newtype, който сочи към липсващ каноничен конструктор.
+kind-internal-lookup-lexical-parameters = Компилаторът няма канонични записи за параметрите на лексикален номинален тип.
+kind-internal-lookup-lexical-nominal = Компилаторът запази маркер за лексикален номинален тип, който сочи към липсващ каноничен запис.
+kind-internal-lookup-nominal-parameters = Компилаторът няма канонични записи за параметрите на локален номинален тип.
+kind-internal-lookup-newtype-constructor = Компилаторът запази newtype, който сочи към липсващ каноничен конструктор.
+kind-internal-lookup-payload-provenance = Компилаторът няма подредени по декларации данни за произхода на товарите за номинален тип.
+kind-internal-lookup-nominal-constructor = Компилаторът запази номинален тип, който сочи към липсващ каноничен конструктор.
+kind-internal-lookup-effect-index = Редът на декларациите в компилатора съдържа невалиден индекс на ефект.
+kind-internal-lookup-global-index = Редът на декларациите в компилатора съдържа невалиден индекс на глобална дефиниция.
+kind-internal-lookup-implementation-index = Редът на декларациите в компилатора съдържа невалиден индекс на реализация.
+kind-internal-lookup-interface-index = Редът на декларациите в компилатора съдържа невалиден индекс на интерфейс.
+kind-internal-lookup-nominal-index = Редът на декларациите в компилатора съдържа невалиден индекс на номинален тип.
+evidence-kind-use = Проверката на родовете се провали при проверка на свидетелството на това използване.
+elaboration-kind-use = Проверката на родовете се провали при проверка на този израз или декларация.
+resolve-kind-use = Проверката на родовете се провали при проверка на внесената информация на това място.
+core-validation-conversion-unknown-owner = Компилаторът е запазил newtype преобразуване, чийто собственик липсва в регистъра.
+core-validation-conversion-unknown-owner-node = { core-validation-conversion-unknown-owner } Core възел: { $node }.
+core-validation-conversion-ordinary-owner = Компилаторът е използвал обикновен номинален тип като собственик на newtype преобразуване.
+core-validation-conversion-ordinary-owner-node = { core-validation-conversion-ordinary-owner } Core възел: { $node }.
+core-validation-conversion-missing-representation = Компилаторът е запазил newtype преобразуване, чийто собственик няма представящ тип.
+core-validation-conversion-missing-representation-node = { core-validation-conversion-missing-representation } Core възел: { $node }.
+core-validation-conversion-missing-parameters = Компилаторът е запазил newtype преобразуване без декларацията на параметрите на неговия собственик.
+core-validation-conversion-missing-parameters-node = { core-validation-conversion-missing-parameters } Core възел: { $node }.
+core-validation-conversion-excess-arguments = Компилаторът е приложил повече типови аргументи, отколкото декларира собственикът на newtype преобразуването.
+core-validation-conversion-excess-arguments-node = { core-validation-conversion-excess-arguments } Core възел: { $node }.
+core-validation-conversion-nominal-owner = Номиналната страна на запазено от компилатора newtype преобразуване не назовава декларирания му собственик.
+core-validation-conversion-nominal-owner-node = { core-validation-conversion-nominal-owner } Core възел: { $node }.
+core-validation-conversion-missing-arguments = Компилаторът е приложил по-малко типови аргументи, отколкото декларира собственикът на newtype преобразуването.
+core-validation-conversion-missing-arguments-node = { core-validation-conversion-missing-arguments } Core възел: { $node }.
+core-validation-conversion-invalid-argument = Компилаторът е запазил newtype преобразуване с типов аргумент, който няма валиден род на монотип.
+core-validation-conversion-invalid-argument-node = { core-validation-conversion-invalid-argument } Core възел: { $node }.
+core-validation-conversion-argument-kind = Типов аргумент на newtype преобразуване има различен род от декларирания му параметър.
+core-validation-conversion-argument-kind-node = { core-validation-conversion-argument-kind } Core възел: { $node }.
+core-validation-conversion-representation-mismatch = Представящата страна на запазено от компилатора newtype преобразуване се различава от инстанцирания му представящ тип.
+core-validation-conversion-representation-mismatch-node = { core-validation-conversion-representation-mismatch } Core възел: { $node }.
+core-validation-unknown-core-effect = Компилаторът е запазил идентификатор на ефект, който липсва в регистъра на Core.
+core-validation-unknown-core-effect-node = { core-validation-unknown-core-effect } Core възел: { $node }.
+core-validation-core-operation-owner = Компилаторът е използвал операция, която принадлежи на друга декларация на ефект.
+core-validation-core-operation-owner-node = { core-validation-core-operation-owner } Core възел: { $node }.
+core-validation-core-effect-argument-count = Компилаторът е запазил екземпляр на ефект с различен брой типови аргументи от декларацията му.
+core-validation-core-effect-argument-count-node = { core-validation-core-effect-argument-count } Core възел: { $node }.
+core-validation-core-effect-invalid-argument = Компилаторът е запазил типов аргумент на ефект, който няма валиден род на монотип.
+core-validation-core-effect-invalid-argument-node = { core-validation-core-effect-invalid-argument } Core възел: { $node }.
+core-validation-core-effect-argument-kind = Типов аргумент на екземпляр на ефект има различен род от декларирания му параметър.
+core-validation-core-effect-argument-kind-node = { core-validation-core-effect-argument-kind } Core възел: { $node }.
+core-validation-unknown-core-operation = Компилаторът е запазил идентификатор на операция, който липсва в декларацията на ефекта ѝ.
+core-validation-unknown-core-operation-node = { core-validation-unknown-core-operation } Core възел: { $node }.
+core-validation-core-operation-signature = Компилаторът е запазил операция на ефект, чиято инстанцирана сигнатура не е функционален тип.
+core-validation-core-operation-signature-node = { core-validation-core-operation-signature } Core възел: { $node }.
+core-validation-unsupported-resource-module = Компилаторът е запазил придобиване на ресурс, чийто вграден модул няма поддържан API на доставчик.
+core-validation-unsupported-resource-module-node = { core-validation-unsupported-resource-module } Core възел: { $node }.
+core-validation-resource-provider-method-count = Компилаторът е запазил придобиване на ресурс с различен брой методи от API на доставчика му.
+core-validation-resource-provider-method-count-node = { core-validation-resource-provider-method-count } Core възел: { $node }.
+core-resource-escape = Компилаторът е запазил стойност, която зависи от ресурс извън обхвата на този ресурс.
+core-resource-escape-node = { core-resource-escape } Core възел: { $node }.
+core-discard-unknown = Компилаторът е запазил discard без доказателство, че прихванатото продължение няма незавършени задължения.
+core-discard-unknown-node = { core-discard-unknown } Core възел: { $node }.
+core-discard-clause = Компилаторът е запазил discard, който пропуска клауза с незавършено задължение за приключване.
+core-discard-clause-node = { core-discard-clause } Core възел: { $node }.
+core-discard-cleanup = Компилаторът е запазил discard, който пропуска действие за почистване, което трябва да приключи.
+core-discard-cleanup-node = { core-discard-cleanup } Core възел: { $node }.
+core-cleanup-context = Компилаторът е запазил discard, който премахва обработчик, необходим за почистването.
+core-cleanup-context-node = { core-cleanup-context } Core възел: { $node }.
+core-validation-missing-tuple-kinds = Анализът на родовете на Core в компилатора има по-малко резултати за елементи на кортежа от необходимото.
+core-validation-missing-tuple-kinds-node = { core-validation-missing-tuple-kinds } Core възел: { $node }.
+core-validation-missing-argument-kind = Анализът на родовете на Core в компилатора няма резултат за аргумента на типово прилагане.
+core-validation-missing-argument-kind-node = { core-validation-missing-argument-kind } Core възел: { $node }.
+core-validation-missing-function-kind = Анализът на родовете на Core в компилатора няма резултат за функцията на типово прилагане.
+core-validation-missing-function-kind-node = { core-validation-missing-function-kind } Core възел: { $node }.
+core-validation-missing-codomain-kind = Анализът на родовете на Core в компилатора няма резултат за кодомейна на функционален тип.
+core-validation-missing-codomain-kind-node = { core-validation-missing-codomain-kind } Core възел: { $node }.
+core-validation-missing-domain-kind = Анализът на родовете на Core в компилатора няма резултат за домейна на функционален тип.
+core-validation-missing-domain-kind-node = { core-validation-missing-domain-kind } Core възел: { $node }.
+core-validation-core-kind-result-count = Анализът на родовете на Core в компилатора не е завършил с точно един резултат.
+core-validation-core-kind-result-count-node = { core-validation-core-kind-result-count } Core възел: { $node }.
+core-validation-duplicate-generated-type-binder = Компилаторът е декларирал един и същ генериран идентификатор на типова променлива в повече от една типова абстракция на Core.
+core-validation-duplicate-generated-type-binder-node = { core-validation-duplicate-generated-type-binder } Core възел: { $node }.
+core-validation-effect-abstraction-body = Компилаторът е запазил типова абстракция на Core с ефекти, чието тяло не е инертна стойност или типово прилагане.
+core-validation-effect-abstraction-body-node = { core-validation-effect-abstraction-body } Core възел: { $node }.
+core-validation-expected-type-abstraction = Компилаторът е записал типова абстракция на Core при възел с друга форма.
+core-validation-expected-type-abstraction-node = { core-validation-expected-type-abstraction } Core възел: { $node }.
+core-validation-expected-type-application = Компилаторът е записал типово прилагане на Core при възел с друга форма.
+core-validation-expected-type-application-node = { core-validation-expected-type-application } Core възел: { $node }.
+core-validation-adapter-parameter-identity = Компилаторът е използвал негенериран типов параметър в адаптер на метод.
+core-validation-adapter-parameter-identity-node = { core-validation-adapter-parameter-identity } Core възел: { $node }.
+core-validation-abstraction-binder-owner = Типова абстракция на Core не притежава един от записаните си типови параметри.
+core-validation-abstraction-binder-owner-node = { core-validation-abstraction-binder-owner } Core възел: { $node }.
+core-validation-method-instantiation-identity = Компилаторът е инстанцирал метод, различен от провереното използване на метод.
+core-validation-method-instantiation-identity-node = { core-validation-method-instantiation-identity } Core възел: { $node }.
+core-validation-method-type-argument-count = Компилаторът е запазил инстанциране на метод с различен брой типови аргументи от провереното използване.
+core-validation-method-type-argument-count-node = { core-validation-method-type-argument-count } Core възел: { $node }.
+core-validation-method-type-argument = Типов аргумент на метод в Core се различава от проверения му аргумент след заместване в обхвата.
+core-validation-method-type-argument-node = { core-validation-method-type-argument } Core възел: { $node }.
+core-validation-method-instantiation-result = Резултатният тип на инстанциране на метод в Core се различава от проверения резултат след заместване в обхвата.
+core-validation-method-instantiation-result-node = { core-validation-method-instantiation-result } Core възел: { $node }.
+core-validation-method-instantiation-role = Компилаторът няма очакване за роля на инстанциране за това използване на метод в Core.
+core-validation-method-instantiation-role-node = { core-validation-method-instantiation-role } Core възел: { $node }.
+core-validation-missing-method-producer = Компилаторът няма запазена опорна точка на производителя за това инстанциране на метод в Core.
+core-validation-missing-method-producer-node = { core-validation-missing-method-producer } Core възел: { $node }.
+core-validation-method-instantiation-producer = Инстанциране на метод в Core не използва записания си производител или свързващ идентификатор.
+core-validation-method-instantiation-producer-node = { core-validation-method-instantiation-producer } Core възел: { $node }.
+core-validation-type-abstraction-scheme = Типова абстракция на Core не носи универсално квантифициран тип.
+core-validation-type-abstraction-scheme-node = { core-validation-type-abstraction-scheme } Core възел: { $node }.
+core-validation-empty-type-abstraction = Компилаторът е запазил типова абстракция на Core без типови параметри.
+core-validation-empty-type-abstraction-node = { core-validation-empty-type-abstraction } Core възел: { $node }.
+core-validation-abstraction-nominal-parameter = Типова абстракция на Core използва повторно типов параметър, притежаван от номинална декларация.
+core-validation-abstraction-nominal-parameter-node = { core-validation-abstraction-nominal-parameter } Core възел: { $node }.
+core-validation-abstraction-parameters = Параметрите на типова абстракция на Core се различават по идентификатор, ред или род от квантифицирания ѝ тип.
+core-validation-abstraction-parameters-node = { core-validation-abstraction-parameters } Core възел: { $node }.
+core-validation-abstraction-body-type = Типът на тялото на типова абстракция на Core се различава от тялото на квантифицирания ѝ тип.
+core-validation-abstraction-body-type-node = { core-validation-abstraction-body-type } Core възел: { $node }.
+core-validation-nested-type-abstraction = Компилаторът е запазил вложена типова квантификация без удостоверяване чрез свидетелство за метод.
+core-validation-nested-type-abstraction-node = { core-validation-nested-type-abstraction } Core възел: { $node }.
+core-validation-abstraction-type-kind = Квантифицираният тип на типова абстракция на Core няма валиден род.
+core-validation-abstraction-type-kind-node = { core-validation-abstraction-type-kind } Core възел: { $node }.
+core-validation-type-application-scheme = Компилаторът е приложил типови аргументи към Core израз без квантифициран тип.
+core-validation-type-application-scheme-node = { core-validation-type-application-scheme } Core възел: { $node }.
+core-validation-type-application-arity = Типово прилагане на Core подава различен брой аргументи от квантифицираните си параметри.
+core-validation-type-application-arity-node = { core-validation-type-application-arity } Core възел: { $node }.
+core-validation-type-application-rows = Компилаторът е запазил аргументи за редове на ефекти в диалект на Core, който не ги допуска.
+core-validation-type-application-rows-node = { core-validation-type-application-rows } Core възел: { $node }.
+core-validation-missing-row-argument = Типово прилагане на Core няма аргумент за ред за параметър от род EffectRow.
+core-validation-missing-row-argument-node = { core-validation-missing-row-argument } Core възел: { $node }.
+core-validation-missing-type-argument = Типово прилагане на Core няма обикновен типов аргумент за следващия си параметър.
+core-validation-missing-type-argument-node = { core-validation-missing-type-argument } Core възел: { $node }.
+core-validation-type-argument-invalid = Аргумент на типово прилагане на Core няма валиден род на монотип.
+core-validation-type-argument-invalid-node = { core-validation-type-argument-invalid } Core възел: { $node }.
+core-validation-type-argument-kind = Родът на аргумент на типово прилагане на Core се различава от рода на параметъра му.
+core-validation-type-argument-kind-node = { core-validation-type-argument-kind } Core възел: { $node }.
+core-validation-type-substitution-ambiguous = Типово прилагане на Core би засилило ограниченията или изравнило несвързани отворени опашки на редове на ефекти.
+core-validation-type-substitution-ambiguous-node = { core-validation-type-substitution-ambiguous } Core възел: { $node }.
+core-validation-type-substitution-missing = Типово прилагане на Core е опитало да премахне екземпляр на ефект, който липсва в заместения ред.
+core-validation-type-substitution-missing-node = { core-validation-type-substitution-missing } Core възел: { $node }.
+core-validation-type-substitution-infinite = Типово прилагане на Core би накарало опашка на ред на ефекти да съдържа себе си.
+core-validation-type-substitution-infinite-node = { core-validation-type-substitution-infinite } Core възел: { $node }.
+core-validation-type-application-result = Записаният резултат на типово прилагане на Core се различава от инстанцирания тип.
+core-validation-type-application-result-node = { core-validation-type-application-result } Core възел: { $node }.
+core-validation-pattern-depth = Компилаторът е запазил Core образец, по-дълбок от границата за проверка.
+core-validation-pattern-depth-node = { core-validation-pattern-depth } Core възел: { $node }.
+core-validation-pattern-type-mismatch = Записаният тип на Core образец се различава от типа, с който трябва да се съпостави.
+core-validation-pattern-type-mismatch-node = { core-validation-pattern-type-mismatch } Core възел: { $node }.
+core-validation-pattern-invalid-type = Компилаторът е запазил Core образец без валиден монотип.
+core-validation-pattern-invalid-type-node = { core-validation-pattern-invalid-type } Core възел: { $node }.
+core-validation-pattern-binder-invalid-type = Компилаторът е запазил свързващ идентификатор на образец или операция без валиден монотип.
+core-validation-pattern-binder-invalid-type-node = { core-validation-pattern-binder-invalid-type } Core възел: { $node }.
+core-validation-pattern-binder-arena = Свързващ идентификатор на Core образец принадлежи на друга арена.
+core-validation-pattern-binder-arena-node = { core-validation-pattern-binder-arena } Core възел: { $node }.
+core-validation-pattern-binder-type = Типът на свързващ идентификатор на Core образец се различава от типа, с който трябва да се съпостави.
+core-validation-pattern-binder-type-node = { core-validation-pattern-binder-type } Core възел: { $node }.
+core-validation-pattern-duplicate-binder = Компилаторът е свързал един и същ идентификатор повече от веднъж в Core образец.
+core-validation-pattern-duplicate-binder-node = { core-validation-pattern-duplicate-binder } Core възел: { $node }.
+core-validation-pattern-tuple-type = Компилаторът е използвал образец за кортеж за съпоставяне с тип, който не е кортеж.
+core-validation-pattern-tuple-type-node = { core-validation-pattern-tuple-type } Core възел: { $node }.
+core-validation-pattern-tuple-arity = Core образец за кортеж има различен брой елементи от очаквания си тип.
+core-validation-pattern-tuple-arity-node = { core-validation-pattern-tuple-arity } Core възел: { $node }.
+core-validation-pattern-hidden-constructor = Компилаторът е разкрил скрит конструктор на ресурс в Core образец.
+core-validation-pattern-hidden-constructor-node = { core-validation-pattern-hidden-constructor } Core възел: { $node }.
+core-validation-pattern-nominal-type = Компилаторът е използвал конструкторен образец за съпоставяне с тип без номинална глава.
+core-validation-pattern-nominal-type-node = { core-validation-pattern-nominal-type } Core възел: { $node }.
+core-validation-pattern-unknown-constructor = Core образец назовава конструктор, който липсва в регистъра.
+core-validation-pattern-unknown-constructor-node = { core-validation-pattern-unknown-constructor } Core възел: { $node }.
+core-validation-pattern-newtype-constructor = Компилаторът е запазил newtype конструктор в обикновен конструкторен образец на Core.
+core-validation-pattern-newtype-constructor-node = { core-validation-pattern-newtype-constructor } Core възел: { $node }.
+core-validation-pattern-constructor-owner = Конструкторът на Core образец принадлежи на номинален тип, различен от очаквания тип.
+core-validation-pattern-constructor-owner-node = { core-validation-pattern-constructor-owner } Core възел: { $node }.
+core-validation-pattern-missing-parameters = Компилаторът няма декларация на номинални параметри за очаквания тип на конструкторен образец на Core.
+core-validation-pattern-missing-parameters-node = { core-validation-pattern-missing-parameters } Core възел: { $node }.
+core-validation-pattern-nominal-arity = Очакваният тип на конструкторен образец на Core има различен брой аргументи от номиналната си декларация.
+core-validation-pattern-nominal-arity-node = { core-validation-pattern-nominal-arity } Core възел: { $node }.
+core-validation-pattern-argument-spine = Компилаторът не е успял да прочете записан аргумент на номинален тип при инстанциране на данните на образец.
+core-validation-pattern-argument-spine-node = { core-validation-pattern-argument-spine } Core възел: { $node }.
+core-validation-pattern-missing-payload = Конструкторен образец на Core пропуска данни, изисквани от конструктора му.
+core-validation-pattern-missing-payload-node = { core-validation-pattern-missing-payload } Core възел: { $node }.
+core-validation-pattern-unexpected-payload = Конструкторен образец на Core подава данни за конструктор, който няма такива.
+core-validation-pattern-unexpected-payload-node = { core-validation-pattern-unexpected-payload } Core възел: { $node }.
+core-validation-pattern-boolean-type = Компилаторът е използвал булев образец за съпоставяне с небулев тип.
+core-validation-pattern-boolean-type-node = { core-validation-pattern-boolean-type } Core възел: { $node }.
+core-validation-pattern-unit-type = Компилаторът е използвал Unit образец за съпоставяне с тип, различен от Unit.
+core-validation-pattern-unit-type-node = { core-validation-pattern-unit-type } Core възел: { $node }.
+core-validation-match-scrutinee-type = Компилаторът е запазил съпоставяне в Core, чийто проверяван израз няма валиден монотип.
+core-validation-match-scrutinee-type-node = { core-validation-match-scrutinee-type } Core възел: { $node }.
+core-validation-unbound-continuation = Компилаторът е запазил използване на продължение без обхващащата го клауза на операция.
+core-validation-unbound-continuation-node = { core-validation-unbound-continuation } Core възел: { $node }.
+core-validation-continuation-branch-usage = Клоновете на съпоставяне в Core се разминават за това кои продължения изразходват или колко пъти ги изразходват.
+core-validation-continuation-branch-usage-node = { core-validation-continuation-branch-usage } Core възел: { $node }.
+core-validation-missing-clause-consumption = Клауза на операция в Core не изразходва продължението си.
+core-validation-missing-clause-consumption-node = { core-validation-missing-clause-consumption } Core възел: { $node }.
+core-validation-repeated-clause-consumption = Клауза на операция в Core не изразходва продължението си точно веднъж.
+core-validation-repeated-clause-consumption-node = { core-validation-repeated-clause-consumption } Core възел: { $node }.
+core-validation-foreign-clause-continuation = Клауза на операция в Core запазва използване на продължението на друга клауза.
+core-validation-foreign-clause-continuation-node = { core-validation-foreign-clause-continuation } Core възел: { $node }.
+core-validation-captured-continuation = Компилаторът е запазил изискване за продължение през граница, която забранява прихващането на продължения.
+core-validation-captured-continuation-node = { core-validation-captured-continuation } Core възел: { $node }.
+core-validation-resume-use-state = Компилаторът е запазил операция resume без състояние за изразходвано продължение.
+core-validation-resume-use-state-node = { core-validation-resume-use-state } Core възел: { $node }.
+core-validation-discard-use-state = Компилаторът е запазил операция discard без състояние за изразходвано продължение.
+core-validation-discard-use-state-node = { core-validation-discard-use-state } Core възел: { $node }.
+core-validation-discard-result-type = Операция discard в Core има резултатен тип, различен от Unit.
+core-validation-discard-result-type-node = { core-validation-discard-result-type } Core възел: { $node }.
+core-validation-discard-missing-contract = Компилаторът няма договор за клауза на операция за обработчика и собственика на продължението на discard в Core.
+core-validation-discard-missing-contract-node = { core-validation-discard-missing-contract } Core възел: { $node }.
+core-validation-resume-missing-contract = Компилаторът няма договор за клауза на операция за обработчика и собственика на продължението на resume в Core.
+core-validation-resume-missing-contract-node = { core-validation-resume-missing-contract } Core възел: { $node }.
+core-validation-resume-handler-shape = Договор за продължение в Core сочи към възел, който не е обработчик.
+core-validation-resume-handler-shape-node = { core-validation-resume-handler-shape } Core възел: { $node }.
+core-validation-resume-missing-clause = Договор за продължение в Core сочи към клауза, която липсва в обработчика му.
+core-validation-resume-missing-clause-node = { core-validation-resume-missing-clause } Core възел: { $node }.
+core-validation-resume-argument-type = Типът на аргумент на resume в Core се различава от резултатния тип на операцията.
+core-validation-resume-argument-type-node = { core-validation-resume-argument-type } Core възел: { $node }.
+core-validation-resume-result-type = Резултатният тип на resume в Core се различава от резултатния тип на обработчика му.
+core-validation-resume-result-type-node = { core-validation-resume-result-type } Core възел: { $node }.
+core-validation-resume-effect-row = Редът на ефекти на resume в Core се различава от изходния ред на обработчика му.
+core-validation-resume-effect-row-node = { core-validation-resume-effect-row } Core възел: { $node }.
+core-validation-resume-argument-effects = Аргумент на resume в Core има ефекти извън изходния ред на обработчика му.
+core-validation-resume-argument-effects-node = { core-validation-resume-argument-effects } Core възел: { $node }.
+core-cleanup-effect-row = Компилаторът е запазил discard, чийто ред на ефекти не съответства на задълженията му за почистване.
+core-cleanup-effect-row-node = { core-cleanup-effect-row } Core възел: { $node }.
+core-validation-row-union-ambiguous = Обединяването на редове на ефекти в Core би засилило ограниченията или изравнило несвързани отворени опашки.
+core-validation-row-union-ambiguous-node = { core-validation-row-union-ambiguous } Core възел: { $node }.
+core-validation-row-union-missing = Обединяването на редове на ефекти в Core изисква екземпляр на ефект, който липсва.
+core-validation-row-union-missing-node = { core-validation-row-union-missing } Core възел: { $node }.
+core-validation-row-union-infinite = Обединяването на редове на ефекти в Core би накарало опашка на ред да съдържа себе си.
+core-validation-row-union-infinite-node = { core-validation-row-union-infinite } Core възел: { $node }.
+core-validation-row-removal-ambiguous = Премахването на ефект в Core не може да установи необходимата връзка с отворена опашка на ред.
+core-validation-row-removal-ambiguous-node = { core-validation-row-removal-ambiguous } Core възел: { $node }.
+core-validation-row-removal-missing = Компилаторът е опитал да премахне екземпляр на ефект, който липсва в ред на Core.
+core-validation-row-removal-missing-node = { core-validation-row-removal-missing } Core възел: { $node }.
+core-validation-row-removal-infinite = Премахването на ефект в Core би накарало опашка на ред да съдържа себе си.
+core-validation-row-removal-infinite-node = { core-validation-row-removal-infinite } Core възел: { $node }.
+core-validation-pure-dialect-row = Компилаторът е запазил ефекти в диалект на Core, който изисква празни редове.
+core-validation-pure-dialect-row-node = { core-validation-pure-dialect-row } Core възел: { $node }.
+core-validation-resource-scope-row = Ефектите на ресурсен обхват в Core се различават от ефектите на инициализатора му и изходящите ефекти на тялото му.
+core-validation-resource-scope-row-node = { core-validation-resource-scope-row } Core възел: { $node }.
+core-validation-request-argument-type = Типът на операнда на заявка за ефект в Core се различава от домейна на операцията ѝ.
+core-validation-request-argument-type-node = { core-validation-request-argument-type } Core възел: { $node }.
+core-validation-request-result-type = Резултатният тип на заявка за ефект в Core се различава от резултатния тип на операцията ѝ.
+core-validation-request-result-type-node = { core-validation-request-result-type } Core възел: { $node }.
+core-validation-request-effect-row = Редът на заявка за ефект в Core се различава от обединението на ефектите на операнда и заявения ефект.
+core-validation-request-effect-row-node = { core-validation-request-effect-row } Core възел: { $node }.
+core-validation-linked-root-effects = Компилаторът е запазил необработени ефекти в корена на свързаната Core програма.
+core-validation-linked-root-effects-node = { core-validation-linked-root-effects } Core възел: { $node }.
+core-validation-row-owner-inference = Компилаторът е опитал да удостовери изключвания от ред чрез нерешена опашка за извеждане.
+core-validation-row-owner-inference-node = { core-validation-row-owner-inference } Core възел: { $node }.
+core-validation-missing-row-owner = Компилаторът няма собственик на типов свързващ идентификатор за проверка на изключване от ред.
+core-validation-missing-row-owner-node = { core-validation-missing-row-owner } Core възел: { $node }.
+core-validation-row-owner-kind = Компилаторът е използвал свързващ идентификатор с род, различен от EffectRow, за удостоверяване на изключвания от ред.
+core-validation-row-owner-kind-node = { core-validation-row-owner-kind } Core възел: { $node }.
+core-validation-row-owner-scheme = Собственикът на опашка на ред в Core няма квантифициран тип, от който да бъдат удостоверени изключванията.
+core-validation-row-owner-scheme-node = { core-validation-row-owner-scheme } Core възел: { $node }.
+core-validation-unproved-row-lacks = Ред на Core заявява изключване на ефект, което не е установено от договора на свързващия му идентификатор.
+core-validation-unproved-row-lacks-node = { core-validation-unproved-row-lacks } Core възел: { $node }.
+core-validation-pure-node-effect-row = Записаните ефекти на Core възел се различават от ефектите на оценяваните му дъщерни възли и латентните ефекти на функцията.
+core-validation-pure-node-effect-row-node = { core-validation-pure-node-effect-row } Core възел: { $node }.
+core-validation-missing-child-row = Компилаторът се нуждае от изведения изходен ред на обработчик за дъщерен възел, преди той да е наличен.
+core-validation-missing-child-row-node = { core-validation-missing-child-row } Core възел: { $node }.
+core-validation-missing-row-slot = Компилаторът няма място за резултата за изведения изходен ред на обработчик за възел.
+core-validation-missing-row-slot-node = { core-validation-missing-row-slot } Core възел: { $node }.
+core-validation-missing-root-row = Компилаторът няма изведен изходен ред за корена на обработчика.
+core-validation-missing-root-row-node = { core-validation-missing-root-row } Core възел: { $node }.
+core-validation-handler-body-type = Типът на тялото на обработчик в Core се различава от резултатния му тип.
+core-validation-handler-body-type-node = { core-validation-handler-body-type } Core възел: { $node }.
+core-validation-handler-body-effects = Тялото на обработчик в Core има изходящи ефекти, които липсват в изходния ред на обработчика.
+core-validation-handler-body-effects-node = { core-validation-handler-body-effects } Core възел: { $node }.
+core-validation-handler-output-row = Записаният изходен ред на обработчик в Core се различава от най-малкия му изведен изходен ред.
+core-validation-handler-output-row-node = { core-validation-handler-output-row } Core възел: { $node }.
+core-validation-cleanup-action-shape = Компилаторът е запазил действие за почистване, което не е прилагане на обратна функция.
+core-validation-cleanup-action-shape-node = { core-validation-cleanup-action-shape } Core възел: { $node }.
+core-validation-cleanup-function-shape = Действие за почистване в Core не се обръща към обратната си функция чрез променлива.
+core-validation-cleanup-function-shape-node = { core-validation-cleanup-function-shape } Core възел: { $node }.
+core-validation-cleanup-function-type = Обратна функция за почистване в Core няма функционален тип.
+core-validation-cleanup-function-type-node = { core-validation-cleanup-function-type } Core възел: { $node }.
+core-validation-cleanup-callback-identity = Действие за почистване в Core се обръща към обратна функция, различна от записаната за обхвата му.
+core-validation-cleanup-callback-identity-node = { core-validation-cleanup-callback-identity } Core възел: { $node }.
+core-validation-cleanup-argument-shape = Действие за почистване в Core не подава стойността Unit на обратната си функция.
+core-validation-cleanup-argument-shape-node = { core-validation-cleanup-argument-shape } Core възел: { $node }.
+core-validation-cleanup-domain-type = Домейнът на обратна функция за почистване в Core не е Unit.
+core-validation-cleanup-domain-type-node = { core-validation-cleanup-domain-type } Core възел: { $node }.
+core-validation-cleanup-result-type = Резултатният тип на обратна функция за почистване в Core не е Unit.
+core-validation-cleanup-result-type-node = { core-validation-cleanup-result-type } Core възел: { $node }.
+core-validation-cleanup-body-type = Резултатният тип на обхват за почистване в Core се различава от типа на тялото му.
+core-validation-cleanup-body-type-node = { core-validation-cleanup-body-type } Core възел: { $node }.
+core-validation-cleanup-scope-effects = Ефектите на обхват за почистване в Core се различават от ефектите на тялото и действието му за почистване.
+core-validation-cleanup-scope-effects-node = { core-validation-cleanup-scope-effects } Core възел: { $node }.
+core-validation-cleanup-scope-origin = Произходът в изходния текст на обхват за почистване в Core се различава от записания му диапазон.
+core-validation-cleanup-scope-origin-node = { core-validation-cleanup-scope-origin } Core възел: { $node }.
+core-validation-cleanup-action-origin = Действие за почистване в Core или неговата обратна функция/аргумент има произход, различен от записания диапазон на действието.
+core-validation-cleanup-action-origin-node = { core-validation-cleanup-action-origin } Core възел: { $node }.
+core-validation-registration-handler-shape = Тялото на обхват за регистрация в Core не е обработчик.
+core-validation-registration-handler-shape-node = { core-validation-registration-handler-shape } Core възел: { $node }.
+core-validation-registration-missing-contract = Обработчикът на обхват за регистрация в Core няма договор за регистрация.
+core-validation-registration-missing-contract-node = { core-validation-registration-missing-contract } Core възел: { $node }.
+core-validation-registration-has-root = Компилаторът е използвал коренов обработчик на hook като обработчик за регистрация.
+core-validation-registration-has-root-node = { core-validation-registration-has-root } Core възел: { $node }.
+core-validation-registration-handler-identity = Обхват за регистрация в Core записва идентификатор на обработчик, различен от този на тялото му.
+core-validation-registration-handler-identity-node = { core-validation-registration-handler-identity } Core възел: { $node }.
+core-validation-registration-callback-identity = Обхват за регистрация в Core и договорът на обработчика му назовават различни обратни функции.
+core-validation-registration-callback-identity-node = { core-validation-registration-callback-identity } Core възел: { $node }.
+core-validation-registration-contract-span = Обхват за регистрация в Core и договорът на обработчика му запазват различни диапазони на обхвата.
+core-validation-registration-contract-span-node = { core-validation-registration-contract-span } Core възел: { $node }.
+core-validation-registration-scope-origin = Произходът на обхват за регистрация в Core се различава от записания му диапазон.
+core-validation-registration-scope-origin-node = { core-validation-registration-scope-origin } Core възел: { $node }.
+core-validation-registration-result-type = Резултатният тип на обхват за регистрация в Core се различава от резултатния тип на обработчика му.
+core-validation-registration-result-type-node = { core-validation-registration-result-type } Core възел: { $node }.
+core-validation-registration-scope-effects = Ефектите на обхват за регистрация в Core се различават от ефектите на обработчика му.
+core-validation-registration-scope-effects-node = { core-validation-registration-scope-effects } Core възел: { $node }.
+core-validation-duplicate-handler-identity = Компилаторът е декларирал един и същ идентификатор на обработчик в Core повече от веднъж.
+core-validation-duplicate-handler-identity-node = { core-validation-duplicate-handler-identity } Core възел: { $node }.
+core-validation-handler-argument-count = Обработчик в Core подава различен брой аргументи на ефект от декларацията му.
+core-validation-handler-argument-count-node = { core-validation-handler-argument-count } Core възел: { $node }.
+core-validation-handler-clause-count = Обработчик в Core има различен брой клаузи от операциите на ефекта си.
+core-validation-handler-clause-count-node = { core-validation-handler-clause-count } Core възел: { $node }.
+core-validation-duplicate-clause-continuation = Компилаторът е присвоил един и същ собственик на продължение на повече от една клауза на обработчик в Core.
+core-validation-duplicate-clause-continuation-node = { core-validation-duplicate-clause-continuation } Core възел: { $node }.
+core-validation-handler-operation-range = Поредният номер на операция на обработчик в Core не може да бъде представен като индекс.
+core-validation-handler-operation-range-node = { core-validation-handler-operation-range } Core възел: { $node }.
+core-validation-handler-operation-slot = Клауза на обработчик в Core се отнася до операция извън таблицата му за покритие.
+core-validation-handler-operation-slot-node = { core-validation-handler-operation-slot } Core възел: { $node }.
+core-validation-duplicate-handler-operation = Обработчик в Core съдържа повече от една клауза за една и съща операция.
+core-validation-duplicate-handler-operation-node = { core-validation-duplicate-handler-operation } Core възел: { $node }.
+core-validation-handler-clause-coverage = Образецът на клауза на обработчик в Core не покрива всеки аргумент на операцията.
+core-validation-handler-clause-coverage-node = { core-validation-handler-clause-coverage } Core възел: { $node }.
+core-validation-handler-clause-type = Типът на тялото на клауза на обработчик в Core се различава от резултатния тип на обработчика.
+core-validation-handler-clause-type-node = { core-validation-handler-clause-type } Core възел: { $node }.
+core-validation-handler-clause-effects = Клауза на обработчик в Core има ефекти, които липсват в изходния ред на обработчика.
+core-validation-handler-clause-effects-node = { core-validation-handler-clause-effects } Core възел: { $node }.
+core-validation-callback-scope-missing-parent = Обхват на обратна функция или обработчик за регистрация в Core няма обхващащ собственик.
+core-validation-callback-scope-missing-parent-node = { core-validation-callback-scope-missing-parent } Core възел: { $node }.
+core-validation-callback-scope-binding-shape = Обхват на обратна функция в Core не е обхванат от свързването на обратната си функция.
+core-validation-callback-scope-binding-shape-node = { core-validation-callback-scope-binding-shape } Core възел: { $node }.
+core-validation-callback-scope-parent-count = Обхват на обратна функция или обработчик за регистрация в Core няма точно една входяща връзка на собственост.
+core-validation-callback-scope-parent-count-node = { core-validation-callback-scope-parent-count } Core възел: { $node }.
+core-validation-callback-scope-binding-body = Обхват на обратна функция в Core не е тялото на обхващащото го свързване.
+core-validation-callback-scope-binding-body-node = { core-validation-callback-scope-binding-body } Core възел: { $node }.
+core-validation-callback-scope-binding-identity = Обхват на обратна функция в Core назовава обратна функция, различна от обхващащото го свързване.
+core-validation-callback-scope-binding-identity-node = { core-validation-callback-scope-binding-identity } Core възел: { $node }.
+core-validation-cleanup-binding-origin = Произходът на свързване на обратна функция за почистване в Core се различава от записания диапазон на действието за почистване.
+core-validation-cleanup-binding-origin-node = { core-validation-cleanup-binding-origin } Core възел: { $node }.
+core-validation-cleanup-action-index = Идентификаторът на възел на действие за почистване в Core не може да бъде представен като индекс.
+core-validation-cleanup-action-index-node = { core-validation-cleanup-action-index } Core възел: { $node }.
+core-validation-cleanup-action-parent-count = Действие за почистване в Core няма точно една входяща връзка на собственост.
+core-validation-cleanup-action-parent-count-node = { core-validation-cleanup-action-parent-count } Core възел: { $node }.
+core-validation-registered-handler-parent-shape = Обработчик за регистрация в Core не е обхванат от обхват за регистрация.
+core-validation-registered-handler-parent-shape-node = { core-validation-registered-handler-parent-shape } Core възел: { $node }.
+core-validation-registered-handler-parent-body = Обработчик за регистрация в Core не е тялото, записано от обхващащия го обхват за регистрация.
+core-validation-registered-handler-parent-body-node = { core-validation-registered-handler-parent-body } Core възел: { $node }.
+core-validation-hook-operation-count = Договор за hook в Core изисква декларация на ефект с точно една операция.
+core-validation-hook-operation-count-node = { core-validation-hook-operation-count } Core възел: { $node }.
+core-validation-hook-operation-type = Операцията на договор за hook в Core няма функционална сигнатура.
+core-validation-hook-operation-type-node = { core-validation-hook-operation-type } Core възел: { $node }.
+core-validation-hook-clause-count = Договор за hook в Core изисква точно една клауза на обработчика.
+core-validation-hook-clause-count-node = { core-validation-hook-clause-count } Core възел: { $node }.
+core-validation-hook-input-pattern = Клауза на hook в Core не свързва входа си с образец за свързващ идентификатор.
+core-validation-hook-input-pattern-node = { core-validation-hook-input-pattern } Core възел: { $node }.
+core-validation-hook-root-resume-shape = Клауза на коренов hook в Core не възобновява директно продължението си.
+core-validation-hook-root-resume-shape-node = { core-validation-hook-root-resume-shape } Core възел: { $node }.
+core-validation-hook-root-value-shape = Коренов hook в Core не възобновява с променлива, която се отнася до входа му.
+core-validation-hook-root-value-shape-node = { core-validation-hook-root-value-shape } Core възел: { $node }.
+core-validation-hook-target-instance = Договор за hook в Core е насочен към екземпляр на ефект, различен от този на обработчика му.
+core-validation-hook-target-instance-node = { core-validation-hook-target-instance } Core възел: { $node }.
+core-validation-hook-operation-spelling = Операцията на договор за hook в Core не се казва publish.
+core-validation-hook-operation-spelling-node = { core-validation-hook-operation-spelling } Core възел: { $node }.
+core-validation-hook-operation-endomorphism = Операция на hook в Core има различни входен и изходен тип.
+core-validation-hook-operation-endomorphism-node = { core-validation-hook-operation-endomorphism } Core възел: { $node }.
+core-validation-hook-contract-operation = Договор за hook в Core назовава операция, различна от декларацията му.
+core-validation-hook-contract-operation-node = { core-validation-hook-contract-operation } Core възел: { $node }.
+core-validation-hook-clause-operation = Клауза на hook в Core обработва операция, различна от договора си.
+core-validation-hook-clause-operation-node = { core-validation-hook-clause-operation } Core възел: { $node }.
+core-validation-hook-input-identity = Клауза на hook в Core свързва входен идентификатор, различен от договора си.
+core-validation-hook-input-identity-node = { core-validation-hook-input-identity } Core възел: { $node }.
+core-validation-hook-root-input-use = Коренов hook в Core възобновява с променлива, различна от записания си вход.
+core-validation-hook-root-input-use-node = { core-validation-hook-root-input-use } Core възел: { $node }.
+core-validation-hook-clause-continuation = Клауза на hook в Core има собственик на продължение, различен от договора си.
+core-validation-hook-clause-continuation-node = { core-validation-hook-clause-continuation } Core възел: { $node }.
+core-validation-hook-resume-owner = Resume на hook в Core назовава собственик на продължение, различен от договора си.
+core-validation-hook-resume-owner-node = { core-validation-hook-resume-owner } Core възел: { $node }.
+core-validation-hook-resume-handler = Resume на hook в Core назовава обработчик, различен от обхващащия го обработчик.
+core-validation-hook-resume-handler-node = { core-validation-hook-resume-handler } Core възел: { $node }.
+core-validation-hook-resume-use-state = Resume на hook в Core не носи състоянието за изразходвано продължение.
+core-validation-hook-resume-use-state-node = { core-validation-hook-resume-use-state } Core възел: { $node }.
+core-validation-hook-scope-origin = Произходът на обработчик на hook в Core се различава от диапазона на обхвата на договора му.
+core-validation-hook-scope-origin-node = { core-validation-hook-scope-origin } Core възел: { $node }.
+core-validation-hook-target-span = Целевият диапазон на договор за hook в Core не се съдържа в диапазона на обхвата му в същия изходен текст.
+core-validation-hook-target-span-node = { core-validation-hook-target-span } Core възел: { $node }.
+core-validation-hook-generated-origins = Генерирани възли или свързващи идентификатори на hook в Core имат произход, различен от целевия диапазон на договора.
+core-validation-hook-generated-origins-node = { core-validation-hook-generated-origins } Core възел: { $node }.
+core-validation-hook-missing-effect = Компилаторът няма декларация на ефект за договор за регистрация на hook в Core.
+core-validation-hook-missing-effect-node = { core-validation-hook-missing-effect } Core възел: { $node }.
+core-validation-hook-duplicate-binders = Договор за регистрация на hook в Core използва повторно идентификатор сред свързващите идентификатори за обратната функция, входа, предишната и следващата стойност.
+core-validation-hook-duplicate-binders-node = { core-validation-hook-duplicate-binders } Core възел: { $node }.
+core-validation-hook-previous-binding-shape = Клауза за регистрация на hook в Core не започва със свързването на предишния си резултат.
+core-validation-hook-previous-binding-shape-node = { core-validation-hook-previous-binding-shape } Core възел: { $node }.
+core-validation-hook-next-binding-shape = Регистрация на hook в Core не свързва следващия резултат след предишния.
+core-validation-hook-next-binding-shape-node = { core-validation-hook-next-binding-shape } Core възел: { $node }.
+core-validation-hook-forward-request-shape = Инициализаторът на предишния резултат на регистрация на hook в Core не е заявка за ефект.
+core-validation-hook-forward-request-shape-node = { core-validation-hook-forward-request-shape } Core възел: { $node }.
+core-validation-hook-callback-application-shape = Инициализаторът на следващия резултат на регистрация на hook в Core не е прилагане на обратна функция.
+core-validation-hook-callback-application-shape-node = { core-validation-hook-callback-application-shape } Core възел: { $node }.
+core-validation-hook-registration-resume-shape = Регистрация на hook в Core не възобновява след свързване на резултата от обратната функция.
+core-validation-hook-registration-resume-shape-node = { core-validation-hook-registration-resume-shape } Core възел: { $node }.
+core-validation-hook-forward-effect = Регистрация на hook в Core препраща екземпляр на ефект, различен от целта на договора си.
+core-validation-hook-forward-effect-node = { core-validation-hook-forward-effect } Core възел: { $node }.
+core-validation-hook-previous-binder = Регистрация на hook в Core свързва предишния резултат с идентификатор, различен от договора си.
+core-validation-hook-previous-binder-node = { core-validation-hook-previous-binder } Core възел: { $node }.
+core-validation-hook-next-binder = Регистрация на hook в Core свързва следващия резултат с идентификатор, различен от договора си.
+core-validation-hook-next-binder-node = { core-validation-hook-next-binder } Core възел: { $node }.
+core-validation-hook-forward-operation = Регистрация на hook в Core препраща операция, различна от договора си.
+core-validation-hook-forward-operation-node = { core-validation-hook-forward-operation } Core възел: { $node }.
+core-validation-hook-forward-input = Препратената заявка на регистрация на hook в Core не използва записания си вход в целевия диапазон.
+core-validation-hook-forward-input-node = { core-validation-hook-forward-input } Core възел: { $node }.
+core-validation-hook-callback-use = Регистрация на hook в Core не извиква записаната си обратна функция в целевия диапазон.
+core-validation-hook-callback-use-node = { core-validation-hook-callback-use } Core възел: { $node }.
+core-validation-hook-previous-use = Регистрация на hook в Core не подава записания си предишен резултат на обратната функция в целевия диапазон.
+core-validation-hook-previous-use-node = { core-validation-hook-previous-use } Core възел: { $node }.
+core-validation-hook-next-use = Регистрация на hook в Core не възобновява със записания си следващ резултат в целевия диапазон.
+core-validation-hook-next-use-node = { core-validation-hook-next-use } Core възел: { $node }.
+runtime-missing-node = Средата за изпълнение не намери възел в проверената програма.
+runtime-unexpected-primitive-value = Примитив получи стойност извън проверения си тип.
+runtime-unexpected-function-value = Проверено извикване на функция получи стойност, която не е функция.
+runtime-missing-binding = Средата за изпълнение не намери лексикалното свързване на променлива.
+runtime-unexpected-recursive-binding = Рекурсивно свързване няма проверената форма на инициализатор.
+runtime-environment-capacity = Средата за изпълнение не може да запази още едно лексикално свързване.
+runtime-invalid-control-state = Средата за изпълнение достигна несъгласувано състояние на управление.
+runtime-heap-capacity = Динамичната памет на средата за изпълнение не може да побере още една клетка.
+runtime-captured-control-capacity = Средата за изпълнение не може да запази още един прихванат кадър на управление.
+runtime-resource-capacity = Средата за изпълнение не може да представи още един активен ресурс или ново активиране.
+runtime-invalid-location = Средата за изпълнение се опита да достъпи адрес в динамичната памет извън това изчисление.
+runtime-uninitialized-location = Програмата се опита да използва рекурсивна стойност, преди тя да бъде инициализирана.
+runtime-alias-loop = Средата за изпълнение откри цикъл от псевдоними в динамичната памет без изградена стойност.
+runtime-impossible-match = Съпоставяне, проверено като изчерпателно, не избра клон.
+runtime-capacity-exhausted = Зададен лимит на ресурс или граница на представянето не допуска заявката.
+runtime-allocator-refused = Разпределителят на памет на хоста отказа заявка за заделяне.
+runtime-storage-reservation-failed = Заделянето на памет на хоста е неуспешно; първопричината не е определена.
+runtime-work-budget-exhausted = Бюджетът за работа на средата за изпълнение не допуска заявената работа.
+runtime-phase-acquisition = придобиване на ресурс
+runtime-phase-capture = прихващане или възстановяване на продължение
+runtime-phase-evaluation = изчисляване на програмата
+runtime-phase-cleanup = почистване, определено в програмата
+runtime-phase-access = достъп до ефект
+runtime-phase-teardown = освобождаване от хоста
+runtime-phase-diagnostic-preparation = подготовка на диагностиката
+runtime-resource-type-disposal = задачи за освобождаване на типове
+runtime-resource-kind-disposal = задачи за освобождаване на видове
+runtime-resource-environment-disposal = записи за освобождаване на среди
+runtime-resource-captured-disposal = прихванати кадри за освобождаване
+runtime-resource-work-units = единици работа на средата за изпълнение
+runtime-resource-resource-owners = собственици на ресурси
+runtime-resource-cleanup-owners = собственици на почистване
+runtime-resource-registration-owners = собственици на регистрации
+runtime-resource-registration-keys = представими ключове на регистрации
+runtime-resource-registration-invocations = извиквания на регистрации
+runtime-resource-activation-keys = представими ключове на активирания
+runtime-resource-environment-bindings = представими свързвания в среда
+runtime-resource-frame-storage = кадри на управление
+runtime-resource-effect-trace = събития в следата на ефектите
+runtime-resource-evaluation-trace = събития в следата на изчислението
+runtime-resource-result-heap-cells = клетки за резултата в динамичната памет
+runtime-resource-heap-cells = клетки в динамичната памет на изпълнението
+runtime-resource-instantiation-entries = записи за инстанциране
+runtime-resource-instantiation-storage = клетки за съхранение при инстанциране
+runtime-resource-capture-inspection = записи за проверка на прихващания
+runtime-resource-registration-identities = идентичности на регистрации
+runtime-cleanup-complete = Почистването от хоста завърши.
+runtime-cleanup-incomplete = Почистването от хоста спря, преди цялото запазено състояние да бъде освободено.
+runtime-cleanup-unknown = Не е установено дали почистването от хоста е завършило.
+runtime-label-cause = Установена причина
+runtime-label-phase = Фаза
+runtime-label-resource = Ресурс
+runtime-label-requested = Заявени допълнителни единици
+runtime-label-available = Налични допълнителни единици
+runtime-label-teardown = Първа грешка при освобождаване
+runtime-label-cleanup = Състояние на почистването
+invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл; форматът и локалът могат да бъдат зададени само по веднъж.
+output-write = Ash не можа да запише резултата от програмата на стандартния изход.
+source-ids-unlocated = Ash не може да задели нова идентичност на източник.
+source-unrepresentable-span-unlocated = Ash срещна непредставима дължина на източник или отместване на токен при създаване на диапазон.
+source-path-limit-unlocated = Пътят за показване надхвърля ограничението на модела на източниците на Ash.
+source-text-limit-unlocated = Текстът на източника надхвърля ограничението за размер на модела на източниците на Ash.
+source-line-limit-unlocated = Източникът има повече редове, отколкото моделът на източниците на Ash може да представи.
+source-column-limit-unlocated = Ред от източника има повече колони, отколкото моделът на източниците на Ash може да представи.
+source-range-unlocated = Ash създаде байтов диапазон { $start }..{ $end } извън { $length } байта на източника.
+source-foreign-span-unlocated = Ash използва диапазон от източник { $found }, когато се изискваше източник { $expected }.
+source-offset-unlocated = Ash използва байтово отместване { $offset } извън { $length } байта на източника.
+source-code-point-unlocated = Ash използва байтово отместване { $offset } във вътрешността на UTF-8 кодова точка.
+source-line-state-unlocated = Вътрешният индекс на редовете на източника в Ash е несъгласуван.
+resolve-dependency-summary-mismatch = Компилаторът получи непълна или несъответстваща проверена информация за импортите на този модул.
+resolve-dependency-summary-invalid = Компилаторът не успя да валидира проверената информация за този импортиран модул.
+resolve-missing-file-scope = Компилаторът загуби обхвата за разрешаване на имената във файла.
+resolve-missing-lexical-scope = Компилаторът загуби текущия лексикален обхват при разрешаване на обвързване.
+resolve-missing-nominal-scope = Компилаторът загуби обхвата за локалните номинални типове.
+resolve-missing-constructor-scope = Компилаторът загуби обхвата за локалните конструктори.
+resolve-declaration-order = Вътрешният ред на декларациите на компилатора е невалиден за { $kind ->
+    [nominal] номиналните типове
+    [interface] интерфейсите
+    [effect] ефектите
+    [global] глобалните стойности
+   *[implementation] реализациите
+    }: { $problem ->
+    [invalid-index] индекс на декларация е извън допустимия диапазон.
+    [repeated-or-reordered] декларация се повтаря или е извън реда си.
+    [skipped-or-reordered] декларация е пропусната или е извън реда си.
+    [omitted] липсва декларация.
+   *[repeated-skipped-or-reordered] декларация се повтаря, пропусната е или е извън реда си.
+    }
+resolve-work-state = Вътрешното състояние на компилатора при разрешаване на имена { $problem ->
+    [missing] не съдържа
+    [extra] неочаквано съдържа
+    [wrong] съдържа неправилна стойност за
+    [not-single] не запазва точно една стойност за
+    [mismatch] съдържа противоречива информация за
+    [empty] е празно за
+    [duplicate] повтаря
+    [unvalidated] не може да валидира
+   *[incomplete] е непълно за
+    } { $part ->
+    [equation] уравнение
+    [operational-pattern] шаблон на операционен параметър
+    [operational-parameter] операционен параметър
+    [operational-body] операционно тяло
+    [tuple-type-element] елемент на кортежен тип
+    [effect-row-argument] типов аргумент на ред от ефекти
+    [function-codomain] тип на резултата на функция
+    [function-domain] тип на аргумента на функция
+    [type-argument] типов аргумент
+    [type] тип
+    [block] блок
+    [binding-pattern] шаблон на обвързване
+    [binding-initializer] начален израз на обвързване
+    [recursive-member] член на рекурсивна група
+    [block-result] резултат на блок
+    [block-binding] обвързване в блок
+    [function-body] тяло на функция
+    [tuple-element] елемент на кортеж
+    [hook-body] тяло на кука
+    [registration-body] тяло на регистрация
+    [registration-initializer] начален израз на регистрация
+    [cleanup-body] тяло на почистване
+    [cleanup-initializer] начален израз на почистване
+    [resource-initializer] начален израз на ресурс
+    [resource-body] тяло на ресурс
+    [lexical-evidence-application] прилагане на лексикално свидетелство
+    [lexical-method-body] тяло на лексикален метод
+    [lexical-method-group] група лексикални методи
+    [request-operand] операнд на заявка
+    [private-constructor] частен конструктор
+    [opaque-constructor] непрозрачен конструктор
+    [public-constructor] публичен конструктор
+    [export-effect-fact] проверена информация за ефект в експортиран модул
+    [effective-route-rank] пореден ранг на действащ път към реализация
+    [public-route-rank] пореден ранг на публичен път към реализация
+    [route-selected-fact] избрана информация за реализация за ранг на път
+    [implementation-interface-fact] информация за определящия интерфейс на реализация
+    [implementation-capture-effect] метаданни за ефект, посочен от графа на прихващанията на реализация
+    [public-implementation-fact] избрана информация за публична реализация
+    [export-capture-effect] метаданни за ефект, посочен от експортиран граф на прихващанията
+    [export-scheme-effect] метаданни за ефект, посочен от експортирана типова схема
+    [export-scheme-nominal] номинални метаданни, посочени от експортирана типова схема
+    [opaque-scheme-representation] каноничното представяне на схема на непрозрачен newtype
+    [route-nominal-closure] номиналното затваряне на зависимостите за алтернативен път на импорт
+    [opaque-export-representation] каноничното представяне на експортиран непрозрачен newtype
+    [transparent-constructor] конструктор на експортиран прозрачен тип
+    [constructor-nominal-metadata] номинални метаданни, посочени от експортиран конструктор
+    [constructor-owner-metadata] метаданни за собственика на експортиран конструктор
+    [nominal-identity] идентичност на номинална декларация
+    [global-binder-slot] позиция за глобално обвързване
+    [implementation-plan] план на реализация
+    [global-binder] глобално обвързване
+    [hidden-method-binder] скрито обвързване на метод
+    [newtype-representation] представянето на разрешен newtype
+    [newtype-representation-origin] произход в източника на представянето на разрешен newtype
+    [pure-effect-origin] произход на аргументи на ефекти върху чиста функция
+    [method-parameters] параметри на метод
+    [resource-builtin-origin] произход в източника на вградена ресурсна операция
+    [public-nominal-visibility] видимост на номинален тип в публичните експорти
+    [projected-newtype-constructor] конструктора на проектиран newtype
+    [projected-newtype-representation] представянето на проектиран newtype
+    [effect-preparation] подготвителни записи за ефекти
+    [operation-identities] идентичности на операции
+    [interface-parameters] вектора от параметри на проектиран интерфейс
+    [interface-preparation] подготвителни записи за интерфейси
+    [interface-method-preparation] подготвителни записи за методи на интерфейс
+    [prepared-method-binder] подготвено обвързване в типовия обхват на метод на интерфейс
+    [implementation-head-arguments] вектора от аргументи на проектирана глава на реализация
+    [export-term-name] име на терм в проверена информация за модул
+    [export-interface-name] име на интерфейс в проверена информация за модул
+    [export-effect-name] име на ефект в проверена информация за модул
+    [alternate-effect-fact] канонична информация за ефект от алтернативни пътища на импорт
+    [interface-visibility] границата на видимост на импортирана идентичност на интерфейс
+    [alternate-interface-fact] проверена информация за интерфейс от алтернативни пътища на импорт
+    [method-interface-owner] собствеността на импортиран метод от интерфейс
+    [imported-method-authority] импортиран метод и проверената информация за неговите правомощия
+    [implementation-authorization] пътя на упълномощаване на импортирана реализация
+    [alternate-implementation-fact] проверена информация за реализация от алтернативни пътища на импорт
+    [implementation-prerequisite] идентичността на предпоставка на импортирана реализация
+    [implementation-method-relation] връзката между методите на импортирана реализация
+    [implementation-method-scheme] типовата схема на метод на импортирана реализация
+    [implementation-route-rank] ранг на път към реализация
+    [public-implementation-route-rank] ранг на публичен път към реализация
+    [alternate-global-fact] проверена информация за глобална стойност от алтернативни пътища на импорт
+    [alternate-nominal-metadata] номинални метаданни, запазени чрез алтернативни пътища на импорт
+    [opaque-data-representation] канонично представяне на непрозрачен тип, който не е newtype
+    [alternate-constructor-fact] проверена информация за конструктор от алтернативни пътища на импорт
+    [constructor-route-nominal] номинални метаданни, запазени чрез алтернативни пътища към конструктор
+    [interface-arguments] вектора от аргументи на проектирано прилагане на интерфейс
+    [definition-clause] клауза на уравнителна дефиниция
+    [implementation-method-group] група методи на реализация
+    [implementation-plans] планове на реализации
+    [method-group-range] диапазон на група методи
+    [method-group] група методи
+    [method-group-source] принадлежност към изходен файл в група методи на реализация
+    [local-nominal-kind] изисквания вид декларация newtype за локален номинален тип в блок
+    [method-equation-source] принадлежност към изходен файл на уравнения на метод
+    [imported-nominal-metadata] номинални метаданни от пътища на импорт
+    [imported-fact-comparison] запазено състояние за сравняване на импортирана информация
+   *[expression] израз
+    [match-pattern] шаблон на съпоставяне
+    [function-pattern] шаблон на параметър на функция
+    [handler-pattern] шаблон на параметър на обработчик
+    [right-operand] десен операнд
+    [left-operand] ляв операнд
+    }.

@@ -5,7 +5,7 @@ use std::{
 };
 
 use ash::{
-    driver::{EntryReason, FileFailure, PipelineFailure, RunConfiguration, run_path},
+    driver::{EntryReason, PipelineFailure, RunConfiguration, run_path},
     module::ModuleRoots,
     types::Type,
 };
@@ -45,10 +45,93 @@ impl Drop for TempTree {
 }
 
 fn run(entry: &Path) -> Result<ash::driver::Observation, ash::driver::FileFailure> {
-    run_path(RunConfiguration {
+    let result = run_path(RunConfiguration {
         entry: entry.to_path_buf(),
         roots: ModuleRoots::empty(),
-    })
+    });
+    if let Err(failure) = &result
+        && let Some(PipelineFailure::Entry(error)) = failure.pipeline_failure()
+    {
+        let sources: Vec<_> = failure.sources().iter().collect();
+        assert_entry_presentation(error, &sources);
+    }
+    result
+}
+
+fn assert_entry_presentation(
+    error: &ash::driver::EntryFailure,
+    sources: &[&ash::source::SourceFile],
+) {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_entry_diagnostic, write_human, write_json},
+    };
+    let diagnostic = compile_entry_diagnostic(error, sources).unwrap();
+    let english = match error.reason() {
+        EntryReason::MissingMain => {
+            "The entry module must define its own `main`; importing one is not enough."
+        }
+        EntryReason::MainPolymorphic => "The entry point `main` must have no type parameters.",
+        EntryReason::MainDomain => "The entry point `main` must be a function accepting `Unit`.",
+        EntryReason::MainEffects => "Calling `main` must require no effects from its caller.",
+        EntryReason::MainOpenResult => {
+            "The result type of `main` must be fully determined, with no type parameters, quantified types, or open effect rows."
+        }
+        EntryReason::MainConstrained => {
+            "The entry point `main` must require no interface evidence from its caller."
+        }
+    };
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("`main`"));
+        if locale == Locale::English {
+            assert!(output.contains(english), "{output}");
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &diagnostic).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["reason"], error.reason().to_string());
+    assert_eq!(json["responsibility"], "source");
+    assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["labels"][0]["relationship"],
+        if error.reason() == EntryReason::MissingMain {
+            "entry_module"
+        } else {
+            "entry_main"
+        }
+    );
+    assert_eq!(
+        json["labels"][0]["byte_start"],
+        error.diagnostic.primary.span().range().start()
+    );
+    assert_eq!(
+        json["labels"][0]["byte_end"],
+        error.diagnostic.primary.span().range().end()
+    );
+    assert!(compile_entry_diagnostic(error, &[]).is_err());
+}
+
+#[test]
+fn retained_open_result_failure_has_entry_presentation() {
+    use ash::{
+        diagnostic::{Diagnostic, SourceLabel},
+        driver::EntryFailure,
+        source::{ByteRange, SourceFile},
+    };
+    // This reason may be preempted by polymorphism/type checks in source programs.
+    let source = SourceFile::new("entry.ash", "main").unwrap();
+    let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+    let error = EntryFailure {
+        diagnostic: Box::new(Diagnostic::new(
+            EntryReason::MainOpenResult,
+            SourceLabel::new(span, "legacy wording"),
+        )),
+    };
+    assert_entry_presentation(&error, &[&source]);
 }
 
 #[test]
@@ -255,7 +338,8 @@ fn existing_entry_shape_failures_precede_main_constrained() {
         let tree = TempTree::create();
         let entry = tree.write("entry.ash", source);
         let failure = run(&entry).expect_err("the earlier entry-shape judgment should reject main");
-        let FileFailure::Pipeline(PipelineFailure::Entry(failure)) = failure else {
+        let PipelineFailure::Entry(failure) = failure.pipeline_failure().expect("pipeline failure")
+        else {
             panic!("entry precedence should retain an entry-contract failure");
         };
 

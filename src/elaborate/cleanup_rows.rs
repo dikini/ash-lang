@@ -3,9 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    CoreElaborator, CoreLoweringFamily, TypeError, TypeReason, TypedNode, TypedNodeOwner,
-    UnificationFailure, capture_failure, inference_failure, invalid_state, type_resource,
-    zonk_core_effect_row,
+    CoreElaborator, CoreLoweringFamily, EffectRowCause, TypeError, TypeReason, TypedNode,
+    TypedNodeOwner, UnificationFailure, capture_failure, effect_row_failure, inference_failure,
+    invalid_state, type_resource, zonk_core_effect_row,
 };
 use crate::{
     core::{
@@ -272,8 +272,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             self.unify_effect_rows(left, right)
                 .map_err(|failure| match failure {
                     UnificationFailure::Resource => type_resource(),
-                    _ => inference_failure(
-                        TypeReason::AmbiguousEffectRow,
+                    _ => effect_row_failure(
+                        EffectRowCause::CleanupRequirement,
                         *span,
                         "cleanup effects do not satisfy this row requirement",
                     ),
@@ -326,12 +326,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             Ok(row) => Ok(row),
             Err(crate::types::EffectRowError::Missing) if absent => Ok(row),
+            Err(_) if absent => Err(effect_row_failure(
+                EffectRowCause::Removal,
+                span,
+                "the handled computation does not request this exact effect instance",
+            )),
             Err(_) => Err(inference_failure(
-                if absent {
-                    TypeReason::AmbiguousEffectRow
-                } else {
-                    TypeReason::MissingHandledEffect
-                },
+                TypeReason::MissingHandledEffect,
                 span,
                 "the handled computation does not request this exact effect instance",
             )),
@@ -464,12 +465,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             Ok(row) => Ok(row),
             Err(crate::types::EffectRowError::Missing) if absent => Ok(row),
+            Err(_) if absent => Err(effect_row_failure(
+                EffectRowCause::Removal,
+                span,
+                "the handled computation does not request this exact effect instance",
+            )),
             Err(_) => Err(inference_failure(
-                if absent {
-                    TypeReason::AmbiguousEffectRow
-                } else {
-                    TypeReason::MissingHandledEffect
-                },
+                TypeReason::MissingHandledEffect,
                 span,
                 "the handled computation does not request this exact effect instance",
             )),

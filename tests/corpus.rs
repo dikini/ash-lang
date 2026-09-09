@@ -433,6 +433,7 @@ const INVALID_CASES: &[InvalidCase] = &[
 
 fn ash(path: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["--message-format", "json"])
         .arg(path)
         .output()
         .expect("the Ash executable should start")
@@ -511,7 +512,9 @@ fn module_newtype_mixed_failures_report_the_earlier_ordinary_payload_kind_owner(
     }
 
     let failure = run(PATH).expect_err("the first ordinary payload kind error must reject");
-    let FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(error))) = failure else {
+    let PipelineFailure::Kind(KindFailure::Source(error)) =
+        failure.pipeline_failure().expect("pipeline failure")
+    else {
         panic!("the earlier ordinary payload must own the mixed failure");
     };
     assert_eq!(error.reason, KindReason::NotApplicable);
@@ -521,17 +524,21 @@ fn module_newtype_mixed_failures_report_the_earlier_ordinary_payload_kind_owner(
     let output = ash(Path::new(PATH));
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["reason"], "kind.not-applicable");
+    assert_eq!(diagnostic["facts"][0]["name"], "expected_kind");
+    assert_eq!(diagnostic["facts"][0]["value"], "Type -> _");
+    assert_eq!(diagnostic["facts"][1]["name"], "found_kind");
+    assert_eq!(diagnostic["facts"][1]["value"], "Type");
+    assert_eq!(diagnostic["labels"][0]["relationship"], "kind_mismatch");
     assert_eq!(
-        output.stderr,
-        concat!(
-            "kind.not-applicable\n",
-            "primary: source 0 25..38: this type does not have a function kind\n",
-            "related: source 0 0..39: the applied type's kind is fixed by this declaration\n",
-            "expected Type -> _\n",
-            "found Type\n",
-        )
-        .as_bytes(),
+        diagnostic["labels"][1]["relationship"],
+        "found_kind_declaration"
     );
+    assert_eq!(diagnostic["labels"][0]["byte_start"], 25);
+    assert_eq!(diagnostic["labels"][0]["byte_end"], 38);
+    assert_eq!(diagnostic["labels"][1]["byte_start"], 0);
+    assert_eq!(diagnostic["labels"][1]["byte_end"], 39);
 }
 
 #[test]
@@ -659,13 +666,12 @@ fn method_parameter_migration_and_exclusion_corpus_is_complete() {
         let output = ash(&source.0);
         assert_eq!(output.status.code(), Some(1), "{}: {output:?}", case.route);
         assert!(output.stdout.is_empty(), "{}: {output:?}", case.route);
-        assert!(
-            output
-                .stderr
-                .starts_with(format!("{}\n", case.reason).as_bytes()),
-            "{}: {output:?}",
-            case.route,
-        );
+        let first = serde_json::Deserializer::from_slice(&output.stderr)
+            .into_iter::<serde_json::Value>()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first["reason"], case.reason, "{}", case.route);
     }
 
     let predecessor = TempSource::write(concat!(
@@ -682,11 +688,8 @@ fn method_parameter_migration_and_exclusion_corpus_is_complete() {
     let predecessor_cli = ash(&predecessor.0);
     assert_eq!(predecessor_cli.status.code(), Some(1));
     assert!(predecessor_cli.stdout.is_empty());
-    assert!(
-        predecessor_cli
-            .stderr
-            .starts_with(b"interface.method-parameter\n")
-    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&predecessor_cli.stderr).unwrap();
+    assert_eq!(diagnostic["reason"], "interface.method-parameter");
 
     let explicit = TempSource::write(concat!(
         "interface Project<I> {\nproject<A> : (I, A) -> A\n}\n\n",
@@ -763,8 +766,11 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Lexical,
             ExpectedReason::Lexical { lexical, parser },
-            FileFailure::Graph(LoadGraphError::Syntax(actual)),
+            FileFailure::Graph(context),
         ) => {
+            let LoadGraphError::Syntax(actual) = context.failure() else {
+                panic!("{} must retain its syntax stage", case.id);
+            };
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
                 actual
@@ -790,8 +796,11 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Parser,
             ExpectedReason::Parser { parser, lexical },
-            FileFailure::Graph(LoadGraphError::Syntax(actual)),
+            FileFailure::Graph(context),
         ) => {
+            let LoadGraphError::Syntax(actual) = context.failure() else {
+                panic!("{} must retain its syntax stage", case.id);
+            };
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
                 actual
@@ -817,18 +826,25 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Resolution,
             ExpectedReason::Resolution(expected),
-            FileFailure::Pipeline(PipelineFailure::Resolution(actual)),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
-        (
-            Stage::Kinding,
-            ExpectedReason::Kinding(expected),
-            FileFailure::Pipeline(PipelineFailure::Kind(KindFailure::Source(actual))),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
-        (
-            Stage::Typing,
-            ExpectedReason::Typing(expected),
-            FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Source(actual))),
-        ) => assert_eq!(actual.reason, expected, "{}", case.id),
+            FileFailure::Pipeline(context),
+        ) => {
+            let PipelineFailure::Resolution(actual) = context.failure() else {
+                panic!("{} must retain its resolution stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
+        (Stage::Kinding, ExpectedReason::Kinding(expected), FileFailure::Pipeline(context)) => {
+            let PipelineFailure::Kind(KindFailure::Source(actual)) = context.failure() else {
+                panic!("{} must retain its kind stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
+        (Stage::Typing, ExpectedReason::Typing(expected), FileFailure::Pipeline(context)) => {
+            let PipelineFailure::Typing(TypeError::Source(actual)) = context.failure() else {
+                panic!("{} must retain its typing stage", case.id);
+            };
+            assert_eq!(actual.reason, expected, "{}", case.id);
+        }
         _ => panic!(
             "{} expected {:?} at {:?}, found {failure:?}",
             case.id, case.reason, case.stage
@@ -840,7 +856,7 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
 fn bare_carriage_return_is_a_structured_lexical_rejection() {
     let source = TempSource::write("\rmain : Unit -> Int\nmain () = 1\n");
     let failure = run(source.0.clone()).expect_err("bare CR must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("bare CR should fail in the syntax pipeline");
     };
     assert_eq!(
@@ -858,7 +874,7 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
     let source = TempSource::write("$\nmain : Unit -> Bool\nmain () = true == false == true\n");
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -885,7 +901,7 @@ fn a_complete_module_retains_an_independent_lexical_failure() {
     let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
     let source = TempSource::write(text);
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -910,7 +926,7 @@ fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_re
         let text = format!("identity : Int -> Int\nidentity value = value\n\n{line}");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded line should fail in the syntax pipeline");
         };
 
@@ -937,7 +953,7 @@ fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded tail should fail in the syntax pipeline");
         };
 
@@ -963,7 +979,7 @@ fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded definition tail should fail in the syntax pipeline");
         };
 

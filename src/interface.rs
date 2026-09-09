@@ -702,6 +702,7 @@ fn same_type_with_constraint_budget_inner(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OverlapFailure {
     InvalidState,
+    Kind(crate::kind::KindFailureContext),
     Resource,
     TypeResource,
 }
@@ -711,6 +712,8 @@ pub(crate) enum OverlapFailure {
 pub(crate) enum HeadMatchFailure {
     /// A checked head contains a forbidden type or an unbound candidate variable.
     InvalidState,
+    /// Kind validation retained a specific compiler failure and its location.
+    Kind(crate::kind::KindFailureContext),
     /// Matching or constraint-side retention exceeded the graph constraint bound.
     ConstraintResource,
     /// Retaining a matched substitution exceeded the structural type bound.
@@ -912,13 +915,16 @@ fn map_match_environment_failure(failure: CanonicalEnvironmentFailure) -> HeadMa
         CanonicalEnvironmentFailure::ConstraintResource => HeadMatchFailure::ConstraintResource,
         CanonicalEnvironmentFailure::TypeResource => HeadMatchFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => HeadMatchFailure::InvalidState,
+        CanonicalEnvironmentFailure::Kind(context) => HeadMatchFailure::Kind(context),
     }
 }
 
 fn map_match_kind_failure(failure: KindFailure) -> HeadMatchFailure {
     match failure {
         KindFailure::Resource(_) => HeadMatchFailure::ConstraintResource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => HeadMatchFailure::InvalidState,
+        failure => failure
+            .internal_context()
+            .map_or(HeadMatchFailure::InvalidState, HeadMatchFailure::Kind),
     }
 }
 
@@ -1433,13 +1439,16 @@ fn map_overlap_environment_failure(failure: CanonicalEnvironmentFailure) -> Over
         CanonicalEnvironmentFailure::ConstraintResource => OverlapFailure::Resource,
         CanonicalEnvironmentFailure::TypeResource => OverlapFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => OverlapFailure::InvalidState,
+        CanonicalEnvironmentFailure::Kind(context) => OverlapFailure::Kind(context),
     }
 }
 
 fn map_overlap_kind_failure(failure: KindFailure) -> OverlapFailure {
     match failure {
         KindFailure::Resource(_) => OverlapFailure::Resource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => OverlapFailure::InvalidState,
+        failure => failure
+            .internal_context()
+            .map_or(OverlapFailure::InvalidState, OverlapFailure::Kind),
     }
 }
 
@@ -1955,6 +1964,572 @@ pub enum InterfaceReason {
     ImplDuplicateMethod,
     /// An implementation group does not name a method of its interface.
     ImplExtraMethod,
+}
+
+/// An interface diagnostic retaining phase-owned context.
+///
+/// Retain this wrapper for localized presentation; the common diagnostic
+/// projection alone does not retain argument counts or selection-label roles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InterfaceDiagnostic {
+    diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+    context: InterfaceDiagnosticContext,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InterfaceDiagnosticContext {
+    Plain,
+    DeterminationConflict(DeterminationConflictCause),
+    DeterminationParameter {
+        cause: DeterminationParameterCause,
+        related: bool,
+    },
+    MethodParameter(MethodParameterCause),
+    DeterminationCoverage {
+        variable_label: bool,
+        key_count: usize,
+    },
+    Selection(crate::evidence::SelectionError),
+    ArgumentCount {
+        expected: usize,
+        found: usize,
+    },
+    ImplementationPair {
+        earlier_imports: usize,
+        later_imports: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeterminationParameterCause {
+    EmptyDeterminant,
+    EmptyDependent,
+    BothSides,
+    Omitted,
+    Repeated,
+    OutOfOrder,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DeterminationConflictCause {
+    Requirements,
+    Prerequisites,
+    Improvement { key: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodParameterCause {
+    ImplicitBinders,
+    MissingInterface,
+    MissingDeterminant,
+}
+
+impl From<crate::diagnostic::Diagnostic<InterfaceReason>> for InterfaceDiagnostic {
+    fn from(diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::Plain,
+        }
+    }
+}
+
+impl std::ops::Deref for InterfaceDiagnostic {
+    type Target = crate::diagnostic::Diagnostic<InterfaceReason>;
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostic
+    }
+}
+
+impl std::ops::DerefMut for InterfaceDiagnostic {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.diagnostic
+    }
+}
+
+impl InterfaceDiagnostic {
+    pub(crate) fn with_determination_conflict(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: DeterminationConflictCause,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationConflict(cause),
+        }
+    }
+
+    pub(crate) fn determination_comparison(&self) -> Option<(&str, &str, &str)> {
+        let InterfaceDiagnosticContext::DeterminationConflict(
+            DeterminationConflictCause::Improvement { key },
+        ) = &self.context
+        else {
+            return None;
+        };
+        Some((key, self.expected.as_deref()?, self.found.as_deref()?))
+    }
+
+    pub(crate) fn determination_failure(&self) -> Option<&'static str> {
+        Some(match &self.context {
+            InterfaceDiagnosticContext::DeterminationParameter { cause, .. } => match cause {
+                DeterminationParameterCause::EmptyDeterminant => "empty-determinant",
+                DeterminationParameterCause::EmptyDependent => "empty-dependent",
+                DeterminationParameterCause::BothSides => "both-sides",
+                DeterminationParameterCause::Omitted => "omitted-parameter",
+                DeterminationParameterCause::Repeated => "repeated-parameter",
+                DeterminationParameterCause::OutOfOrder => "declaration-order",
+            },
+            InterfaceDiagnosticContext::DeterminationConflict(cause) => match cause {
+                DeterminationConflictCause::Requirements => "conflicting-requirements",
+                DeterminationConflictCause::Prerequisites => "conflicting-prerequisites",
+                DeterminationConflictCause::Improvement { .. } => "conflicting-improvement",
+            },
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn with_determination_parameter(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: DeterminationParameterCause,
+    ) -> Self {
+        let related = !diagnostic.related.is_empty();
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationParameter { cause, related },
+        }
+    }
+
+    pub(crate) fn with_method_parameter(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: MethodParameterCause,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::MethodParameter(cause),
+        }
+    }
+
+    pub(crate) fn with_determination_coverage(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        variable_label: bool,
+        key_count: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationCoverage {
+                variable_label,
+                key_count,
+            },
+        }
+    }
+
+    pub(crate) fn parameter_failure(&self) -> Option<&'static str> {
+        let InterfaceDiagnosticContext::MethodParameter(cause) = self.context else {
+            return None;
+        };
+        Some(match cause {
+            MethodParameterCause::ImplicitBinders => "implicit-binders",
+            MethodParameterCause::MissingInterface => "missing-interface-parameter",
+            MethodParameterCause::MissingDeterminant => "missing-determinant",
+        })
+    }
+    pub(crate) fn with_selection(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        selection: crate::evidence::SelectionError,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::Selection(selection),
+        }
+    }
+
+    pub(crate) fn minimum_related(&self) -> usize {
+        match &self.context {
+            InterfaceDiagnosticContext::DeterminationConflict(_) => 1,
+            InterfaceDiagnosticContext::DeterminationParameter { related, .. } => {
+                usize::from(*related)
+            }
+            InterfaceDiagnosticContext::MethodParameter(_) => 1,
+            InterfaceDiagnosticContext::DeterminationCoverage {
+                variable_label,
+                key_count,
+            } => usize::from(*variable_label) + key_count,
+            InterfaceDiagnosticContext::ImplementationPair {
+                earlier_imports,
+                later_imports,
+            } => 1 + earlier_imports + later_imports,
+            InterfaceDiagnosticContext::Selection(selection) => {
+                usize::from(selection.declaration_span().is_some())
+                    + usize::from(selection.import_span().is_some())
+                    + selection.causes().len()
+            }
+            _ => self.reason.minimum_related(),
+        }
+    }
+
+    pub(crate) fn with_argument_counts(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::ArgumentCount { expected, found },
+        }
+    }
+
+    pub(crate) fn with_implementation_pair(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        earlier_imports: usize,
+        later_imports: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::ImplementationPair {
+                earlier_imports,
+                later_imports,
+            },
+        }
+    }
+
+    pub(crate) fn argument_counts(&self) -> Option<(usize, usize)> {
+        match self.context {
+            InterfaceDiagnosticContext::ArgumentCount { expected, found }
+                if self.reason == InterfaceReason::ArgumentCount =>
+            {
+                Some((expected, found))
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if let InterfaceDiagnosticContext::DeterminationConflict(cause) = &self.context {
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationConflictCause::Requirements => {
+                    (Message::determination_requirement_conflict(), "requirement")
+                }
+                DeterminationConflictCause::Prerequisites => (
+                    Message::determination_prerequisite_conflict(),
+                    "prerequisite",
+                ),
+                DeterminationConflictCause::Improvement { .. } => {
+                    let (key, expected, found) = self.determination_comparison()?;
+                    (
+                        Message::determination_improvement_conflict(key, expected, found),
+                        "dependent_tuple",
+                    )
+                }
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationParameter { cause, .. } = self.context {
+            use crate::message::Message;
+            return Some((
+                match cause {
+                    DeterminationParameterCause::EmptyDeterminant => {
+                        Message::determination_empty_determinant()
+                    }
+                    DeterminationParameterCause::EmptyDependent => {
+                        Message::determination_empty_dependent()
+                    }
+                    DeterminationParameterCause::BothSides => Message::determination_both_sides(),
+                    DeterminationParameterCause::Omitted => Message::determination_omitted(),
+                    DeterminationParameterCause::Repeated => Message::determination_repeated(),
+                    DeterminationParameterCause::OutOfOrder => Message::determination_order(),
+                },
+                "determination_parameter",
+            ));
+        }
+        if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
+            use crate::message::Message;
+            return Some((
+                match cause {
+                    MethodParameterCause::ImplicitBinders => Message::method_implicit_parameters(),
+                    MethodParameterCause::MissingInterface => {
+                        Message::method_missing_interface_parameter()
+                    }
+                    MethodParameterCause::MissingDeterminant => {
+                        Message::method_missing_determinant()
+                    }
+                },
+                "method_type",
+            ));
+        }
+        if self.reason == InterfaceReason::ArgumentCount {
+            let (expected, found) = self.argument_counts()?;
+            return Some((
+                crate::message::Message::interface_argument_count(expected, found),
+                "interface_application",
+            ));
+        }
+        self.reason.message()
+    }
+
+    pub(crate) fn related_message(
+        &self,
+        mut index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let InterfaceDiagnosticContext::DeterminationConflict(cause) = &self.context {
+            if index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationConflictCause::Requirements => (
+                    Message::determination_earlier_requirement(),
+                    "earlier_requirement",
+                ),
+                DeterminationConflictCause::Prerequisites => (
+                    Message::determination_earlier_prerequisite(),
+                    "earlier_prerequisite",
+                ),
+                DeterminationConflictCause::Improvement { .. } => (
+                    Message::determination_expected_source(),
+                    "determining_source",
+                ),
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationParameter { cause, related } = self.context
+        {
+            if !related || index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                DeterminationParameterCause::EmptyDeterminant
+                | DeterminationParameterCause::EmptyDependent => (
+                    Message::interface_parameter_declaration(),
+                    "interface_parameter",
+                ),
+                DeterminationParameterCause::BothSides => (
+                    Message::determination_key_occurrence(),
+                    "determinant_occurrence",
+                ),
+                DeterminationParameterCause::Omitted => (
+                    Message::determination_missing_parameter(),
+                    "omitted_parameter",
+                ),
+                DeterminationParameterCause::Repeated => (
+                    Message::determination_earlier_occurrence(),
+                    "earlier_parameter_occurrence",
+                ),
+                DeterminationParameterCause::OutOfOrder => (
+                    Message::determination_preceding_occurrence(),
+                    "preceding_parameter_occurrence",
+                ),
+            });
+        }
+        if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
+            if index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                MethodParameterCause::ImplicitBinders => (
+                    Message::interface_parameter_declaration(),
+                    "interface_parameter",
+                ),
+                _ => (
+                    Message::missing_method_parameter(),
+                    "required_interface_parameter",
+                ),
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationCoverage {
+            variable_label,
+            key_count,
+        } = self.context
+        {
+            use crate::message::Message;
+            if variable_label {
+                if index == 0 {
+                    return Some((Message::dependent_variable(), "dependent_variable"));
+                }
+                index -= 1;
+            }
+            return (index < key_count).then(|| {
+                (
+                    Message::determinant_missing_variable(),
+                    "determinant_argument",
+                )
+            });
+        }
+        if let InterfaceDiagnosticContext::ImplementationPair {
+            earlier_imports,
+            later_imports,
+        } = self.context
+        {
+            use crate::message::Message;
+            return if index == 0 {
+                Some((Message::earlier_implementation(), "earlier_implementation"))
+            } else if index <= earlier_imports {
+                Some((
+                    Message::earlier_implementation_import(),
+                    "earlier_implementation_import",
+                ))
+            } else if later_imports > 0 && index == earlier_imports + 1 {
+                Some((Message::later_implementation(), "later_implementation"))
+            } else if later_imports > 0 && index <= earlier_imports + later_imports {
+                Some((
+                    Message::later_implementation_import(),
+                    "later_implementation_import",
+                ))
+            } else {
+                None
+            };
+        }
+        let InterfaceDiagnosticContext::Selection(selection) = &self.context else {
+            return self.reason.related_message(index);
+        };
+        use crate::{evidence::SelectionCauseKind, message::Message};
+        if selection.declaration_span().is_some() {
+            if index == 0 {
+                return Some((Message::selection_declaration(), "obligation_declaration"));
+            }
+            index -= 1;
+        }
+        if selection.import_span().is_some() {
+            if index == 0 {
+                return Some((Message::selection_import(), "declaration_import"));
+            }
+            index -= 1;
+        }
+        Some(match selection.causes().get(index)?.kind() {
+            SelectionCauseKind::Interface => {
+                (Message::selection_interface(), "selection_interface")
+            }
+            SelectionCauseKind::Implementation => (
+                Message::selection_implementation(),
+                "selected_implementation",
+            ),
+            SelectionCauseKind::ImplementationMethod => {
+                (Message::selection_method(), "selected_method")
+            }
+            SelectionCauseKind::ImplementationImport => (
+                Message::selection_implementation_import(),
+                "implementation_import",
+            ),
+        })
+    }
+}
+
+impl InterfaceReason {
+    pub(crate) fn minimum_related(self) -> usize {
+        usize::from(matches!(
+            self,
+            Self::MethodNotFunction
+                | Self::ImplMissingMethod
+                | Self::ImplDuplicateMethod
+                | Self::ImplExtraMethod
+                | Self::ImplVariableHead
+                | Self::ImplPrerequisiteVariable
+                | Self::ImplPrerequisiteNotDecreasing
+                | Self::ConstraintPrivateInterface
+                | Self::ImplPrivateInterface
+                | Self::DuplicateRequirement
+                | Self::ImplOrphan
+        ))
+    }
+
+    pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        Some(match self {
+            Self::ImplDeterminationCoverage => {
+                (Message::impl_determination_coverage(), "dependent_argument")
+            }
+            Self::UndeterminedParameter => (Message::undetermined_parameter(), "requirement_key"),
+            Self::ImplOverlap => (Message::impl_overlap(), "implementation_head"),
+            Self::ImplDeterminationConflict => {
+                (Message::impl_determination_conflict(), "implementation_key")
+            }
+            Self::Unsatisfied => (Message::constraint_unsatisfied(), "interface_obligation"),
+            Self::Ambiguous => (Message::constraint_ambiguous(), "interface_obligation"),
+            Self::Cycle => (Message::constraint_cycle(), "interface_obligation"),
+            Self::ImplOrphan => (Message::impl_orphan(), "implementation_key"),
+            Self::ConstraintPrivateInterface => (
+                Message::constraint_private_interface(),
+                "public_requirement",
+            ),
+            Self::ImplPrivateInterface => (
+                Message::impl_private_interface(),
+                "public_implementation_interface",
+            ),
+            Self::DuplicateRequirement => (Message::duplicate_requirement(), "requirement"),
+            Self::ImplVariableHead => (Message::impl_variable_head(), "implementation_key"),
+            Self::ImplPrerequisiteVariable => (
+                Message::impl_prerequisite_variable(),
+                "prerequisite_variable",
+            ),
+            Self::ImplPrerequisiteNotDecreasing => {
+                (Message::impl_prerequisite_decrease(), "prerequisite")
+            }
+            Self::EvidenceMissingLocalKey => (Message::evidence_local_key(), "evidence_key"),
+            Self::EvidenceDuplicate => (Message::evidence_duplicate(), "evidence_key"),
+            Self::EvidenceDeterminationConflict => {
+                (Message::evidence_determination_conflict(), "evidence_key")
+            }
+            Self::EvidenceMissingMethod => {
+                (Message::evidence_missing_method(), "evidence_declaration")
+            }
+            Self::EvidenceDuplicateMethod => {
+                (Message::evidence_duplicate_method(), "evidence_method")
+            }
+            Self::EvidenceExtraMethod => (Message::evidence_extra_method(), "evidence_method"),
+            Self::MethodNotFunction => (Message::interface_method_function(), "method_type"),
+            Self::ImplMissingMethod => (Message::impl_missing_method(), "implementation"),
+            Self::ImplDuplicateMethod => {
+                (Message::impl_duplicate_method(), "implementation_method")
+            }
+            Self::ImplExtraMethod => (Message::impl_extra_method(), "implementation_method"),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn related_message(
+        self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if index != 0 {
+            return None;
+        }
+        use crate::message::Message;
+        Some(match self {
+            Self::EvidenceDuplicate | Self::EvidenceDeterminationConflict => {
+                (Message::evidence_earlier(), "earlier_evidence")
+            }
+            Self::EvidenceMissingMethod => (Message::evidence_required_method(), "required_method"),
+            Self::EvidenceDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
+            Self::EvidenceExtraMethod => (Message::evidence_interface(), "interface_declaration"),
+            Self::MethodNotFunction => (
+                Message::interface_method_declaration(),
+                "method_declaration",
+            ),
+            Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
+            Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
+            Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::UndeterminedParameter => (
+                Message::requirement_only_parameter(),
+                "undetermined_parameter",
+            ),
+            Self::ArgumentCount => (Message::interface_parameters(), "interface_parameters"),
+            Self::ImplOrphan => (
+                Message::impl_foreign_interface(),
+                "selected_foreign_interface",
+            ),
+            Self::ConstraintPrivateInterface | Self::ImplPrivateInterface => (
+                Message::private_interface_declaration(),
+                "private_interface",
+            ),
+            Self::DuplicateRequirement => (Message::earlier_requirement(), "earlier_requirement"),
+            Self::ImplVariableHead => (Message::impl_selected_interface(), "implemented_interface"),
+            Self::ImplPrerequisiteVariable => {
+                (Message::impl_head_variables(), "implementation_head")
+            }
+            Self::ImplPrerequisiteNotDecreasing => {
+                (Message::impl_head_decrease(), "implementation_head")
+            }
+            _ => return None,
+        })
+    }
 }
 
 impl fmt::Display for InterfaceReason {
@@ -3086,6 +3661,58 @@ impl Drop for ConstrainedScheme {
 
 #[cfg(test)]
 mod tests {
+    fn matching_kind_cause(failure: HeadMatchFailure) -> (&'static str, Span) {
+        let HeadMatchFailure::Kind(context) = failure else {
+            panic!("expected a retained kind failure, got {failure:?}")
+        };
+        (context.name(), context.span())
+    }
+
+    fn overlap_kind_cause(failure: OverlapFailure) -> (&'static str, Span) {
+        let OverlapFailure::Kind(context) = failure else {
+            panic!("expected a retained kind failure, got {failure:?}")
+        };
+        (context.name(), context.span())
+    }
+
+    #[test]
+    fn matching_adapters_preserve_kind_cause() {
+        let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let kind = Kind::Type;
+        for overlap in [false, true] {
+            let mut environments = crate::kind::KindEnvironments::new();
+            let identity = TypeVariableId::new(0);
+            environments
+                .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+                .unwrap();
+            let failure = environments
+                .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+                .unwrap_err();
+            let context = failure.internal_context().unwrap();
+            if overlap {
+                assert_eq!(
+                    map_overlap_kind_failure(failure),
+                    OverlapFailure::Kind(context)
+                );
+                assert_eq!(
+                    map_overlap_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
+                    OverlapFailure::Kind(context)
+                );
+            } else {
+                assert_eq!(
+                    map_match_kind_failure(failure),
+                    HeadMatchFailure::Kind(context)
+                );
+                assert_eq!(
+                    map_match_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
+                    HeadMatchFailure::Kind(context)
+                );
+            }
+        }
+    }
     #[test]
     fn paired_effectful_type_equality_checks_rows_at_exact_work_boundaries() {
         use crate::types::{ComputationType, EffectId, EffectInstance, EffectRow};
@@ -3747,8 +4374,9 @@ mod tests {
                 span,
                 &mut InterfaceConstraintBudget::default(),
                 &mut TypeWorkBudget::default(),
-            ),
-            Err(HeadMatchFailure::InvalidState),
+            )
+            .map_err(matching_kind_cause),
+            Err(("body-free-monotype-kind", span)),
             "a Type-kinded goal must fail before a higher-kinded binding is retained"
         );
     }
@@ -3951,8 +4579,9 @@ mod tests {
                         span,
                         &mut InterfaceConstraintBudget::default(),
                         &mut TypeWorkBudget::default(),
-                    ),
-                    Err(HeadMatchFailure::InvalidState),
+                    )
+                    .map_err(matching_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "the second binding must fail before the authenticated first binding is cloned"
                 );
             })
@@ -5175,8 +5804,9 @@ mod tests {
                         span,
                         &mut InterfaceConstraintBudget::default(),
                         &mut TypeWorkBudget::default(),
-                    ),
-                    Err(HeadMatchFailure::InvalidState),
+                    )
+                    .map_err(matching_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "a mismatch at the deep Kind result must fail before substitution publication"
                 );
             })
@@ -5303,8 +5933,8 @@ mod tests {
                         &left,
                         &[rejected_right],
                         &rejected,
-                    ),
-                    Err(OverlapFailure::InvalidState),
+                    ).map_err(overlap_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "a mismatch at the deep Kind result must fail before solution caching"
                 );
             })
@@ -5413,8 +6043,9 @@ mod tests {
                 &left,
                 &[right_first, right_second],
                 &right,
-            ),
-            Err(OverlapFailure::InvalidState),
+            )
+            .map_err(overlap_kind_cause),
+            Err(("body-free-monotype-kind", span)),
             "the second solution mismatch must discard the first authenticated cache entry"
         );
     }

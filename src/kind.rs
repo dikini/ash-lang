@@ -87,9 +87,9 @@ impl SynthesisLedger<'_> {
     fn resolved_budget(&mut self, span: Span) -> Result<&mut TypeWorkBudget, KindFailure> {
         match self {
             Self::Resolved(budget) => Ok(*budget),
-            Self::BodyFree(_) => Err(KindFailure::internal(
+            Self::BodyFree(_) => Err(KindFailure::internal_cause(
                 span,
-                "body-free kind synthesis attempted to retain a source diagnostic",
+                KindInternalCause::BodyFreeSourceDiagnostic,
             )),
         }
     }
@@ -134,6 +134,40 @@ pub enum KindExpectation {
 }
 
 impl KindError {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        let found = self.diagnostic.found.as_deref()?;
+        Some(match self.diagnostic.reason {
+            KindReason::ExpectedType => crate::message::Message::kind_expected_type(found),
+            KindReason::NotApplicable => crate::message::Message::kind_not_applicable(found),
+            KindReason::Argument => {
+                crate::message::Message::kind_argument(self.diagnostic.expected.as_deref()?, found)
+            }
+        })
+    }
+
+    pub(crate) fn related_message(
+        &self,
+    ) -> Option<(crate::message::Message<'_>, &'static str, &str)> {
+        match self.diagnostic.reason {
+            KindReason::Argument => {
+                let expected = self.diagnostic.expected.as_deref()?;
+                Some((
+                    crate::message::Message::kind_required_declaration(expected),
+                    "required_kind_declaration",
+                    expected,
+                ))
+            }
+            KindReason::ExpectedType | KindReason::NotApplicable => {
+                let found = self.diagnostic.found.as_deref()?;
+                Some((
+                    crate::message::Message::kind_found_declaration(found),
+                    "found_kind_declaration",
+                    found,
+                ))
+            }
+        }
+    }
+
     /// Returns the structured diagnostic fields and causal labels.
     #[must_use]
     pub const fn diagnostic(&self) -> &Diagnostic<KindReason> {
@@ -189,18 +223,907 @@ pub enum KindFailure {
     Internal(KindStageFailure),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KindInternalCause {
+    BodyFreeConstructorOwner,
+    BodyFreeInterfaceKind,
+    BodyFreeConstructorKind,
+    BodyFreeFunctionKind,
+    BodyFreeInterfaceArity,
+    BodyFreeInterfaceArgument,
+    BodyFreeDeterminantSeed,
+    BodyFreeMethodKind,
+    BodyFreeRequiredSeed,
+    BodyFreeMethodFunction,
+    BodyFreeMissingParameter,
+    BodyFreeMethodDuplicateParameter,
+    BodyFreeInterfaceDuplicateParameter,
+    BodyFreeSeedOrder,
+    BodyFreeMonotypeKind,
+    BodyFreeTupleKind,
+    BodyFreeApplicationArgument,
+    BodyFreeNonFunctionKind,
+    BodyFreeValueKind,
+    BodyFreeSourceDiagnostic,
+    LookupLexicalConstructor,
+    LookupLexicalParameters,
+    LookupLexicalNominal,
+    LookupNominalParameters,
+    LookupNewtypeConstructor,
+    LookupPayloadProvenance,
+    LookupNominalConstructor,
+    LookupEffectIndex,
+    LookupGlobalIndex,
+    LookupImplementationIndex,
+    LookupInterfaceIndex,
+    LookupNominalIndex,
+    MissingCanonicalBinder,
+    ConflictingDeclarationBinder,
+    MissingDeclarationBinder,
+    SchemeInDetermination,
+    SchemeInMonotype,
+    EmptyMethodBinders,
+    MissingInterfaceKind,
+    EmptyInterfaceParameters,
+    MissingVariableKind,
+    ResourceIdentityKind,
+    DeterminantPosition,
+    SourceDeterminationKey,
+    SummaryDeterminationKey,
+    EffectArgumentKind,
+    EffectArgumentCount,
+    MissingRowEffect,
+    NonOwnerRowTail,
+    RowTailKind,
+    MissingRowBinderKind,
+    MissingRowInferenceKind,
+    ImplementationRowBinder,
+    PreflightArityChanged,
+    MethodRowBinder,
+    RowInferenceDetermination,
+    ConstructorMovedProvenance,
+    ConstructorOwner,
+    PayloadCardinality,
+    PayloadIdentity,
+    NominalPayloadProvenance,
+    NewtypePayload,
+    NewtypeConstructorCount,
+    NewtypeRepresentationCount,
+    NewtypeRepresentation,
+    NewtypeFieldProvenance,
+    LexicalNominal,
+    LexicalNewtypeConstructor,
+    LexicalNewtypeCount,
+    LexicalNewtypeRepresentation,
+    LexicalNewtypeProvenance,
+    ImportedNominalParameters,
+    PayloadSchemeFunction,
+    DeclarationOrder,
+    DeclarationCoverage,
+    KindPreflightGlobal,
+    KindPreflightImplementation,
+    PreflightGlobal,
+    PreflightImplementation,
+    InvalidTypeProvenance,
+    TypeProvenanceOwner,
+    AtomicTypeProvenance,
+    ApplicationProvenance,
+    FunctionProvenance,
+    TupleProvenance,
+    IncompleteTupleProvenance,
+    TupleChildProvenance,
+    EffectTypeProvenanceOwner,
+    EffectTypeProvenanceShape,
+    EffectTupleProvenance,
+    EffectFunctionProvenance,
+    PureComputationProvenance,
+    ComputationMissingArguments,
+    ComputationSurplusArguments,
+    RowMissingArguments,
+    RowSurplusArguments,
+    HookArgumentSource,
+    HookArgumentProvenance,
+    HookMissingEffect,
+    ImplementationBinderCount,
+    ImplementationBinderIdentity,
+    SchemeBinderCount,
+    SchemeBinderIdentity,
+    RetainedBinderKind,
+    UnusedImplementationBinder,
+    UnusedSchemeBinder,
+    InvalidDependentAllowance,
+    LinkedValueType,
+    LinkedComputationRow,
+    DuplicateConstructorMirror,
+    MissingNominalKind,
+    DuplicateNominalKind,
+    MissingInferenceKind,
+    DuplicateInferenceKind,
+    MissingInterfaceParameters,
+    InterfaceParameterCount,
+    InterfaceParameterRecords,
+    MissingEffect,
+    DuplicateEffect,
+    NestedEffectRow,
+    DuplicateBinder,
+    OwnerEffectRow,
+    MissingOwnerBinder,
+}
+
+impl KindInternalCause {
+    fn name(self) -> &'static str {
+        match self {
+            Self::BodyFreeConstructorOwner => "body-free-constructor-owner",
+            Self::BodyFreeInterfaceKind => "body-free-interface-kind",
+            Self::BodyFreeConstructorKind => "body-free-constructor-kind",
+            Self::BodyFreeFunctionKind => "body-free-function-kind",
+            Self::BodyFreeInterfaceArity => "body-free-interface-arity",
+            Self::BodyFreeInterfaceArgument => "body-free-interface-argument",
+            Self::BodyFreeDeterminantSeed => "body-free-determinant-seed",
+            Self::BodyFreeMethodKind => "body-free-method-kind",
+            Self::BodyFreeRequiredSeed => "body-free-required-seed",
+            Self::BodyFreeMethodFunction => "body-free-method-function",
+            Self::BodyFreeMissingParameter => "body-free-missing-parameter",
+            Self::BodyFreeMethodDuplicateParameter => "body-free-method-duplicate-parameter",
+            Self::BodyFreeInterfaceDuplicateParameter => "body-free-interface-duplicate-parameter",
+            Self::BodyFreeSeedOrder => "body-free-seed-order",
+            Self::BodyFreeMonotypeKind => "body-free-monotype-kind",
+            Self::BodyFreeTupleKind => "body-free-tuple-kind",
+            Self::BodyFreeApplicationArgument => "body-free-application-argument",
+            Self::BodyFreeNonFunctionKind => "body-free-non-function-kind",
+            Self::BodyFreeValueKind => "body-free-value-kind",
+            Self::BodyFreeSourceDiagnostic => "body-free-source-diagnostic",
+            Self::LookupLexicalConstructor => "lookup-lexical-constructor",
+            Self::LookupLexicalParameters => "lookup-lexical-parameters",
+            Self::LookupLexicalNominal => "lookup-lexical-nominal",
+            Self::LookupNominalParameters => "lookup-nominal-parameters",
+            Self::LookupNewtypeConstructor => "lookup-newtype-constructor",
+            Self::LookupPayloadProvenance => "lookup-payload-provenance",
+            Self::LookupNominalConstructor => "lookup-nominal-constructor",
+            Self::LookupEffectIndex => "lookup-effect-index",
+            Self::LookupGlobalIndex => "lookup-global-index",
+            Self::LookupImplementationIndex => "lookup-implementation-index",
+            Self::LookupInterfaceIndex => "lookup-interface-index",
+            Self::LookupNominalIndex => "lookup-nominal-index",
+            Self::MissingCanonicalBinder => "missing-canonical-binder",
+            Self::ConflictingDeclarationBinder => "conflicting-declaration-binder",
+            Self::MissingDeclarationBinder => "missing-declaration-binder",
+            Self::SchemeInDetermination => "scheme-in-determination",
+            Self::SchemeInMonotype => "scheme-in-monotype",
+            Self::EmptyMethodBinders => "empty-method-binders",
+            Self::MissingInterfaceKind => "missing-interface-kind",
+            Self::EmptyInterfaceParameters => "empty-interface-parameters",
+            Self::MissingVariableKind => "missing-variable-kind",
+            Self::ResourceIdentityKind => "resource-identity-kind",
+            Self::DeterminantPosition => "determinant-position",
+            Self::SourceDeterminationKey => "source-determination-key",
+            Self::SummaryDeterminationKey => "summary-determination-key",
+            Self::EffectArgumentKind => "effect-argument-kind",
+            Self::EffectArgumentCount => "effect-argument-count",
+            Self::MissingRowEffect => "missing-row-effect",
+            Self::NonOwnerRowTail => "non-owner-row-tail",
+            Self::RowTailKind => "row-tail-kind",
+            Self::MissingRowBinderKind => "missing-row-binder-kind",
+            Self::MissingRowInferenceKind => "missing-row-inference-kind",
+            Self::ImplementationRowBinder => "implementation-row-binder",
+            Self::PreflightArityChanged => "preflight-arity-changed",
+            Self::MethodRowBinder => "method-row-binder",
+            Self::RowInferenceDetermination => "row-inference-determination",
+            Self::ConstructorMovedProvenance => "constructor-moved-provenance",
+            Self::ConstructorOwner => "constructor-owner",
+            Self::PayloadCardinality => "payload-cardinality",
+            Self::PayloadIdentity => "payload-identity",
+            Self::NominalPayloadProvenance => "nominal-payload-provenance",
+            Self::NewtypePayload => "newtype-payload",
+            Self::NewtypeConstructorCount => "newtype-constructor-count",
+            Self::NewtypeRepresentationCount => "newtype-representation-count",
+            Self::NewtypeRepresentation => "newtype-representation",
+            Self::NewtypeFieldProvenance => "newtype-field-provenance",
+            Self::LexicalNominal => "lexical-nominal",
+            Self::LexicalNewtypeConstructor => "lexical-newtype-constructor",
+            Self::LexicalNewtypeCount => "lexical-newtype-count",
+            Self::LexicalNewtypeRepresentation => "lexical-newtype-representation",
+            Self::LexicalNewtypeProvenance => "lexical-newtype-provenance",
+            Self::ImportedNominalParameters => "imported-nominal-parameters",
+            Self::PayloadSchemeFunction => "payload-scheme-function",
+            Self::DeclarationOrder => "declaration-order",
+            Self::DeclarationCoverage => "declaration-coverage",
+            Self::KindPreflightGlobal => "kind-preflight-global",
+            Self::KindPreflightImplementation => "kind-preflight-implementation",
+            Self::PreflightGlobal => "preflight-global",
+            Self::PreflightImplementation => "preflight-implementation",
+            Self::InvalidTypeProvenance => "invalid-type-provenance",
+            Self::TypeProvenanceOwner => "type-provenance-owner",
+            Self::AtomicTypeProvenance => "atomic-type-provenance",
+            Self::ApplicationProvenance => "application-provenance",
+            Self::FunctionProvenance => "function-provenance",
+            Self::TupleProvenance => "tuple-provenance",
+            Self::IncompleteTupleProvenance => "incomplete-tuple-provenance",
+            Self::TupleChildProvenance => "tuple-child-provenance",
+            Self::EffectTypeProvenanceOwner => "effect-type-provenance-owner",
+            Self::EffectTypeProvenanceShape => "effect-type-provenance-shape",
+            Self::EffectTupleProvenance => "effect-tuple-provenance",
+            Self::EffectFunctionProvenance => "effect-function-provenance",
+            Self::PureComputationProvenance => "pure-computation-provenance",
+            Self::ComputationMissingArguments => "computation-missing-arguments",
+            Self::ComputationSurplusArguments => "computation-surplus-arguments",
+            Self::RowMissingArguments => "row-missing-arguments",
+            Self::RowSurplusArguments => "row-surplus-arguments",
+            Self::HookArgumentSource => "hook-argument-source",
+            Self::HookArgumentProvenance => "hook-argument-provenance",
+            Self::HookMissingEffect => "hook-missing-effect",
+            Self::ImplementationBinderCount => "implementation-binder-count",
+            Self::ImplementationBinderIdentity => "implementation-binder-identity",
+            Self::SchemeBinderCount => "scheme-binder-count",
+            Self::SchemeBinderIdentity => "scheme-binder-identity",
+            Self::RetainedBinderKind => "retained-binder-kind",
+            Self::UnusedImplementationBinder => "unused-implementation-binder",
+            Self::UnusedSchemeBinder => "unused-scheme-binder",
+            Self::InvalidDependentAllowance => "invalid-dependent-allowance",
+            Self::LinkedValueType => "linked-value-type",
+            Self::LinkedComputationRow => "linked-computation-row",
+            Self::DuplicateConstructorMirror => "duplicate-constructor-mirror",
+            Self::MissingNominalKind => "missing-nominal-kind",
+            Self::DuplicateNominalKind => "duplicate-nominal-kind",
+            Self::MissingInferenceKind => "missing-inference-kind",
+            Self::DuplicateInferenceKind => "duplicate-inference-kind",
+            Self::MissingInterfaceParameters => "missing-interface-parameters",
+            Self::InterfaceParameterCount => "interface-parameter-count",
+            Self::InterfaceParameterRecords => "interface-parameter-records",
+            Self::MissingEffect => "missing-effect",
+            Self::DuplicateEffect => "duplicate-effect",
+            Self::NestedEffectRow => "nested-effect-row",
+            Self::DuplicateBinder => "duplicate-binder",
+            Self::OwnerEffectRow => "owner-effect-row",
+            Self::MissingOwnerBinder => "missing-owner-binder",
+        }
+    }
+    fn legacy(self) -> &'static str {
+        match self {
+            Self::BodyFreeConstructorOwner => {
+                "a body-free constructor scheme references a non-owner variable"
+            }
+            Self::BodyFreeInterfaceKind => {
+                "a body-free interface occurrence has no canonical parameter kind"
+            }
+            Self::BodyFreeConstructorKind => {
+                "a checked body-free constructor scheme does not end at kind Type"
+            }
+            Self::BodyFreeFunctionKind => {
+                "a checked body-free function component has the wrong kind"
+            }
+            Self::BodyFreeInterfaceArity => {
+                "a checked body-free interface application has the wrong argument count"
+            }
+            Self::BodyFreeInterfaceArgument => {
+                "a checked body-free interface argument has the wrong kind"
+            }
+            Self::BodyFreeDeterminantSeed => {
+                "a checked body-free interface has an empty or complete determinant seed"
+            }
+            Self::BodyFreeMethodKind => {
+                "a checked body-free interface method does not end at kind Type"
+            }
+            Self::BodyFreeRequiredSeed => {
+                "a checked body-free interface method has an empty required seed"
+            }
+            Self::BodyFreeMethodFunction => {
+                "a checked body-free interface method is not a function"
+            }
+            Self::BodyFreeMissingParameter => {
+                "a checked body-free interface method omits a required parameter"
+            }
+            Self::BodyFreeMethodDuplicateParameter => {
+                "a checked body-free interface method repeats a type parameter"
+            }
+            Self::BodyFreeInterfaceDuplicateParameter => {
+                "a checked body-free interface repeats a type parameter"
+            }
+            Self::BodyFreeSeedOrder => {
+                "a checked body-free interface seed is not a unique declaration-order subset"
+            }
+            Self::BodyFreeMonotypeKind => {
+                "a checked body-free monotype has the wrong canonical kind"
+            }
+            Self::BodyFreeTupleKind => "a checked body-free tuple element has the wrong kind",
+            Self::BodyFreeApplicationArgument => {
+                "a checked body-free type application has the wrong argument kind"
+            }
+            Self::BodyFreeNonFunctionKind => "a checked body-free type applies a non-function kind",
+            Self::BodyFreeValueKind => "a checked body-free value scheme does not end at kind Type",
+            Self::BodyFreeSourceDiagnostic => {
+                "body-free kind synthesis attempted to retain a source diagnostic"
+            }
+            Self::LookupLexicalConstructor => {
+                "a lexical newtype names a missing canonical constructor"
+            }
+            Self::LookupLexicalParameters => "a lexical nominal has no canonical parameter slice",
+            Self::LookupLexicalNominal => "a lexical nominal marker names a missing canonical fact",
+            Self::LookupNominalParameters => "a local nominal has no canonical parameter slice",
+            Self::LookupNewtypeConstructor => "a newtype names a missing canonical constructor",
+            Self::LookupPayloadProvenance => {
+                "a nominal has no declaration-ordered payload provenance"
+            }
+            Self::LookupNominalConstructor => "a nominal names a missing canonical constructor",
+            Self::LookupEffectIndex => "declaration order contains an invalid effect index",
+            Self::LookupGlobalIndex => "declaration order contains an invalid global index",
+            Self::LookupImplementationIndex => {
+                "declaration order contains an invalid implementation index"
+            }
+            Self::LookupInterfaceIndex => "declaration order contains an invalid interface index",
+            Self::LookupNominalIndex => "declaration order contains an invalid nominal index",
+            Self::MissingCanonicalBinder => "a canonical type-binder kind is missing",
+            Self::ConflictingDeclarationBinder => {
+                "a declaration binder conflicts with its canonical registry record"
+            }
+            Self::MissingDeclarationBinder => {
+                "a declaration binder has no canonical registry record"
+            }
+            Self::SchemeInDetermination => "a rank-1 scheme entered global determination discovery",
+            Self::SchemeInMonotype => "a rank-1 scheme entered the resolved monotype kind judgment",
+            Self::EmptyMethodBinders => "a resolved explicit method binder list is empty",
+            Self::MissingInterfaceKind => {
+                "a resolved interface application has no canonical interface-kind entry"
+            }
+            Self::EmptyInterfaceParameters => "a resolved interface has no type parameters",
+            Self::MissingVariableKind => "a resolved type variable has no canonical kind",
+            Self::ResourceIdentityKind => "a resource identity must have kind Type",
+            Self::DeterminantPosition => {
+                "an authenticated determinant position is outside its complete application"
+            }
+            Self::SourceDeterminationKey => {
+                "an authenticated source determination has an invalid key"
+            }
+            Self::SummaryDeterminationKey => {
+                "an authenticated summary determination has an invalid key"
+            }
+            Self::EffectArgumentKind => "an effect row argument has the wrong canonical kind",
+            Self::EffectArgumentCount => "an effect row has the wrong canonical argument count",
+            Self::MissingRowEffect => "an effect row names no canonical checked declaration",
+            Self::NonOwnerRowTail => "an effect row references a non-owner tail",
+            Self::RowTailKind => "an effect-row tail does not have kind EffectRow",
+            Self::MissingRowBinderKind => "an effect-row tail has no canonical binder kind",
+            Self::MissingRowInferenceKind => "an effect-row tail has no fixed inference kind",
+            Self::ImplementationRowBinder => {
+                "an implementation owner cannot bind an EffectRow parameter"
+            }
+            Self::PreflightArityChanged => {
+                "an interface application changed arity between kind preflight passes"
+            }
+            Self::MethodRowBinder => "an interface method cannot bind an EffectRow parameter",
+            Self::RowInferenceDetermination => {
+                "row inference entered global determination discovery"
+            }
+            Self::ConstructorMovedProvenance => {
+                "a constructor payload and its moved provenance disagree"
+            }
+            Self::ConstructorOwner => "canonical constructor ownership disagrees with its nominal",
+            Self::PayloadCardinality => {
+                "constructor payload provenance has the wrong outer cardinality"
+            }
+            Self::PayloadIdentity => {
+                "constructor payload provenance is paired with the wrong identity"
+            }
+            Self::NominalPayloadProvenance => {
+                "a nominal has incomplete constructor payload provenance"
+            }
+            Self::NewtypePayload => "a newtype constructor retains an ordinary payload",
+            Self::NewtypeConstructorCount => {
+                "a newtype does not retain exactly one constructor identity"
+            }
+            Self::NewtypeRepresentationCount => {
+                "a newtype does not retain exactly one representation provenance"
+            }
+            Self::NewtypeRepresentation => "a newtype does not retain its canonical representation",
+            Self::NewtypeFieldProvenance => {
+                "a newtype representation does not retain exactly one field provenance"
+            }
+            Self::LexicalNominal => "a lexical nominal fact is not a lexical newtype",
+            Self::LexicalNewtypeConstructor => {
+                "a lexical newtype constructor has invalid ownership or payload"
+            }
+            Self::LexicalNewtypeCount => {
+                "a lexical newtype does not retain exactly one constructor identity"
+            }
+            Self::LexicalNewtypeRepresentation => {
+                "a lexical newtype does not retain its canonical representation"
+            }
+            Self::LexicalNewtypeProvenance => {
+                "a lexical newtype does not retain representation provenance"
+            }
+            Self::ImportedNominalParameters => {
+                "an imported nominal has an incomplete canonical parameter slice"
+            }
+            Self::PayloadSchemeFunction => {
+                "a payload constructor scheme does not have an outer function"
+            }
+            Self::DeclarationOrder => {
+                "declaration order contains a duplicate or out of source order index"
+            }
+            Self::DeclarationCoverage => "declaration order under-covers local declarations",
+            Self::KindPreflightGlobal => {
+                "interface-application kind preflight found an invalid global index"
+            }
+            Self::KindPreflightImplementation => {
+                "interface-application kind preflight found an invalid implementation index"
+            }
+            Self::PreflightGlobal => {
+                "interface-application preflight found an invalid global index"
+            }
+            Self::PreflightImplementation => {
+                "interface-application preflight found an invalid implementation index"
+            }
+            Self::InvalidTypeProvenance => "a resolved type has invalid provenance",
+            Self::TypeProvenanceOwner => "a resolved type has mismatched provenance ownership",
+            Self::AtomicTypeProvenance => "an atomic resolved type has structural provenance",
+            Self::ApplicationProvenance => "a resolved application has non-application provenance",
+            Self::FunctionProvenance => "a resolved function has non-function provenance",
+            Self::TupleProvenance => "a resolved tuple has non-tuple provenance",
+            Self::IncompleteTupleProvenance => "a resolved tuple has incomplete provenance",
+            Self::TupleChildProvenance => "a resolved tuple has incomplete child provenance",
+            Self::EffectTypeProvenanceOwner => {
+                "an effect-bearing type has mismatched provenance ownership"
+            }
+            Self::EffectTypeProvenanceShape => {
+                "an effect-bearing type has mismatched structural provenance"
+            }
+            Self::EffectTupleProvenance => "an effect-bearing tuple has incomplete provenance",
+            Self::EffectFunctionProvenance => "an effectful function has incomplete provenance",
+            Self::PureComputationProvenance => {
+                "a pure computation retained effect-argument provenance"
+            }
+            Self::ComputationMissingArguments => {
+                "a computation row has incomplete effect-argument provenance"
+            }
+            Self::ComputationSurplusArguments => {
+                "a computation row has surplus effect-argument provenance"
+            }
+            Self::RowMissingArguments => "an effect row has incomplete argument provenance",
+            Self::RowSurplusArguments => "an effect row has surplus argument provenance",
+            Self::HookArgumentSource => "a hook argument has no source occurrence",
+            Self::HookArgumentProvenance => "a hook target has incomplete argument provenance",
+            Self::HookMissingEffect => "a hook target has no canonical effect declaration",
+            Self::ImplementationBinderCount => {
+                "linked implementation-head mirrors retain different binder counts"
+            }
+            Self::ImplementationBinderIdentity => {
+                "linked implementation-head mirrors retain different binder identities"
+            }
+            Self::SchemeBinderCount => {
+                "a linked source and checked scheme retain different binder counts"
+            }
+            Self::SchemeBinderIdentity => {
+                "a linked source and checked scheme retain different binder identities"
+            }
+            Self::RetainedBinderKind => {
+                "a linked retained binder Kind does not match its canonical registry fact"
+            }
+            Self::UnusedImplementationBinder => {
+                "a linked implementation head retains an unused rigid binder"
+            }
+            Self::UnusedSchemeBinder => "a linked value scheme retains an unused owner binder",
+            Self::InvalidDependentAllowance => {
+                "a linked global has an invalid dependent-only binder allowance"
+            }
+            Self::LinkedValueType => "a linked source type does not match its checked value type",
+            Self::LinkedComputationRow => {
+                "a linked source computation row does not match its checked row"
+            }
+            Self::DuplicateConstructorMirror => {
+                "a linked constructor domain has two retained mirrors"
+            }
+            Self::MissingNominalKind => "a nominal type has no canonical kind",
+            Self::DuplicateNominalKind => "a nominal type has more than one canonical kind",
+            Self::MissingInferenceKind => "an inference variable has no fixed kind",
+            Self::DuplicateInferenceKind => "an inference variable has more than one fixed kind",
+            Self::MissingInterfaceParameters => "an interface has no canonical parameter records",
+            Self::InterfaceParameterCount => {
+                "an interface has conflicting canonical parameter counts"
+            }
+            Self::InterfaceParameterRecords => {
+                "an interface has conflicting canonical parameter records"
+            }
+            Self::MissingEffect => "a local effect has no canonical registry fact",
+            Self::DuplicateEffect => "the checked effect registry repeats a canonical identity",
+            Self::NestedEffectRow => "EffectRow cannot occur beneath a kind arrow",
+            Self::DuplicateBinder => "an owner binder list repeats a type-variable identity",
+            Self::OwnerEffectRow => "this owner cannot bind an EffectRow parameter",
+            Self::MissingOwnerBinder => "a linked owner binder has no canonical registry fact",
+        }
+    }
+    fn message(self) -> crate::message::Message<'static> {
+        match self {
+            Self::BodyFreeConstructorOwner => {
+                crate::message::Message::kind_internal_body_free_constructor_owner()
+            }
+            Self::BodyFreeInterfaceKind => {
+                crate::message::Message::kind_internal_body_free_interface_kind()
+            }
+            Self::BodyFreeConstructorKind => {
+                crate::message::Message::kind_internal_body_free_constructor_kind()
+            }
+            Self::BodyFreeFunctionKind => {
+                crate::message::Message::kind_internal_body_free_function_kind()
+            }
+            Self::BodyFreeInterfaceArity => {
+                crate::message::Message::kind_internal_body_free_interface_arity()
+            }
+            Self::BodyFreeInterfaceArgument => {
+                crate::message::Message::kind_internal_body_free_interface_argument()
+            }
+            Self::BodyFreeDeterminantSeed => {
+                crate::message::Message::kind_internal_body_free_determinant_seed()
+            }
+            Self::BodyFreeMethodKind => {
+                crate::message::Message::kind_internal_body_free_method_kind()
+            }
+            Self::BodyFreeRequiredSeed => {
+                crate::message::Message::kind_internal_body_free_required_seed()
+            }
+            Self::BodyFreeMethodFunction => {
+                crate::message::Message::kind_internal_body_free_method_function()
+            }
+            Self::BodyFreeMissingParameter => {
+                crate::message::Message::kind_internal_body_free_missing_parameter()
+            }
+            Self::BodyFreeMethodDuplicateParameter => {
+                crate::message::Message::kind_internal_body_free_method_duplicate_parameter()
+            }
+            Self::BodyFreeInterfaceDuplicateParameter => {
+                crate::message::Message::kind_internal_body_free_interface_duplicate_parameter()
+            }
+            Self::BodyFreeSeedOrder => {
+                crate::message::Message::kind_internal_body_free_seed_order()
+            }
+            Self::BodyFreeMonotypeKind => {
+                crate::message::Message::kind_internal_body_free_monotype_kind()
+            }
+            Self::BodyFreeTupleKind => {
+                crate::message::Message::kind_internal_body_free_tuple_kind()
+            }
+            Self::BodyFreeApplicationArgument => {
+                crate::message::Message::kind_internal_body_free_application_argument()
+            }
+            Self::BodyFreeNonFunctionKind => {
+                crate::message::Message::kind_internal_body_free_non_function_kind()
+            }
+            Self::BodyFreeValueKind => {
+                crate::message::Message::kind_internal_body_free_value_kind()
+            }
+            Self::BodyFreeSourceDiagnostic => {
+                crate::message::Message::kind_internal_body_free_source_diagnostic()
+            }
+            Self::LookupLexicalConstructor => {
+                crate::message::Message::kind_internal_lookup_lexical_constructor()
+            }
+            Self::LookupLexicalParameters => {
+                crate::message::Message::kind_internal_lookup_lexical_parameters()
+            }
+            Self::LookupLexicalNominal => {
+                crate::message::Message::kind_internal_lookup_lexical_nominal()
+            }
+            Self::LookupNominalParameters => {
+                crate::message::Message::kind_internal_lookup_nominal_parameters()
+            }
+            Self::LookupNewtypeConstructor => {
+                crate::message::Message::kind_internal_lookup_newtype_constructor()
+            }
+            Self::LookupPayloadProvenance => {
+                crate::message::Message::kind_internal_lookup_payload_provenance()
+            }
+            Self::LookupNominalConstructor => {
+                crate::message::Message::kind_internal_lookup_nominal_constructor()
+            }
+            Self::LookupEffectIndex => crate::message::Message::kind_internal_lookup_effect_index(),
+            Self::LookupGlobalIndex => crate::message::Message::kind_internal_lookup_global_index(),
+            Self::LookupImplementationIndex => {
+                crate::message::Message::kind_internal_lookup_implementation_index()
+            }
+            Self::LookupInterfaceIndex => {
+                crate::message::Message::kind_internal_lookup_interface_index()
+            }
+            Self::LookupNominalIndex => {
+                crate::message::Message::kind_internal_lookup_nominal_index()
+            }
+            Self::MissingCanonicalBinder => {
+                crate::message::Message::kind_internal_missing_canonical_binder()
+            }
+            Self::ConflictingDeclarationBinder => {
+                crate::message::Message::kind_internal_conflicting_declaration_binder()
+            }
+            Self::MissingDeclarationBinder => {
+                crate::message::Message::kind_internal_missing_declaration_binder()
+            }
+            Self::SchemeInDetermination => {
+                crate::message::Message::kind_internal_scheme_in_determination()
+            }
+            Self::SchemeInMonotype => crate::message::Message::kind_internal_scheme_in_monotype(),
+            Self::EmptyMethodBinders => {
+                crate::message::Message::kind_internal_empty_method_binders()
+            }
+            Self::MissingInterfaceKind => {
+                crate::message::Message::kind_internal_missing_interface_kind()
+            }
+            Self::EmptyInterfaceParameters => {
+                crate::message::Message::kind_internal_empty_interface_parameters()
+            }
+            Self::MissingVariableKind => {
+                crate::message::Message::kind_internal_missing_variable_kind()
+            }
+            Self::ResourceIdentityKind => {
+                crate::message::Message::kind_internal_resource_identity_kind()
+            }
+            Self::DeterminantPosition => {
+                crate::message::Message::kind_internal_determinant_position()
+            }
+            Self::SourceDeterminationKey => {
+                crate::message::Message::kind_internal_source_determination_key()
+            }
+            Self::SummaryDeterminationKey => {
+                crate::message::Message::kind_internal_summary_determination_key()
+            }
+            Self::EffectArgumentKind => {
+                crate::message::Message::kind_internal_effect_argument_kind()
+            }
+            Self::EffectArgumentCount => {
+                crate::message::Message::kind_internal_effect_argument_count()
+            }
+            Self::MissingRowEffect => crate::message::Message::kind_internal_missing_row_effect(),
+            Self::NonOwnerRowTail => crate::message::Message::kind_internal_non_owner_row_tail(),
+            Self::RowTailKind => crate::message::Message::kind_internal_row_tail_kind(),
+            Self::MissingRowBinderKind => {
+                crate::message::Message::kind_internal_missing_row_binder_kind()
+            }
+            Self::MissingRowInferenceKind => {
+                crate::message::Message::kind_internal_missing_row_inference_kind()
+            }
+            Self::ImplementationRowBinder => {
+                crate::message::Message::kind_internal_implementation_row_binder()
+            }
+            Self::PreflightArityChanged => {
+                crate::message::Message::kind_internal_preflight_arity_changed()
+            }
+            Self::MethodRowBinder => crate::message::Message::kind_internal_method_row_binder(),
+            Self::RowInferenceDetermination => {
+                crate::message::Message::kind_internal_row_inference_determination()
+            }
+            Self::ConstructorMovedProvenance => {
+                crate::message::Message::kind_internal_constructor_moved_provenance()
+            }
+            Self::ConstructorOwner => crate::message::Message::kind_internal_constructor_owner(),
+            Self::PayloadCardinality => {
+                crate::message::Message::kind_internal_payload_cardinality()
+            }
+            Self::PayloadIdentity => crate::message::Message::kind_internal_payload_identity(),
+            Self::NominalPayloadProvenance => {
+                crate::message::Message::kind_internal_nominal_payload_provenance()
+            }
+            Self::NewtypePayload => crate::message::Message::kind_internal_newtype_payload(),
+            Self::NewtypeConstructorCount => {
+                crate::message::Message::kind_internal_newtype_constructor_count()
+            }
+            Self::NewtypeRepresentationCount => {
+                crate::message::Message::kind_internal_newtype_representation_count()
+            }
+            Self::NewtypeRepresentation => {
+                crate::message::Message::kind_internal_newtype_representation()
+            }
+            Self::NewtypeFieldProvenance => {
+                crate::message::Message::kind_internal_newtype_field_provenance()
+            }
+            Self::LexicalNominal => crate::message::Message::kind_internal_lexical_nominal(),
+            Self::LexicalNewtypeConstructor => {
+                crate::message::Message::kind_internal_lexical_newtype_constructor()
+            }
+            Self::LexicalNewtypeCount => {
+                crate::message::Message::kind_internal_lexical_newtype_count()
+            }
+            Self::LexicalNewtypeRepresentation => {
+                crate::message::Message::kind_internal_lexical_newtype_representation()
+            }
+            Self::LexicalNewtypeProvenance => {
+                crate::message::Message::kind_internal_lexical_newtype_provenance()
+            }
+            Self::ImportedNominalParameters => {
+                crate::message::Message::kind_internal_imported_nominal_parameters()
+            }
+            Self::PayloadSchemeFunction => {
+                crate::message::Message::kind_internal_payload_scheme_function()
+            }
+            Self::DeclarationOrder => crate::message::Message::kind_internal_declaration_order(),
+            Self::DeclarationCoverage => {
+                crate::message::Message::kind_internal_declaration_coverage()
+            }
+            Self::KindPreflightGlobal => {
+                crate::message::Message::kind_internal_kind_preflight_global()
+            }
+            Self::KindPreflightImplementation => {
+                crate::message::Message::kind_internal_kind_preflight_implementation()
+            }
+            Self::PreflightGlobal => crate::message::Message::kind_internal_preflight_global(),
+            Self::PreflightImplementation => {
+                crate::message::Message::kind_internal_preflight_implementation()
+            }
+            Self::InvalidTypeProvenance => {
+                crate::message::Message::kind_internal_invalid_type_provenance()
+            }
+            Self::TypeProvenanceOwner => {
+                crate::message::Message::kind_internal_type_provenance_owner()
+            }
+            Self::AtomicTypeProvenance => {
+                crate::message::Message::kind_internal_atomic_type_provenance()
+            }
+            Self::ApplicationProvenance => {
+                crate::message::Message::kind_internal_application_provenance()
+            }
+            Self::FunctionProvenance => {
+                crate::message::Message::kind_internal_function_provenance()
+            }
+            Self::TupleProvenance => crate::message::Message::kind_internal_tuple_provenance(),
+            Self::IncompleteTupleProvenance => {
+                crate::message::Message::kind_internal_incomplete_tuple_provenance()
+            }
+            Self::TupleChildProvenance => {
+                crate::message::Message::kind_internal_tuple_child_provenance()
+            }
+            Self::EffectTypeProvenanceOwner => {
+                crate::message::Message::kind_internal_effect_type_provenance_owner()
+            }
+            Self::EffectTypeProvenanceShape => {
+                crate::message::Message::kind_internal_effect_type_provenance_shape()
+            }
+            Self::EffectTupleProvenance => {
+                crate::message::Message::kind_internal_effect_tuple_provenance()
+            }
+            Self::EffectFunctionProvenance => {
+                crate::message::Message::kind_internal_effect_function_provenance()
+            }
+            Self::PureComputationProvenance => {
+                crate::message::Message::kind_internal_pure_computation_provenance()
+            }
+            Self::ComputationMissingArguments => {
+                crate::message::Message::kind_internal_computation_missing_arguments()
+            }
+            Self::ComputationSurplusArguments => {
+                crate::message::Message::kind_internal_computation_surplus_arguments()
+            }
+            Self::RowMissingArguments => {
+                crate::message::Message::kind_internal_row_missing_arguments()
+            }
+            Self::RowSurplusArguments => {
+                crate::message::Message::kind_internal_row_surplus_arguments()
+            }
+            Self::HookArgumentSource => {
+                crate::message::Message::kind_internal_hook_argument_source()
+            }
+            Self::HookArgumentProvenance => {
+                crate::message::Message::kind_internal_hook_argument_provenance()
+            }
+            Self::HookMissingEffect => crate::message::Message::kind_internal_hook_missing_effect(),
+            Self::ImplementationBinderCount => {
+                crate::message::Message::kind_internal_implementation_binder_count()
+            }
+            Self::ImplementationBinderIdentity => {
+                crate::message::Message::kind_internal_implementation_binder_identity()
+            }
+            Self::SchemeBinderCount => crate::message::Message::kind_internal_scheme_binder_count(),
+            Self::SchemeBinderIdentity => {
+                crate::message::Message::kind_internal_scheme_binder_identity()
+            }
+            Self::RetainedBinderKind => {
+                crate::message::Message::kind_internal_retained_binder_kind()
+            }
+            Self::UnusedImplementationBinder => {
+                crate::message::Message::kind_internal_unused_implementation_binder()
+            }
+            Self::UnusedSchemeBinder => {
+                crate::message::Message::kind_internal_unused_scheme_binder()
+            }
+            Self::InvalidDependentAllowance => {
+                crate::message::Message::kind_internal_invalid_dependent_allowance()
+            }
+            Self::LinkedValueType => crate::message::Message::kind_internal_linked_value_type(),
+            Self::LinkedComputationRow => {
+                crate::message::Message::kind_internal_linked_computation_row()
+            }
+            Self::DuplicateConstructorMirror => {
+                crate::message::Message::kind_internal_duplicate_constructor_mirror()
+            }
+            Self::MissingNominalKind => {
+                crate::message::Message::kind_internal_missing_nominal_kind()
+            }
+            Self::DuplicateNominalKind => {
+                crate::message::Message::kind_internal_duplicate_nominal_kind()
+            }
+            Self::MissingInferenceKind => {
+                crate::message::Message::kind_internal_missing_inference_kind()
+            }
+            Self::DuplicateInferenceKind => {
+                crate::message::Message::kind_internal_duplicate_inference_kind()
+            }
+            Self::MissingInterfaceParameters => {
+                crate::message::Message::kind_internal_missing_interface_parameters()
+            }
+            Self::InterfaceParameterCount => {
+                crate::message::Message::kind_internal_interface_parameter_count()
+            }
+            Self::InterfaceParameterRecords => {
+                crate::message::Message::kind_internal_interface_parameter_records()
+            }
+            Self::MissingEffect => crate::message::Message::kind_internal_missing_effect(),
+            Self::DuplicateEffect => crate::message::Message::kind_internal_duplicate_effect(),
+            Self::NestedEffectRow => crate::message::Message::kind_internal_nested_effect_row(),
+            Self::DuplicateBinder => crate::message::Message::kind_internal_duplicate_binder(),
+            Self::OwnerEffectRow => crate::message::Message::kind_internal_owner_effect_row(),
+            Self::MissingOwnerBinder => {
+                crate::message::Message::kind_internal_missing_owner_binder()
+            }
+        }
+    }
+}
+
+/// A retained internal kind-checking cause and its original source location.
+///
+/// This opaque, copyable context can cross compiler failure boundaries without
+/// retaining legacy diagnostic strings or exposing the internal cause enum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KindFailureContext {
+    span: Span,
+    cause: KindInternalCause,
+}
+
+impl KindFailureContext {
+    pub(crate) const fn span(self) -> Span {
+        self.span
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        self.cause.name()
+    }
+
+    pub(crate) fn message(self) -> crate::message::Message<'static> {
+        self.cause.message()
+    }
+}
+
 impl KindFailure {
+    pub(crate) fn internal_context(&self) -> Option<KindFailureContext> {
+        let Self::Internal(detail) = self else {
+            return None;
+        };
+        Some(KindFailureContext {
+            span: detail.span,
+            cause: detail.cause?,
+        })
+    }
+
+    fn internal_cause(span: Span, cause: KindInternalCause) -> Self {
+        Self::Internal(KindStageFailure {
+            span,
+            message: cause.legacy().to_owned(),
+            cause: Some(cause),
+        })
+    }
+
+    pub(crate) fn internal_presentation(
+        &self,
+    ) -> Option<(Span, crate::message::Message<'static>, &'static str)> {
+        let context = self.internal_context()?;
+        Some((context.span(), context.message(), context.name()))
+    }
+
+    pub(crate) fn resource_presentation(&self) -> Option<(Span, crate::message::Message<'static>)> {
+        let Self::Resource(failure) = self else {
+            return None;
+        };
+        Some((failure.span, crate::message::Message::kind_resources()))
+    }
+
     fn resource(span: Span, message: impl Into<String>) -> Self {
         Self::Resource(KindStageFailure {
             span,
             message: message.into(),
-        })
-    }
-
-    fn internal(span: Span, message: impl Into<String>) -> Self {
-        Self::Internal(KindStageFailure {
-            span,
-            message: message.into(),
+            cause: None,
         })
     }
 
@@ -235,6 +1158,7 @@ impl std::error::Error for KindFailure {}
 /// Causal data for a non-source failure in the resolved kind stage.
 #[derive(Debug, Eq, PartialEq)]
 pub struct KindStageFailure {
+    cause: Option<KindInternalCause>,
     /// Source span whose resolved fact was being processed.
     pub span: Span,
     /// Stable stage-owned explanation.
@@ -321,15 +1245,15 @@ impl<'a> KindEnvironments<'a> {
                 KindFailure::resource(span, "effect-kind registry could not reserve storage")
             })?;
             let effect = registry.effect(source.id).ok_or_else(|| {
-                KindFailure::internal(span, "a local effect has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingEffect)
             })?;
             if effects
                 .insert(effect.id, effect.parameters.as_ref())
                 .is_some()
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "the checked effect registry repeats a canonical identity",
+                    KindInternalCause::DuplicateEffect,
                 ));
             }
         }
@@ -347,9 +1271,9 @@ impl<'a> KindEnvironments<'a> {
                 .insert(effect.id, effect.parameters.as_ref())
                 .is_some()
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "the checked effect registry repeats a canonical identity",
+                    KindInternalCause::DuplicateEffect,
                 ));
             }
         }
@@ -377,9 +1301,9 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         if !binder_kind_is_admitted(kind, true) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "EffectRow cannot occur beneath a kind arrow",
+                KindInternalCause::NestedEffectRow,
             ));
         }
         budget.charge(1).map_err(|()| {
@@ -389,9 +1313,9 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         if self.delta.contains_key(&identity) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "an owner binder list repeats a type-variable identity",
+                KindInternalCause::DuplicateBinder,
             ));
         }
         self.delta.try_reserve(1).map_err(|_| {
@@ -424,9 +1348,9 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for parameter in parameters {
             if !binder_kind_is_admitted(&parameter.kind, false) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "this owner cannot bind an EffectRow parameter",
+                    KindInternalCause::OwnerEffectRow,
                 ));
             }
             self.insert_declared(
@@ -447,9 +1371,9 @@ impl<'a> KindEnvironments<'a> {
         for (installed, parameter) in parameters.iter().enumerate() {
             if !binder_kind_is_admitted(&parameter.kind, false) {
                 self.remove_owner_parameter_extension(&parameters[..installed]);
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "this owner cannot bind an EffectRow parameter",
+                    KindInternalCause::OwnerEffectRow,
                 ));
             }
             if let Err(failure) = self.insert_declared(
@@ -482,9 +1406,9 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for parameter in parameters {
             if !binder_kind_is_admitted(&parameter.kind, true) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "EffectRow cannot occur beneath a kind arrow",
+                    KindInternalCause::NestedEffectRow,
                 ));
             }
             self.insert_declared(
@@ -507,12 +1431,12 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for (identity, kind) in parameters {
             if !binder_kind_is_admitted(kind, allow_effect_row) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     origin,
                     if allow_effect_row {
-                        "EffectRow cannot occur beneath a kind arrow"
+                        KindInternalCause::NestedEffectRow
                     } else {
-                        "this owner cannot bind an EffectRow parameter"
+                        KindInternalCause::OwnerEffectRow
                     },
                 ));
             }
@@ -540,7 +1464,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             self.insert_declared(
                 *identity,
@@ -562,9 +1486,9 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
     ) -> Result<(), KindFailure> {
         if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "linked implementation-head mirrors retain different binder counts",
+                KindInternalCause::ImplementationBinderCount,
             ));
         }
         self.clear_declared();
@@ -572,15 +1496,15 @@ impl<'a> KindEnvironments<'a> {
             if !binder_kind_is_admitted(&parameter.kind, false)
                 || !binder_kind_is_admitted(&source.kind, false)
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an implementation owner cannot bind an EffectRow parameter",
+                    KindInternalCause::ImplementationRowBinder,
                 ));
             }
             if parameter.id != source.id {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "linked implementation-head mirrors retain different binder identities",
+                    KindInternalCause::ImplementationBinderIdentity,
                 ));
             }
             budget.charge(1).map_err(|()| {
@@ -590,7 +1514,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
@@ -599,9 +1523,9 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             if self.delta.contains_key(&parameter.id) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an owner binder list repeats a type-variable identity",
+                    KindInternalCause::DuplicateBinder,
                 ));
             }
             self.delta.try_reserve(1).map_err(|_| {
@@ -635,17 +1559,17 @@ impl<'a> KindEnvironments<'a> {
         span: Span,
     ) -> Result<(), KindFailure> {
         if parameters.len() != source_parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked source and checked scheme retain different binder counts",
+                KindInternalCause::SchemeBinderCount,
             ));
         }
         self.clear_declared();
         for ((identity, retained_kind), source) in parameters.iter().zip(source_parameters) {
             if *identity != source.id {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a linked source and checked scheme retain different binder identities",
+                    KindInternalCause::SchemeBinderIdentity,
                 ));
             }
             budget.charge(1).map_err(|()| {
@@ -655,7 +1579,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
@@ -664,9 +1588,9 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             if self.delta.contains_key(identity) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an owner binder list repeats a type-variable identity",
+                    KindInternalCause::DuplicateBinder,
                 ));
             }
             self.delta.try_reserve(1).map_err(|_| {
@@ -703,9 +1627,9 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         if self.omega.contains_key(&identity) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 causal_span,
-                "an inference variable has more than one fixed kind",
+                KindInternalCause::DuplicateInferenceKind,
             ));
         }
         self.omega.try_reserve(1).map_err(|_| {
@@ -727,9 +1651,9 @@ impl<'a> KindEnvironments<'a> {
             )
             .is_some()
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 causal_span,
-                "an inference variable has more than one fixed kind",
+                KindInternalCause::DuplicateInferenceKind,
             ));
         }
         Ok(())
@@ -773,9 +1697,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free monotype has the wrong canonical kind",
+                KindInternalCause::BodyFreeMonotypeKind,
             ))
         }
     }
@@ -801,9 +1725,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free value scheme does not end at kind Type",
+                KindInternalCause::BodyFreeValueKind,
             ))
         }
     }
@@ -823,9 +1747,9 @@ impl<'a> KindEnvironments<'a> {
             (Some(payload), Type::Function(_, _)) => Some(payload),
             (None, _) => None,
             (Some(_), _) => {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a payload constructor scheme does not have an outer function",
+                    KindInternalCause::PayloadSchemeFunction,
                 ));
             }
         };
@@ -866,9 +1790,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free constructor scheme does not end at kind Type",
+                KindInternalCause::BodyFreeConstructorKind,
             ))
         }
     }
@@ -887,15 +1811,15 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut impl KindWorkLedger,
     ) -> Result<(), KindFailure> {
         if ty.function_view().is_none() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface method is not a function",
+                KindInternalCause::BodyFreeMethodFunction,
             ));
         }
         if interface_parameters.is_empty() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface method has an empty required seed",
+                KindInternalCause::BodyFreeRequiredSeed,
             ));
         }
         let parameter_count = method_parameters
@@ -928,25 +1852,25 @@ impl<'a> KindEnvironments<'a> {
         })?;
         for parameter in interface_parameters {
             if !allowed.insert(*parameter) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a checked body-free interface repeats a type parameter",
+                    KindInternalCause::BodyFreeInterfaceDuplicateParameter,
                 ));
             }
         }
         for method_parameter in method_parameters {
             if !allowed.insert(*method_parameter) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a checked body-free interface method repeats a type parameter",
+                    KindInternalCause::BodyFreeMethodDuplicateParameter,
                 ));
             }
         }
         if let BodyFreeInterfaceMethodSeed::Determined(required) = seed {
             if required.is_empty() || required.len() >= interface_parameters.len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a checked body-free interface has an empty or complete determinant seed",
+                    KindInternalCause::BodyFreeDeterminantSeed,
                 ));
             }
             let mut next_interface = 0;
@@ -966,9 +1890,9 @@ impl<'a> KindEnvironments<'a> {
                     }
                 }
                 if !found {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "a checked body-free interface seed is not a unique declaration-order subset",
+                        KindInternalCause::BodyFreeSeedOrder,
                     ));
                 }
             }
@@ -1017,9 +1941,9 @@ impl<'a> KindEnvironments<'a> {
                 .iter()
                 .any(|method_parameter| !visited.contains(method_parameter))
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface method omits a required parameter",
+                KindInternalCause::BodyFreeMissingParameter,
             ));
         }
         let equal =
@@ -1032,9 +1956,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface method does not end at kind Type",
+                KindInternalCause::BodyFreeMethodKind,
             ))
         }
     }
@@ -1075,9 +1999,9 @@ impl<'a> KindEnvironments<'a> {
             &mut ledger,
         )?;
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         let equal =
@@ -1090,9 +2014,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free value scheme does not end at kind Type",
+                KindInternalCause::BodyFreeValueKind,
             ))
         }
     }
@@ -1143,9 +2067,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free value scheme does not end at kind Type",
+                KindInternalCause::BodyFreeValueKind,
             ))
         }
     }
@@ -1183,9 +2107,9 @@ impl<'a> KindEnvironments<'a> {
             &mut ledger,
         )?;
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         let equal =
@@ -1198,9 +2122,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free value scheme does not end at kind Type",
+                KindInternalCause::BodyFreeValueKind,
             ))
         }
     }
@@ -1249,9 +2173,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free value scheme does not end at kind Type",
+                KindInternalCause::BodyFreeValueKind,
             ))
         }
     }
@@ -1278,9 +2202,9 @@ impl<'a> KindEnvironments<'a> {
         })?;
         for identity in allowed_unused {
             if !self.delta.contains_key(identity) || !allowed.insert(*identity) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a linked global has an invalid dependent-only binder allowance",
+                    KindInternalCause::InvalidDependentAllowance,
                 ));
             }
         }
@@ -1295,9 +2219,9 @@ impl<'a> KindEnvironments<'a> {
             .keys()
             .any(|identity| !visited.contains(identity) && !allowed.contains(identity))
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked value scheme retains an unused owner binder",
+                KindInternalCause::UnusedSchemeBinder,
             ));
         }
         Ok(())
@@ -1312,9 +2236,9 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         if self.xi.contains_key(&identity) {
             charge_lookup_attempt(origin, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "a nominal type has more than one canonical kind",
+                KindInternalCause::DuplicateNominalKind,
             ));
         }
 
@@ -1351,9 +2275,9 @@ impl<'a> KindEnvironments<'a> {
     ) -> Result<(), KindFailure> {
         if self.xi.contains_key(&identity) {
             charge_lookup_attempt(origin, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "a nominal type has more than one canonical kind",
+                KindInternalCause::DuplicateNominalKind,
             ));
         }
 
@@ -1395,9 +2319,9 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         if parameters.is_empty() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "an interface has no canonical parameter records",
+                KindInternalCause::MissingInterfaceParameters,
             ));
         }
         budget.charge(1).map_err(|()| {
@@ -1408,9 +2332,9 @@ impl<'a> KindEnvironments<'a> {
         })?;
         if let Some(existing) = self.iota.get(&identity) {
             if existing.parameters.len() != parameters.len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     origin,
-                    "an interface has conflicting canonical parameter counts",
+                    KindInternalCause::InterfaceParameterCount,
                 ));
             }
             for (existing, parameter) in existing.parameters.iter().zip(parameters) {
@@ -1425,9 +2349,9 @@ impl<'a> KindEnvironments<'a> {
                     || existing.origin.primary_span() != parameter.origin.primary_span()
                     || !equal
                 {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         origin,
-                        "an interface has conflicting canonical parameter records",
+                        KindInternalCause::InterfaceParameterRecords,
                     ));
                 }
             }
@@ -1558,9 +2482,9 @@ impl<'a> KindEnvironments<'a> {
         if equal {
             return Ok(());
         }
-        Err(KindFailure::internal(
+        Err(KindFailure::internal_cause(
             span,
-            "a checked body-free value scheme does not end at kind Type",
+            KindInternalCause::BodyFreeValueKind,
         ))
     }
 
@@ -1578,15 +2502,15 @@ impl<'a> KindEnvironments<'a> {
                     "body-free interface-kind lookup exceeded its owning work budget",
                 )
             })?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a body-free interface occurrence has no canonical parameter kind",
+                KindInternalCause::BodyFreeInterfaceKind,
             ));
         };
         if arguments.len() != expected.parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface application has the wrong argument count",
+                KindInternalCause::BodyFreeInterfaceArity,
             ));
         }
         let mut ledger = SynthesisLedger::BodyFree(budget);
@@ -1609,9 +2533,9 @@ impl<'a> KindEnvironments<'a> {
                     )
                 })?;
             if !equal {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a checked body-free interface argument has the wrong kind",
+                    KindInternalCause::BodyFreeInterfaceArgument,
                 ));
             }
         }
@@ -1634,15 +2558,15 @@ impl<'a> KindEnvironments<'a> {
                     "body-free interface-kind lookup exceeded its owning work budget",
                 )
             })?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a body-free interface occurrence has no canonical parameter kind",
+                KindInternalCause::BodyFreeInterfaceKind,
             ));
         };
         if arguments.len() != expected.parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a checked body-free interface application has the wrong argument count",
+                KindInternalCause::BodyFreeInterfaceArity,
             ));
         }
         let mut visited = HashSet::new();
@@ -1678,16 +2602,16 @@ impl<'a> KindEnvironments<'a> {
                     )
                 })?;
             if !equal {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a checked body-free interface argument has the wrong kind",
+                    KindInternalCause::BodyFreeInterfaceArgument,
                 ));
             }
         }
         if visited.len() != self.delta.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a linked implementation head retains an unused rigid binder",
+                KindInternalCause::UnusedImplementationBinder,
             ));
         }
         Ok(())
@@ -1798,9 +2722,9 @@ impl<'a> KindEnvironments<'a> {
     {
         if row.is_empty() {
             if !argument_provenance.is_empty() || !argument_roots.is_empty() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a pure computation retained effect-argument provenance",
+                    KindInternalCause::PureComputationProvenance,
                 ));
             }
             return Ok(());
@@ -1818,12 +2742,12 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameters = effects.get(&instance.effect()).ok_or_else(|| {
-                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+                KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
             })?;
             if parameters.len() != instance.arguments().len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an effect row has the wrong canonical argument count",
+                    KindInternalCause::EffectArgumentCount,
                 ));
             }
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
@@ -1831,9 +2755,9 @@ impl<'a> KindEnvironments<'a> {
                     .next()
                     .and_then(|root| argument_provenance.get(*root))
                     .ok_or_else(|| {
-                        KindFailure::internal(
+                        KindFailure::internal_cause(
                             span,
-                            "a computation row has incomplete effect-argument provenance",
+                            KindInternalCause::ComputationMissingArguments,
                         )
                     })?;
                 let found = self.synthesize_with_ledger(
@@ -1871,9 +2795,9 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if roots.next().is_some() || argument_provenance.len() != argument_roots.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a computation row has surplus effect-argument provenance",
+                KindInternalCause::ComputationSurplusArguments,
             ));
         }
         Ok(())
@@ -1901,9 +2825,9 @@ impl<'a> KindEnvironments<'a> {
                 (Some(provenance), Some(root)) => provenance.nodes().get(root),
                 (None, None) => None,
                 _ => {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an effect-bearing type has mismatched provenance ownership",
+                        KindInternalCause::EffectTypeProvenanceOwner,
                     ));
                 }
             };
@@ -1914,9 +2838,9 @@ impl<'a> KindEnvironments<'a> {
                             elements: roots, ..
                         }) if roots.len() == elements.len() => Some(roots.as_ref()),
                         Some(_) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effect-bearing tuple has incomplete provenance",
+                                KindInternalCause::EffectTupleProvenance,
                             ));
                         }
                         None => None,
@@ -1960,9 +2884,9 @@ impl<'a> KindEnvironments<'a> {
                             }),
                         ) if effect_arguments.is_empty() => (Some(*domain), Some(*codomain)),
                         (_, Some(_)) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effect-bearing type has mismatched structural provenance",
+                                KindInternalCause::EffectTypeProvenanceShape,
                             ));
                         }
                         (_, None) => (None, None),
@@ -1995,9 +2919,9 @@ impl<'a> KindEnvironments<'a> {
                             Some(effect_arguments.as_ref()),
                         ),
                         Some(_) => {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "an effectful function has incomplete provenance",
+                                KindInternalCause::EffectFunctionProvenance,
                             ));
                         }
                         None => (None, None, None),
@@ -2075,21 +2999,18 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameters = effects.get(&instance.effect()).ok_or_else(|| {
-                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+                KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
             })?;
             if parameters.len() != instance.arguments().len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an effect row has the wrong canonical argument count",
+                    KindInternalCause::EffectArgumentCount,
                 ));
             }
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
                 let argument_root = match roots.as_mut() {
                     Some(roots) => Some(*roots.next().ok_or_else(|| {
-                        KindFailure::internal(
-                            span,
-                            "an effect row has incomplete argument provenance",
-                        )
+                        KindFailure::internal_cause(span, KindInternalCause::RowMissingArguments)
                     })?),
                     None => None,
                 };
@@ -2113,9 +3034,9 @@ impl<'a> KindEnvironments<'a> {
                     })?;
                 if !equal {
                     if provenance.is_none() {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             span,
-                            "an effect row argument has the wrong canonical kind",
+                            KindInternalCause::EffectArgumentKind,
                         ));
                     }
                     let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
@@ -2148,9 +3069,9 @@ impl<'a> KindEnvironments<'a> {
             }
         }
         if roots.is_some_and(|mut roots| roots.next().is_some()) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "an effect row has surplus argument provenance",
+                KindInternalCause::RowSurplusArguments,
             ));
         }
         Ok(())
@@ -2173,21 +3094,21 @@ impl<'a> KindEnvironments<'a> {
         let fact = match tail.variable() {
             crate::types::EffectRowVariable::Rigid(identity) => {
                 if allowed_variables.is_some_and(|allowed| !allowed.contains(&identity)) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an effect row references a non-owner tail",
+                        KindInternalCause::NonOwnerRowTail,
                     ));
                 }
                 if let Some(visited) = visited_variables {
                     visited.insert(identity);
                 }
                 self.delta.get(&identity).ok_or_else(|| {
-                    KindFailure::internal(span, "an effect-row tail has no canonical binder kind")
+                    KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
                 })?
             }
             crate::types::EffectRowVariable::Inference(identity) => {
                 self.omega.get(&identity).ok_or_else(|| {
-                    KindFailure::internal(span, "an effect-row tail has no fixed inference kind")
+                    KindFailure::internal_cause(span, KindInternalCause::MissingRowInferenceKind)
                 })?
             }
         };
@@ -2201,9 +3122,9 @@ impl<'a> KindEnvironments<'a> {
         if is_row {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "an effect-row tail does not have kind EffectRow",
+                KindInternalCause::RowTailKind,
             ))
         }
     }
@@ -2300,9 +3221,9 @@ impl<'a> KindEnvironments<'a> {
                         (Some(provenance), Some(root)) => {
                             let Some(node) = provenance.nodes().get(root) else {
                                 charge_lookup_attempt(fallback_span, budget)?;
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     fallback_span,
-                                    "a resolved type has invalid provenance",
+                                    KindInternalCause::InvalidTypeProvenance,
                                 ));
                             };
                             Some(node)
@@ -2310,9 +3231,9 @@ impl<'a> KindEnvironments<'a> {
                         (None, None) => None,
                         _ => {
                             charge_lookup_attempt(fallback_span, budget)?;
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 fallback_span,
-                                "a resolved type has mismatched provenance ownership",
+                                KindInternalCause::TypeProvenanceOwner,
                             ));
                         }
                     };
@@ -2327,9 +3248,9 @@ impl<'a> KindEnvironments<'a> {
                                     | (Type::Unit, None | Some(Type::Unit))
                             );
                             if !mirror_matches {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a linked source type does not match its checked value type",
+                                    KindInternalCause::LinkedValueType,
                                 ));
                             }
                             require_fact_node(node, span, budget)?;
@@ -2345,27 +3266,24 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Variable(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             if allowed_variables.is_some_and(|allowed| !allowed.contains(identity))
                             {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a body-free constructor scheme references a non-owner variable",
+                                    KindInternalCause::BodyFreeConstructorOwner,
                                 ));
                             }
                             if let Some(visited) = visited_variables.as_deref_mut() {
                                 visited.insert(*identity);
                             }
                             let mut fact = *self.delta.get(identity).ok_or_else(|| {
-                                KindFailure::internal(
+                                KindFailure::internal_cause(
                                     span,
-                                    "a resolved type variable has no canonical kind",
+                                    KindInternalCause::MissingVariableKind,
                                 )
                             })?;
                             authenticate_kind_descendants_with_ledger(
@@ -2373,17 +3291,15 @@ impl<'a> KindEnvironments<'a> {
                                 fact.retained_mirrors,
                                 budget,
                             )
-                            .map_err(|failure| {
-                                match failure {
-                                    LinkedKindMirrorFailure::Resource => KindFailure::resource(
-                                        span,
-                                        "declaration kind lookup exceeded its type-work budget",
-                                    ),
-                                    LinkedKindMirrorFailure::Mismatch => KindFailure::internal(
-                                        span,
-                                        "a linked retained binder Kind does not match its canonical registry fact",
-                                    ),
-                                }
+                            .map_err(|failure| match failure {
+                                LinkedKindMirrorFailure::Resource => KindFailure::resource(
+                                    span,
+                                    "declaration kind lookup exceeded its type-work budget",
+                                ),
+                                LinkedKindMirrorFailure::Mismatch => KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::RetainedBinderKind,
+                                ),
                             })?;
                             fact.occurrence = span;
                             State::Complete(fact)
@@ -2393,17 +3309,14 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Inference(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let mut fact = *self.omega.get(identity).ok_or_else(|| {
-                                KindFailure::internal(
+                                KindFailure::internal_cause(
                                     span,
-                                    "an inference variable has no fixed kind",
+                                    KindInternalCause::MissingInferenceKind,
                                 )
                             })?;
                             charge_kind_descendants_with_ledger(fact.kind, budget).map_err(
@@ -2422,15 +3335,15 @@ impl<'a> KindEnvironments<'a> {
                                 .is_some_and(|mirror| !matches!(mirror, Type::Nominal(found) if found == identity))
                             {
                                 charge_lookup_attempt(span, budget)?;
-                                return Err(KindFailure::internal(
-                                    span,
-                                    "a linked source type does not match its checked value type",
-                                ));
+                                return Err(KindFailure::internal_cause(span, KindInternalCause::LinkedValueType));
                             }
                             require_fact_node(node, span, budget)?;
                             charge_lookup_attempt(span, budget)?;
                             let fact = self.xi.get(identity).ok_or_else(|| {
-                                KindFailure::internal(span, "a nominal type has no canonical kind")
+                                KindFailure::internal_cause(
+                                    span,
+                                    KindInternalCause::MissingNominalKind,
+                                )
                             })?;
                             charge_kind_descendants_with_ledger(&fact.kind, budget).map_err(
                                 |()| {
@@ -2455,9 +3368,9 @@ impl<'a> KindEnvironments<'a> {
                                     Some(mirrors)
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2466,9 +3379,9 @@ impl<'a> KindEnvironments<'a> {
                                     Some(elements.iter())
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has non-tuple provenance",
+                                        KindInternalCause::TupleProvenance,
                                     ));
                                 }
                                 None => None,
@@ -2477,9 +3390,9 @@ impl<'a> KindEnvironments<'a> {
                                 .as_ref()
                                 .is_some_and(|roots| elements.len() != roots.len())
                             {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a resolved tuple has incomplete provenance",
+                                    KindInternalCause::IncompleteTupleProvenance,
                                 ));
                             }
                             let mut remaining = elements.iter();
@@ -2492,9 +3405,9 @@ impl<'a> KindEnvironments<'a> {
                                 let first_root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && first_root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has incomplete child provenance",
+                                        KindInternalCause::TupleChildProvenance,
                                     ));
                                 }
                                 push_continuation!(
@@ -2525,9 +3438,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(function.as_ref()), Some(argument.as_ref()))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2539,9 +3452,9 @@ impl<'a> KindEnvironments<'a> {
                                     ..
                                 }) => (Some(*function), Some(*argument), *argument_span),
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved application has non-application provenance",
+                                        KindInternalCause::ApplicationProvenance,
                                     ));
                                 }
                                 None => (None, None, span),
@@ -2579,9 +3492,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(domain.as_ref()), Some(codomain.value()))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked source type does not match its checked value type",
+                                        KindInternalCause::LinkedValueType,
                                     ));
                                 }
                             };
@@ -2599,9 +3512,9 @@ impl<'a> KindEnvironments<'a> {
                                         )
                                     })?;
                                     if !equal {
-                                        return Err(KindFailure::internal(
+                                        return Err(KindFailure::internal_cause(
                                             span,
-                                            "a linked source computation row does not match its checked row",
+                                            KindInternalCause::LinkedComputationRow,
                                         ));
                                     }
                                 }
@@ -2615,9 +3528,9 @@ impl<'a> KindEnvironments<'a> {
                             }
                             if domain_override.is_some() {
                                 if domain_mirror.is_some() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a linked constructor domain has two retained mirrors",
+                                        KindInternalCause::DuplicateConstructorMirror,
                                     ));
                                 }
                                 domain_mirror = domain_override;
@@ -2640,9 +3553,9 @@ impl<'a> KindEnvironments<'a> {
                                     (Some(*domain), Some(*codomain))
                                 }
                                 Some(_) => {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved function has non-function provenance",
+                                        KindInternalCause::FunctionProvenance,
                                     ));
                                 }
                                 None => (None, None),
@@ -2664,14 +3577,14 @@ impl<'a> KindEnvironments<'a> {
                             if type_mirror
                                 .is_some_and(|mirror| !matches!(mirror, Type::Forall(_, _)))
                             {
-                                return Err(KindFailure::internal(
+                                return Err(KindFailure::internal_cause(
                                     span,
-                                    "a linked source type does not match its checked value type",
+                                    KindInternalCause::LinkedValueType,
                                 ));
                             }
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "a rank-1 scheme entered the resolved monotype kind judgment",
+                                KindInternalCause::SchemeInMonotype,
                             ));
                         }
                     }
@@ -2697,9 +3610,9 @@ impl<'a> KindEnvironments<'a> {
                                     })?;
                             if !equal {
                                 if provenance.is_none() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         found.occurrence,
-                                        "a checked body-free tuple element has the wrong kind",
+                                        KindInternalCause::BodyFreeTupleKind,
                                     ));
                                 }
                                 let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
@@ -2721,9 +3634,9 @@ impl<'a> KindEnvironments<'a> {
                                 let root = roots.as_mut().and_then(Iterator::next).copied();
                                 if provenance.is_some() && root.is_none() {
                                     charge_lookup_attempt(span, budget)?;
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a resolved tuple has incomplete child provenance",
+                                        KindInternalCause::TupleChildProvenance,
                                     ));
                                 }
                                 work.push(Continuation::Tuple {
@@ -2763,9 +3676,9 @@ impl<'a> KindEnvironments<'a> {
                         } => {
                             let Kind::Arrow(domain, codomain) = function.kind else {
                                 if provenance.is_none() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         span,
-                                        "a checked body-free type applies a non-function kind",
+                                        KindInternalCause::BodyFreeNonFunctionKind,
                                     ));
                                 }
                                 let diagnostic_budget = budget.resolved_budget(span)?;
@@ -2795,9 +3708,9 @@ impl<'a> KindEnvironments<'a> {
                             })?;
                             if !equal {
                                 if provenance.is_none() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         argument_span,
-                                        "a checked body-free type application has the wrong argument kind",
+                                        KindInternalCause::BodyFreeApplicationArgument,
                                     ));
                                 }
                                 let diagnostic_budget = budget.resolved_budget(argument_span)?;
@@ -2839,9 +3752,9 @@ impl<'a> KindEnvironments<'a> {
                                     })?;
                             if !equal {
                                 if provenance.is_none() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         found.occurrence,
-                                        "a checked body-free function component has the wrong kind",
+                                        KindInternalCause::BodyFreeFunctionKind,
                                     ));
                                 }
                                 let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
@@ -2871,9 +3784,9 @@ impl<'a> KindEnvironments<'a> {
                                     })?;
                             if !equal {
                                 if provenance.is_none() {
-                                    return Err(KindFailure::internal(
+                                    return Err(KindFailure::internal_cause(
                                         found.occurrence,
-                                        "a checked body-free function component has the wrong kind",
+                                        KindInternalCause::BodyFreeFunctionKind,
                                     ));
                                 }
                                 let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
@@ -2911,6 +3824,7 @@ pub(crate) enum CanonicalEnvironmentFailure {
     ConstraintResource,
     TypeResource,
     InvalidState,
+    Kind(KindFailureContext),
 }
 
 pub(crate) fn canonical_body_free_environments<'a>(
@@ -3063,9 +3977,10 @@ fn map_canonical_environment_retention_failure(
 ) -> CanonicalEnvironmentFailure {
     match failure {
         KindFailure::Resource(_) => CanonicalEnvironmentFailure::TypeResource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => {
-            CanonicalEnvironmentFailure::InvalidState
-        }
+        failure => failure.internal_context().map_or(
+            CanonicalEnvironmentFailure::InvalidState,
+            CanonicalEnvironmentFailure::Kind,
+        ),
     }
 }
 
@@ -3084,7 +3999,7 @@ pub(crate) fn canonical_type_variable_kind<'a>(
     registry
         .type_variable(identity)
         .map(|parameter| &parameter.kind)
-        .ok_or_else(|| KindFailure::internal(span, "a canonical type-binder kind is missing"))
+        .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::MissingCanonicalBinder))
 }
 
 /// Checks every resolved type boundary before a resolved module is published.
@@ -3111,7 +4026,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
         let parameters = required_lookup(
             module.registry.canonical_nominal_parameters(nominal.id),
             nominal.origin.primary_span(),
-            "a local nominal has no canonical parameter slice",
+            KindInternalCause::LookupNominalParameters,
             budget,
         )?;
         authenticate_owner_parameters(&module.registry, parameters, budget)?;
@@ -3131,9 +4046,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             )
         })?;
         if interface.parameters.is_empty() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 interface.span,
-                "a resolved interface has no type parameters",
+                KindInternalCause::EmptyInterfaceParameters,
             ));
         }
         if !interface_determination_is_total(interface, budget)? {
@@ -3165,40 +4080,40 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 let nominal = required_lookup(
                     module.registry.nominals().get(index),
                     module.span,
-                    "declaration order contains an invalid nominal index",
+                    KindInternalCause::LookupNominalIndex,
                     budget,
                 )?;
                 let parameters = required_lookup(
                     module.registry.canonical_nominal_parameters(nominal.id),
                     nominal.origin.primary_span(),
-                    "a local nominal has no canonical parameter slice",
+                    KindInternalCause::LookupNominalParameters,
                     budget,
                 )?;
                 environments.install_owner_parameters(parameters, budget)?;
                 let payload_provenance = required_lookup(
                     constructor_payload_provenance.get(index),
                     nominal.origin.primary_span(),
-                    "a nominal has no declaration-ordered payload provenance",
+                    KindInternalCause::LookupPayloadProvenance,
                     budget,
                 )?;
                 if payload_provenance.len() != nominal.constructors.len() {
                     charge_lookup_attempt(nominal.origin.primary_span(), budget)?;
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         nominal.origin.primary_span(),
-                        "a nominal has incomplete constructor payload provenance",
+                        KindInternalCause::NominalPayloadProvenance,
                     ));
                 }
                 if nominal.declaration_kind == ResolvedNominalDeclarationKind::Newtype {
                     let [constructor_id] = nominal.constructors.as_ref() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain exactly one constructor identity",
+                            KindInternalCause::NewtypeConstructorCount,
                         ));
                     };
                     let [payload_provenance] = payload_provenance.as_slice() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain exactly one representation provenance",
+                            KindInternalCause::NewtypeRepresentationCount,
                         ));
                     };
                     budget.charge(1).map_err(|()| {
@@ -3208,33 +4123,33 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         )
                     })?;
                     if payload_provenance.constructor != *constructor_id {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "constructor payload provenance is paired with the wrong identity",
+                            KindInternalCause::PayloadIdentity,
                         ));
                     }
                     let constructor = required_lookup(
                         module.registry.constructor(*constructor_id),
                         nominal.origin.primary_span(),
-                        "a newtype names a missing canonical constructor",
+                        KindInternalCause::LookupNewtypeConstructor,
                         budget,
                     )?;
                     if constructor.owner != nominal.id || constructor.payload.is_some() {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             constructor.origin.primary_span(),
-                            "a newtype constructor retains an ordinary payload",
+                            KindInternalCause::NewtypePayload,
                         ));
                     }
                     let [field] = payload_provenance.fields.as_slice() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             constructor.origin.primary_span(),
-                            "a newtype representation does not retain exactly one field provenance",
+                            KindInternalCause::NewtypeFieldProvenance,
                         ));
                     };
                     let representation = nominal.representation.as_ref().ok_or_else(|| {
-                        KindFailure::internal(
+                        KindFailure::internal_cause(
                             nominal.origin.primary_span(),
-                            "a newtype does not retain its canonical representation",
+                            KindInternalCause::NewtypeRepresentation,
                         )
                     })?;
                     environments.expect_value_type_parts(
@@ -3256,21 +4171,21 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         )
                     })?;
                         if payload_provenance.constructor != *constructor_id {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 nominal.origin.primary_span(),
-                                "constructor payload provenance is paired with the wrong identity",
+                                KindInternalCause::PayloadIdentity,
                             ));
                         }
                         let constructor = required_lookup(
                             module.registry.constructor(*constructor_id),
                             nominal.origin.primary_span(),
-                            "a nominal names a missing canonical constructor",
+                            KindInternalCause::LookupNominalConstructor,
                             budget,
                         )?;
                         if constructor.id != *constructor_id || constructor.owner != nominal.id {
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 constructor.origin.primary_span(),
-                                "canonical constructor ownership disagrees with its nominal",
+                                KindInternalCause::ConstructorOwner,
                             ));
                         }
                         check_constructor_payload(
@@ -3287,7 +4202,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 let interface = required_lookup(
                     module.interfaces.get(index),
                     module.span,
-                    "declaration order contains an invalid interface index",
+                    KindInternalCause::LookupInterfaceIndex,
                     budget,
                 )?;
                 check_interface(interface, &module.registry, &mut environments, budget)?
@@ -3296,7 +4211,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 let effect = required_lookup(
                     module.effects.get(index),
                     module.span,
-                    "declaration order contains an invalid effect index",
+                    KindInternalCause::LookupEffectIndex,
                     budget,
                 )?;
                 check_effect(effect, &module.registry, &mut environments, budget)?
@@ -3305,7 +4220,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 let definition = required_lookup(
                     module.definitions.get(index),
                     module.span,
-                    "declaration order contains an invalid global index",
+                    KindInternalCause::LookupGlobalIndex,
                     budget,
                 )?;
                 check_definition(definition, &module.registry, &mut environments, budget)?
@@ -3314,7 +4229,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                 let implementation = required_lookup(
                     module.implementations.get(index),
                     module.span,
-                    "declaration order contains an invalid implementation index",
+                    KindInternalCause::LookupImplementationIndex,
                     budget,
                 )?;
                 check_implementation(implementation, &module.registry, &mut environments, budget)?
@@ -3338,46 +4253,46 @@ fn check_lexical_newtype<'a>(
     let parameters = required_lookup(
         registry.canonical_nominal_parameters(nominal.id),
         nominal.origin.primary_span(),
-        "a lexical nominal has no canonical parameter slice",
+        KindInternalCause::LookupLexicalParameters,
         budget,
     )?;
     authenticate_owner_parameters(registry, parameters, budget)?;
     if nominal.declaration_kind != ResolvedNominalDeclarationKind::Newtype
         || !nominal.id.is_lexical()
     {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical nominal fact is not a lexical newtype",
+            KindInternalCause::LexicalNominal,
         ));
     }
     let [constructor_id] = nominal.constructors.as_ref() else {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain exactly one constructor identity",
+            KindInternalCause::LexicalNewtypeCount,
         ));
     };
     let constructor = required_lookup(
         registry.constructor(*constructor_id),
         nominal.origin.primary_span(),
-        "a lexical newtype names a missing canonical constructor",
+        KindInternalCause::LookupLexicalConstructor,
         budget,
     )?;
     if constructor.owner != nominal.id || constructor.payload.is_some() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             constructor.origin.primary_span(),
-            "a lexical newtype constructor has invalid ownership or payload",
+            KindInternalCause::LexicalNewtypeConstructor,
         ));
     }
     let representation = nominal.representation.as_ref().ok_or_else(|| {
-        KindFailure::internal(
+        KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain its canonical representation",
+            KindInternalCause::LexicalNewtypeRepresentation,
         )
     })?;
     let provenance = nominal.representation_provenance.as_ref().ok_or_else(|| {
-        KindFailure::internal(
+        KindFailure::internal_cause(
             nominal.origin.primary_span(),
-            "a lexical newtype does not retain representation provenance",
+            KindInternalCause::LexicalNewtypeProvenance,
         )
     })?;
     environments.extend_owner_parameters(parameters, budget)?;
@@ -3447,9 +4362,9 @@ fn authenticate_declaration_order(
             }
         };
         if !ordered {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 module.span,
-                "declaration order contains a duplicate or out of source order index",
+                KindInternalCause::DeclarationOrder,
             ));
         }
     }
@@ -3466,9 +4381,9 @@ fn authenticate_declaration_order(
         || next_global != module.definitions.len()
         || next_implementation != module.implementations.len()
     {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             module.span,
-            "declaration order under-covers local declarations",
+            KindInternalCause::DeclarationCoverage,
         ));
     }
 
@@ -3479,9 +4394,9 @@ fn authenticate_declaration_order(
         )
     })?;
     if constructor_payload_provenance.len() != module.registry.nominals().len() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             module.span,
-            "constructor payload provenance has the wrong outer cardinality",
+            KindInternalCause::PayloadCardinality,
         ));
     }
     Ok(())
@@ -3495,9 +4410,9 @@ fn authenticate_imported_environments<'a>(
     let imported = &module.imported;
     for nominal in imported.nominals() {
         if nominal.parameter_count != nominal.parameters.len() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 nominal.origin.primary_span(),
-                "an imported nominal has an incomplete canonical parameter slice",
+                KindInternalCause::ImportedNominalParameters,
             ));
         }
         authenticate_unique_parameter_ids(
@@ -3536,9 +4451,9 @@ fn authenticate_imported_environments<'a>(
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         parameter.origin.primary_span(),
-                        "an interface method cannot bind an EffectRow parameter",
+                        KindInternalCause::MethodRowBinder,
                     ));
                 }
                 environments.insert_declared(
@@ -3649,9 +4564,9 @@ fn check_constructor_payload(
             })?;
             Ok(())
         }
-        _ => Err(KindFailure::internal(
+        _ => Err(KindFailure::internal_cause(
             constructor.origin.primary_span(),
-            "a constructor payload and its moved provenance disagree",
+            KindInternalCause::ConstructorMovedProvenance,
         )),
     }
 }
@@ -3669,9 +4584,9 @@ fn check_interface<'a>(
         )
     })?;
     if interface.parameters.is_empty() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             interface.span,
-            "a resolved interface has no type parameters",
+            KindInternalCause::EmptyInterfaceParameters,
         ));
     }
     if !interface_determination_is_total(interface, budget)? {
@@ -3681,9 +4596,9 @@ fn check_interface<'a>(
     for method in &interface.methods {
         if method.has_explicit_type_parameters && method.type_parameters.is_empty() {
             charge_lookup_attempt(method.span, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 method.span,
-                "a resolved explicit method binder list is empty",
+                KindInternalCause::EmptyMethodBinders,
             ));
         }
         authenticate_owner_parameters(registry, &method.type_parameters, budget)?;
@@ -3691,9 +4606,9 @@ fn check_interface<'a>(
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in &method.type_parameters {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         parameter.origin.primary_span(),
-                        "an interface method cannot bind an EffectRow parameter",
+                        KindInternalCause::MethodRowBinder,
                     ));
                 }
                 environments.insert_declared(
@@ -3778,10 +4693,7 @@ fn authenticate_interface_application<'application, 'kind>(
         .iota
         .get(&application.interface.id)
         .ok_or_else(|| {
-            KindFailure::internal(
-                application.span,
-                "a resolved interface application has no canonical interface-kind entry",
-            )
+            KindFailure::internal_cause(application.span, KindInternalCause::MissingInterfaceKind)
         })?;
     if application.arguments.len() != expected.parameters.len() {
         return Ok(None);
@@ -3848,9 +4760,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                  budget: &mut TypeWorkBudget| {
         let application = authenticate_interface_application(application, environments, budget)?
             .ok_or_else(|| {
-                KindFailure::internal(
+                KindFailure::internal_cause(
                     application.span,
-                    "an interface application changed arity between kind preflight passes",
+                    KindInternalCause::PreflightArityChanged,
                 )
             })?;
         check_interface_application_kinds(application, environments, budget)
@@ -3868,10 +4780,7 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
-                    KindFailure::internal(
-                        module.span,
-                        "interface-application kind preflight found an invalid global index",
-                    )
+                    KindFailure::internal_cause(module.span, KindInternalCause::KindPreflightGlobal)
                 })?;
                 let (parameters, requirements) = match &definition.kind {
                     ResolvedDefinitionKind::Equational(global) => (
@@ -3890,9 +4799,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
             }
             crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
                 let implementation = module.implementations.get(index).ok_or_else(|| {
-                    KindFailure::internal(
+                    KindFailure::internal_cause(
                         module.span,
-                        "interface-application kind preflight found an invalid implementation index",
+                        KindInternalCause::KindPreflightImplementation,
                     )
                 })?;
                 authenticate_owner_parameters(
@@ -3909,9 +4818,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                 check(&implementation.head, environments, budget)?;
                 for parameter in &implementation.prerequisite_only_parameters {
                     if !binder_kind_is_admitted(&parameter.kind, false) {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             parameter.origin.primary_span(),
-                            "this owner cannot bind an EffectRow parameter",
+                            KindInternalCause::OwnerEffectRow,
                         ));
                     }
                     environments.insert_declared(
@@ -3951,10 +4860,7 @@ fn visit_interface_applications(
             | crate::resolved::ResolvedDeclarationIndex::Effect(_) => {}
             crate::resolved::ResolvedDeclarationIndex::Global(index) => {
                 let definition = module.definitions.get(index).ok_or_else(|| {
-                    KindFailure::internal(
-                        module.span,
-                        "interface-application preflight found an invalid global index",
-                    )
+                    KindFailure::internal_cause(module.span, KindInternalCause::PreflightGlobal)
                 })?;
                 let requirements = match &definition.kind {
                     ResolvedDefinitionKind::Equational(global) => &global.interface.requirements,
@@ -3970,9 +4876,9 @@ fn visit_interface_applications(
             }
             crate::resolved::ResolvedDeclarationIndex::Implementation(index) => {
                 let implementation = module.implementations.get(index).ok_or_else(|| {
-                    KindFailure::internal(
+                    KindFailure::internal_cause(
                         module.span,
-                        "interface-application preflight found an invalid implementation index",
+                        KindInternalCause::PreflightImplementation,
                     )
                 })?;
                 if !visit(&implementation.head, budget)? {
@@ -4126,9 +5032,9 @@ fn collect_type_variables(
             Type::EffectfulFunction(domain, codomain) => {
                 if let Some(tail) = codomain.effects().tail() {
                     let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             span,
-                            "row inference entered global determination discovery",
+                            KindInternalCause::RowInferenceDetermination,
                         ));
                     };
                     if !contains_type_variable_with_budget(output, identity, span, budget)? {
@@ -4154,9 +5060,9 @@ fn collect_type_variables(
                 push_determination_work(&mut work, domain, span, budget)?;
             }
             Type::Forall(_, _) => {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a rank-1 scheme entered global determination discovery",
+                    KindInternalCause::SchemeInDetermination,
                 ));
             }
             Type::Int | Type::Bool | Type::Unit | Type::Inference(_) | Type::Nominal(_) => {}
@@ -4235,9 +5141,9 @@ fn requirement_has_undetermined_variable(
                 }
             }
             if next != determination.determinant.parameters.len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an authenticated source determination has an invalid key",
+                    KindInternalCause::SourceDeterminationKey,
                 ));
             }
         }
@@ -4251,9 +5157,9 @@ fn requirement_has_undetermined_variable(
                     )
                 })?;
                 if previous.is_some_and(|previous| previous >= position) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an authenticated summary determination has an invalid key",
+                        KindInternalCause::SummaryDeterminationKey,
                     ));
                 }
                 previous = Some(position);
@@ -4279,12 +5185,9 @@ fn requirement_argument_has_undetermined_variable(
     determined: &[TypeVariableId],
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
-    let argument = arguments.get(position).ok_or_else(|| {
-        KindFailure::internal(
-            span,
-            "an authenticated determinant position is outside its complete application",
-        )
-    })?;
+    let argument = arguments
+        .get(position)
+        .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::DeterminantPosition))?;
     let mut variables = Vec::new();
     collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
     for identity in variables {
@@ -4373,10 +5276,7 @@ fn authenticate_owner_parameters(
     for parameter in parameters {
         let span = parameter.origin.primary_span();
         let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
-            KindFailure::internal(
-                span,
-                "a declaration binder has no canonical registry record",
-            )
+            KindFailure::internal_cause(span, KindInternalCause::MissingDeclarationBinder)
         })?;
         let same_kind =
             same_kind_with_budget(&canonical.kind, &parameter.kind, budget).map_err(|()| {
@@ -4390,9 +5290,9 @@ fn authenticate_owner_parameters(
             || canonical.origin.primary_span() != span
             || !same_kind
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a declaration binder conflicts with its canonical registry record",
+                KindInternalCause::ConflictingDeclarationBinder,
             ));
         }
     }
@@ -4419,9 +5319,9 @@ fn authenticate_unique_parameter_ids(
     })?;
     for parameter in parameters {
         if !identities.insert(parameter.id) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 parameter.origin.primary_span(),
-                "an owner binder list repeats a type-variable identity",
+                KindInternalCause::DuplicateBinder,
             ));
         }
     }
@@ -4550,9 +5450,9 @@ fn check_expression_work<'a>(
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
                 if resource.identity.kind != Kind::Type {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "a resource identity must have kind Type",
+                        KindInternalCause::ResourceIdentityKind,
                     ));
                 }
                 environments.extend_owner_parameters(parameters, budget)?;
@@ -4722,19 +5622,16 @@ fn check_hook_target_kind(
         .as_ref()
         .and_then(|effects| effects.get(&target.instance.effect()))
         .ok_or_else(|| {
-            KindFailure::internal(
-                target.span,
-                "a hook target has no canonical effect declaration",
-            )
+            KindFailure::internal_cause(target.span, KindInternalCause::HookMissingEffect)
         })?;
     // Elaboration owns the existing source-facing instance arity diagnostic.
     if parameters.len() != target.instance.arguments().len() {
         return Ok(());
     }
     if target.argument_provenance.len() != target.instance.arguments().len() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             target.span,
-            "a hook target has incomplete argument provenance",
+            KindInternalCause::HookArgumentProvenance,
         ));
     }
     for ((argument, provenance), parameter) in target
@@ -4745,7 +5642,7 @@ fn check_hook_target_kind(
         .zip(parameters.iter())
     {
         let span = provenance.span().ok_or_else(|| {
-            KindFailure::internal(target.span, "a hook argument has no source occurrence")
+            KindFailure::internal_cause(target.span, KindInternalCause::HookArgumentSource)
         })?;
         let found = environments.synthesize(argument, Some(provenance), span, budget)?;
         if !same_kind_with_budget(&parameter.kind, found.kind, budget).map_err(|()| {
@@ -4789,7 +5686,7 @@ fn schedule_block_work<'a>(
                 let nominal = required_lookup(
                     registry.nominal(*owner),
                     block.span,
-                    "a lexical nominal marker names a missing canonical fact",
+                    KindInternalCause::LookupLexicalNominal,
                     budget,
                 )?;
                 BodyWork::LexicalNewtype(nominal)
@@ -5030,14 +5927,14 @@ fn charge_lookup_attempt(span: Span, budget: &mut impl KindWorkLedger) -> Result
 fn required_lookup<T>(
     value: Option<T>,
     span: Span,
-    message: &'static str,
+    cause: KindInternalCause,
     budget: &mut TypeWorkBudget,
 ) -> Result<T, KindFailure> {
     match value {
         Some(value) => Ok(value),
         None => {
             charge_lookup_attempt(span, budget)?;
-            Err(KindFailure::internal(span, message))
+            Err(KindFailure::internal_cause(span, cause))
         }
     }
 }
@@ -5110,16 +6007,251 @@ fn require_fact_node(
         Ok(())
     } else {
         charge_lookup_attempt(span, budget)?;
-        Err(KindFailure::internal(
+        Err(KindFailure::internal_cause(
             span,
-            "an atomic resolved type has structural provenance",
+            KindInternalCause::AtomicTypeProvenance,
         ))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_retention_preserves_kind_cause() {
+        let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let failure = KindFailure::internal_cause(span, KindInternalCause::DuplicateBinder);
+        let context = failure.internal_context().unwrap();
+        let mapped = map_canonical_environment_retention_failure(failure);
+        assert_eq!(mapped, CanonicalEnvironmentFailure::Kind(context));
+    }
     use super::*;
+    #[test]
+    fn kind_internal_causes_are_retained_without_parsing_legacy_text() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_kind_failure, write_human, write_json},
+        };
+        let source = crate::source::SourceFile::new("kind-internal.ash", "owner").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 5).unwrap())
+            .unwrap();
+        for cause in [
+            KindInternalCause::MissingEffect,
+            KindInternalCause::DuplicateEffect,
+            KindInternalCause::NestedEffectRow,
+            KindInternalCause::DuplicateBinder,
+            KindInternalCause::OwnerEffectRow,
+            KindInternalCause::MissingOwnerBinder,
+            KindInternalCause::BodyFreeConstructorOwner,
+            KindInternalCause::BodyFreeInterfaceKind,
+            KindInternalCause::BodyFreeConstructorKind,
+            KindInternalCause::BodyFreeFunctionKind,
+            KindInternalCause::BodyFreeInterfaceArity,
+            KindInternalCause::BodyFreeInterfaceArgument,
+            KindInternalCause::BodyFreeDeterminantSeed,
+            KindInternalCause::BodyFreeMethodKind,
+            KindInternalCause::BodyFreeRequiredSeed,
+            KindInternalCause::BodyFreeMethodFunction,
+            KindInternalCause::BodyFreeMissingParameter,
+            KindInternalCause::BodyFreeMethodDuplicateParameter,
+            KindInternalCause::BodyFreeInterfaceDuplicateParameter,
+            KindInternalCause::BodyFreeSeedOrder,
+            KindInternalCause::BodyFreeMonotypeKind,
+            KindInternalCause::BodyFreeTupleKind,
+            KindInternalCause::BodyFreeApplicationArgument,
+            KindInternalCause::BodyFreeNonFunctionKind,
+            KindInternalCause::BodyFreeValueKind,
+            KindInternalCause::BodyFreeSourceDiagnostic,
+            KindInternalCause::LookupLexicalConstructor,
+            KindInternalCause::LookupLexicalParameters,
+            KindInternalCause::LookupLexicalNominal,
+            KindInternalCause::LookupNominalParameters,
+            KindInternalCause::LookupNewtypeConstructor,
+            KindInternalCause::LookupPayloadProvenance,
+            KindInternalCause::LookupNominalConstructor,
+            KindInternalCause::LookupEffectIndex,
+            KindInternalCause::LookupGlobalIndex,
+            KindInternalCause::LookupImplementationIndex,
+            KindInternalCause::LookupInterfaceIndex,
+            KindInternalCause::LookupNominalIndex,
+            KindInternalCause::MissingCanonicalBinder,
+            KindInternalCause::ConflictingDeclarationBinder,
+            KindInternalCause::MissingDeclarationBinder,
+            KindInternalCause::SchemeInDetermination,
+            KindInternalCause::SchemeInMonotype,
+            KindInternalCause::EmptyMethodBinders,
+            KindInternalCause::MissingInterfaceKind,
+            KindInternalCause::EmptyInterfaceParameters,
+            KindInternalCause::MissingVariableKind,
+            KindInternalCause::ResourceIdentityKind,
+            KindInternalCause::DeterminantPosition,
+            KindInternalCause::SourceDeterminationKey,
+            KindInternalCause::SummaryDeterminationKey,
+            KindInternalCause::EffectArgumentKind,
+            KindInternalCause::EffectArgumentCount,
+            KindInternalCause::MissingRowEffect,
+            KindInternalCause::NonOwnerRowTail,
+            KindInternalCause::RowTailKind,
+            KindInternalCause::MissingRowBinderKind,
+            KindInternalCause::MissingRowInferenceKind,
+            KindInternalCause::ImplementationRowBinder,
+            KindInternalCause::PreflightArityChanged,
+            KindInternalCause::MethodRowBinder,
+            KindInternalCause::RowInferenceDetermination,
+            KindInternalCause::ConstructorMovedProvenance,
+            KindInternalCause::ConstructorOwner,
+            KindInternalCause::PayloadCardinality,
+            KindInternalCause::PayloadIdentity,
+            KindInternalCause::NominalPayloadProvenance,
+            KindInternalCause::NewtypePayload,
+            KindInternalCause::NewtypeConstructorCount,
+            KindInternalCause::NewtypeRepresentationCount,
+            KindInternalCause::NewtypeRepresentation,
+            KindInternalCause::NewtypeFieldProvenance,
+            KindInternalCause::LexicalNominal,
+            KindInternalCause::LexicalNewtypeConstructor,
+            KindInternalCause::LexicalNewtypeCount,
+            KindInternalCause::LexicalNewtypeRepresentation,
+            KindInternalCause::LexicalNewtypeProvenance,
+            KindInternalCause::ImportedNominalParameters,
+            KindInternalCause::PayloadSchemeFunction,
+            KindInternalCause::DeclarationOrder,
+            KindInternalCause::DeclarationCoverage,
+            KindInternalCause::KindPreflightGlobal,
+            KindInternalCause::KindPreflightImplementation,
+            KindInternalCause::PreflightGlobal,
+            KindInternalCause::PreflightImplementation,
+            KindInternalCause::InvalidTypeProvenance,
+            KindInternalCause::TypeProvenanceOwner,
+            KindInternalCause::AtomicTypeProvenance,
+            KindInternalCause::ApplicationProvenance,
+            KindInternalCause::FunctionProvenance,
+            KindInternalCause::TupleProvenance,
+            KindInternalCause::IncompleteTupleProvenance,
+            KindInternalCause::TupleChildProvenance,
+            KindInternalCause::EffectTypeProvenanceOwner,
+            KindInternalCause::EffectTypeProvenanceShape,
+            KindInternalCause::EffectTupleProvenance,
+            KindInternalCause::EffectFunctionProvenance,
+            KindInternalCause::PureComputationProvenance,
+            KindInternalCause::ComputationMissingArguments,
+            KindInternalCause::ComputationSurplusArguments,
+            KindInternalCause::RowMissingArguments,
+            KindInternalCause::RowSurplusArguments,
+            KindInternalCause::HookArgumentSource,
+            KindInternalCause::HookArgumentProvenance,
+            KindInternalCause::HookMissingEffect,
+            KindInternalCause::ImplementationBinderCount,
+            KindInternalCause::ImplementationBinderIdentity,
+            KindInternalCause::SchemeBinderCount,
+            KindInternalCause::SchemeBinderIdentity,
+            KindInternalCause::RetainedBinderKind,
+            KindInternalCause::UnusedImplementationBinder,
+            KindInternalCause::UnusedSchemeBinder,
+            KindInternalCause::InvalidDependentAllowance,
+            KindInternalCause::LinkedValueType,
+            KindInternalCause::LinkedComputationRow,
+            KindInternalCause::DuplicateConstructorMirror,
+            KindInternalCause::MissingNominalKind,
+            KindInternalCause::DuplicateNominalKind,
+            KindInternalCause::MissingInferenceKind,
+            KindInternalCause::DuplicateInferenceKind,
+            KindInternalCause::MissingInterfaceParameters,
+            KindInternalCause::InterfaceParameterCount,
+            KindInternalCause::InterfaceParameterRecords,
+        ] {
+            let mut error = KindFailure::internal_cause(span, cause);
+            let KindFailure::Internal(ref mut detail) = error else {
+                unreachable!()
+            };
+            detail.message = "ignored".to_owned();
+            let view = compile_kind_failure(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(!output.contains("ignored"));
+                if locale == Locale::English {
+                    assert!(output.contains("The compiler"));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "kind.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][1]["name"], "cause");
+            assert_eq!(json["facts"][1]["value"], cause.name());
+        }
+    }
+
+    #[test]
+    fn kind_resource_presentation_retains_stage_and_span() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_kind_failure, write_human, write_json},
+        };
+        let source = crate::source::SourceFile::new("kind-resource.ash", "Int").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 3).unwrap())
+            .unwrap();
+        let error = KindFailure::resource(span, "ignored legacy wording");
+        let view = compile_kind_failure(&error, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(!output.contains("ignored"));
+            if locale == Locale::English {
+                assert!(
+                    output.contains("The compiler ran out of resources while checking type kinds.")
+                );
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["value"], "kind-checking");
+        assert_eq!(json["facts"][1]["value"], "type-work");
+        assert_eq!(json["labels"][0]["relationship"], "kind_checking_site");
+        assert!(compile_kind_failure(&error, &[]).is_err());
+        let missing_cause = KindFailure::Internal(KindStageFailure {
+            span,
+            message: "ignored".to_owned(),
+            cause: None,
+        });
+        assert!(compile_kind_failure(&missing_cause, &[&source]).is_err());
+    }
+
+    #[test]
+    fn kind_presentation_does_not_invent_an_absent_declaration() {
+        let source = crate::source::SourceFile::new("kind.ash", "Int").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 3).unwrap())
+            .unwrap();
+        let error = not_applicable_error(
+            KindReason::NotApplicable,
+            span,
+            "legacy wording",
+            &Kind::Type,
+            &Kind::Type,
+            None,
+            &mut TypeWorkBudget::with_limit(100),
+        )
+        .unwrap();
+        let view = crate::presentation::compile_kind_diagnostic(&error, &[&source]).unwrap();
+        let mut output = Vec::new();
+        crate::presentation::write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+        assert_eq!(json["facts"][0]["value"], "Type -> _");
+        assert_eq!(json["facts"][0]["kind"], "kind-pattern");
+    }
+
     use crate::{
         interface::{ImplId, InterfaceId, MethodId, RequirementId, RequirementOwner},
         module::ModuleId,

@@ -320,6 +320,218 @@ fn requires_pure_core_projection(
     Ok(false)
 }
 
+pub(crate) struct TypeSourceMessage<'a> {
+    pub(crate) message: crate::message::Message<'a>,
+    pub(crate) relationship: &'static str,
+    pub(crate) fact: Option<(&'static str, &'a str)>,
+    pub(crate) fact_kind: &'static str,
+    pub(crate) minimum_related: usize,
+}
+
+impl TypeReason {
+    pub(crate) fn source_message<'a>(
+        self,
+        expected: Option<&'a str>,
+        witness: Option<&'a str>,
+    ) -> Option<TypeSourceMessage<'a>> {
+        use crate::message::Message;
+        let uncovered = witness.map(|value| ("uncovered_value", value));
+        let (message, relationship, fact) = match self {
+            Self::HookApi => (Message::hook_api(), "hook_api", None),
+            Self::MissingHandledEffect => {
+                (Message::missing_handled_effect(), "handled_effect", None)
+            }
+            Self::LocalNominalEscape => {
+                (Message::local_nominal_escape(), "escaping_dependency", None)
+            }
+            Self::ResourceEscape => (Message::resource_escape(), "escaping_dependency", None),
+            Self::UnsafeRecursiveInitializer => (
+                Message::recursion_initializer(),
+                "recursive_initializer",
+                None,
+            ),
+            Self::UnsafeRecursiveRoot => (Message::recursion_root(), "recursive_initializer", None),
+            Self::NewtypeRecursiveRepresentation => (
+                Message::newtype_representation_cycle(),
+                "cycle_closing_occurrence",
+                None,
+            ),
+            Self::CleanupContext => (Message::cleanup_context(), "discard", None),
+            Self::InfiniteType => (Message::type_infinite(), "infinite_type", None),
+            Self::AmbiguousType => (Message::type_ambiguous(), "ambiguous_type", None),
+            Self::UnguardedRecursiveUse => {
+                (Message::recursion_unguarded_use(), "recursive_use", None)
+            }
+            Self::ResumeNotConsumed => (
+                Message::continuation_not_consumed(),
+                "continuation_usage",
+                None,
+            ),
+            Self::ResumeAlreadyConsumed => (
+                Message::continuation_already_consumed(),
+                "continuation_usage",
+                None,
+            ),
+            Self::ResumeCapture => (
+                Message::continuation_capture(),
+                "continuation_capture",
+                None,
+            ),
+            Self::PatternMismatch => (
+                Message::pattern_type_mismatch(expected?),
+                "pattern",
+                Some(("expected_type", expected?)),
+            ),
+            Self::ConstructorMismatch => {
+                (Message::pattern_constructor_payload(), "constructor", None)
+            }
+            Self::ConstructorOwner => (Message::pattern_constructor_owner(), "pattern", None),
+            Self::RefutableBinding => (
+                Message::pattern_refutable_binding(witness?),
+                "binding_pattern",
+                uncovered,
+            ),
+            Self::RefutableFunctionDomain => (
+                Message::pattern_refutable_function(witness?),
+                "function_pattern",
+                uncovered,
+            ),
+            Self::RefutableHandlerPattern => (
+                Message::pattern_refutable_handler(witness?),
+                "handler_pattern",
+                uncovered,
+            ),
+            Self::NonExhaustive => match witness {
+                Some(value) => (
+                    Message::coverage_non_exhaustive(value),
+                    "coverage",
+                    uncovered,
+                ),
+                None => (Message::coverage_empty_match(), "coverage", None),
+            },
+            Self::RedundantCase => (Message::coverage_redundant_case(), "case", None),
+            _ => return None,
+        };
+        Some(TypeSourceMessage {
+            message,
+            relationship,
+            fact,
+            fact_kind: "code",
+            minimum_related: match self {
+                Self::UnsafeRecursiveInitializer
+                | Self::UnsafeRecursiveRoot
+                | Self::CleanupContext => 2,
+                Self::NewtypeRecursiveRepresentation
+                | Self::LocalNominalEscape
+                | Self::ResourceEscape => 1,
+                _ => 0,
+            },
+        })
+    }
+
+    pub(crate) fn source_related_message(
+        self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        Some(match (self, index) {
+            (Self::LocalNominalEscape, 0) => {
+                (Message::local_nominal_scope(), "local_nominal_scope")
+            }
+            (Self::ResourceEscape, 0) => (Message::resource_acquisition(), "resource_acquisition"),
+            (Self::UnsafeRecursiveInitializer | Self::UnsafeRecursiveRoot, 0) => {
+                (Message::recursion_group(), "recursive_group")
+            }
+            (Self::UnsafeRecursiveInitializer | Self::UnsafeRecursiveRoot, 1) => {
+                (Message::recursion_member_annotation(), "member_annotation")
+            }
+            (Self::NewtypeRecursiveRepresentation, _) => {
+                (Message::newtype_cycle_member(), "representation_cycle")
+            }
+            (Self::CleanupContext, 0) => (Message::cleanup_required_action(), "cleanup_action"),
+            (Self::CleanupContext, 1) => {
+                (Message::cleanup_abandoned_handler(), "abandoned_handler")
+            }
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn message<'a>(
+        self,
+        expected: &'a str,
+        found: &'a str,
+    ) -> Option<crate::message::Message<'a>> {
+        use crate::message::Message;
+        Some(match self {
+            Self::BindingInitializer => Message::binding_initializer(expected, found),
+            Self::DefinitionResult => Message::type_definition_result(expected, found),
+            Self::OperatorOperand => Message::type_operator_operand(found),
+            Self::Argument => Message::type_argument(expected, found),
+            Self::PolymorphicRecursion => Message::type_polymorphic_recursion(expected, found),
+            Self::NotApplicable => Message::type_not_applicable(found),
+            Self::EquationInterfaceNotFunction => Message::type_equation_signature(found),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn primary_message(
+        self,
+        found: &str,
+    ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        use crate::message::Message;
+        if self == Self::BindingInitializer {
+            return Some((Message::initializer(found), "initializer"));
+        }
+        let relationship = match self {
+            Self::DefinitionResult => "definition_result",
+            Self::OperatorOperand => "operator_operand",
+            Self::Argument => "argument",
+            Self::PolymorphicRecursion => "recursive_argument",
+            Self::NotApplicable => "application_function",
+            Self::EquationInterfaceNotFunction => "equation_signature",
+            _ => return None,
+        };
+        Some((Message::type_found(found), relationship))
+    }
+
+    pub(crate) fn related_message(
+        self,
+        index: usize,
+        expected: &str,
+    ) -> Option<(crate::message::Message<'_>, &'static str, Option<&str>)> {
+        use crate::message::Message;
+        Some(match (self, index) {
+            (Self::BindingInitializer, 0) => (
+                Message::binding_annotation(expected),
+                "binding_annotation",
+                Some(expected),
+            ),
+            (Self::DefinitionResult, 0) => (
+                Message::type_result_annotation(expected),
+                "result_annotation",
+                Some(expected),
+            ),
+            (Self::OperatorOperand, 0) => (
+                Message::type_operator_requirement(),
+                "operator_requirement",
+                Some(expected),
+            ),
+            (Self::Argument, 0) => (
+                Message::type_function_domain(expected),
+                "function_domain",
+                Some(expected),
+            ),
+            (Self::Argument, 1) | (Self::NotApplicable, 0) => {
+                (Message::type_application(), "application", None)
+            }
+            (Self::EquationInterfaceNotFunction, 0) => {
+                (Message::type_equation_head(), "equation_head", None)
+            }
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for TypeReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -381,6 +593,14 @@ pub struct TypeMismatch {
 }
 
 impl TypeMismatch {
+    pub(crate) fn display_types(&self) -> (&str, &str) {
+        (&self.expected_display, &self.found_display)
+    }
+
+    pub(crate) fn message(&self) -> crate::message::Message<'_> {
+        crate::message::Message::type_mismatch(&self.expected_display, &self.found_display)
+    }
+
     /// Returns the expression that did not check.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -414,10 +634,17 @@ pub enum ElaborationFailure {
     Core(BuildError),
     /// The explicit elaboration work stack lost an invariant.
     InvalidState,
+    /// Kind validation failed during elaboration, retaining its original cause.
+    Kind {
+        /// Original kind-checking cause and source location.
+        context: crate::kind::KindFailureContext,
+        /// The elaboration use that exposed the failure, when available.
+        span: Option<Span>,
+    },
     /// Effect syntax reached a checkpoint that still retains only pure Core.
     EffectCoreUnavailable,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
-    CoverageResourceExhausted,
+    CoverageResourceExhausted(UsefulnessError),
     /// Cumulative inference and type construction exceeded its work budget.
     TypeResourceExhausted,
     /// Graph-wide interface and constraint processing exceeded its work budget.
@@ -425,14 +652,65 @@ pub enum ElaborationFailure {
 }
 
 impl ElaborationFailure {
+    pub(crate) fn diagnostic_message(
+        &self,
+    ) -> Option<(
+        crate::message::Message<'static>,
+        &'static str,
+        &'static str,
+        &'static str,
+    )> {
+        use crate::message::Message;
+        Some(match self {
+            Self::Core(cause) => {
+                let (message, cause) = cause.diagnostic_message();
+                (message, "cause", "core-build-failure", cause)
+            }
+            Self::CoverageResourceExhausted(cause) => {
+                let (message, resource) = cause.diagnostic_message();
+                (message, "resource", "resource", resource)
+            }
+            Self::TypeResourceExhausted => (
+                Message::compiler_type_resources(),
+                "resource",
+                "resource",
+                "type-work",
+            ),
+            Self::ConstraintResourceExhausted => (
+                Message::compiler_constraint_resources(),
+                "resource",
+                "resource",
+                "constraint-work",
+            ),
+            Self::EffectCoreUnavailable => (
+                Message::effect_core_unavailable(),
+                "cause",
+                "elaboration-failure",
+                "effect-core-unavailable",
+            ),
+            Self::InvalidState => (
+                Message::elaboration_invalid_state(),
+                "cause",
+                "elaboration-failure",
+                "invalid-state",
+            ),
+            Self::Kind { context, .. } => (
+                context.message(),
+                "kind_cause",
+                "kind-internal-cause",
+                context.name(),
+            ),
+        })
+    }
+
     /// Returns the stable reason code owned by this elaboration failure.
     #[must_use]
     pub const fn reason_code(&self) -> &'static str {
         match self {
             Self::Core(_) => "internal.core-build",
-            Self::InvalidState => "type.internal",
+            Self::InvalidState | Self::Kind { .. } => "type.internal",
             Self::EffectCoreUnavailable => "effect.core-unavailable",
-            Self::CoverageResourceExhausted => "internal.resource.coverage",
+            Self::CoverageResourceExhausted(_) => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
             Self::ConstraintResourceExhausted => "internal.resource.constraint-work",
         }
@@ -443,11 +721,13 @@ impl fmt::Display for ElaborationFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Core(error) => write!(formatter, "typed Core construction failed: {error}"),
-            Self::InvalidState => formatter.write_str("typed elaboration state is inconsistent"),
+            Self::InvalidState | Self::Kind { .. } => {
+                formatter.write_str("typed elaboration state is inconsistent")
+            }
             Self::EffectCoreUnavailable => {
                 formatter.write_str("effect syntax requires the effect Core checkpoint")
             }
-            Self::CoverageResourceExhausted => {
+            Self::CoverageResourceExhausted(_) => {
                 formatter.write_str("pattern coverage resource limit exceeded")
             }
             Self::TypeResourceExhausted => formatter.write_str("type work resource limit exceeded"),
@@ -470,17 +750,355 @@ impl From<BuildError> for ElaborationFailure {
     }
 }
 
+/// A source type diagnostic with phase-owned context for presentation.
+/// Common fields remain available through dereferencing; localized reporting
+/// must retain this owner rather than copying only the common diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeDiagnostic {
+    diagnostic: Diagnostic<TypeReason>,
+    context: TypeDiagnosticContext,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TypeDiagnosticContext {
+    Plain,
+    FunctionNeedsContext(Option<SynthesisCause>),
+    EquationArity(EquationArityCause),
+    HandlerCoverage(HandlerCoverageCause),
+    CompletionOutside(CompletionOperation),
+    EffectRow(EffectRowCause),
+    DiscardUnsafe(Option<crate::core::capture::CompletionOwner>),
+    PolymorphicRecursion([Option<RecursionLabel>; 2]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecursionLabel {
+    Function,
+    Application,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EffectRowCause {
+    Union,
+    InfiniteFunction,
+    FunctionMismatch,
+    FunctionOutsideDeclared,
+    CleanupInference,
+    CleanupOutsideExpected,
+    DiscardCleanup,
+    CleanupRequirement,
+    Removal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandlerCoverageCause {
+    ArgumentCount,
+    OperationOwner,
+    ClauseCount,
+    OperationIndex,
+    DuplicateOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionOperation {
+    Resume,
+    Discard,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EquationArityCause {
+    PatternCount,
+    DeclaredArrows,
+}
+
+impl From<Diagnostic<TypeReason>> for TypeDiagnostic {
+    fn from(diagnostic: Diagnostic<TypeReason>) -> Self {
+        Self {
+            diagnostic,
+            context: TypeDiagnosticContext::Plain,
+        }
+    }
+}
+
+impl std::ops::Deref for TypeDiagnostic {
+    type Target = Diagnostic<TypeReason>;
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostic
+    }
+}
+
+impl std::ops::DerefMut for TypeDiagnostic {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.diagnostic
+    }
+}
+
+impl TypeDiagnostic {
+    pub(crate) fn comparison_minimum_related(&self) -> usize {
+        match self.context {
+            TypeDiagnosticContext::PolymorphicRecursion(labels) => labels.iter().flatten().count(),
+            _ => 1,
+        }
+    }
+
+    pub(crate) fn comparison_related_message<'a>(
+        &self,
+        index: usize,
+        expected: &'a str,
+    ) -> Option<(crate::message::Message<'a>, &'static str, Option<&'a str>)> {
+        if self.reason != TypeReason::PolymorphicRecursion {
+            return self.reason.related_message(index, expected);
+        }
+        let TypeDiagnosticContext::PolymorphicRecursion(labels) = self.context else {
+            return None;
+        };
+        use crate::message::Message;
+        Some(match labels.get(index).copied().flatten()? {
+            RecursionLabel::Function => (
+                Message::recursive_function(),
+                "recursive_function",
+                Some(expected),
+            ),
+            RecursionLabel::Application => (Message::recursive_application(), "application", None),
+        })
+    }
+
+    pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason == TypeReason::DiscardUnsafe {
+            let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
+                return None;
+            };
+            use crate::{core::capture::CompletionOwner, message::Message};
+            let (message, kind) = match owner {
+                None => (Message::discard_unknown(), "unknown"),
+                Some(CompletionOwner::Clause(_)) => (Message::discard_clause(), "clause"),
+                Some(CompletionOwner::Cleanup(_)) => (Message::discard_cleanup(), "cleanup"),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "discard",
+                fact: Some(("completion_owner", kind)),
+                fact_kind: "completion-owner",
+                minimum_related: 1 + usize::from(owner.is_some()),
+            });
+        }
+        if self.reason == TypeReason::AmbiguousEffectRow {
+            let TypeDiagnosticContext::EffectRow(cause) = self.context else {
+                return None;
+            };
+            let (message, failure) = match cause {
+                EffectRowCause::Union => (crate::message::Message::effect_row_union(), "union"),
+                EffectRowCause::CleanupRequirement => (
+                    crate::message::Message::effect_row_cleanup_requirement(),
+                    "cleanup-requirement",
+                ),
+                EffectRowCause::Removal => {
+                    (crate::message::Message::effect_row_removal(), "removal")
+                }
+                EffectRowCause::InfiniteFunction => (
+                    crate::message::Message::effect_row_infinite_function(),
+                    "infinite-function",
+                ),
+                EffectRowCause::FunctionMismatch => (
+                    crate::message::Message::effect_row_function_mismatch(),
+                    "function-mismatch",
+                ),
+                EffectRowCause::FunctionOutsideDeclared => (
+                    crate::message::Message::effect_row_function_outside_declared(),
+                    "function-outside-declared",
+                ),
+                EffectRowCause::CleanupInference => (
+                    crate::message::Message::effect_row_cleanup_inference(),
+                    "cleanup-inference",
+                ),
+                EffectRowCause::CleanupOutsideExpected => (
+                    crate::message::Message::effect_row_cleanup_outside_expected(),
+                    "cleanup-outside-expected",
+                ),
+                EffectRowCause::DiscardCleanup => (
+                    crate::message::Message::effect_row_discard_cleanup(),
+                    "discard-cleanup",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "effect_row",
+                fact: Some(("row_failure", failure)),
+                fact_kind: "effect-row-failure",
+                minimum_related: 0,
+            });
+        }
+        if self.reason == TypeReason::HandlerCoverage {
+            let TypeDiagnosticContext::HandlerCoverage(cause) = self.context else {
+                return None;
+            };
+            use crate::message::Message;
+            let (message, failure) = match cause {
+                HandlerCoverageCause::ArgumentCount => {
+                    (Message::handler_argument_count(), "argument-count")
+                }
+                HandlerCoverageCause::OperationOwner => {
+                    (Message::handler_operation_owner(), "operation-owner")
+                }
+                HandlerCoverageCause::ClauseCount => {
+                    (Message::handler_clause_count(), "clause-count")
+                }
+                HandlerCoverageCause::OperationIndex => {
+                    (Message::handler_operation_index(), "operation-index")
+                }
+                HandlerCoverageCause::DuplicateOperation => (
+                    Message::handler_duplicate_operation(),
+                    "duplicate-operation",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "handler_coverage",
+                fact: Some(("coverage_failure", failure)),
+                fact_kind: "handler-coverage-failure",
+                minimum_related: 0,
+            });
+        }
+        if self.reason == TypeReason::ResumeOutsideClause {
+            let TypeDiagnosticContext::CompletionOutside(operation) = self.context else {
+                return None;
+            };
+            let keyword = match operation {
+                CompletionOperation::Resume => "resume",
+                CompletionOperation::Discard => "discard",
+            };
+            return Some(TypeSourceMessage {
+                message: crate::message::Message::resolve_continuation_outside(keyword),
+                relationship: "continuation_use",
+                fact: Some(("operation", keyword)),
+                fact_kind: "keyword",
+                minimum_related: 0,
+            });
+        }
+        if self.reason == TypeReason::EquationArity {
+            let TypeDiagnosticContext::EquationArity(cause) = self.context else {
+                return None;
+            };
+            let (message, requirement) = match cause {
+                EquationArityCause::PatternCount => (
+                    crate::message::Message::equation_pattern_count(),
+                    "pattern-count",
+                ),
+                EquationArityCause::DeclaredArrows => (
+                    crate::message::Message::equation_declared_arrows(),
+                    "declared-arrows",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "equation_group",
+                fact: Some(("arity_requirement", requirement)),
+                fact_kind: "equation-arity-requirement",
+                minimum_related: 0,
+            });
+        }
+        if self.reason != TypeReason::FunctionNeedsContext {
+            return self
+                .reason
+                .source_message(self.expected.as_deref(), self.found.as_deref());
+        }
+        let TypeDiagnosticContext::FunctionNeedsContext(cause) = self.context else {
+            return None;
+        };
+        let context = match cause {
+            None => "expected-function",
+            Some(SynthesisCause::Binding(_) | SynthesisCause::NestedBinding(_)) => "binding",
+            Some(SynthesisCause::ProgramResult(_)) => "program-result",
+            Some(SynthesisCause::Application { .. }) => "application",
+            Some(SynthesisCause::Operator(_)) => "operator",
+        };
+        Some(TypeSourceMessage {
+            message: crate::message::Message::function_needs_context(),
+            relationship: "anonymous_function",
+            fact: Some(("required_context", context)),
+            fact_kind: "synthesis-context",
+            minimum_related: usize::from(cause.is_some()),
+        })
+    }
+
+    pub(crate) fn source_related_message(
+        &self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if self.reason == TypeReason::DiscardUnsafe {
+            let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
+                return None;
+            };
+            use crate::{core::capture::CompletionOwner, message::Message};
+            return match (index, owner) {
+                (0, _) => Some((Message::discard_request(), "capturing_request")),
+                (1, Some(CompletionOwner::Clause(_))) => {
+                    Some((Message::discard_clause_owner(), "completion_clause"))
+                }
+                (1, Some(CompletionOwner::Cleanup(_))) => {
+                    Some((Message::discard_cleanup_owner(), "cleanup_action"))
+                }
+                _ => None,
+            };
+        }
+        if self.reason != TypeReason::FunctionNeedsContext {
+            return self.reason.source_related_message(index);
+        }
+        if index != 0 {
+            return None;
+        }
+        let TypeDiagnosticContext::FunctionNeedsContext(Some(cause)) = self.context else {
+            return None;
+        };
+        use crate::message::Message;
+        Some(match cause {
+            SynthesisCause::Binding(_) | SynthesisCause::NestedBinding(_) => {
+                (Message::function_context_binding(), "binding")
+            }
+            SynthesisCause::ProgramResult(_) => {
+                (Message::function_context_result(), "program_result")
+            }
+            SynthesisCause::Application { .. } => {
+                (Message::function_context_application(), "application")
+            }
+            SynthesisCause::Operator(_) => (Message::function_context_operator(), "operator"),
+        })
+    }
+}
+
 /// A source diagnostic, general checking mismatch, or compiler failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TypeError {
     /// A categorized Ash source rejection.
-    Source(Box<Diagnostic<TypeReason>>),
+    Source(Box<TypeDiagnostic>),
     /// A categorized interface or implementation source rejection.
-    Interface(Box<Diagnostic<InterfaceReason>>),
+    Interface(Box<crate::interface::InterfaceDiagnostic>),
     /// The general checking rule found structurally unequal types.
     Mismatch(TypeMismatch),
     /// Typed elaboration could not preserve its compiler invariants.
     Internal(ElaborationFailure),
+}
+
+impl TypeError {
+    fn source(diagnostic: Diagnostic<TypeReason>) -> Self {
+        Self::Source(Box::new(diagnostic.into()))
+    }
+
+    fn interface(diagnostic: Diagnostic<InterfaceReason>) -> Self {
+        Self::Interface(Box::new(diagnostic.into()))
+    }
+
+    fn interface_arity(
+        diagnostic: Diagnostic<InterfaceReason>,
+        expected: usize,
+        found: usize,
+    ) -> Self {
+        Self::Interface(Box::new(
+            crate::interface::InterfaceDiagnostic::with_argument_counts(
+                diagnostic, expected, found,
+            ),
+        ))
+    }
 }
 
 impl fmt::Display for TypeError {
@@ -507,8 +1125,8 @@ impl From<BuildError> for TypeError {
 }
 
 impl From<UsefulnessError> for TypeError {
-    fn from(_: UsefulnessError) -> Self {
-        Self::Internal(ElaborationFailure::CoverageResourceExhausted)
+    fn from(cause: UsefulnessError) -> Self {
+        Self::Internal(ElaborationFailure::CoverageResourceExhausted(cause))
     }
 }
 
@@ -4018,6 +4636,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                         .map_err(
                                             |failure| match failure {
+                                                UnificationFailure::Kind { context, span } => {
+                                                    SelectionFailure::Kind { context, span }
+                                                }
                                                 UnificationFailure::Resource => {
                                                     SelectionFailure::TypeResource
                                                 }
@@ -4064,6 +4685,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -4103,6 +4727,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let actual = IterativeTypeOwner::new(Type::Tuple(actual));
             match self.unify(&expected, &actual) {
                 Ok(()) => {}
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -4131,11 +4761,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     )?;
                     diagnostic.expected = Some(self.registry.display_source_type(&expected));
                     diagnostic.found = Some(self.registry.display_source_type(&actual));
-                    diagnostic.help = Some(format!(
-                        "the known determinant key is {}",
-                        self.registry.display_source_type(&key)
-                    ));
-                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                    let key = self.registry.display_source_type(&key);
+                    diagnostic.help = Some(format!("the known determinant key is {key}"));
+                    return Err(TypeError::Interface(Box::new(
+                        crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                            diagnostic,
+                            crate::interface::DeterminationConflictCause::Improvement { key },
+                        ),
+                    )));
                 }
             }
         }
@@ -4176,6 +4809,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                         .map_err(
                                             |failure| match failure {
+                                                UnificationFailure::Kind { context, span } => {
+                                                    SelectionFailure::Kind { context, span }
+                                                }
                                                 UnificationFailure::Resource => {
                                                     SelectionFailure::TypeResource
                                                 }
@@ -4224,6 +4860,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -4270,6 +4909,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             match self.unify(method_argument, rigid_argument) {
                 Ok(()) => {}
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -4281,6 +4926,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     let found = IterativeTypeOwner::new(self.zonk(method_argument)?);
                     let site = check.site();
                     let primary = site.argument_span().unwrap_or(site.occurrence_span());
+                    let mut labels = [None; 2];
                     let mut diagnostic = Diagnostic::new(
                         TypeReason::PolymorphicRecursion,
                         SourceLabel::new(
@@ -4289,6 +4935,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         ),
                     );
                     if primary != site.occurrence_span() {
+                        labels[diagnostic.related.len()] = Some(RecursionLabel::Function);
                         diagnostic.related.push(SourceLabel::new(
                             site.occurrence_span(),
                             "this recursive function is checked monomorphically",
@@ -4298,6 +4945,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         && application_span != primary
                         && application_span != site.occurrence_span()
                     {
+                        labels[diagnostic.related.len()] = Some(RecursionLabel::Application);
                         diagnostic.related.push(SourceLabel::new(
                             application_span,
                             "this application supplies the recursive argument",
@@ -4305,7 +4953,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     diagnostic.expected = Some(self.registry.display_source_type(&expected));
                     diagnostic.found = Some(self.registry.display_source_type(&found));
-                    return Err(TypeError::Source(Box::new(diagnostic)));
+                    return Err(TypeError::Source(Box::new(TypeDiagnostic {
+                        diagnostic,
+                        context: TypeDiagnosticContext::PolymorphicRecursion(labels),
+                    })));
                 }
             }
         }
@@ -4618,6 +5269,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -5525,6 +6179,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ) => {
                     return Err(invalid_state());
                 }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -5550,6 +6210,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Ok(()) => {}
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
                 }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
@@ -5648,6 +6314,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Ok(()) => {}
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
                 }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
@@ -6396,6 +7068,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     type_work,
                 )
                 .map_err(|failure| match failure {
+                    UnificationFailure::Kind { context, span } => {
+                        TypeError::Internal(ElaborationFailure::Kind { context, span })
+                    }
                     UnificationFailure::Resource => {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     }
@@ -6672,6 +7347,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             match error {
                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                     UnificationFailure::Resource
+                }
+                TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                    UnificationFailure::Kind { context, span }
                 }
                 TypeError::Source(_)
                 | TypeError::Interface(_)
@@ -7175,6 +7853,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                                 UnificationFailure::Resource
                             }
+                            TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                                UnificationFailure::Kind { context, span }
+                            }
                             TypeError::Source(_)
                             | TypeError::Interface(_)
                             | TypeError::Mismatch(_)
@@ -7191,6 +7872,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         return Err(match error {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                                 UnificationFailure::Resource
+                            }
+                            TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                                UnificationFailure::Kind { context, span }
                             }
                             TypeError::Source(_)
                             | TypeError::Interface(_)
@@ -7384,6 +8068,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             "this function context would require an infinite type",
                         ),
                         UnificationFailure::Mismatch => function_needs_context(span, None),
+                        UnificationFailure::Kind { context, span } => {
+                            TypeError::Internal(ElaborationFailure::Kind { context, span })
+                        }
                         UnificationFailure::Resource => {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         }
@@ -7419,13 +8106,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
                 diagnostic.expected = Some(Type::Int.to_string());
                 diagnostic.found = Some(self.registry.display_source_type(&found));
-                Err(TypeError::Source(Box::new(diagnostic)))
+                Err(TypeError::source(diagnostic))
             }
             Err(UnificationFailure::Infinite) => Err(inference_failure(
                 TypeReason::InfiniteType,
                 operand_span,
                 "this primitive operand would require an infinite type",
             )),
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
@@ -7450,6 +8143,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 span,
                 "this pattern would require an infinite type",
             )),
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
@@ -8441,7 +9140,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declaration,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         self.deferred_local_nominal_escapes.clear();
         Ok(())
@@ -8532,7 +9231,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             acquisition,
             "this resource is acquired here",
         ));
-        TypeError::Source(Box::new(diagnostic))
+        TypeError::source(diagnostic)
     }
 
     fn elaborate_result(
@@ -8603,8 +9302,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         left.union_with_budget(&right, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
             .map_err(|_| {
-                inference_failure(
-                    TypeReason::AmbiguousEffectRow,
+                effect_row_failure(
+                    EffectRowCause::Union,
                     span,
                     "this strict expression has no principal effect-row union",
                 )
@@ -8656,11 +9355,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .registry
             .effect(instance.effect())
             .ok_or_else(invalid_state)?;
-        if declaration.parameters.len() != instance.arguments().len()
-            || operation.owner() != declaration.id
-        {
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+        if declaration.parameters.len() != instance.arguments().len() {
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::ArgumentCount,
+                span,
+                "this effect instance does not match its declaration",
+            ));
+        }
+        if operation.owner() != declaration.id {
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::OperationOwner,
                 span,
                 "this effect instance does not match its declaration",
             ));
@@ -8776,13 +9480,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         discard: &crate::resolved::ResolvedDiscardExpr,
         span: Span,
     ) -> Result<TypedNode, TypeError> {
-        let owner = discard.owner.ok_or_else(|| {
-            inference_failure(
-                TypeReason::ResumeOutsideClause,
-                span,
-                "resume and discard are available only inside an operation clause",
-            )
-        })?;
+        let owner = discard
+            .owner
+            .ok_or_else(|| completion_outside_error(CompletionOperation::Discard, span))?;
         let active = self
             .active_resumes
             .iter()
@@ -8819,13 +9519,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        let owner = resume.owner.ok_or_else(|| {
-            inference_failure(
-                TypeReason::ResumeOutsideClause,
-                span,
-                "resume and discard are available only inside an operation clause",
-            )
-        })?;
+        let owner = resume
+            .owner
+            .ok_or_else(|| completion_outside_error(CompletionOperation::Resume, span))?;
         let active_position = self
             .active_resumes
             .iter()
@@ -9120,6 +9816,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     &self.registry,
                 ))
             }
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(type_resource()),
             Err(UnificationFailure::Invariant) => Err(invalid_state()),
         }
@@ -9259,8 +9961,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .effect(handler.effect.instance.effect())
                 .ok_or_else(invalid_state)?;
             if declaration.parameters.len() != handler.effect.instance.arguments().len() {
-                return Err(inference_failure(
-                    TypeReason::HandlerCoverage,
+                return Err(handler_coverage_error(
+                    HandlerCoverageCause::ArgumentCount,
                     handler.effect.span,
                     "this effect instance does not match its declaration",
                 ));
@@ -9312,8 +10014,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .effect(handler.effect.instance.effect())
             .ok_or_else(invalid_state)?;
         if handler.clauses.len() != declaration.operations.len() {
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::ClauseCount,
                 span,
                 "a handler must contain one clause for every operation",
             ));
@@ -9325,13 +10027,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut self.type_work,
         )
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        if let Some(index) = invalid_clause {
+        if let Some((index, cause)) = invalid_clause {
             let diagnostic_span = handler
                 .clauses
                 .get(index)
                 .map_or(span, |clause| clause.span);
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+            return Err(handler_coverage_error(
+                cause,
                 diagnostic_span,
                 "a handler operation clause is duplicate or does not belong to this effect",
             ));
@@ -10007,10 +10709,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 };
             let value_type = IterativeTypeOwner::new(value_type);
             if parameters.len() != application.arguments().len() {
-                return Err(lexical_evidence_error(
-                    InterfaceReason::ArgumentCount,
-                    source.application.span,
-                    interface_span,
+                return Err(TypeError::interface_arity(
+                    lexical_evidence_diagnostic(
+                        InterfaceReason::ArgumentCount,
+                        source.application.span,
+                        interface_span,
+                    ),
+                    parameters.len(),
+                    application.arguments().len(),
                 ));
             }
             let mut replacements = TypeReplacementBuffer::new();
@@ -10633,17 +11339,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     if expected_is_inference {
                         self.unify_effect_rows(&expected_effects, &body.effects)
                             .map_err(|failure| match failure {
+                                UnificationFailure::Kind { context, span } => {
+                                    TypeError::Internal(ElaborationFailure::Kind { context, span })
+                                }
                                 UnificationFailure::Resource => {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 }
-                                UnificationFailure::Infinite => inference_failure(
-                                    TypeReason::AmbiguousEffectRow,
+                                UnificationFailure::Infinite => effect_row_failure(
+                                    EffectRowCause::InfiniteFunction,
                                     effect_span,
                                     "this function would require an infinite latent effect row",
                                 ),
                                 UnificationFailure::Mismatch | UnificationFailure::Invariant => {
-                                    inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
+                                    effect_row_failure(
+                                        EffectRowCause::FunctionMismatch,
                                         effect_span,
                                         "this function body does not match its latent effect row",
                                     )
@@ -10655,8 +11364,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         let weakened =
                             self.union_effects(&body.effects, &expected_effects, effect_span)?;
                         if !self.same_effect_rows(&weakened, &expected_effects)? {
-                            return Err(inference_failure(
-                                TypeReason::AmbiguousEffectRow,
+                            return Err(effect_row_failure(
+                                EffectRowCause::FunctionOutsideDeclared,
                                 effect_span,
                                 "this function body requests effects outside its declared row",
                             ));
@@ -10846,11 +11555,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             {
                 self.unify_effect_rows(&expected, &inferred)
                     .map_err(|failure| match failure {
+                        UnificationFailure::Kind { context, span } => {
+                            TypeError::Internal(ElaborationFailure::Kind { context, span })
+                        }
                         UnificationFailure::Resource => type_resource(),
                         UnificationFailure::Invariant => invalid_state(),
                         UnificationFailure::Infinite | UnificationFailure::Mismatch => {
-                            inference_failure(
-                                TypeReason::AmbiguousEffectRow,
+                            effect_row_failure(
+                                EffectRowCause::CleanupInference,
                                 span,
                                 "this cleanup action has no principal latent effect row",
                             )
@@ -10859,8 +11571,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } else {
                 let combined = self.union_effects(&expected, &inferred, span)?;
                 if !self.same_effect_rows(&combined, &expected)? {
-                    return Err(inference_failure(
-                        TypeReason::AmbiguousEffectRow,
+                    return Err(effect_row_failure(
+                        EffectRowCause::CleanupOutsideExpected,
                         span,
                         "this cleanup action requests effects outside its expected row",
                     ));
@@ -11597,6 +12309,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             &self.registry,
                         ));
                     }
+                    Err(UnificationFailure::Kind { context, span }) => {
+                        return Err(TypeError::Internal(ElaborationFailure::Kind {
+                            context,
+                            span,
+                        }));
+                    }
                     Err(UnificationFailure::Resource) => {
                         return Err(TypeError::Internal(
                             ElaborationFailure::TypeResourceExhausted,
@@ -12219,7 +12937,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declaration_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         let mut retained_declarations = declarations.split_off(declaration_start);
         while !retained_declarations.is_empty() {
@@ -12458,7 +13176,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 effect_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         let zonked_effects = self.zonk_effect_row(&body.effects)?;
@@ -12477,7 +13195,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 effect_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         self.type_work
             .charge(3)
@@ -12526,6 +13244,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ),
                     UnificationFailure::Mismatch => {
                         not_applicable(function_span, whole_span, &function_ty, &self.registry)
+                    }
+                    UnificationFailure::Kind { context, span } => {
+                        TypeError::Internal(ElaborationFailure::Kind { context, span })
                     }
                     UnificationFailure::Resource => {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -14988,11 +15709,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .iter()
                 .any(|clause| clause.patterns.len() != arity)
         {
-            return Err(case_error(
-                TypeReason::EquationArity,
+            return Err(equation_arity_error(
+                EquationArityCause::PatternCount,
                 definition_span,
-                "equational clauses must have the same positive pattern count",
-                None,
             ));
         }
         let mut remainder = ProvenancedTypeOwner::new(ProvenancedType {
@@ -15009,11 +15728,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut expected_body_effects = EffectRow::empty();
         for _ in 0..arity {
             if remainder.ty.function_view().is_none() {
-                return Err(case_error(
-                    TypeReason::EquationArity,
+                return Err(equation_arity_error(
+                    EquationArityCause::DeclaredArrows,
                     definition_span,
-                    "the equation has more patterns than the declared arrows",
-                    None,
                 ));
             }
             expected_body_effects = match remainder
@@ -15220,8 +15937,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let weakened =
                 self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
             if !self.same_effect_rows(&weakened, &expected_effects)? {
-                return Err(inference_failure(
-                    TypeReason::AmbiguousEffectRow,
+                return Err(effect_row_failure(
+                    EffectRowCause::FunctionOutsideDeclared,
                     clause.body.span,
                     "this function body requests effects outside its declared row",
                 ));
@@ -15684,7 +16401,17 @@ fn check_interface_declarations(
                         .primary_span(),
                     "the interface parameter is declared here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                use crate::interface::{InterfaceDiagnostic, MethodParameterCause};
+                let cause = if invalid_binder_state {
+                    MethodParameterCause::ImplicitBinders
+                } else if determinant_positions.is_some() {
+                    MethodParameterCause::MissingDeterminant
+                } else {
+                    MethodParameterCause::MissingInterface
+                };
+                return Err(TypeError::Interface(Box::new(
+                    InterfaceDiagnostic::with_method_parameter(diagnostic, cause),
+                )));
             }
             if method.annotation.ty.function_view().is_none() {
                 let mut diagnostic = Diagnostic::new(
@@ -15698,7 +16425,7 @@ fn check_interface_declarations(
                     method.span,
                     "the method signature is declared here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -15805,6 +16532,7 @@ fn check_determination_key(
     if determination.determinant.parameters.is_empty() {
         return Err(determination_parameter_error(
             determination.determinant.span,
+            crate::interface::DeterminationParameterCause::EmptyDeterminant,
             "the determinant key must contain an interface parameter",
             interface.parameters.first().map(|parameter| {
                 (
@@ -15818,6 +16546,7 @@ fn check_determination_key(
     if determination.dependent.parameters.is_empty() {
         return Err(determination_parameter_error(
             determination.dependent.span,
+            crate::interface::DeterminationParameterCause::EmptyDependent,
             "the dependent complement must contain an interface parameter",
             interface.parameters.first().map(|parameter| {
                 (
@@ -15867,6 +16596,7 @@ fn check_determination_key(
                     .ok_or_else(invalid_state)?;
                 return Err(determination_parameter_error(
                     dependent.origin.primary_span(),
+                    crate::interface::DeterminationParameterCause::BothSides,
                     "this parameter occurs on both sides of the determination",
                     Some((
                         determinant.origin.primary_span(),
@@ -15900,6 +16630,7 @@ fn check_determination_key(
         let missing = missing.ok_or_else(invalid_state)?;
         return Err(determination_parameter_error(
             determination.span,
+            crate::interface::DeterminationParameterCause::Omitted,
             "this determination does not cover every interface parameter",
             Some((
                 missing.origin.primary_span(),
@@ -15955,20 +16686,23 @@ fn determination_side_positions(
                 }
             }
             let actual = actual.ok_or_else(invalid_state)?;
-            let (message, related_message) =
+            let (cause, message, related_message) =
                 if previous.is_some_and(|(previous_position, _)| previous_position == actual) {
                     (
+                        crate::interface::DeterminationParameterCause::Repeated,
                         "this determination parameter is repeated",
                         "the first occurrence on this side is here",
                     )
                 } else {
                     (
+                        crate::interface::DeterminationParameterCause::OutOfOrder,
                         "this determination side does not follow interface declaration order",
                         "the preceding occurrence on this side is here",
                     )
                 };
             return Err(determination_parameter_error(
                 occurrence.origin.primary_span(),
+                cause,
                 message,
                 previous.map(
                     |(_, previous): (usize, &crate::resolved::ResolvedDeterminationParameter)| {
@@ -15986,6 +16720,7 @@ fn determination_side_positions(
 
 fn determination_parameter_error(
     primary: Span,
+    cause: crate::interface::DeterminationParameterCause,
     message: &'static str,
     related: Option<(Span, &'static str)>,
     budget: &mut InterfaceConstraintBudget,
@@ -15997,7 +16732,9 @@ fn determination_parameter_error(
     if let Some((span, message)) = related {
         retain_interface_label(&mut diagnostic, span, message, budget)?;
     }
-    Ok(TypeError::Interface(Box::new(diagnostic)))
+    Ok(TypeError::Interface(Box::new(
+        crate::interface::InterfaceDiagnostic::with_determination_parameter(diagnostic, cause),
+    )))
 }
 
 fn check_global_requirements(
@@ -16079,7 +16816,7 @@ fn check_global_requirements(
                         interface.span(),
                         "the private interface is declared here",
                     ));
-                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                    return Err(TypeError::interface(diagnostic));
                 }
             }
         }
@@ -16130,7 +16867,7 @@ fn check_global_requirements(
                     first.application.span,
                     "the first identical requirement is here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
             if let Some(first) = determination_conflict {
                 budget.charge(2).map_err(|()| constraint_resource())?;
@@ -16149,7 +16886,12 @@ fn check_global_requirements(
                     first.application.span,
                     "this earlier requirement fixes a different dependent tuple for that key",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                        diagnostic,
+                        crate::interface::DeterminationConflictCause::Requirements,
+                    ),
+                )));
             }
         }
         for requirement in requirements.iter() {
@@ -16204,7 +16946,7 @@ fn check_global_requirements(
                         "this candidate parameter occurs only in a requirement",
                     ));
                 }
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -16586,7 +17328,13 @@ where
                         )?;
                     }
                 }
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_implementation_pair(
+                        diagnostic,
+                        previous.import_route().len(),
+                        later_route.len(),
+                    ),
+                )));
             }
         }
     }
@@ -16601,6 +17349,10 @@ fn map_overlap_result(result: Result<bool, OverlapFailure>) -> Result<bool, Type
             ElaborationFailure::TypeResourceExhausted,
         )),
         Err(OverlapFailure::InvalidState) => Err(invalid_state()),
+        Err(OverlapFailure::Kind(context)) => Err(TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: None,
+        })),
     }
 }
 
@@ -16679,7 +17431,7 @@ fn check_implementation_header(
             "this is the implemented interface",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     if let Some(parameter) = implementation.prerequisite_only_parameters.first() {
@@ -16696,7 +17448,7 @@ fn check_implementation_header(
             "the implementation head determines every prerequisite variable",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     check_implementation_determination_coverage(module, head_interface, implementation, budget)?;
@@ -16723,7 +17475,7 @@ fn check_implementation_header(
             "the foreign interface is selected here",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     let head_key = if implementation.prerequisites.is_empty() {
@@ -16779,7 +17531,7 @@ fn check_implementation_header(
                 "the prerequisite must decrease pointwise from this head",
                 budget,
             )?;
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
     if implementation.public {
@@ -16803,7 +17555,7 @@ fn check_implementation_header(
                 "the private interface is declared here",
                 budget,
             )?;
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
         for prerequisite in &implementation.prerequisites {
             if let Some(interface) = checked_interface(
@@ -16826,7 +17578,7 @@ fn check_implementation_header(
                     "the private interface is declared here",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -16870,7 +17622,7 @@ fn check_implementation_prerequisite_relations(
                     "the first identical prerequisite is here",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
             if let Some(determination) = interface.determination()
                 && same_resolved_application_key(
@@ -16893,7 +17645,12 @@ fn check_implementation_prerequisite_relations(
                     "this earlier prerequisite fixes a different dependent tuple for that key",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::Interface(Box::new(
+                    crate::interface::InterfaceDiagnostic::with_determination_conflict(
+                        diagnostic,
+                        crate::interface::DeterminationConflictCause::Prerequisites,
+                    ),
+                )));
             }
         }
     }
@@ -17096,7 +17853,8 @@ fn check_implementation_determination_coverage(
                 "this dependent argument contains a variable absent from the determinant key",
             ),
         );
-        if let Some(parameter) = module.registry().type_variable(variable) {
+        let parameter = module.registry().type_variable(variable);
+        if let Some(parameter) = parameter {
             retain_interface_label(
                 &mut diagnostic,
                 parameter.origin.primary_span(),
@@ -17114,7 +17872,13 @@ fn check_implementation_determination_coverage(
                 budget,
             )?;
         }
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::Interface(Box::new(
+            crate::interface::InterfaceDiagnostic::with_determination_coverage(
+                diagnostic,
+                parameter.is_some(),
+                positions.len(),
+            ),
+        )));
     }
     if key_index != positions.len() {
         return Err(invalid_state());
@@ -17161,7 +17925,7 @@ fn check_implementation_membership(
                 interface.span(),
                 "the implemented interface is declared here",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         };
         if let Some((_, first)) = supplied.insert(method, (source_group, group)) {
             let mut diagnostic = Diagnostic::new(
@@ -17172,7 +17936,7 @@ fn check_implementation_membership(
                 first.span,
                 "the first method group is here",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
     for method_index in 0..interface.method_count() {
@@ -17190,7 +17954,7 @@ fn check_implementation_membership(
                 method.span(),
                 "this required method is missing",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
 
@@ -17333,7 +18097,7 @@ fn check_application_arity_parts(
         declaration_span,
         "the interface parameter list is declared here",
     ));
-    Err(TypeError::Interface(Box::new(diagnostic)))
+    Err(TypeError::interface_arity(diagnostic, expected, found))
 }
 
 fn same_resolved_application_arguments(
@@ -17454,6 +18218,14 @@ fn constraint_resource() -> TypeError {
 }
 
 fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) -> TypeError {
+    TypeError::interface(lexical_evidence_diagnostic(reason, span, related))
+}
+
+fn lexical_evidence_diagnostic(
+    reason: InterfaceReason,
+    span: Span,
+    related: Span,
+) -> Diagnostic<InterfaceReason> {
     let mut diagnostic = Diagnostic::new(
         reason,
         SourceLabel::new(span, "this lexical evidence declaration is not admitted"),
@@ -17463,7 +18235,7 @@ fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) ->
             .related
             .push(SourceLabel::new(related, "the related declaration is here"));
     }
-    TypeError::Interface(Box::new(diagnostic))
+    diagnostic
 }
 
 fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
@@ -17472,16 +18244,23 @@ fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
             let Some(span) = span else {
                 return invalid_state();
             };
-            TypeError::Interface(Box::new(Diagnostic::new(
+            TypeError::interface(Diagnostic::new(
                 reason,
                 SourceLabel::new(span, selection_reason_message(reason)),
-            )))
+            ))
         }
         SelectionFailure::TypeResource => {
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
         }
         SelectionFailure::ConstraintResource => constraint_resource(),
         SelectionFailure::InvalidState => invalid_state(),
+        SelectionFailure::Kind {
+            context,
+            span: retained_span,
+        } => TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: retained_span.or(span),
+        }),
     }
 }
 
@@ -17527,7 +18306,9 @@ fn selected_obligation_error(error: SelectionError) -> TypeError {
             .related
             .push(SourceLabel::new(cause.span(), message));
     }
-    TypeError::Interface(Box::new(diagnostic))
+    TypeError::Interface(Box::new(
+        crate::interface::InterfaceDiagnostic::with_selection(diagnostic, error),
+    ))
 }
 
 fn is_polymorphic_recursion_error(error: &TypeError) -> bool {
@@ -17945,7 +18726,7 @@ fn check_newtype_representation_cycles(
                             "this declaration participates in the recursive representation cycle",
                         ));
                     }
-                    return Err(TypeError::Source(Box::new(diagnostic)));
+                    return Err(TypeError::source(diagnostic));
                 }
                 2 => {}
                 _ => unreachable!("newtype representation traversal state is ternary"),
@@ -18303,6 +19084,12 @@ fn checked_interface_facts(
                     }
                     ResolvedBuildFailure::ConstraintResource => constraint_resource(),
                     ResolvedBuildFailure::InvalidState => invalid_state(),
+                    ResolvedBuildFailure::Kind(context) => {
+                        TypeError::Internal(ElaborationFailure::Kind {
+                            context,
+                            span: None,
+                        })
+                    }
                 })?,
             );
         }
@@ -18857,7 +19644,7 @@ enum CheckKind {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SynthesisCause {
     Binding(Span),
     NestedBinding(Span),
@@ -20227,7 +21014,13 @@ fn check_mismatch(
                 ));
                 diagnostic.expected = Some(registry.display_source_type(&expected));
                 diagnostic.found = Some(registry.display_source_type(&found));
-                return TypeError::Source(Box::new(diagnostic));
+                return TypeError::Source(Box::new(TypeDiagnostic {
+                    diagnostic,
+                    context: TypeDiagnosticContext::PolymorphicRecursion([
+                        Some(RecursionLabel::Function),
+                        None,
+                    ]),
+                }));
             }
             let expected = registry.display_source_type(&expected);
             let found = registry.display_source_type(&found);
@@ -20247,7 +21040,7 @@ fn check_mismatch(
             }
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         CheckKind::Definition { result_cause } => {
             let expected = registry.display_source_type(&expected);
@@ -20262,7 +21055,7 @@ fn check_mismatch(
             ));
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         CheckKind::BindingInitializer {
             initializer_span,
@@ -20283,7 +21076,7 @@ fn check_mismatch(
             ));
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
     }
 }
@@ -20322,7 +21115,10 @@ fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeErro
         diagnostic.related.push(SourceLabel::new(span, message));
         diagnostic.help = help.map(str::to_owned);
     }
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic,
+        context: TypeDiagnosticContext::FunctionNeedsContext(cause),
+    }))
 }
 
 fn not_applicable(
@@ -20341,7 +21137,7 @@ fn not_applicable(
     ));
     diagnostic.expected = Some("function".to_owned());
     diagnostic.found = Some(registry.display_source_type(found));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn equation_interface_not_function(
@@ -20363,7 +21159,7 @@ fn equation_interface_not_function(
     ));
     diagnostic.expected = Some("function".to_owned());
     diagnostic.found = Some(found);
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn schedule_left<'a>(
@@ -20469,7 +21265,14 @@ fn allocate_row_inference_variable(
 fn kind_failure_for_unification(failure: KindFailure) -> UnificationFailure {
     match failure {
         KindFailure::Resource(_) => UnificationFailure::Resource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => UnificationFailure::Invariant,
+        failure => failure
+            .internal_context()
+            .map_or(UnificationFailure::Invariant, |context| {
+                UnificationFailure::Kind {
+                    context,
+                    span: None,
+                }
+            }),
     }
 }
 
@@ -20782,6 +21585,10 @@ fn zonk_core_effect_row(
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
     match error {
         ResolvedBuildFailure::InvalidState => invalid_state(),
+        ResolvedBuildFailure::Kind(context) => TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: None,
+        }),
         ResolvedBuildFailure::TypeResource => {
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
         }
@@ -20795,14 +21602,49 @@ fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) ->
         SourceLabel::new(span, "this pattern does not match its expected type"),
     );
     diagnostic.expected = Some(registry.display_source_type(expected));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn constructor_mismatch(span: Span) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
+    TypeError::source(Diagnostic::new(
         TypeReason::ConstructorMismatch,
         SourceLabel::new(span, "this constructor has the wrong payload shape"),
-    )))
+    ))
+}
+
+fn handler_coverage_error(cause: HandlerCoverageCause, span: Span, message: &str) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(TypeReason::HandlerCoverage, SourceLabel::new(span, message)),
+        context: TypeDiagnosticContext::HandlerCoverage(cause),
+    }))
+}
+
+fn completion_outside_error(operation: CompletionOperation, span: Span) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(
+            TypeReason::ResumeOutsideClause,
+            SourceLabel::new(
+                span,
+                "resume and discard are available only inside an operation clause",
+            ),
+        ),
+        context: TypeDiagnosticContext::CompletionOutside(operation),
+    }))
+}
+
+fn equation_arity_error(cause: EquationArityCause, span: Span) -> TypeError {
+    let message = match cause {
+        EquationArityCause::PatternCount => {
+            "equational clauses must have the same positive pattern count"
+        }
+        EquationArityCause::DeclaredArrows => {
+            "the equation has more patterns than the declared arrows"
+        }
+    };
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(TypeReason::EquationArity, SourceLabel::new(span, message)),
+        context: TypeDiagnosticContext::EquationArity(cause),
+    }))
 }
 
 fn case_error(
@@ -20813,7 +21655,7 @@ fn case_error(
 ) -> TypeError {
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = witness;
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn binding_origin(binding: &ResolvedBinding) -> Origin {
@@ -21054,17 +21896,17 @@ fn unsafe_recursive_root(
         member.annotation.span,
         "this is the member's declared nominal type",
     ));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn unguarded_recursive_use(span: Span) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
+    TypeError::source(Diagnostic::new(
         TypeReason::UnguardedRecursiveUse,
         SourceLabel::new(
             span,
             "a recursive occurrence crosses a forcing or transporting expression",
         ),
-    )))
+    ))
 }
 
 fn unsafe_recursive_initializer(
@@ -21088,7 +21930,7 @@ fn unsafe_recursive_initializer(
     ));
     diagnostic.expected = Some("a direct `fn` initializer".into());
     diagnostic.help = Some("initialize the recursive member directly with `fn`".into());
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn equational_origin(
@@ -21497,6 +22339,10 @@ enum UnificationFailure {
     Infinite,
     Resource,
     Invariant,
+    Kind {
+        context: crate::kind::KindFailureContext,
+        span: Option<Span>,
+    },
 }
 
 #[cfg(test)]
@@ -22219,11 +23065,18 @@ fn type_contains_unsolved_row_inference(
     Ok(false)
 }
 
+fn effect_row_failure(cause: EffectRowCause, span: Span, message: &str) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(
+            TypeReason::AmbiguousEffectRow,
+            SourceLabel::new(span, message),
+        ),
+        context: TypeDiagnosticContext::EffectRow(cause),
+    }))
+}
+
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
-        reason,
-        SourceLabel::new(span, message),
-    )))
+    TypeError::source(Diagnostic::new(reason, SourceLabel::new(span, message)))
 }
 
 fn capture_failure(
@@ -22232,8 +23085,8 @@ fn capture_failure(
 ) -> TypeError {
     use crate::core::capture::Failure;
     match failure {
-        Failure::CleanupRow { source, .. } => inference_failure(
-            TypeReason::AmbiguousEffectRow,
+        Failure::CleanupRow { source, .. } => effect_row_failure(
+            EffectRowCause::DiscardCleanup,
             source,
             "discard effects differ from its owned cleanup actions",
         ),
@@ -22263,7 +23116,7 @@ fn capture_failure(
                 handler,
                 "this nearest matching handler is abandoned",
             ));
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
@@ -22288,7 +23141,7 @@ fn capture_failure(
                 acquisition,
                 "this resource is acquired here",
             ));
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         Failure::Unsafe(unsafe_discard) => {
             let related_count = 1 + usize::from(unsafe_discard.owner.is_some());
@@ -22321,7 +23174,10 @@ fn capture_failure(
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
             }
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::Source(Box::new(TypeDiagnostic {
+                diagnostic,
+                context: TypeDiagnosticContext::DiscardUnsafe(unsafe_discard.owner),
+            }))
         }
     }
 }
@@ -22977,7 +23833,7 @@ fn first_invalid_handler_operation_with_budget(
     operation_count: usize,
     operations: impl ExactSizeIterator<Item = crate::types::OperationId>,
     budget: &mut TypeWorkBudget,
-) -> Result<Option<usize>, ()> {
+) -> Result<Option<(usize, HandlerCoverageCause)>, ()> {
     budget.charge(operation_count)?;
     let mut seen = Vec::new();
     seen.try_reserve(operation_count).map_err(|_| ())?;
@@ -22986,13 +23842,19 @@ fn first_invalid_handler_operation_with_budget(
     budget.charge(operations.len())?;
     for (clause_index, operation) in operations.enumerate() {
         let Ok(index) = usize::try_from(operation.operation()) else {
-            return Ok(Some(clause_index));
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationIndex)));
         };
         let Some(slot) = seen.get_mut(index) else {
-            return Ok(Some(clause_index));
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationIndex)));
         };
-        if operation.owner() != owner || std::mem::replace(slot, true) {
-            return Ok(Some(clause_index));
+        if operation.owner() != owner {
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationOwner)));
+        }
+        if std::mem::replace(slot, true) {
+            return Ok(Some((
+                clause_index,
+                HandlerCoverageCause::DuplicateOperation,
+            )));
         }
     }
     Ok(None)
@@ -23194,6 +24056,192 @@ pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModulePr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unification_retains_kind_cause() {
+        let source = SourceFile::new("unification.ash", "binder").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let kind = Kind::Type;
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        let mapped = kind_failure_for_unification(failure);
+        assert_eq!(
+            mapped,
+            UnificationFailure::Kind {
+                context,
+                span: None
+            }
+        );
+
+        let mut elaborator = Elaborator::new();
+        let expected = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+        let invalid = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
+        let failure = elaborator
+            .refine_pattern_expected(&expected, &invalid, span)
+            .unwrap_err();
+        let TypeError::Internal(ElaborationFailure::Kind { context, .. }) = failure else {
+            panic!("invalid retained kind must remain a compiler failure")
+        };
+        assert_eq!(context.name(), "body-free-non-function-kind");
+        assert_eq!(context.span(), span);
+        assert!(elaborator.inference_solutions.is_empty());
+        assert!(elaborator.authenticated_inference_solutions.is_empty());
+    }
+    #[test]
+    fn selection_kind_context_reaches_presentation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_elaboration_failure, write_human, write_json},
+            source::{ByteRange, SourceFile},
+        };
+        let declaration = SourceFile::new("declaration.ash", "binder").unwrap();
+        let occurrence = SourceFile::new("occurrence.ash", "use").unwrap();
+        let origin = declaration.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let use_span = occurrence.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        let kind = Kind::Type;
+        environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        for failure in [
+            map_overlap_result(Err(OverlapFailure::Kind(context))).unwrap_err(),
+            resolved_build_error(ResolvedBuildFailure::Kind(context)),
+        ] {
+            assert_eq!(
+                failure,
+                TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span: None
+                })
+            );
+        }
+        for span in [None, Some(origin), Some(use_span)] {
+            let TypeError::Internal(error) = selection_failure(
+                SelectionFailure::Kind {
+                    context,
+                    span: None,
+                },
+                span,
+            ) else {
+                panic!("kind failure must remain compiler-owned")
+            };
+            assert_eq!(
+                selection_failure(SelectionFailure::Kind { context, span }, None),
+                TypeError::Internal(error.clone())
+            );
+            let view = compile_elaboration_failure(&error, &[&declaration, &occurrence]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains("duplicate type-variable identity")
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "type.internal");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], "duplicate-binder");
+            let labels = json["labels"].as_array().unwrap();
+            assert_eq!(labels.len(), if span == Some(use_span) { 2 } else { 1 });
+            if span == Some(use_span) {
+                assert_eq!(labels[1]["relationship"], "kind_failure_origin");
+            }
+            assert!(compile_elaboration_failure(&error, &[&occurrence]).is_err());
+        }
+    }
+
+    #[test]
+    fn function_context_presentation_keeps_every_synthesis_cause() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+            source::{ByteRange, SourceFile},
+        };
+        let source = SourceFile::new("context.ash", "fn source context").unwrap();
+        let primary = source.span(ByteRange::new(0, 2).unwrap()).unwrap();
+        let related = source.span(ByteRange::new(3, 17).unwrap()).unwrap();
+        for (cause, context, relation) in [
+            (None, "expected-function", None),
+            (
+                Some(SynthesisCause::Binding(related)),
+                "binding",
+                Some("binding"),
+            ),
+            (
+                Some(SynthesisCause::NestedBinding(related)),
+                "binding",
+                Some("binding"),
+            ),
+            (
+                Some(SynthesisCause::ProgramResult(related)),
+                "program-result",
+                Some("program_result"),
+            ),
+            (
+                Some(SynthesisCause::Application {
+                    whole_span: related,
+                    argument_span: related,
+                }),
+                "application",
+                Some("application"),
+            ),
+            (
+                Some(SynthesisCause::Operator(related)),
+                "operator",
+                Some("operator"),
+            ),
+        ] {
+            let TypeError::Source(error) = function_needs_context(primary, cause) else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        output.contains("This anonymous function needs an expected function type.")
+                    );
+                    assert_eq!(
+                        output.contains("Add a function type annotation to this binding."),
+                        context == "binding"
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["name"], "required_context");
+            assert_eq!(json["facts"][0]["kind"], "synthesis-context");
+            assert_eq!(json["facts"][0]["value"], context);
+            assert_eq!(
+                json["labels"].as_array().unwrap().len(),
+                1 + usize::from(relation.is_some())
+            );
+            if let Some(relation) = relation {
+                assert_eq!(json["labels"][1]["relationship"], relation);
+            }
+        }
+    }
+
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -23249,6 +24297,570 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn determination_improvement_messages_retain_key_and_comparison() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("improvement.ash", "source goal").unwrap();
+        let source_span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let goal_span = source.span(ByteRange::new(7, 11).unwrap()).unwrap();
+        let task = ImprovementTask::for_test(
+            Box::new([Type::Unit]),
+            Box::new([Type::Int]),
+            Box::new([Type::Bool]),
+            goal_span,
+            source_span,
+        );
+        let mut elaborator = Elaborator::new();
+        let TypeError::Interface(mut error) = elaborator
+            .apply_improvement_tasks(std::iter::once(task))
+            .unwrap_err()
+        else {
+            panic!("expected determination conflict")
+        };
+        // Legacy prose is not an input to the presentation adapter.
+        error.help = Some("ignored".to_owned());
+        error.related[0] = SourceLabel::new(source_span, "ignored");
+        let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            for value in ["Unit", "Int", "Bool"] {
+                assert!(output.contains(value));
+            }
+            assert!(!output.contains("ignored"));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let (key, expected, found) = error.determination_comparison().unwrap();
+        for (index, (name, value)) in [
+            ("determinant_key", key),
+            ("expected", expected),
+            ("found", found),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(json["facts"][index]["name"], name);
+            assert_eq!(json["facts"][index]["value"], value);
+            assert_eq!(json["facts"][index]["kind"], "code");
+        }
+        assert_eq!(json["facts"][3]["value"], "conflicting-improvement");
+        assert_eq!(json["labels"][1]["relationship"], "determining_source");
+        let expected = error.expected.take();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+        error.expected = expected;
+        let found = error.found.take();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+        error.found = found;
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+    }
+
+    #[test]
+    fn empty_determination_messages_preserve_optional_declaration() {
+        use crate::{
+            interface::DeterminationParameterCause,
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human},
+        };
+        let source = SourceFile::new("empty-side.ash", "where").unwrap();
+        let span = source.span(ByteRange::new(0, 5).unwrap()).unwrap();
+        for cause in [
+            DeterminationParameterCause::EmptyDeterminant,
+            DeterminationParameterCause::EmptyDependent,
+        ] {
+            for related in [None, Some((span, "ignored"))] {
+                let TypeError::Interface(mut error) = determination_parameter_error(
+                    span,
+                    cause,
+                    "ignored",
+                    related,
+                    &mut InterfaceConstraintBudget::with_limit(1),
+                )
+                .unwrap() else {
+                    panic!("expected interface diagnostic")
+                };
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(match cause {
+                            DeterminationParameterCause::EmptyDeterminant => "The determining side must contain at least one interface parameter.",
+                            _ => "The dependent side must contain at least one interface parameter.",
+                        }));
+                    }
+                }
+                if related.is_some() {
+                    error.related.clear();
+                } else {
+                    error.related.push(SourceLabel::new(span, "ignored"));
+                }
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn determination_coverage_messages_preserve_optional_variable_label() {
+        use crate::{
+            interface::InterfaceDiagnostic,
+            presentation::{compile_interface_diagnostic, write_json},
+        };
+        let source = SourceFile::new("coverage.ash", "type").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for variable_label in [false, true] {
+            for key_count in 1..3 {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplDeterminationCoverage,
+                    SourceLabel::new(span, "ignored"),
+                );
+                for _ in 0..usize::from(variable_label) + key_count {
+                    diagnostic.related.push(SourceLabel::new(span, "ignored"));
+                }
+                let mut error = InterfaceDiagnostic::with_determination_coverage(
+                    diagnostic,
+                    variable_label,
+                    key_count,
+                );
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                for (index, label) in json["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                {
+                    assert_eq!(
+                        label["relationship"],
+                        if variable_label && index == 0 {
+                            "dependent_variable"
+                        } else {
+                            "determinant_argument"
+                        }
+                    );
+                }
+                error.related.pop();
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn implementation_pair_messages_preserve_import_route_roles() {
+        use crate::{
+            interface::InterfaceDiagnostic,
+            presentation::{compile_interface_diagnostic, write_json},
+        };
+        let source = SourceFile::new("pair.ash", "head").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for earlier in 0..3 {
+            for later in 0..3 {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplOverlap,
+                    SourceLabel::new(span, "ignored"),
+                );
+                let mut roles = vec!["earlier_implementation"];
+                roles.extend(std::iter::repeat_n(
+                    "earlier_implementation_import",
+                    earlier,
+                ));
+                if later > 0 {
+                    roles.push("later_implementation");
+                    roles.extend(std::iter::repeat_n(
+                        "later_implementation_import",
+                        later - 1,
+                    ));
+                }
+                for _ in &roles {
+                    diagnostic.related.push(SourceLabel::new(span, "ignored"));
+                }
+                let mut error =
+                    InterfaceDiagnostic::with_implementation_pair(diagnostic, earlier, later);
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                for (label, role) in json["labels"].as_array().unwrap().iter().skip(1).zip(roles) {
+                    assert_eq!(label["relationship"], role);
+                }
+                let last = error.related.pop().unwrap();
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+                error.related.push(last.clone());
+                error.related.push(last);
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn interface_arity_messages_retain_numeric_counts() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("arity.ash", "application declaration").unwrap();
+        let span = source.span(ByteRange::new(0, 11).unwrap()).unwrap();
+        let declaration = source.span(ByteRange::new(12, 23).unwrap()).unwrap();
+        for (expected, found) in [(1, 0), (1, 2), (2, 1), (3, 5)] {
+            let TypeError::Interface(error) =
+                check_application_arity_parts(expected, declaration, found, span).unwrap_err()
+            else {
+                unreachable!()
+            };
+            let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains(&format!("expected {expected}, supplied {found}"))
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], expected);
+            assert_eq!(json["facts"][1]["value"], found);
+        }
+    }
+
+    #[test]
+    fn lexical_evidence_messages_preserve_admission_causes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("evidence.ash", "source earlier").unwrap();
+        let primary = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let earlier = source.span(ByteRange::new(7, 14).unwrap()).unwrap();
+        for reason in [
+            InterfaceReason::EvidenceMissingLocalKey,
+            InterfaceReason::EvidenceDuplicate,
+            InterfaceReason::EvidenceDeterminationConflict,
+            InterfaceReason::EvidenceMissingMethod,
+            InterfaceReason::EvidenceDuplicateMethod,
+            InterfaceReason::EvidenceExtraMethod,
+        ] {
+            let related = if reason == InterfaceReason::EvidenceMissingLocalKey {
+                primary
+            } else {
+                earlier
+            };
+            let TypeError::Interface(error) = lexical_evidence_error(reason, primary, related)
+            else {
+                unreachable!()
+            };
+            let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("is not admitted")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], reason.to_string());
+            assert_eq!(
+                json["labels"][0]["relationship"],
+                match reason {
+                    InterfaceReason::EvidenceMissingLocalKey
+                    | InterfaceReason::EvidenceDuplicate
+                    | InterfaceReason::EvidenceDeterminationConflict => "evidence_key",
+                    InterfaceReason::EvidenceMissingMethod => "evidence_declaration",
+                    _ => "evidence_method",
+                }
+            );
+            assert_eq!(json["responsibility"], "source");
+            assert_eq!(
+                json["labels"].as_array().unwrap().len(),
+                1 + usize::from(primary != related)
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_presentation_preserves_optional_label_roles() {
+        use crate::presentation::{compile_type_diagnostic, write_json};
+        let source = SourceFile::new("recursive.ash", "call").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for labels in [
+            [None, None],
+            [Some(RecursionLabel::Function), None],
+            [Some(RecursionLabel::Application), None],
+            [
+                Some(RecursionLabel::Function),
+                Some(RecursionLabel::Application),
+            ],
+        ] {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::PolymorphicRecursion,
+                SourceLabel::new(span, "ignored"),
+            );
+            diagnostic.expected = Some("A".into());
+            diagnostic.found = Some("(A, A)".into());
+            for _ in labels.iter().flatten() {
+                diagnostic.related.push(SourceLabel::new(span, "ignored"));
+            }
+            let mut error = TypeDiagnostic {
+                diagnostic,
+                context: TypeDiagnosticContext::PolymorphicRecursion(labels),
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let actual = json["labels"].as_array().unwrap();
+            assert_eq!(actual.len(), 1 + labels.iter().flatten().count());
+            for (label, expected) in actual.iter().skip(1).zip(labels.iter().flatten()) {
+                assert_eq!(
+                    label["relationship"],
+                    match expected {
+                        RecursionLabel::Function => "recursive_function",
+                        RecursionLabel::Application => "application",
+                    }
+                );
+            }
+            if !error.related.is_empty() {
+                error.related.pop();
+                assert!(compile_type_diagnostic(&error, &[&source]).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn unsafe_discard_presentation_retains_completion_owner_and_budget() {
+        use crate::{
+            core::capture::{CompletionOwner, Failure, UnsafeDiscard},
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("discard.ash", "discard request owner").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        for (owner, kind) in [
+            (None, "unknown"),
+            (Some(CompletionOwner::Clause(span(16, 21))), "clause"),
+            (Some(CompletionOwner::Cleanup(span(16, 21))), "cleanup"),
+        ] {
+            let failure = Failure::Unsafe(UnsafeDiscard {
+                node: 0,
+                discard: span(0, 7),
+                request: span(8, 15),
+                owner,
+            });
+            let work = 2 + usize::from(owner.is_some());
+            let mut short = TypeWorkBudget::with_limit(work - 1);
+            assert!(matches!(
+                capture_failure(failure, &mut short),
+                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+            ));
+            let mut budget = TypeWorkBudget::with_limit(work);
+            let TypeError::Source(mut error) = capture_failure(failure, &mut budget) else {
+                unreachable!()
+            };
+            assert_eq!(budget.used(), work);
+            for label in &mut error.related {
+                *label = SourceLabel::new(label.span(), "ignored legacy prose");
+            }
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("ignored legacy prose")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], kind);
+            assert_eq!(json["labels"].as_array().unwrap().len(), work);
+        }
+    }
+
+    #[test]
+    fn effect_row_causes_render_without_legacy_prose() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("row.ash", "action").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        for (cause, name, explanation) in [
+            (
+                EffectRowCause::CleanupRequirement,
+                "cleanup-requirement",
+                "The cleanup effects do not satisfy the required effect row.",
+            ),
+            (
+                EffectRowCause::Removal,
+                "removal",
+                "Ash cannot determine the effect row remaining after this handler removes its exact effect instance.",
+            ),
+            (
+                EffectRowCause::Union,
+                "union",
+                "This expression combines effect rows that have no most general union.",
+            ),
+            (
+                EffectRowCause::InfiniteFunction,
+                "infinite-function",
+                "This function would require an infinite effect row.",
+            ),
+            (
+                EffectRowCause::FunctionMismatch,
+                "function-mismatch",
+                "This function body's effects do not match its function type.",
+            ),
+            (
+                EffectRowCause::FunctionOutsideDeclared,
+                "function-outside-declared",
+                "This function body requests effects outside its declared effect row.",
+            ),
+            (
+                EffectRowCause::CleanupInference,
+                "cleanup-inference",
+                "Ash cannot infer a most general effect row for this cleanup action.",
+            ),
+            (
+                EffectRowCause::CleanupOutsideExpected,
+                "cleanup-outside-expected",
+                "This cleanup action requests effects outside its expected effect row.",
+            ),
+            (
+                EffectRowCause::DiscardCleanup,
+                "discard-cleanup",
+                "The effects of this discard do not match the cleanup actions it owns.",
+            ),
+        ] {
+            let TypeError::Source(error) = effect_row_failure(cause, span, "ignored legacy prose")
+            else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let text = String::from_utf8(output).unwrap();
+                assert!(!text.contains("ignored legacy prose"));
+                if locale == Locale::English {
+                    assert!(text.contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["name"], "row_failure");
+            assert_eq!(json["facts"][0]["value"], name);
+            assert_eq!(json["responsibility"], "source");
+        }
+    }
+
+    #[test]
+    fn handler_operation_validation_retains_exact_causes_and_work() {
+        use crate::types::{EffectId, OperationId};
+        let owner = EffectId::new(ModuleId::new(7), 3);
+        let foreign = EffectId::new(ModuleId::new(7), 4);
+        for (operations, expected) in [
+            (
+                [OperationId::new(owner, 0), OperationId::new(owner, 0)],
+                HandlerCoverageCause::DuplicateOperation,
+            ),
+            (
+                [OperationId::new(owner, 0), OperationId::new(foreign, 1)],
+                HandlerCoverageCause::OperationOwner,
+            ),
+            (
+                [OperationId::new(owner, 0), OperationId::new(owner, 2)],
+                HandlerCoverageCause::OperationIndex,
+            ),
+        ] {
+            let mut budget = TypeWorkBudget::with_limit(4);
+            assert_eq!(
+                first_invalid_handler_operation_with_budget(
+                    owner,
+                    2,
+                    operations.into_iter(),
+                    &mut budget
+                ),
+                Ok(Some((1, expected)))
+            );
+            assert_eq!(budget.used(), 4);
+        }
+    }
+
+    #[test]
+    fn handler_and_completion_causes_render_without_legacy_prose() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("handler.ash", "resume").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let mut cases = vec![
+            (
+                completion_outside_error(CompletionOperation::Resume, span),
+                "resume",
+            ),
+            (
+                completion_outside_error(CompletionOperation::Discard, span),
+                "discard",
+            ),
+        ];
+        for (cause, name) in [
+            (HandlerCoverageCause::ArgumentCount, "argument-count"),
+            (HandlerCoverageCause::OperationOwner, "operation-owner"),
+            (HandlerCoverageCause::ClauseCount, "clause-count"),
+            (HandlerCoverageCause::OperationIndex, "operation-index"),
+            (
+                HandlerCoverageCause::DuplicateOperation,
+                "duplicate-operation",
+            ),
+        ] {
+            cases.push((
+                handler_coverage_error(cause, span, "ignored legacy prose"),
+                name,
+            ));
+        }
+        for (error, fact) in cases {
+            let TypeError::Source(error) = error else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("ignored legacy prose")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], fact);
+            assert_eq!(json["responsibility"], "source");
+        }
     }
 
     #[test]
@@ -25882,7 +27494,9 @@ mod tests {
 
         assert_eq!(
             failure,
-            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted(
+                UsefulnessError::WorkLimit
+            ))
         );
     }
 
@@ -25912,7 +27526,9 @@ mod tests {
 
         assert_eq!(
             failure,
-            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted)
+            TypeError::Internal(ElaborationFailure::CoverageResourceExhausted(
+                UsefulnessError::WorkLimit
+            ))
         );
     }
 

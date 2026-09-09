@@ -252,11 +252,2498 @@ impl fmt::Display for ValidationReason {
 pub struct ValidationError {
     reason: ValidationReason,
     node: Option<NodeId>,
+    cause: Option<ValidationCause>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ValidationCause {
+    CapturedResourceEscape {
+        source: crate::source::Span,
+        acquisition: crate::source::Span,
+    },
+    UnsafeCoreDiscard(super::capture::UnsafeDiscard),
+    CoreCleanupContext {
+        discard: crate::source::Span,
+        action: crate::source::Span,
+        handler: crate::source::Span,
+    },
+    MissingChild,
+    ForeignArena,
+    MissingNode,
+    NodeIdentityRange,
+    EmptyMatch,
+    RedundantArm {
+        arm: usize,
+    },
+    NonExhaustiveMatch,
+    MissingOrigin,
+    OriginDepth,
+    RelatedOriginSource,
+    UnadmittedOriginSource,
+    InvalidOriginSpan(crate::source::SourceError),
+    EmptyRecursiveGroup,
+    RecursiveFunctionInitializer,
+    RecursiveTypeAbstraction,
+    RecursiveTypeParameters,
+    RecursiveFunctionBody,
+    RecursiveValueType,
+    RecursiveUnknownConstructor,
+    RecursiveConstructorOwner,
+    RecursiveMissingPayload,
+    RecursiveUnexpectedPayload,
+    RecursiveDataRoot,
+    RecursivePayloadCall,
+    RecursivePayloadForm,
+    ForeignBinderArena,
+    DuplicateBinder,
+    UnknownVariableBinder,
+    NonLexicalScopeOwner,
+    UnknownScopeOwner,
+    LocalScopeType,
+    LocalScopeEffects,
+    IncompleteScopeAnalysis,
+    UnboundCoreBinder,
+    UnboundLocalNominal,
+    UnexpectedLocalScope,
+    DuplicateLocalScope,
+    MissingLocalScope,
+    ScopeMissingChild,
+    MissingCaptureRequirement,
+    MissingRootRequirements,
+    MissingNodeRequirements,
+    MissingGeneratedTypeBinder,
+    UnresolvedCoreInference,
+    TypeScopeMissingChild,
+    MissingTypeRootRequirements,
+    UnboundCoreTypeVariables,
+    MissingTypeUseCount,
+    ExhaustedTypeUseCount,
+    MissingTypeRequirementSlot,
+    MissingTypeRequirements,
+    UnresolvedCoreRow,
+    UnknownCoreRowBinder,
+    NonRowTailKind,
+    HookMissingEffect,
+    HookDuplicateBinders,
+    HookPreviousBindingShape,
+    HookNextBindingShape,
+    HookForwardRequestShape,
+    HookCallbackApplicationShape,
+    HookRegistrationResumeShape,
+    HookForwardEffect,
+    HookPreviousBinder,
+    HookNextBinder,
+    HookForwardOperation,
+    HookForwardInput,
+    HookCallbackUse,
+    HookPreviousUse,
+    HookNextUse,
+    CallbackScopeMissingParent,
+    CallbackScopeBindingShape,
+    CallbackScopeParentCount,
+    CallbackScopeBindingBody,
+    CallbackScopeBindingIdentity,
+    CleanupBindingOrigin,
+    CleanupActionIndex,
+    CleanupActionParentCount,
+    RegisteredHandlerParentShape,
+    RegisteredHandlerParentBody,
+    HookOperationCount,
+    HookOperationType,
+    HookClauseCount,
+    HookInputPattern,
+    HookRootResumeShape,
+    HookRootValueShape,
+    HookTargetInstance,
+    HookOperationSpelling,
+    HookOperationEndomorphism,
+    HookContractOperation,
+    HookClauseOperation,
+    HookInputIdentity,
+    HookRootInputUse,
+    HookClauseContinuation,
+    HookResumeOwner,
+    HookResumeHandler,
+    HookResumeUseState,
+    HookScopeOrigin,
+    HookTargetSpan,
+    HookGeneratedOrigins,
+    CleanupActionShape,
+    CleanupFunctionShape,
+    CleanupFunctionType,
+    CleanupCallbackIdentity,
+    CleanupArgumentShape,
+    CleanupDomainType,
+    CleanupResultType,
+    CleanupBodyType,
+    CleanupScopeEffects,
+    CleanupScopeOrigin,
+    CleanupActionOrigin,
+    RegistrationHandlerShape,
+    RegistrationMissingContract,
+    RegistrationHasRoot,
+    RegistrationHandlerIdentity,
+    RegistrationCallbackIdentity,
+    RegistrationContractSpan,
+    RegistrationScopeOrigin,
+    RegistrationResultType,
+    RegistrationScopeEffects,
+    DuplicateHandlerIdentity,
+    HandlerArgumentCount,
+    HandlerClauseCount,
+    DuplicateClauseContinuation,
+    HandlerOperationRange,
+    HandlerOperationSlot,
+    DuplicateHandlerOperation,
+    HandlerClauseCoverage,
+    HandlerClauseType,
+    HandlerClauseEffects,
+    CoreCleanupRow(crate::source::Span),
+    RowUnionAmbiguous,
+    RowUnionMissing,
+    RowUnionInfinite,
+    RowRemovalAmbiguous,
+    RowRemovalMissing,
+    RowRemovalInfinite,
+    PureDialectRow,
+    ResourceScopeRow,
+    RequestArgumentType,
+    RequestResultType,
+    RequestEffectRow,
+    LinkedRootEffects,
+    RowOwnerInference,
+    MissingRowOwner,
+    RowOwnerKind,
+    RowOwnerScheme,
+    UnprovedRowLacks,
+    PureNodeEffectRow,
+    MissingChildRow,
+    MissingRowSlot,
+    MissingRootRow,
+    HandlerBodyType,
+    HandlerBodyEffects,
+    HandlerOutputRow,
+    UnboundContinuation,
+    ContinuationBranchUsage,
+    MissingClauseConsumption,
+    RepeatedClauseConsumption,
+    ForeignClauseContinuation,
+    CapturedContinuation,
+    ResumeUseState,
+    DiscardUseState,
+    DiscardResultType,
+    DiscardMissingContract,
+    ResumeMissingContract,
+    ResumeHandlerShape,
+    ResumeMissingClause,
+    ResumeArgumentType,
+    ResumeResultType,
+    ResumeEffectRow,
+    ResumeArgumentEffects,
+    PatternDepth,
+    PatternTypeMismatch,
+    PatternInvalidType,
+    PatternBinderInvalidType,
+    PatternBinderArena,
+    PatternBinderType,
+    PatternDuplicateBinder,
+    PatternTupleType,
+    PatternTupleArity,
+    PatternHiddenConstructor,
+    PatternNominalType,
+    PatternUnknownConstructor,
+    PatternNewtypeConstructor,
+    PatternConstructorOwner,
+    PatternMissingParameters,
+    PatternNominalArity,
+    PatternArgumentSpine,
+    PatternMissingPayload,
+    PatternUnexpectedPayload,
+    PatternBooleanType,
+    PatternUnitType,
+    MatchScrutineeType,
+    ExpectedTypeAbstraction,
+    ExpectedTypeApplication,
+    AdapterParameterIdentity,
+    AbstractionBinderOwner,
+    MethodInstantiationIdentity,
+    MethodTypeArgumentCount,
+    MethodTypeArgument,
+    MethodInstantiationResult,
+    MethodInstantiationRole,
+    MissingMethodProducer,
+    MethodInstantiationProducer,
+    TypeAbstractionScheme,
+    EmptyTypeAbstraction,
+    AbstractionNominalParameter,
+    AbstractionParameters,
+    AbstractionBodyType,
+    NestedTypeAbstraction,
+    AbstractionTypeKind,
+    TypeApplicationScheme,
+    TypeApplicationArity,
+    TypeApplicationRows,
+    MissingRowArgument,
+    MissingTypeArgument,
+    TypeArgumentInvalid,
+    TypeArgumentKind,
+    TypeSubstitutionAmbiguous,
+    TypeSubstitutionMissing,
+    TypeSubstitutionInfinite,
+    TypeApplicationResult,
+    MissingTupleKinds,
+    MissingArgumentKind,
+    MissingFunctionKind,
+    MissingCodomainKind,
+    MissingDomainKind,
+    CoreKindResultCount,
+    DuplicateGeneratedTypeBinder,
+    EffectAbstractionBody,
+    UnknownCoreEffect,
+    CoreOperationOwner,
+    CoreEffectArgumentCount,
+    CoreEffectInvalidArgument,
+    CoreEffectArgumentKind,
+    UnknownCoreOperation,
+    CoreOperationSignature,
+    UnsupportedResourceModule,
+    ResourceProviderMethodCount,
+    ConversionUnknownOwner,
+    ConversionOrdinaryOwner,
+    ConversionMissingRepresentation,
+    ConversionMissingParameters,
+    ConversionExcessArguments,
+    ConversionNominalOwner,
+    ConversionMissingArguments,
+    ConversionInvalidArgument,
+    ConversionArgumentKind,
+    ConversionRepresentationMismatch,
 }
 
 impl ValidationError {
+    fn row_union_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
+        Self::with_cause(
+            match error {
+                crate::types::EffectRowError::Ambiguous => ValidationCause::RowUnionAmbiguous,
+                crate::types::EffectRowError::Missing => ValidationCause::RowUnionMissing,
+                crate::types::EffectRowError::Infinite => ValidationCause::RowUnionInfinite,
+            },
+            Some(node),
+        )
+    }
+
+    fn row_removal_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
+        Self::with_cause(
+            match error {
+                crate::types::EffectRowError::Ambiguous => ValidationCause::RowRemovalAmbiguous,
+                crate::types::EffectRowError::Missing => ValidationCause::RowRemovalMissing,
+                crate::types::EffectRowError::Infinite => ValidationCause::RowRemovalInfinite,
+            },
+            Some(node),
+        )
+    }
+    pub(crate) fn cause_name(&self) -> Option<&'static str> {
+        Some(match self.cause? {
+            ValidationCause::CapturedResourceEscape { .. } => "captured-resource-escape",
+            ValidationCause::CoreCleanupContext { .. } => "cleanup-context",
+            ValidationCause::UnsafeCoreDiscard(failure) => match failure.owner {
+                None => "discard-unproved",
+                Some(super::capture::CompletionOwner::Cleanup(_)) => "discard-cleanup",
+                Some(super::capture::CompletionOwner::Clause(_)) => "discard-clause",
+            },
+            ValidationCause::MissingChild => "missing-child",
+            ValidationCause::ForeignArena => "foreign-arena",
+            ValidationCause::MissingNode => "missing-node",
+            ValidationCause::NodeIdentityRange => "node-identity-range",
+            ValidationCause::EmptyMatch => "empty-match",
+            ValidationCause::RedundantArm { .. } => "redundant-arm",
+            ValidationCause::NonExhaustiveMatch => "non-exhaustive-match",
+            ValidationCause::MissingOrigin => "missing-origin",
+            ValidationCause::OriginDepth => "origin-depth",
+            ValidationCause::RelatedOriginSource => "related-origin-source",
+            ValidationCause::UnadmittedOriginSource => "unadmitted-origin-source",
+            ValidationCause::InvalidOriginSpan(_) => "invalid-origin-span",
+            ValidationCause::EmptyRecursiveGroup => "empty-recursive-group",
+            ValidationCause::RecursiveFunctionInitializer => "recursive-function-initializer",
+            ValidationCause::RecursiveTypeAbstraction => "recursive-type-abstraction",
+            ValidationCause::RecursiveTypeParameters => "recursive-type-parameters",
+            ValidationCause::RecursiveFunctionBody => "recursive-function-body",
+            ValidationCause::RecursiveValueType => "recursive-value-type",
+            ValidationCause::RecursiveUnknownConstructor => "recursive-unknown-constructor",
+            ValidationCause::RecursiveConstructorOwner => "recursive-constructor-owner",
+            ValidationCause::RecursiveMissingPayload => "recursive-missing-payload",
+            ValidationCause::RecursiveUnexpectedPayload => "recursive-unexpected-payload",
+            ValidationCause::RecursiveDataRoot => "recursive-data-root",
+            ValidationCause::RecursivePayloadCall => "recursive-payload-call",
+            ValidationCause::RecursivePayloadForm => "recursive-payload-form",
+            ValidationCause::ForeignBinderArena => "foreign-binder-arena",
+            ValidationCause::DuplicateBinder => "duplicate-binder",
+            ValidationCause::UnknownVariableBinder => "unknown-variable-binder",
+            ValidationCause::NonLexicalScopeOwner => "non-lexical-scope-owner",
+            ValidationCause::UnknownScopeOwner => "unknown-scope-owner",
+            ValidationCause::LocalScopeType => "local-scope-type",
+            ValidationCause::LocalScopeEffects => "local-scope-effects",
+            ValidationCause::IncompleteScopeAnalysis => "incomplete-scope-analysis",
+            ValidationCause::UnboundCoreBinder => "unbound-core-binder",
+            ValidationCause::UnboundLocalNominal => "unbound-local-nominal",
+            ValidationCause::UnexpectedLocalScope => "unexpected-local-scope",
+            ValidationCause::DuplicateLocalScope => "duplicate-local-scope",
+            ValidationCause::MissingLocalScope => "missing-local-scope",
+            ValidationCause::ScopeMissingChild => "scope-missing-child",
+            ValidationCause::MissingCaptureRequirement => "missing-capture-requirement",
+            ValidationCause::MissingRootRequirements => "missing-root-requirements",
+            ValidationCause::MissingNodeRequirements => "missing-node-requirements",
+            ValidationCause::MissingGeneratedTypeBinder => "missing-generated-type-binder",
+            ValidationCause::UnresolvedCoreInference => "unresolved-core-inference",
+            ValidationCause::TypeScopeMissingChild => "type-scope-missing-child",
+            ValidationCause::MissingTypeRootRequirements => "missing-type-root-requirements",
+            ValidationCause::UnboundCoreTypeVariables => "unbound-core-type-variables",
+            ValidationCause::MissingTypeUseCount => "missing-type-use-count",
+            ValidationCause::ExhaustedTypeUseCount => "exhausted-type-use-count",
+            ValidationCause::MissingTypeRequirementSlot => "missing-type-requirement-slot",
+            ValidationCause::MissingTypeRequirements => "missing-type-requirements",
+            ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
+            ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
+            ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::HookMissingEffect => "hook-missing-effect",
+            ValidationCause::HookDuplicateBinders => "hook-duplicate-binders",
+            ValidationCause::HookPreviousBindingShape => "hook-previous-binding-shape",
+            ValidationCause::HookNextBindingShape => "hook-next-binding-shape",
+            ValidationCause::HookForwardRequestShape => "hook-forward-request-shape",
+            ValidationCause::HookCallbackApplicationShape => "hook-callback-application-shape",
+            ValidationCause::HookRegistrationResumeShape => "hook-registration-resume-shape",
+            ValidationCause::HookForwardEffect => "hook-forward-effect",
+            ValidationCause::HookPreviousBinder => "hook-previous-binder",
+            ValidationCause::HookNextBinder => "hook-next-binder",
+            ValidationCause::HookForwardOperation => "hook-forward-operation",
+            ValidationCause::HookForwardInput => "hook-forward-input",
+            ValidationCause::HookCallbackUse => "hook-callback-use",
+            ValidationCause::HookPreviousUse => "hook-previous-use",
+            ValidationCause::HookNextUse => "hook-next-use",
+            ValidationCause::CallbackScopeMissingParent => "callback-scope-missing-parent",
+            ValidationCause::CallbackScopeBindingShape => "callback-scope-binding-shape",
+            ValidationCause::CallbackScopeParentCount => "callback-scope-parent-count",
+            ValidationCause::CallbackScopeBindingBody => "callback-scope-binding-body",
+            ValidationCause::CallbackScopeBindingIdentity => "callback-scope-binding-identity",
+            ValidationCause::CleanupBindingOrigin => "cleanup-binding-origin",
+            ValidationCause::CleanupActionIndex => "cleanup-action-index",
+            ValidationCause::CleanupActionParentCount => "cleanup-action-parent-count",
+            ValidationCause::RegisteredHandlerParentShape => "registered-handler-parent-shape",
+            ValidationCause::RegisteredHandlerParentBody => "registered-handler-parent-body",
+            ValidationCause::HookOperationCount => "hook-operation-count",
+            ValidationCause::HookOperationType => "hook-operation-type",
+            ValidationCause::HookClauseCount => "hook-clause-count",
+            ValidationCause::HookInputPattern => "hook-input-pattern",
+            ValidationCause::HookRootResumeShape => "hook-root-resume-shape",
+            ValidationCause::HookRootValueShape => "hook-root-value-shape",
+            ValidationCause::HookTargetInstance => "hook-target-instance",
+            ValidationCause::HookOperationSpelling => "hook-operation-spelling",
+            ValidationCause::HookOperationEndomorphism => "hook-operation-endomorphism",
+            ValidationCause::HookContractOperation => "hook-contract-operation",
+            ValidationCause::HookClauseOperation => "hook-clause-operation",
+            ValidationCause::HookInputIdentity => "hook-input-identity",
+            ValidationCause::HookRootInputUse => "hook-root-input-use",
+            ValidationCause::HookClauseContinuation => "hook-clause-continuation",
+            ValidationCause::HookResumeOwner => "hook-resume-owner",
+            ValidationCause::HookResumeHandler => "hook-resume-handler",
+            ValidationCause::HookResumeUseState => "hook-resume-use-state",
+            ValidationCause::HookScopeOrigin => "hook-scope-origin",
+            ValidationCause::HookTargetSpan => "hook-target-span",
+            ValidationCause::HookGeneratedOrigins => "hook-generated-origins",
+            ValidationCause::CleanupActionShape => "cleanup-action-shape",
+            ValidationCause::CleanupFunctionShape => "cleanup-function-shape",
+            ValidationCause::CleanupFunctionType => "cleanup-function-type",
+            ValidationCause::CleanupCallbackIdentity => "cleanup-callback-identity",
+            ValidationCause::CleanupArgumentShape => "cleanup-argument-shape",
+            ValidationCause::CleanupDomainType => "cleanup-domain-type",
+            ValidationCause::CleanupResultType => "cleanup-result-type",
+            ValidationCause::CleanupBodyType => "cleanup-body-type",
+            ValidationCause::CleanupScopeEffects => "cleanup-scope-effects",
+            ValidationCause::CleanupScopeOrigin => "cleanup-scope-origin",
+            ValidationCause::CleanupActionOrigin => "cleanup-action-origin",
+            ValidationCause::RegistrationHandlerShape => "registration-handler-shape",
+            ValidationCause::RegistrationMissingContract => "registration-missing-contract",
+            ValidationCause::RegistrationHasRoot => "registration-has-root",
+            ValidationCause::RegistrationHandlerIdentity => "registration-handler-identity",
+            ValidationCause::RegistrationCallbackIdentity => "registration-callback-identity",
+            ValidationCause::RegistrationContractSpan => "registration-contract-span",
+            ValidationCause::RegistrationScopeOrigin => "registration-scope-origin",
+            ValidationCause::RegistrationResultType => "registration-result-type",
+            ValidationCause::RegistrationScopeEffects => "registration-scope-effects",
+            ValidationCause::DuplicateHandlerIdentity => "duplicate-handler-identity",
+            ValidationCause::HandlerArgumentCount => "handler-argument-count",
+            ValidationCause::HandlerClauseCount => "handler-clause-count",
+            ValidationCause::DuplicateClauseContinuation => "duplicate-clause-continuation",
+            ValidationCause::HandlerOperationRange => "handler-operation-range",
+            ValidationCause::HandlerOperationSlot => "handler-operation-slot",
+            ValidationCause::DuplicateHandlerOperation => "duplicate-handler-operation",
+            ValidationCause::HandlerClauseCoverage => "handler-clause-coverage",
+            ValidationCause::HandlerClauseType => "handler-clause-type",
+            ValidationCause::HandlerClauseEffects => "handler-clause-effects",
+            ValidationCause::CoreCleanupRow(_) => "cleanup-effect-row",
+            ValidationCause::RowUnionAmbiguous => "row-union-ambiguous",
+            ValidationCause::RowUnionMissing => "row-union-missing",
+            ValidationCause::RowUnionInfinite => "row-union-infinite",
+            ValidationCause::RowRemovalAmbiguous => "row-removal-ambiguous",
+            ValidationCause::RowRemovalMissing => "row-removal-missing",
+            ValidationCause::RowRemovalInfinite => "row-removal-infinite",
+            ValidationCause::PureDialectRow => "pure-dialect-row",
+            ValidationCause::ResourceScopeRow => "resource-scope-row",
+            ValidationCause::RequestArgumentType => "request-argument-type",
+            ValidationCause::RequestResultType => "request-result-type",
+            ValidationCause::RequestEffectRow => "request-effect-row",
+            ValidationCause::LinkedRootEffects => "linked-root-effects",
+            ValidationCause::RowOwnerInference => "row-owner-inference",
+            ValidationCause::MissingRowOwner => "missing-row-owner",
+            ValidationCause::RowOwnerKind => "row-owner-kind",
+            ValidationCause::RowOwnerScheme => "row-owner-scheme",
+            ValidationCause::UnprovedRowLacks => "unproved-row-lacks",
+            ValidationCause::PureNodeEffectRow => "pure-node-effect-row",
+            ValidationCause::MissingChildRow => "missing-child-row",
+            ValidationCause::MissingRowSlot => "missing-row-slot",
+            ValidationCause::MissingRootRow => "missing-root-row",
+            ValidationCause::HandlerBodyType => "handler-body-type",
+            ValidationCause::HandlerBodyEffects => "handler-body-effects",
+            ValidationCause::HandlerOutputRow => "handler-output-row",
+            ValidationCause::UnboundContinuation => "unbound-continuation",
+            ValidationCause::ContinuationBranchUsage => "continuation-branch-usage",
+            ValidationCause::MissingClauseConsumption => "missing-clause-consumption",
+            ValidationCause::RepeatedClauseConsumption => "repeated-clause-consumption",
+            ValidationCause::ForeignClauseContinuation => "foreign-clause-continuation",
+            ValidationCause::CapturedContinuation => "captured-continuation",
+            ValidationCause::ResumeUseState => "resume-use-state",
+            ValidationCause::DiscardUseState => "discard-use-state",
+            ValidationCause::DiscardResultType => "discard-result-type",
+            ValidationCause::DiscardMissingContract => "discard-missing-contract",
+            ValidationCause::ResumeMissingContract => "resume-missing-contract",
+            ValidationCause::ResumeHandlerShape => "resume-handler-shape",
+            ValidationCause::ResumeMissingClause => "resume-missing-clause",
+            ValidationCause::ResumeArgumentType => "resume-argument-type",
+            ValidationCause::ResumeResultType => "resume-result-type",
+            ValidationCause::ResumeEffectRow => "resume-effect-row",
+            ValidationCause::ResumeArgumentEffects => "resume-argument-effects",
+            ValidationCause::PatternDepth => "pattern-depth",
+            ValidationCause::PatternTypeMismatch => "pattern-type-mismatch",
+            ValidationCause::PatternInvalidType => "pattern-invalid-type",
+            ValidationCause::PatternBinderInvalidType => "pattern-binder-invalid-type",
+            ValidationCause::PatternBinderArena => "pattern-binder-arena",
+            ValidationCause::PatternBinderType => "pattern-binder-type",
+            ValidationCause::PatternDuplicateBinder => "pattern-duplicate-binder",
+            ValidationCause::PatternTupleType => "pattern-tuple-type",
+            ValidationCause::PatternTupleArity => "pattern-tuple-arity",
+            ValidationCause::PatternHiddenConstructor => "pattern-hidden-constructor",
+            ValidationCause::PatternNominalType => "pattern-nominal-type",
+            ValidationCause::PatternUnknownConstructor => "pattern-unknown-constructor",
+            ValidationCause::PatternNewtypeConstructor => "pattern-newtype-constructor",
+            ValidationCause::PatternConstructorOwner => "pattern-constructor-owner",
+            ValidationCause::PatternMissingParameters => "pattern-missing-parameters",
+            ValidationCause::PatternNominalArity => "pattern-nominal-arity",
+            ValidationCause::PatternArgumentSpine => "pattern-argument-spine",
+            ValidationCause::PatternMissingPayload => "pattern-missing-payload",
+            ValidationCause::PatternUnexpectedPayload => "pattern-unexpected-payload",
+            ValidationCause::PatternBooleanType => "pattern-boolean-type",
+            ValidationCause::PatternUnitType => "pattern-unit-type",
+            ValidationCause::MatchScrutineeType => "match-scrutinee-type",
+            ValidationCause::ExpectedTypeAbstraction => "expected-type-abstraction",
+            ValidationCause::ExpectedTypeApplication => "expected-type-application",
+            ValidationCause::AdapterParameterIdentity => "adapter-parameter-identity",
+            ValidationCause::AbstractionBinderOwner => "abstraction-binder-owner",
+            ValidationCause::MethodInstantiationIdentity => "method-instantiation-identity",
+            ValidationCause::MethodTypeArgumentCount => "method-type-argument-count",
+            ValidationCause::MethodTypeArgument => "method-type-argument",
+            ValidationCause::MethodInstantiationResult => "method-instantiation-result",
+            ValidationCause::MethodInstantiationRole => "method-instantiation-role",
+            ValidationCause::MissingMethodProducer => "missing-method-producer",
+            ValidationCause::MethodInstantiationProducer => "method-instantiation-producer",
+            ValidationCause::TypeAbstractionScheme => "type-abstraction-scheme",
+            ValidationCause::EmptyTypeAbstraction => "empty-type-abstraction",
+            ValidationCause::AbstractionNominalParameter => "abstraction-nominal-parameter",
+            ValidationCause::AbstractionParameters => "abstraction-parameters",
+            ValidationCause::AbstractionBodyType => "abstraction-body-type",
+            ValidationCause::NestedTypeAbstraction => "nested-type-abstraction",
+            ValidationCause::AbstractionTypeKind => "abstraction-type-kind",
+            ValidationCause::TypeApplicationScheme => "type-application-scheme",
+            ValidationCause::TypeApplicationArity => "type-application-arity",
+            ValidationCause::TypeApplicationRows => "type-application-rows",
+            ValidationCause::MissingRowArgument => "missing-row-argument",
+            ValidationCause::MissingTypeArgument => "missing-type-argument",
+            ValidationCause::TypeArgumentInvalid => "type-argument-invalid",
+            ValidationCause::TypeArgumentKind => "type-argument-kind",
+            ValidationCause::TypeSubstitutionAmbiguous => "type-substitution-ambiguous",
+            ValidationCause::TypeSubstitutionMissing => "type-substitution-missing",
+            ValidationCause::TypeSubstitutionInfinite => "type-substitution-infinite",
+            ValidationCause::TypeApplicationResult => "type-application-result",
+            ValidationCause::MissingTupleKinds => "missing-tuple-kinds",
+            ValidationCause::MissingArgumentKind => "missing-argument-kind",
+            ValidationCause::MissingFunctionKind => "missing-function-kind",
+            ValidationCause::MissingCodomainKind => "missing-codomain-kind",
+            ValidationCause::MissingDomainKind => "missing-domain-kind",
+            ValidationCause::CoreKindResultCount => "core-kind-result-count",
+            ValidationCause::DuplicateGeneratedTypeBinder => "duplicate-generated-type-binder",
+            ValidationCause::EffectAbstractionBody => "effect-abstraction-body",
+            ValidationCause::UnknownCoreEffect => "unknown-core-effect",
+            ValidationCause::CoreOperationOwner => "core-operation-owner",
+            ValidationCause::CoreEffectArgumentCount => "core-effect-argument-count",
+            ValidationCause::CoreEffectInvalidArgument => "core-effect-invalid-argument",
+            ValidationCause::CoreEffectArgumentKind => "core-effect-argument-kind",
+            ValidationCause::UnknownCoreOperation => "unknown-core-operation",
+            ValidationCause::CoreOperationSignature => "core-operation-signature",
+            ValidationCause::UnsupportedResourceModule => "unsupported-resource-module",
+            ValidationCause::ResourceProviderMethodCount => "resource-provider-method-count",
+            ValidationCause::ConversionUnknownOwner => "conversion-unknown-owner",
+            ValidationCause::ConversionOrdinaryOwner => "conversion-ordinary-owner",
+            ValidationCause::ConversionMissingRepresentation => "conversion-missing-representation",
+            ValidationCause::ConversionMissingParameters => "conversion-missing-parameters",
+            ValidationCause::ConversionExcessArguments => "conversion-excess-arguments",
+            ValidationCause::ConversionNominalOwner => "conversion-nominal-owner",
+            ValidationCause::ConversionMissingArguments => "conversion-missing-arguments",
+            ValidationCause::ConversionInvalidArgument => "conversion-invalid-argument",
+            ValidationCause::ConversionArgumentKind => "conversion-argument-kind",
+            ValidationCause::ConversionRepresentationMismatch => {
+                "conversion-representation-mismatch"
+            }
+        })
+    }
+
+    pub(crate) fn arm_number(&self) -> Option<usize> {
+        match self.cause {
+            Some(ValidationCause::RedundantArm { arm }) => Some(arm),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn origin_span_failure(&self) -> Option<crate::source::SourceError> {
+        match self.cause {
+            Some(ValidationCause::InvalidOriginSpan(error)) => Some(error),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn capture_labels(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::source::Span,
+            crate::message::Message<'static>,
+            &'static str,
+        ),
+    > {
+        use crate::message::Message;
+        let labels = match self.cause {
+            Some(ValidationCause::CoreCleanupRow(source)) => [
+                Some((source, Message::effect_row_discard_cleanup(), "discard")),
+                None,
+                None,
+            ],
+            Some(ValidationCause::CapturedResourceEscape {
+                source,
+                acquisition,
+            }) => [
+                Some((source, Message::resource_escape(), "escaping_dependency")),
+                Some((
+                    acquisition,
+                    Message::resource_acquisition(),
+                    "resource_acquisition",
+                )),
+                None,
+            ],
+            Some(ValidationCause::CoreCleanupContext {
+                discard,
+                action,
+                handler,
+            }) => [
+                Some((discard, Message::cleanup_context(), "discard")),
+                Some((action, Message::cleanup_required_action(), "cleanup_action")),
+                Some((
+                    handler,
+                    Message::cleanup_abandoned_handler(),
+                    "abandoned_handler",
+                )),
+            ],
+            Some(ValidationCause::UnsafeCoreDiscard(failure)) => {
+                let (message, owner) = match failure.owner {
+                    None => (Message::discard_unknown(), None),
+                    Some(super::capture::CompletionOwner::Cleanup(span)) => (
+                        Message::discard_cleanup(),
+                        Some((span, Message::discard_cleanup_owner(), "cleanup_action")),
+                    ),
+                    Some(super::capture::CompletionOwner::Clause(span)) => (
+                        Message::discard_clause(),
+                        Some((span, Message::discard_clause_owner(), "completion_clause")),
+                    ),
+                };
+                [
+                    Some((failure.discard, message, "discard")),
+                    Some((
+                        failure.request,
+                        Message::discard_request(),
+                        "capturing_request",
+                    )),
+                    owner,
+                ]
+            }
+            _ => [None, None, None],
+        };
+        labels.into_iter().flatten()
+    }
+
+    pub(crate) fn diagnostic_message(&self) -> Option<crate::message::Message<'static>> {
+        use crate::message::Message;
+        let node = self
+            .node
+            .map(|node| usize::try_from(node.value()))
+            .transpose()
+            .ok()?;
+        if let Some(cause) = self.cause {
+            return Some(match (cause, node) {
+                (ValidationCause::CapturedResourceEscape { .. }, None) => {
+                    Message::core_resource_escape()
+                }
+                (ValidationCause::CapturedResourceEscape { .. }, Some(node)) => {
+                    Message::core_resource_escape_node(node)
+                }
+                (ValidationCause::CoreCleanupContext { .. }, None) => {
+                    Message::core_cleanup_context()
+                }
+                (ValidationCause::CoreCleanupContext { .. }, Some(node)) => {
+                    Message::core_cleanup_context_node(node)
+                }
+                (ValidationCause::UnsafeCoreDiscard(failure), node) => {
+                    match (failure.owner, node) {
+                        (None, None) => Message::core_discard_unknown(),
+                        (None, Some(node)) => Message::core_discard_unknown_node(node),
+                        (Some(super::capture::CompletionOwner::Clause(_)), None) => {
+                            Message::core_discard_clause()
+                        }
+                        (Some(super::capture::CompletionOwner::Clause(_)), Some(node)) => {
+                            Message::core_discard_clause_node(node)
+                        }
+                        (Some(super::capture::CompletionOwner::Cleanup(_)), None) => {
+                            Message::core_discard_cleanup()
+                        }
+                        (Some(super::capture::CompletionOwner::Cleanup(_)), Some(node)) => {
+                            Message::core_discard_cleanup_node(node)
+                        }
+                    }
+                }
+                (ValidationCause::MissingChild, None) => Message::core_validation_missing_child(),
+                (ValidationCause::ForeignArena, None) => Message::core_validation_foreign_arena(),
+                (ValidationCause::MissingNode, None) => Message::core_validation_missing_node(),
+                (ValidationCause::NodeIdentityRange, None) => {
+                    Message::core_validation_identity_range()
+                }
+                (ValidationCause::MissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::ForeignArena, Some(node)) => {
+                    Message::core_validation_foreign_arena_node(node)
+                }
+                (ValidationCause::MissingNode, Some(node)) => {
+                    Message::core_validation_missing_node_node(node)
+                }
+                (ValidationCause::NodeIdentityRange, Some(node)) => {
+                    Message::core_validation_identity_range_node(node)
+                }
+                (ValidationCause::EmptyMatch, None) => Message::core_validation_empty_match(),
+                (ValidationCause::EmptyMatch, Some(node)) => {
+                    Message::core_validation_empty_match_node(node)
+                }
+                (ValidationCause::RedundantArm { arm }, None) => {
+                    Message::core_validation_redundant_arm(arm)
+                }
+                (ValidationCause::RedundantArm { arm }, Some(node)) => {
+                    Message::core_validation_redundant_arm_node(arm, node)
+                }
+                (ValidationCause::NonExhaustiveMatch, None) => {
+                    Message::core_validation_non_exhaustive()
+                }
+                (ValidationCause::NonExhaustiveMatch, Some(node)) => {
+                    Message::core_validation_non_exhaustive_node(node)
+                }
+                (ValidationCause::MissingOrigin, None) => Message::core_validation_missing_origin(),
+                (ValidationCause::MissingOrigin, Some(node)) => {
+                    Message::core_validation_missing_origin_node(node)
+                }
+                (ValidationCause::OriginDepth, None) => Message::core_validation_origin_depth(),
+                (ValidationCause::OriginDepth, Some(node)) => {
+                    Message::core_validation_origin_depth_node(node)
+                }
+                (ValidationCause::RelatedOriginSource, None) => {
+                    Message::core_validation_related_origin_source()
+                }
+                (ValidationCause::RelatedOriginSource, Some(node)) => {
+                    Message::core_validation_related_origin_source_node(node)
+                }
+                (ValidationCause::UnadmittedOriginSource, None) => {
+                    Message::core_validation_unadmitted_origin_source()
+                }
+                (ValidationCause::UnadmittedOriginSource, Some(node)) => {
+                    Message::core_validation_unadmitted_origin_source_node(node)
+                }
+                (ValidationCause::InvalidOriginSpan(error), _) => {
+                    return Self::origin_span_message(error, node);
+                }
+                (ValidationCause::EmptyRecursiveGroup, None) => {
+                    Message::core_validation_empty_recursive_group()
+                }
+                (ValidationCause::EmptyRecursiveGroup, Some(node)) => {
+                    Message::core_validation_empty_recursive_group_node(node)
+                }
+                (ValidationCause::RecursiveFunctionInitializer, None) => {
+                    Message::core_validation_recursive_function_initializer()
+                }
+                (ValidationCause::RecursiveFunctionInitializer, Some(node)) => {
+                    Message::core_validation_recursive_function_initializer_node(node)
+                }
+                (ValidationCause::RecursiveTypeAbstraction, None) => {
+                    Message::core_validation_recursive_type_abstraction()
+                }
+                (ValidationCause::RecursiveTypeAbstraction, Some(node)) => {
+                    Message::core_validation_recursive_type_abstraction_node(node)
+                }
+                (ValidationCause::RecursiveTypeParameters, None) => {
+                    Message::core_validation_recursive_type_parameters()
+                }
+                (ValidationCause::RecursiveTypeParameters, Some(node)) => {
+                    Message::core_validation_recursive_type_parameters_node(node)
+                }
+                (ValidationCause::RecursiveFunctionBody, None) => {
+                    Message::core_validation_recursive_function_body()
+                }
+                (ValidationCause::RecursiveFunctionBody, Some(node)) => {
+                    Message::core_validation_recursive_function_body_node(node)
+                }
+                (ValidationCause::RecursiveValueType, None) => {
+                    Message::core_validation_recursive_value_type()
+                }
+                (ValidationCause::RecursiveValueType, Some(node)) => {
+                    Message::core_validation_recursive_value_type_node(node)
+                }
+                (ValidationCause::RecursiveUnknownConstructor, None) => {
+                    Message::core_validation_recursive_unknown_constructor()
+                }
+                (ValidationCause::RecursiveUnknownConstructor, Some(node)) => {
+                    Message::core_validation_recursive_unknown_constructor_node(node)
+                }
+                (ValidationCause::RecursiveConstructorOwner, None) => {
+                    Message::core_validation_recursive_constructor_owner()
+                }
+                (ValidationCause::RecursiveConstructorOwner, Some(node)) => {
+                    Message::core_validation_recursive_constructor_owner_node(node)
+                }
+                (ValidationCause::RecursiveMissingPayload, None) => {
+                    Message::core_validation_recursive_missing_payload()
+                }
+                (ValidationCause::RecursiveMissingPayload, Some(node)) => {
+                    Message::core_validation_recursive_missing_payload_node(node)
+                }
+                (ValidationCause::RecursiveUnexpectedPayload, None) => {
+                    Message::core_validation_recursive_unexpected_payload()
+                }
+                (ValidationCause::RecursiveUnexpectedPayload, Some(node)) => {
+                    Message::core_validation_recursive_unexpected_payload_node(node)
+                }
+                (ValidationCause::RecursiveDataRoot, None) => {
+                    Message::core_validation_recursive_data_root()
+                }
+                (ValidationCause::RecursiveDataRoot, Some(node)) => {
+                    Message::core_validation_recursive_data_root_node(node)
+                }
+                (ValidationCause::RecursivePayloadCall, None) => {
+                    Message::core_validation_recursive_payload_call()
+                }
+                (ValidationCause::RecursivePayloadCall, Some(node)) => {
+                    Message::core_validation_recursive_payload_call_node(node)
+                }
+                (ValidationCause::RecursivePayloadForm, None) => {
+                    Message::core_validation_recursive_payload_form()
+                }
+                (ValidationCause::RecursivePayloadForm, Some(node)) => {
+                    Message::core_validation_recursive_payload_form_node(node)
+                }
+                (ValidationCause::ForeignBinderArena, None) => {
+                    Message::core_validation_foreign_binder_arena()
+                }
+                (ValidationCause::ForeignBinderArena, Some(node)) => {
+                    Message::core_validation_foreign_binder_arena_node(node)
+                }
+                (ValidationCause::DuplicateBinder, None) => {
+                    Message::core_validation_duplicate_binder()
+                }
+                (ValidationCause::DuplicateBinder, Some(node)) => {
+                    Message::core_validation_duplicate_binder_node(node)
+                }
+                (ValidationCause::UnknownVariableBinder, None) => {
+                    Message::core_validation_unknown_variable_binder()
+                }
+                (ValidationCause::UnknownVariableBinder, Some(node)) => {
+                    Message::core_validation_unknown_variable_binder_node(node)
+                }
+                (ValidationCause::NonLexicalScopeOwner, None) => {
+                    Message::core_validation_non_lexical_scope_owner()
+                }
+                (ValidationCause::NonLexicalScopeOwner, Some(node)) => {
+                    Message::core_validation_non_lexical_scope_owner_node(node)
+                }
+                (ValidationCause::UnknownScopeOwner, None) => {
+                    Message::core_validation_unknown_scope_owner()
+                }
+                (ValidationCause::UnknownScopeOwner, Some(node)) => {
+                    Message::core_validation_unknown_scope_owner_node(node)
+                }
+                (ValidationCause::LocalScopeType, None) => {
+                    Message::core_validation_local_scope_type()
+                }
+                (ValidationCause::LocalScopeType, Some(node)) => {
+                    Message::core_validation_local_scope_type_node(node)
+                }
+                (ValidationCause::LocalScopeEffects, None) => {
+                    Message::core_validation_local_scope_effects()
+                }
+                (ValidationCause::LocalScopeEffects, Some(node)) => {
+                    Message::core_validation_local_scope_effects_node(node)
+                }
+                (ValidationCause::IncompleteScopeAnalysis, None) => {
+                    Message::core_validation_incomplete_scope_analysis()
+                }
+                (ValidationCause::IncompleteScopeAnalysis, Some(node)) => {
+                    Message::core_validation_incomplete_scope_analysis_node(node)
+                }
+                (ValidationCause::UnboundCoreBinder, None) => {
+                    Message::core_validation_unbound_core_binder()
+                }
+                (ValidationCause::UnboundCoreBinder, Some(node)) => {
+                    Message::core_validation_unbound_core_binder_node(node)
+                }
+                (ValidationCause::UnboundLocalNominal, None) => {
+                    Message::core_validation_unbound_local_nominal()
+                }
+                (ValidationCause::UnboundLocalNominal, Some(node)) => {
+                    Message::core_validation_unbound_local_nominal_node(node)
+                }
+                (ValidationCause::UnexpectedLocalScope, None) => {
+                    Message::core_validation_unexpected_local_scope()
+                }
+                (ValidationCause::UnexpectedLocalScope, Some(node)) => {
+                    Message::core_validation_unexpected_local_scope_node(node)
+                }
+                (ValidationCause::DuplicateLocalScope, None) => {
+                    Message::core_validation_duplicate_local_scope()
+                }
+                (ValidationCause::DuplicateLocalScope, Some(node)) => {
+                    Message::core_validation_duplicate_local_scope_node(node)
+                }
+                (ValidationCause::MissingLocalScope, None) => {
+                    Message::core_validation_missing_local_scope()
+                }
+                (ValidationCause::MissingLocalScope, Some(node)) => {
+                    Message::core_validation_missing_local_scope_node(node)
+                }
+                (ValidationCause::ScopeMissingChild, None) => {
+                    Message::core_validation_missing_child()
+                }
+                (ValidationCause::ScopeMissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::MissingCaptureRequirement, None) => {
+                    Message::core_validation_missing_capture_requirement()
+                }
+                (ValidationCause::MissingCaptureRequirement, Some(node)) => {
+                    Message::core_validation_missing_capture_requirement_node(node)
+                }
+                (ValidationCause::MissingRootRequirements, None) => {
+                    Message::core_validation_missing_root_requirements()
+                }
+                (ValidationCause::MissingRootRequirements, Some(node)) => {
+                    Message::core_validation_missing_root_requirements_node(node)
+                }
+                (ValidationCause::MissingNodeRequirements, None) => {
+                    Message::core_validation_missing_node_requirements()
+                }
+                (ValidationCause::MissingNodeRequirements, Some(node)) => {
+                    Message::core_validation_missing_node_requirements_node(node)
+                }
+                (ValidationCause::MissingGeneratedTypeBinder, None) => {
+                    Message::core_validation_missing_generated_type_binder()
+                }
+                (ValidationCause::MissingGeneratedTypeBinder, Some(node)) => {
+                    Message::core_validation_missing_generated_type_binder_node(node)
+                }
+                (ValidationCause::UnresolvedCoreInference, None) => {
+                    Message::core_validation_unresolved_core_inference()
+                }
+                (ValidationCause::UnresolvedCoreInference, Some(node)) => {
+                    Message::core_validation_unresolved_core_inference_node(node)
+                }
+                (ValidationCause::TypeScopeMissingChild, None) => {
+                    Message::core_validation_missing_child()
+                }
+                (ValidationCause::TypeScopeMissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::MissingTypeRootRequirements, None) => {
+                    Message::core_validation_missing_type_root_requirements()
+                }
+                (ValidationCause::MissingTypeRootRequirements, Some(node)) => {
+                    Message::core_validation_missing_type_root_requirements_node(node)
+                }
+                (ValidationCause::UnboundCoreTypeVariables, None) => {
+                    Message::core_validation_unbound_core_type_variables()
+                }
+                (ValidationCause::UnboundCoreTypeVariables, Some(node)) => {
+                    Message::core_validation_unbound_core_type_variables_node(node)
+                }
+                (ValidationCause::MissingTypeUseCount, None) => {
+                    Message::core_validation_missing_type_use_count()
+                }
+                (ValidationCause::MissingTypeUseCount, Some(node)) => {
+                    Message::core_validation_missing_type_use_count_node(node)
+                }
+                (ValidationCause::ExhaustedTypeUseCount, None) => {
+                    Message::core_validation_exhausted_type_use_count()
+                }
+                (ValidationCause::ExhaustedTypeUseCount, Some(node)) => {
+                    Message::core_validation_exhausted_type_use_count_node(node)
+                }
+                (ValidationCause::MissingTypeRequirementSlot, None) => {
+                    Message::core_validation_missing_type_requirement_slot()
+                }
+                (ValidationCause::MissingTypeRequirementSlot, Some(node)) => {
+                    Message::core_validation_missing_type_requirement_slot_node(node)
+                }
+                (ValidationCause::MissingTypeRequirements, None) => {
+                    Message::core_validation_missing_type_requirements()
+                }
+                (ValidationCause::MissingTypeRequirements, Some(node)) => {
+                    Message::core_validation_missing_type_requirements_node(node)
+                }
+                (ValidationCause::UnresolvedCoreRow, None) => {
+                    Message::core_validation_unresolved_core_row()
+                }
+                (ValidationCause::UnresolvedCoreRow, Some(node)) => {
+                    Message::core_validation_unresolved_core_row_node(node)
+                }
+                (ValidationCause::UnknownCoreRowBinder, None) => {
+                    Message::core_validation_unknown_core_row_binder()
+                }
+                (ValidationCause::UnknownCoreRowBinder, Some(node)) => {
+                    Message::core_validation_unknown_core_row_binder_node(node)
+                }
+                (ValidationCause::ConversionUnknownOwner, None) => {
+                    Message::core_validation_conversion_unknown_owner()
+                }
+                (ValidationCause::ConversionUnknownOwner, Some(node)) => {
+                    Message::core_validation_conversion_unknown_owner_node(node)
+                }
+                (ValidationCause::ConversionOrdinaryOwner, None) => {
+                    Message::core_validation_conversion_ordinary_owner()
+                }
+                (ValidationCause::ConversionOrdinaryOwner, Some(node)) => {
+                    Message::core_validation_conversion_ordinary_owner_node(node)
+                }
+                (ValidationCause::ConversionMissingRepresentation, None) => {
+                    Message::core_validation_conversion_missing_representation()
+                }
+                (ValidationCause::ConversionMissingRepresentation, Some(node)) => {
+                    Message::core_validation_conversion_missing_representation_node(node)
+                }
+                (ValidationCause::ConversionMissingParameters, None) => {
+                    Message::core_validation_conversion_missing_parameters()
+                }
+                (ValidationCause::ConversionMissingParameters, Some(node)) => {
+                    Message::core_validation_conversion_missing_parameters_node(node)
+                }
+                (ValidationCause::ConversionExcessArguments, None) => {
+                    Message::core_validation_conversion_excess_arguments()
+                }
+                (ValidationCause::ConversionExcessArguments, Some(node)) => {
+                    Message::core_validation_conversion_excess_arguments_node(node)
+                }
+                (ValidationCause::ConversionNominalOwner, None) => {
+                    Message::core_validation_conversion_nominal_owner()
+                }
+                (ValidationCause::ConversionNominalOwner, Some(node)) => {
+                    Message::core_validation_conversion_nominal_owner_node(node)
+                }
+                (ValidationCause::ConversionMissingArguments, None) => {
+                    Message::core_validation_conversion_missing_arguments()
+                }
+                (ValidationCause::ConversionMissingArguments, Some(node)) => {
+                    Message::core_validation_conversion_missing_arguments_node(node)
+                }
+                (ValidationCause::ConversionInvalidArgument, None) => {
+                    Message::core_validation_conversion_invalid_argument()
+                }
+                (ValidationCause::ConversionInvalidArgument, Some(node)) => {
+                    Message::core_validation_conversion_invalid_argument_node(node)
+                }
+                (ValidationCause::ConversionArgumentKind, None) => {
+                    Message::core_validation_conversion_argument_kind()
+                }
+                (ValidationCause::ConversionArgumentKind, Some(node)) => {
+                    Message::core_validation_conversion_argument_kind_node(node)
+                }
+                (ValidationCause::ConversionRepresentationMismatch, None) => {
+                    Message::core_validation_conversion_representation_mismatch()
+                }
+                (ValidationCause::ConversionRepresentationMismatch, Some(node)) => {
+                    Message::core_validation_conversion_representation_mismatch_node(node)
+                }
+                (ValidationCause::UnknownCoreEffect, None) => {
+                    Message::core_validation_unknown_core_effect()
+                }
+                (ValidationCause::UnknownCoreEffect, Some(node)) => {
+                    Message::core_validation_unknown_core_effect_node(node)
+                }
+                (ValidationCause::CoreOperationOwner, None) => {
+                    Message::core_validation_core_operation_owner()
+                }
+                (ValidationCause::CoreOperationOwner, Some(node)) => {
+                    Message::core_validation_core_operation_owner_node(node)
+                }
+                (ValidationCause::CoreEffectArgumentCount, None) => {
+                    Message::core_validation_core_effect_argument_count()
+                }
+                (ValidationCause::CoreEffectArgumentCount, Some(node)) => {
+                    Message::core_validation_core_effect_argument_count_node(node)
+                }
+                (ValidationCause::CoreEffectInvalidArgument, None) => {
+                    Message::core_validation_core_effect_invalid_argument()
+                }
+                (ValidationCause::CoreEffectInvalidArgument, Some(node)) => {
+                    Message::core_validation_core_effect_invalid_argument_node(node)
+                }
+                (ValidationCause::CoreEffectArgumentKind, None) => {
+                    Message::core_validation_core_effect_argument_kind()
+                }
+                (ValidationCause::CoreEffectArgumentKind, Some(node)) => {
+                    Message::core_validation_core_effect_argument_kind_node(node)
+                }
+                (ValidationCause::UnknownCoreOperation, None) => {
+                    Message::core_validation_unknown_core_operation()
+                }
+                (ValidationCause::UnknownCoreOperation, Some(node)) => {
+                    Message::core_validation_unknown_core_operation_node(node)
+                }
+                (ValidationCause::CoreOperationSignature, None) => {
+                    Message::core_validation_core_operation_signature()
+                }
+                (ValidationCause::CoreOperationSignature, Some(node)) => {
+                    Message::core_validation_core_operation_signature_node(node)
+                }
+                (ValidationCause::UnsupportedResourceModule, None) => {
+                    Message::core_validation_unsupported_resource_module()
+                }
+                (ValidationCause::UnsupportedResourceModule, Some(node)) => {
+                    Message::core_validation_unsupported_resource_module_node(node)
+                }
+                (ValidationCause::ResourceProviderMethodCount, None) => {
+                    Message::core_validation_resource_provider_method_count()
+                }
+                (ValidationCause::ResourceProviderMethodCount, Some(node)) => {
+                    Message::core_validation_resource_provider_method_count_node(node)
+                }
+                (ValidationCause::MissingTupleKinds, None) => {
+                    Message::core_validation_missing_tuple_kinds()
+                }
+                (ValidationCause::MissingTupleKinds, Some(node)) => {
+                    Message::core_validation_missing_tuple_kinds_node(node)
+                }
+                (ValidationCause::MissingArgumentKind, None) => {
+                    Message::core_validation_missing_argument_kind()
+                }
+                (ValidationCause::MissingArgumentKind, Some(node)) => {
+                    Message::core_validation_missing_argument_kind_node(node)
+                }
+                (ValidationCause::MissingFunctionKind, None) => {
+                    Message::core_validation_missing_function_kind()
+                }
+                (ValidationCause::MissingFunctionKind, Some(node)) => {
+                    Message::core_validation_missing_function_kind_node(node)
+                }
+                (ValidationCause::MissingCodomainKind, None) => {
+                    Message::core_validation_missing_codomain_kind()
+                }
+                (ValidationCause::MissingCodomainKind, Some(node)) => {
+                    Message::core_validation_missing_codomain_kind_node(node)
+                }
+                (ValidationCause::MissingDomainKind, None) => {
+                    Message::core_validation_missing_domain_kind()
+                }
+                (ValidationCause::MissingDomainKind, Some(node)) => {
+                    Message::core_validation_missing_domain_kind_node(node)
+                }
+                (ValidationCause::CoreKindResultCount, None) => {
+                    Message::core_validation_core_kind_result_count()
+                }
+                (ValidationCause::CoreKindResultCount, Some(node)) => {
+                    Message::core_validation_core_kind_result_count_node(node)
+                }
+                (ValidationCause::DuplicateGeneratedTypeBinder, None) => {
+                    Message::core_validation_duplicate_generated_type_binder()
+                }
+                (ValidationCause::DuplicateGeneratedTypeBinder, Some(node)) => {
+                    Message::core_validation_duplicate_generated_type_binder_node(node)
+                }
+                (ValidationCause::EffectAbstractionBody, None) => {
+                    Message::core_validation_effect_abstraction_body()
+                }
+                (ValidationCause::EffectAbstractionBody, Some(node)) => {
+                    Message::core_validation_effect_abstraction_body_node(node)
+                }
+                (ValidationCause::ExpectedTypeAbstraction, None) => {
+                    Message::core_validation_expected_type_abstraction()
+                }
+                (ValidationCause::ExpectedTypeAbstraction, Some(node)) => {
+                    Message::core_validation_expected_type_abstraction_node(node)
+                }
+                (ValidationCause::ExpectedTypeApplication, None) => {
+                    Message::core_validation_expected_type_application()
+                }
+                (ValidationCause::ExpectedTypeApplication, Some(node)) => {
+                    Message::core_validation_expected_type_application_node(node)
+                }
+                (ValidationCause::AdapterParameterIdentity, None) => {
+                    Message::core_validation_adapter_parameter_identity()
+                }
+                (ValidationCause::AdapterParameterIdentity, Some(node)) => {
+                    Message::core_validation_adapter_parameter_identity_node(node)
+                }
+                (ValidationCause::AbstractionBinderOwner, None) => {
+                    Message::core_validation_abstraction_binder_owner()
+                }
+                (ValidationCause::AbstractionBinderOwner, Some(node)) => {
+                    Message::core_validation_abstraction_binder_owner_node(node)
+                }
+                (ValidationCause::MethodInstantiationIdentity, None) => {
+                    Message::core_validation_method_instantiation_identity()
+                }
+                (ValidationCause::MethodInstantiationIdentity, Some(node)) => {
+                    Message::core_validation_method_instantiation_identity_node(node)
+                }
+                (ValidationCause::MethodTypeArgumentCount, None) => {
+                    Message::core_validation_method_type_argument_count()
+                }
+                (ValidationCause::MethodTypeArgumentCount, Some(node)) => {
+                    Message::core_validation_method_type_argument_count_node(node)
+                }
+                (ValidationCause::MethodTypeArgument, None) => {
+                    Message::core_validation_method_type_argument()
+                }
+                (ValidationCause::MethodTypeArgument, Some(node)) => {
+                    Message::core_validation_method_type_argument_node(node)
+                }
+                (ValidationCause::MethodInstantiationResult, None) => {
+                    Message::core_validation_method_instantiation_result()
+                }
+                (ValidationCause::MethodInstantiationResult, Some(node)) => {
+                    Message::core_validation_method_instantiation_result_node(node)
+                }
+                (ValidationCause::MethodInstantiationRole, None) => {
+                    Message::core_validation_method_instantiation_role()
+                }
+                (ValidationCause::MethodInstantiationRole, Some(node)) => {
+                    Message::core_validation_method_instantiation_role_node(node)
+                }
+                (ValidationCause::MissingMethodProducer, None) => {
+                    Message::core_validation_missing_method_producer()
+                }
+                (ValidationCause::MissingMethodProducer, Some(node)) => {
+                    Message::core_validation_missing_method_producer_node(node)
+                }
+                (ValidationCause::MethodInstantiationProducer, None) => {
+                    Message::core_validation_method_instantiation_producer()
+                }
+                (ValidationCause::MethodInstantiationProducer, Some(node)) => {
+                    Message::core_validation_method_instantiation_producer_node(node)
+                }
+                (ValidationCause::TypeAbstractionScheme, None) => {
+                    Message::core_validation_type_abstraction_scheme()
+                }
+                (ValidationCause::TypeAbstractionScheme, Some(node)) => {
+                    Message::core_validation_type_abstraction_scheme_node(node)
+                }
+                (ValidationCause::EmptyTypeAbstraction, None) => {
+                    Message::core_validation_empty_type_abstraction()
+                }
+                (ValidationCause::EmptyTypeAbstraction, Some(node)) => {
+                    Message::core_validation_empty_type_abstraction_node(node)
+                }
+                (ValidationCause::AbstractionNominalParameter, None) => {
+                    Message::core_validation_abstraction_nominal_parameter()
+                }
+                (ValidationCause::AbstractionNominalParameter, Some(node)) => {
+                    Message::core_validation_abstraction_nominal_parameter_node(node)
+                }
+                (ValidationCause::AbstractionParameters, None) => {
+                    Message::core_validation_abstraction_parameters()
+                }
+                (ValidationCause::AbstractionParameters, Some(node)) => {
+                    Message::core_validation_abstraction_parameters_node(node)
+                }
+                (ValidationCause::AbstractionBodyType, None) => {
+                    Message::core_validation_abstraction_body_type()
+                }
+                (ValidationCause::AbstractionBodyType, Some(node)) => {
+                    Message::core_validation_abstraction_body_type_node(node)
+                }
+                (ValidationCause::NestedTypeAbstraction, None) => {
+                    Message::core_validation_nested_type_abstraction()
+                }
+                (ValidationCause::NestedTypeAbstraction, Some(node)) => {
+                    Message::core_validation_nested_type_abstraction_node(node)
+                }
+                (ValidationCause::AbstractionTypeKind, None) => {
+                    Message::core_validation_abstraction_type_kind()
+                }
+                (ValidationCause::AbstractionTypeKind, Some(node)) => {
+                    Message::core_validation_abstraction_type_kind_node(node)
+                }
+                (ValidationCause::TypeApplicationScheme, None) => {
+                    Message::core_validation_type_application_scheme()
+                }
+                (ValidationCause::TypeApplicationScheme, Some(node)) => {
+                    Message::core_validation_type_application_scheme_node(node)
+                }
+                (ValidationCause::TypeApplicationArity, None) => {
+                    Message::core_validation_type_application_arity()
+                }
+                (ValidationCause::TypeApplicationArity, Some(node)) => {
+                    Message::core_validation_type_application_arity_node(node)
+                }
+                (ValidationCause::TypeApplicationRows, None) => {
+                    Message::core_validation_type_application_rows()
+                }
+                (ValidationCause::TypeApplicationRows, Some(node)) => {
+                    Message::core_validation_type_application_rows_node(node)
+                }
+                (ValidationCause::MissingRowArgument, None) => {
+                    Message::core_validation_missing_row_argument()
+                }
+                (ValidationCause::MissingRowArgument, Some(node)) => {
+                    Message::core_validation_missing_row_argument_node(node)
+                }
+                (ValidationCause::MissingTypeArgument, None) => {
+                    Message::core_validation_missing_type_argument()
+                }
+                (ValidationCause::MissingTypeArgument, Some(node)) => {
+                    Message::core_validation_missing_type_argument_node(node)
+                }
+                (ValidationCause::TypeArgumentInvalid, None) => {
+                    Message::core_validation_type_argument_invalid()
+                }
+                (ValidationCause::TypeArgumentInvalid, Some(node)) => {
+                    Message::core_validation_type_argument_invalid_node(node)
+                }
+                (ValidationCause::TypeArgumentKind, None) => {
+                    Message::core_validation_type_argument_kind()
+                }
+                (ValidationCause::TypeArgumentKind, Some(node)) => {
+                    Message::core_validation_type_argument_kind_node(node)
+                }
+                (ValidationCause::TypeSubstitutionAmbiguous, None) => {
+                    Message::core_validation_type_substitution_ambiguous()
+                }
+                (ValidationCause::TypeSubstitutionAmbiguous, Some(node)) => {
+                    Message::core_validation_type_substitution_ambiguous_node(node)
+                }
+                (ValidationCause::TypeSubstitutionMissing, None) => {
+                    Message::core_validation_type_substitution_missing()
+                }
+                (ValidationCause::TypeSubstitutionMissing, Some(node)) => {
+                    Message::core_validation_type_substitution_missing_node(node)
+                }
+                (ValidationCause::TypeSubstitutionInfinite, None) => {
+                    Message::core_validation_type_substitution_infinite()
+                }
+                (ValidationCause::TypeSubstitutionInfinite, Some(node)) => {
+                    Message::core_validation_type_substitution_infinite_node(node)
+                }
+                (ValidationCause::TypeApplicationResult, None) => {
+                    Message::core_validation_type_application_result()
+                }
+                (ValidationCause::TypeApplicationResult, Some(node)) => {
+                    Message::core_validation_type_application_result_node(node)
+                }
+                (ValidationCause::PatternDepth, None) => Message::core_validation_pattern_depth(),
+                (ValidationCause::PatternDepth, Some(node)) => {
+                    Message::core_validation_pattern_depth_node(node)
+                }
+                (ValidationCause::PatternTypeMismatch, None) => {
+                    Message::core_validation_pattern_type_mismatch()
+                }
+                (ValidationCause::PatternTypeMismatch, Some(node)) => {
+                    Message::core_validation_pattern_type_mismatch_node(node)
+                }
+                (ValidationCause::PatternInvalidType, None) => {
+                    Message::core_validation_pattern_invalid_type()
+                }
+                (ValidationCause::PatternInvalidType, Some(node)) => {
+                    Message::core_validation_pattern_invalid_type_node(node)
+                }
+                (ValidationCause::PatternBinderInvalidType, None) => {
+                    Message::core_validation_pattern_binder_invalid_type()
+                }
+                (ValidationCause::PatternBinderInvalidType, Some(node)) => {
+                    Message::core_validation_pattern_binder_invalid_type_node(node)
+                }
+                (ValidationCause::PatternBinderArena, None) => {
+                    Message::core_validation_pattern_binder_arena()
+                }
+                (ValidationCause::PatternBinderArena, Some(node)) => {
+                    Message::core_validation_pattern_binder_arena_node(node)
+                }
+                (ValidationCause::PatternBinderType, None) => {
+                    Message::core_validation_pattern_binder_type()
+                }
+                (ValidationCause::PatternBinderType, Some(node)) => {
+                    Message::core_validation_pattern_binder_type_node(node)
+                }
+                (ValidationCause::PatternDuplicateBinder, None) => {
+                    Message::core_validation_pattern_duplicate_binder()
+                }
+                (ValidationCause::PatternDuplicateBinder, Some(node)) => {
+                    Message::core_validation_pattern_duplicate_binder_node(node)
+                }
+                (ValidationCause::PatternTupleType, None) => {
+                    Message::core_validation_pattern_tuple_type()
+                }
+                (ValidationCause::PatternTupleType, Some(node)) => {
+                    Message::core_validation_pattern_tuple_type_node(node)
+                }
+                (ValidationCause::PatternTupleArity, None) => {
+                    Message::core_validation_pattern_tuple_arity()
+                }
+                (ValidationCause::PatternTupleArity, Some(node)) => {
+                    Message::core_validation_pattern_tuple_arity_node(node)
+                }
+                (ValidationCause::PatternHiddenConstructor, None) => {
+                    Message::core_validation_pattern_hidden_constructor()
+                }
+                (ValidationCause::PatternHiddenConstructor, Some(node)) => {
+                    Message::core_validation_pattern_hidden_constructor_node(node)
+                }
+                (ValidationCause::PatternNominalType, None) => {
+                    Message::core_validation_pattern_nominal_type()
+                }
+                (ValidationCause::PatternNominalType, Some(node)) => {
+                    Message::core_validation_pattern_nominal_type_node(node)
+                }
+                (ValidationCause::PatternUnknownConstructor, None) => {
+                    Message::core_validation_pattern_unknown_constructor()
+                }
+                (ValidationCause::PatternUnknownConstructor, Some(node)) => {
+                    Message::core_validation_pattern_unknown_constructor_node(node)
+                }
+                (ValidationCause::PatternNewtypeConstructor, None) => {
+                    Message::core_validation_pattern_newtype_constructor()
+                }
+                (ValidationCause::PatternNewtypeConstructor, Some(node)) => {
+                    Message::core_validation_pattern_newtype_constructor_node(node)
+                }
+                (ValidationCause::PatternConstructorOwner, None) => {
+                    Message::core_validation_pattern_constructor_owner()
+                }
+                (ValidationCause::PatternConstructorOwner, Some(node)) => {
+                    Message::core_validation_pattern_constructor_owner_node(node)
+                }
+                (ValidationCause::PatternMissingParameters, None) => {
+                    Message::core_validation_pattern_missing_parameters()
+                }
+                (ValidationCause::PatternMissingParameters, Some(node)) => {
+                    Message::core_validation_pattern_missing_parameters_node(node)
+                }
+                (ValidationCause::PatternNominalArity, None) => {
+                    Message::core_validation_pattern_nominal_arity()
+                }
+                (ValidationCause::PatternNominalArity, Some(node)) => {
+                    Message::core_validation_pattern_nominal_arity_node(node)
+                }
+                (ValidationCause::PatternArgumentSpine, None) => {
+                    Message::core_validation_pattern_argument_spine()
+                }
+                (ValidationCause::PatternArgumentSpine, Some(node)) => {
+                    Message::core_validation_pattern_argument_spine_node(node)
+                }
+                (ValidationCause::PatternMissingPayload, None) => {
+                    Message::core_validation_pattern_missing_payload()
+                }
+                (ValidationCause::PatternMissingPayload, Some(node)) => {
+                    Message::core_validation_pattern_missing_payload_node(node)
+                }
+                (ValidationCause::PatternUnexpectedPayload, None) => {
+                    Message::core_validation_pattern_unexpected_payload()
+                }
+                (ValidationCause::PatternUnexpectedPayload, Some(node)) => {
+                    Message::core_validation_pattern_unexpected_payload_node(node)
+                }
+                (ValidationCause::PatternBooleanType, None) => {
+                    Message::core_validation_pattern_boolean_type()
+                }
+                (ValidationCause::PatternBooleanType, Some(node)) => {
+                    Message::core_validation_pattern_boolean_type_node(node)
+                }
+                (ValidationCause::PatternUnitType, None) => {
+                    Message::core_validation_pattern_unit_type()
+                }
+                (ValidationCause::PatternUnitType, Some(node)) => {
+                    Message::core_validation_pattern_unit_type_node(node)
+                }
+                (ValidationCause::MatchScrutineeType, None) => {
+                    Message::core_validation_match_scrutinee_type()
+                }
+                (ValidationCause::MatchScrutineeType, Some(node)) => {
+                    Message::core_validation_match_scrutinee_type_node(node)
+                }
+                (ValidationCause::UnboundContinuation, None) => {
+                    Message::core_validation_unbound_continuation()
+                }
+                (ValidationCause::UnboundContinuation, Some(node)) => {
+                    Message::core_validation_unbound_continuation_node(node)
+                }
+                (ValidationCause::ContinuationBranchUsage, None) => {
+                    Message::core_validation_continuation_branch_usage()
+                }
+                (ValidationCause::ContinuationBranchUsage, Some(node)) => {
+                    Message::core_validation_continuation_branch_usage_node(node)
+                }
+                (ValidationCause::MissingClauseConsumption, None) => {
+                    Message::core_validation_missing_clause_consumption()
+                }
+                (ValidationCause::MissingClauseConsumption, Some(node)) => {
+                    Message::core_validation_missing_clause_consumption_node(node)
+                }
+                (ValidationCause::RepeatedClauseConsumption, None) => {
+                    Message::core_validation_repeated_clause_consumption()
+                }
+                (ValidationCause::RepeatedClauseConsumption, Some(node)) => {
+                    Message::core_validation_repeated_clause_consumption_node(node)
+                }
+                (ValidationCause::ForeignClauseContinuation, None) => {
+                    Message::core_validation_foreign_clause_continuation()
+                }
+                (ValidationCause::ForeignClauseContinuation, Some(node)) => {
+                    Message::core_validation_foreign_clause_continuation_node(node)
+                }
+                (ValidationCause::CapturedContinuation, None) => {
+                    Message::core_validation_captured_continuation()
+                }
+                (ValidationCause::CapturedContinuation, Some(node)) => {
+                    Message::core_validation_captured_continuation_node(node)
+                }
+                (ValidationCause::ResumeUseState, None) => {
+                    Message::core_validation_resume_use_state()
+                }
+                (ValidationCause::ResumeUseState, Some(node)) => {
+                    Message::core_validation_resume_use_state_node(node)
+                }
+                (ValidationCause::DiscardUseState, None) => {
+                    Message::core_validation_discard_use_state()
+                }
+                (ValidationCause::DiscardUseState, Some(node)) => {
+                    Message::core_validation_discard_use_state_node(node)
+                }
+                (ValidationCause::DiscardResultType, None) => {
+                    Message::core_validation_discard_result_type()
+                }
+                (ValidationCause::DiscardResultType, Some(node)) => {
+                    Message::core_validation_discard_result_type_node(node)
+                }
+                (ValidationCause::DiscardMissingContract, None) => {
+                    Message::core_validation_discard_missing_contract()
+                }
+                (ValidationCause::DiscardMissingContract, Some(node)) => {
+                    Message::core_validation_discard_missing_contract_node(node)
+                }
+                (ValidationCause::ResumeMissingContract, None) => {
+                    Message::core_validation_resume_missing_contract()
+                }
+                (ValidationCause::ResumeMissingContract, Some(node)) => {
+                    Message::core_validation_resume_missing_contract_node(node)
+                }
+                (ValidationCause::ResumeHandlerShape, None) => {
+                    Message::core_validation_resume_handler_shape()
+                }
+                (ValidationCause::ResumeHandlerShape, Some(node)) => {
+                    Message::core_validation_resume_handler_shape_node(node)
+                }
+                (ValidationCause::ResumeMissingClause, None) => {
+                    Message::core_validation_resume_missing_clause()
+                }
+                (ValidationCause::ResumeMissingClause, Some(node)) => {
+                    Message::core_validation_resume_missing_clause_node(node)
+                }
+                (ValidationCause::ResumeArgumentType, None) => {
+                    Message::core_validation_resume_argument_type()
+                }
+                (ValidationCause::ResumeArgumentType, Some(node)) => {
+                    Message::core_validation_resume_argument_type_node(node)
+                }
+                (ValidationCause::ResumeResultType, None) => {
+                    Message::core_validation_resume_result_type()
+                }
+                (ValidationCause::ResumeResultType, Some(node)) => {
+                    Message::core_validation_resume_result_type_node(node)
+                }
+                (ValidationCause::ResumeEffectRow, None) => {
+                    Message::core_validation_resume_effect_row()
+                }
+                (ValidationCause::ResumeEffectRow, Some(node)) => {
+                    Message::core_validation_resume_effect_row_node(node)
+                }
+                (ValidationCause::ResumeArgumentEffects, None) => {
+                    Message::core_validation_resume_argument_effects()
+                }
+                (ValidationCause::ResumeArgumentEffects, Some(node)) => {
+                    Message::core_validation_resume_argument_effects_node(node)
+                }
+                (ValidationCause::CoreCleanupRow(_), None) => Message::core_cleanup_effect_row(),
+                (ValidationCause::CoreCleanupRow(_), Some(node)) => {
+                    Message::core_cleanup_effect_row_node(node)
+                }
+                (ValidationCause::RowUnionAmbiguous, None) => {
+                    Message::core_validation_row_union_ambiguous()
+                }
+                (ValidationCause::RowUnionAmbiguous, Some(node)) => {
+                    Message::core_validation_row_union_ambiguous_node(node)
+                }
+                (ValidationCause::RowUnionMissing, None) => {
+                    Message::core_validation_row_union_missing()
+                }
+                (ValidationCause::RowUnionMissing, Some(node)) => {
+                    Message::core_validation_row_union_missing_node(node)
+                }
+                (ValidationCause::RowUnionInfinite, None) => {
+                    Message::core_validation_row_union_infinite()
+                }
+                (ValidationCause::RowUnionInfinite, Some(node)) => {
+                    Message::core_validation_row_union_infinite_node(node)
+                }
+                (ValidationCause::RowRemovalAmbiguous, None) => {
+                    Message::core_validation_row_removal_ambiguous()
+                }
+                (ValidationCause::RowRemovalAmbiguous, Some(node)) => {
+                    Message::core_validation_row_removal_ambiguous_node(node)
+                }
+                (ValidationCause::RowRemovalMissing, None) => {
+                    Message::core_validation_row_removal_missing()
+                }
+                (ValidationCause::RowRemovalMissing, Some(node)) => {
+                    Message::core_validation_row_removal_missing_node(node)
+                }
+                (ValidationCause::RowRemovalInfinite, None) => {
+                    Message::core_validation_row_removal_infinite()
+                }
+                (ValidationCause::RowRemovalInfinite, Some(node)) => {
+                    Message::core_validation_row_removal_infinite_node(node)
+                }
+                (ValidationCause::PureDialectRow, None) => {
+                    Message::core_validation_pure_dialect_row()
+                }
+                (ValidationCause::PureDialectRow, Some(node)) => {
+                    Message::core_validation_pure_dialect_row_node(node)
+                }
+                (ValidationCause::ResourceScopeRow, None) => {
+                    Message::core_validation_resource_scope_row()
+                }
+                (ValidationCause::ResourceScopeRow, Some(node)) => {
+                    Message::core_validation_resource_scope_row_node(node)
+                }
+                (ValidationCause::RequestArgumentType, None) => {
+                    Message::core_validation_request_argument_type()
+                }
+                (ValidationCause::RequestArgumentType, Some(node)) => {
+                    Message::core_validation_request_argument_type_node(node)
+                }
+                (ValidationCause::RequestResultType, None) => {
+                    Message::core_validation_request_result_type()
+                }
+                (ValidationCause::RequestResultType, Some(node)) => {
+                    Message::core_validation_request_result_type_node(node)
+                }
+                (ValidationCause::RequestEffectRow, None) => {
+                    Message::core_validation_request_effect_row()
+                }
+                (ValidationCause::RequestEffectRow, Some(node)) => {
+                    Message::core_validation_request_effect_row_node(node)
+                }
+                (ValidationCause::LinkedRootEffects, None) => {
+                    Message::core_validation_linked_root_effects()
+                }
+                (ValidationCause::LinkedRootEffects, Some(node)) => {
+                    Message::core_validation_linked_root_effects_node(node)
+                }
+                (ValidationCause::RowOwnerInference, None) => {
+                    Message::core_validation_row_owner_inference()
+                }
+                (ValidationCause::RowOwnerInference, Some(node)) => {
+                    Message::core_validation_row_owner_inference_node(node)
+                }
+                (ValidationCause::MissingRowOwner, None) => {
+                    Message::core_validation_missing_row_owner()
+                }
+                (ValidationCause::MissingRowOwner, Some(node)) => {
+                    Message::core_validation_missing_row_owner_node(node)
+                }
+                (ValidationCause::RowOwnerKind, None) => Message::core_validation_row_owner_kind(),
+                (ValidationCause::RowOwnerKind, Some(node)) => {
+                    Message::core_validation_row_owner_kind_node(node)
+                }
+                (ValidationCause::RowOwnerScheme, None) => {
+                    Message::core_validation_row_owner_scheme()
+                }
+                (ValidationCause::RowOwnerScheme, Some(node)) => {
+                    Message::core_validation_row_owner_scheme_node(node)
+                }
+                (ValidationCause::UnprovedRowLacks, None) => {
+                    Message::core_validation_unproved_row_lacks()
+                }
+                (ValidationCause::UnprovedRowLacks, Some(node)) => {
+                    Message::core_validation_unproved_row_lacks_node(node)
+                }
+                (ValidationCause::PureNodeEffectRow, None) => {
+                    Message::core_validation_pure_node_effect_row()
+                }
+                (ValidationCause::PureNodeEffectRow, Some(node)) => {
+                    Message::core_validation_pure_node_effect_row_node(node)
+                }
+                (ValidationCause::MissingChildRow, None) => {
+                    Message::core_validation_missing_child_row()
+                }
+                (ValidationCause::MissingChildRow, Some(node)) => {
+                    Message::core_validation_missing_child_row_node(node)
+                }
+                (ValidationCause::MissingRowSlot, None) => {
+                    Message::core_validation_missing_row_slot()
+                }
+                (ValidationCause::MissingRowSlot, Some(node)) => {
+                    Message::core_validation_missing_row_slot_node(node)
+                }
+                (ValidationCause::MissingRootRow, None) => {
+                    Message::core_validation_missing_root_row()
+                }
+                (ValidationCause::MissingRootRow, Some(node)) => {
+                    Message::core_validation_missing_root_row_node(node)
+                }
+                (ValidationCause::HandlerBodyType, None) => {
+                    Message::core_validation_handler_body_type()
+                }
+                (ValidationCause::HandlerBodyType, Some(node)) => {
+                    Message::core_validation_handler_body_type_node(node)
+                }
+                (ValidationCause::HandlerBodyEffects, None) => {
+                    Message::core_validation_handler_body_effects()
+                }
+                (ValidationCause::HandlerBodyEffects, Some(node)) => {
+                    Message::core_validation_handler_body_effects_node(node)
+                }
+                (ValidationCause::HandlerOutputRow, None) => {
+                    Message::core_validation_handler_output_row()
+                }
+                (ValidationCause::HandlerOutputRow, Some(node)) => {
+                    Message::core_validation_handler_output_row_node(node)
+                }
+                (ValidationCause::CleanupActionShape, None) => {
+                    Message::core_validation_cleanup_action_shape()
+                }
+                (ValidationCause::CleanupActionShape, Some(node)) => {
+                    Message::core_validation_cleanup_action_shape_node(node)
+                }
+                (ValidationCause::CleanupFunctionShape, None) => {
+                    Message::core_validation_cleanup_function_shape()
+                }
+                (ValidationCause::CleanupFunctionShape, Some(node)) => {
+                    Message::core_validation_cleanup_function_shape_node(node)
+                }
+                (ValidationCause::CleanupFunctionType, None) => {
+                    Message::core_validation_cleanup_function_type()
+                }
+                (ValidationCause::CleanupFunctionType, Some(node)) => {
+                    Message::core_validation_cleanup_function_type_node(node)
+                }
+                (ValidationCause::CleanupCallbackIdentity, None) => {
+                    Message::core_validation_cleanup_callback_identity()
+                }
+                (ValidationCause::CleanupCallbackIdentity, Some(node)) => {
+                    Message::core_validation_cleanup_callback_identity_node(node)
+                }
+                (ValidationCause::CleanupArgumentShape, None) => {
+                    Message::core_validation_cleanup_argument_shape()
+                }
+                (ValidationCause::CleanupArgumentShape, Some(node)) => {
+                    Message::core_validation_cleanup_argument_shape_node(node)
+                }
+                (ValidationCause::CleanupDomainType, None) => {
+                    Message::core_validation_cleanup_domain_type()
+                }
+                (ValidationCause::CleanupDomainType, Some(node)) => {
+                    Message::core_validation_cleanup_domain_type_node(node)
+                }
+                (ValidationCause::CleanupResultType, None) => {
+                    Message::core_validation_cleanup_result_type()
+                }
+                (ValidationCause::CleanupResultType, Some(node)) => {
+                    Message::core_validation_cleanup_result_type_node(node)
+                }
+                (ValidationCause::CleanupBodyType, None) => {
+                    Message::core_validation_cleanup_body_type()
+                }
+                (ValidationCause::CleanupBodyType, Some(node)) => {
+                    Message::core_validation_cleanup_body_type_node(node)
+                }
+                (ValidationCause::CleanupScopeEffects, None) => {
+                    Message::core_validation_cleanup_scope_effects()
+                }
+                (ValidationCause::CleanupScopeEffects, Some(node)) => {
+                    Message::core_validation_cleanup_scope_effects_node(node)
+                }
+                (ValidationCause::CleanupScopeOrigin, None) => {
+                    Message::core_validation_cleanup_scope_origin()
+                }
+                (ValidationCause::CleanupScopeOrigin, Some(node)) => {
+                    Message::core_validation_cleanup_scope_origin_node(node)
+                }
+                (ValidationCause::CleanupActionOrigin, None) => {
+                    Message::core_validation_cleanup_action_origin()
+                }
+                (ValidationCause::CleanupActionOrigin, Some(node)) => {
+                    Message::core_validation_cleanup_action_origin_node(node)
+                }
+                (ValidationCause::RegistrationHandlerShape, None) => {
+                    Message::core_validation_registration_handler_shape()
+                }
+                (ValidationCause::RegistrationHandlerShape, Some(node)) => {
+                    Message::core_validation_registration_handler_shape_node(node)
+                }
+                (ValidationCause::RegistrationMissingContract, None) => {
+                    Message::core_validation_registration_missing_contract()
+                }
+                (ValidationCause::RegistrationMissingContract, Some(node)) => {
+                    Message::core_validation_registration_missing_contract_node(node)
+                }
+                (ValidationCause::RegistrationHasRoot, None) => {
+                    Message::core_validation_registration_has_root()
+                }
+                (ValidationCause::RegistrationHasRoot, Some(node)) => {
+                    Message::core_validation_registration_has_root_node(node)
+                }
+                (ValidationCause::RegistrationHandlerIdentity, None) => {
+                    Message::core_validation_registration_handler_identity()
+                }
+                (ValidationCause::RegistrationHandlerIdentity, Some(node)) => {
+                    Message::core_validation_registration_handler_identity_node(node)
+                }
+                (ValidationCause::RegistrationCallbackIdentity, None) => {
+                    Message::core_validation_registration_callback_identity()
+                }
+                (ValidationCause::RegistrationCallbackIdentity, Some(node)) => {
+                    Message::core_validation_registration_callback_identity_node(node)
+                }
+                (ValidationCause::RegistrationContractSpan, None) => {
+                    Message::core_validation_registration_contract_span()
+                }
+                (ValidationCause::RegistrationContractSpan, Some(node)) => {
+                    Message::core_validation_registration_contract_span_node(node)
+                }
+                (ValidationCause::RegistrationScopeOrigin, None) => {
+                    Message::core_validation_registration_scope_origin()
+                }
+                (ValidationCause::RegistrationScopeOrigin, Some(node)) => {
+                    Message::core_validation_registration_scope_origin_node(node)
+                }
+                (ValidationCause::RegistrationResultType, None) => {
+                    Message::core_validation_registration_result_type()
+                }
+                (ValidationCause::RegistrationResultType, Some(node)) => {
+                    Message::core_validation_registration_result_type_node(node)
+                }
+                (ValidationCause::RegistrationScopeEffects, None) => {
+                    Message::core_validation_registration_scope_effects()
+                }
+                (ValidationCause::RegistrationScopeEffects, Some(node)) => {
+                    Message::core_validation_registration_scope_effects_node(node)
+                }
+                (ValidationCause::DuplicateHandlerIdentity, None) => {
+                    Message::core_validation_duplicate_handler_identity()
+                }
+                (ValidationCause::DuplicateHandlerIdentity, Some(node)) => {
+                    Message::core_validation_duplicate_handler_identity_node(node)
+                }
+                (ValidationCause::HandlerArgumentCount, None) => {
+                    Message::core_validation_handler_argument_count()
+                }
+                (ValidationCause::HandlerArgumentCount, Some(node)) => {
+                    Message::core_validation_handler_argument_count_node(node)
+                }
+                (ValidationCause::HandlerClauseCount, None) => {
+                    Message::core_validation_handler_clause_count()
+                }
+                (ValidationCause::HandlerClauseCount, Some(node)) => {
+                    Message::core_validation_handler_clause_count_node(node)
+                }
+                (ValidationCause::DuplicateClauseContinuation, None) => {
+                    Message::core_validation_duplicate_clause_continuation()
+                }
+                (ValidationCause::DuplicateClauseContinuation, Some(node)) => {
+                    Message::core_validation_duplicate_clause_continuation_node(node)
+                }
+                (ValidationCause::HandlerOperationRange, None) => {
+                    Message::core_validation_handler_operation_range()
+                }
+                (ValidationCause::HandlerOperationRange, Some(node)) => {
+                    Message::core_validation_handler_operation_range_node(node)
+                }
+                (ValidationCause::HandlerOperationSlot, None) => {
+                    Message::core_validation_handler_operation_slot()
+                }
+                (ValidationCause::HandlerOperationSlot, Some(node)) => {
+                    Message::core_validation_handler_operation_slot_node(node)
+                }
+                (ValidationCause::DuplicateHandlerOperation, None) => {
+                    Message::core_validation_duplicate_handler_operation()
+                }
+                (ValidationCause::DuplicateHandlerOperation, Some(node)) => {
+                    Message::core_validation_duplicate_handler_operation_node(node)
+                }
+                (ValidationCause::HandlerClauseCoverage, None) => {
+                    Message::core_validation_handler_clause_coverage()
+                }
+                (ValidationCause::HandlerClauseCoverage, Some(node)) => {
+                    Message::core_validation_handler_clause_coverage_node(node)
+                }
+                (ValidationCause::HandlerClauseType, None) => {
+                    Message::core_validation_handler_clause_type()
+                }
+                (ValidationCause::HandlerClauseType, Some(node)) => {
+                    Message::core_validation_handler_clause_type_node(node)
+                }
+                (ValidationCause::HandlerClauseEffects, None) => {
+                    Message::core_validation_handler_clause_effects()
+                }
+                (ValidationCause::HandlerClauseEffects, Some(node)) => {
+                    Message::core_validation_handler_clause_effects_node(node)
+                }
+                (ValidationCause::CallbackScopeMissingParent, None) => {
+                    Message::core_validation_callback_scope_missing_parent()
+                }
+                (ValidationCause::CallbackScopeMissingParent, Some(node)) => {
+                    Message::core_validation_callback_scope_missing_parent_node(node)
+                }
+                (ValidationCause::CallbackScopeBindingShape, None) => {
+                    Message::core_validation_callback_scope_binding_shape()
+                }
+                (ValidationCause::CallbackScopeBindingShape, Some(node)) => {
+                    Message::core_validation_callback_scope_binding_shape_node(node)
+                }
+                (ValidationCause::CallbackScopeParentCount, None) => {
+                    Message::core_validation_callback_scope_parent_count()
+                }
+                (ValidationCause::CallbackScopeParentCount, Some(node)) => {
+                    Message::core_validation_callback_scope_parent_count_node(node)
+                }
+                (ValidationCause::CallbackScopeBindingBody, None) => {
+                    Message::core_validation_callback_scope_binding_body()
+                }
+                (ValidationCause::CallbackScopeBindingBody, Some(node)) => {
+                    Message::core_validation_callback_scope_binding_body_node(node)
+                }
+                (ValidationCause::CallbackScopeBindingIdentity, None) => {
+                    Message::core_validation_callback_scope_binding_identity()
+                }
+                (ValidationCause::CallbackScopeBindingIdentity, Some(node)) => {
+                    Message::core_validation_callback_scope_binding_identity_node(node)
+                }
+                (ValidationCause::CleanupBindingOrigin, None) => {
+                    Message::core_validation_cleanup_binding_origin()
+                }
+                (ValidationCause::CleanupBindingOrigin, Some(node)) => {
+                    Message::core_validation_cleanup_binding_origin_node(node)
+                }
+                (ValidationCause::CleanupActionIndex, None) => {
+                    Message::core_validation_cleanup_action_index()
+                }
+                (ValidationCause::CleanupActionIndex, Some(node)) => {
+                    Message::core_validation_cleanup_action_index_node(node)
+                }
+                (ValidationCause::CleanupActionParentCount, None) => {
+                    Message::core_validation_cleanup_action_parent_count()
+                }
+                (ValidationCause::CleanupActionParentCount, Some(node)) => {
+                    Message::core_validation_cleanup_action_parent_count_node(node)
+                }
+                (ValidationCause::RegisteredHandlerParentShape, None) => {
+                    Message::core_validation_registered_handler_parent_shape()
+                }
+                (ValidationCause::RegisteredHandlerParentShape, Some(node)) => {
+                    Message::core_validation_registered_handler_parent_shape_node(node)
+                }
+                (ValidationCause::RegisteredHandlerParentBody, None) => {
+                    Message::core_validation_registered_handler_parent_body()
+                }
+                (ValidationCause::RegisteredHandlerParentBody, Some(node)) => {
+                    Message::core_validation_registered_handler_parent_body_node(node)
+                }
+                (ValidationCause::HookOperationCount, None) => {
+                    Message::core_validation_hook_operation_count()
+                }
+                (ValidationCause::HookOperationCount, Some(node)) => {
+                    Message::core_validation_hook_operation_count_node(node)
+                }
+                (ValidationCause::HookOperationType, None) => {
+                    Message::core_validation_hook_operation_type()
+                }
+                (ValidationCause::HookOperationType, Some(node)) => {
+                    Message::core_validation_hook_operation_type_node(node)
+                }
+                (ValidationCause::HookClauseCount, None) => {
+                    Message::core_validation_hook_clause_count()
+                }
+                (ValidationCause::HookClauseCount, Some(node)) => {
+                    Message::core_validation_hook_clause_count_node(node)
+                }
+                (ValidationCause::HookInputPattern, None) => {
+                    Message::core_validation_hook_input_pattern()
+                }
+                (ValidationCause::HookInputPattern, Some(node)) => {
+                    Message::core_validation_hook_input_pattern_node(node)
+                }
+                (ValidationCause::HookRootResumeShape, None) => {
+                    Message::core_validation_hook_root_resume_shape()
+                }
+                (ValidationCause::HookRootResumeShape, Some(node)) => {
+                    Message::core_validation_hook_root_resume_shape_node(node)
+                }
+                (ValidationCause::HookRootValueShape, None) => {
+                    Message::core_validation_hook_root_value_shape()
+                }
+                (ValidationCause::HookRootValueShape, Some(node)) => {
+                    Message::core_validation_hook_root_value_shape_node(node)
+                }
+                (ValidationCause::HookTargetInstance, None) => {
+                    Message::core_validation_hook_target_instance()
+                }
+                (ValidationCause::HookTargetInstance, Some(node)) => {
+                    Message::core_validation_hook_target_instance_node(node)
+                }
+                (ValidationCause::HookOperationSpelling, None) => {
+                    Message::core_validation_hook_operation_spelling()
+                }
+                (ValidationCause::HookOperationSpelling, Some(node)) => {
+                    Message::core_validation_hook_operation_spelling_node(node)
+                }
+                (ValidationCause::HookOperationEndomorphism, None) => {
+                    Message::core_validation_hook_operation_endomorphism()
+                }
+                (ValidationCause::HookOperationEndomorphism, Some(node)) => {
+                    Message::core_validation_hook_operation_endomorphism_node(node)
+                }
+                (ValidationCause::HookContractOperation, None) => {
+                    Message::core_validation_hook_contract_operation()
+                }
+                (ValidationCause::HookContractOperation, Some(node)) => {
+                    Message::core_validation_hook_contract_operation_node(node)
+                }
+                (ValidationCause::HookClauseOperation, None) => {
+                    Message::core_validation_hook_clause_operation()
+                }
+                (ValidationCause::HookClauseOperation, Some(node)) => {
+                    Message::core_validation_hook_clause_operation_node(node)
+                }
+                (ValidationCause::HookInputIdentity, None) => {
+                    Message::core_validation_hook_input_identity()
+                }
+                (ValidationCause::HookInputIdentity, Some(node)) => {
+                    Message::core_validation_hook_input_identity_node(node)
+                }
+                (ValidationCause::HookRootInputUse, None) => {
+                    Message::core_validation_hook_root_input_use()
+                }
+                (ValidationCause::HookRootInputUse, Some(node)) => {
+                    Message::core_validation_hook_root_input_use_node(node)
+                }
+                (ValidationCause::HookClauseContinuation, None) => {
+                    Message::core_validation_hook_clause_continuation()
+                }
+                (ValidationCause::HookClauseContinuation, Some(node)) => {
+                    Message::core_validation_hook_clause_continuation_node(node)
+                }
+                (ValidationCause::HookResumeOwner, None) => {
+                    Message::core_validation_hook_resume_owner()
+                }
+                (ValidationCause::HookResumeOwner, Some(node)) => {
+                    Message::core_validation_hook_resume_owner_node(node)
+                }
+                (ValidationCause::HookResumeHandler, None) => {
+                    Message::core_validation_hook_resume_handler()
+                }
+                (ValidationCause::HookResumeHandler, Some(node)) => {
+                    Message::core_validation_hook_resume_handler_node(node)
+                }
+                (ValidationCause::HookResumeUseState, None) => {
+                    Message::core_validation_hook_resume_use_state()
+                }
+                (ValidationCause::HookResumeUseState, Some(node)) => {
+                    Message::core_validation_hook_resume_use_state_node(node)
+                }
+                (ValidationCause::HookScopeOrigin, None) => {
+                    Message::core_validation_hook_scope_origin()
+                }
+                (ValidationCause::HookScopeOrigin, Some(node)) => {
+                    Message::core_validation_hook_scope_origin_node(node)
+                }
+                (ValidationCause::HookTargetSpan, None) => {
+                    Message::core_validation_hook_target_span()
+                }
+                (ValidationCause::HookTargetSpan, Some(node)) => {
+                    Message::core_validation_hook_target_span_node(node)
+                }
+                (ValidationCause::HookGeneratedOrigins, None) => {
+                    Message::core_validation_hook_generated_origins()
+                }
+                (ValidationCause::HookGeneratedOrigins, Some(node)) => {
+                    Message::core_validation_hook_generated_origins_node(node)
+                }
+                (ValidationCause::HookMissingEffect, None) => {
+                    Message::core_validation_hook_missing_effect()
+                }
+                (ValidationCause::HookMissingEffect, Some(node)) => {
+                    Message::core_validation_hook_missing_effect_node(node)
+                }
+                (ValidationCause::HookDuplicateBinders, None) => {
+                    Message::core_validation_hook_duplicate_binders()
+                }
+                (ValidationCause::HookDuplicateBinders, Some(node)) => {
+                    Message::core_validation_hook_duplicate_binders_node(node)
+                }
+                (ValidationCause::HookPreviousBindingShape, None) => {
+                    Message::core_validation_hook_previous_binding_shape()
+                }
+                (ValidationCause::HookPreviousBindingShape, Some(node)) => {
+                    Message::core_validation_hook_previous_binding_shape_node(node)
+                }
+                (ValidationCause::HookNextBindingShape, None) => {
+                    Message::core_validation_hook_next_binding_shape()
+                }
+                (ValidationCause::HookNextBindingShape, Some(node)) => {
+                    Message::core_validation_hook_next_binding_shape_node(node)
+                }
+                (ValidationCause::HookForwardRequestShape, None) => {
+                    Message::core_validation_hook_forward_request_shape()
+                }
+                (ValidationCause::HookForwardRequestShape, Some(node)) => {
+                    Message::core_validation_hook_forward_request_shape_node(node)
+                }
+                (ValidationCause::HookCallbackApplicationShape, None) => {
+                    Message::core_validation_hook_callback_application_shape()
+                }
+                (ValidationCause::HookCallbackApplicationShape, Some(node)) => {
+                    Message::core_validation_hook_callback_application_shape_node(node)
+                }
+                (ValidationCause::HookRegistrationResumeShape, None) => {
+                    Message::core_validation_hook_registration_resume_shape()
+                }
+                (ValidationCause::HookRegistrationResumeShape, Some(node)) => {
+                    Message::core_validation_hook_registration_resume_shape_node(node)
+                }
+                (ValidationCause::HookForwardEffect, None) => {
+                    Message::core_validation_hook_forward_effect()
+                }
+                (ValidationCause::HookForwardEffect, Some(node)) => {
+                    Message::core_validation_hook_forward_effect_node(node)
+                }
+                (ValidationCause::HookPreviousBinder, None) => {
+                    Message::core_validation_hook_previous_binder()
+                }
+                (ValidationCause::HookPreviousBinder, Some(node)) => {
+                    Message::core_validation_hook_previous_binder_node(node)
+                }
+                (ValidationCause::HookNextBinder, None) => {
+                    Message::core_validation_hook_next_binder()
+                }
+                (ValidationCause::HookNextBinder, Some(node)) => {
+                    Message::core_validation_hook_next_binder_node(node)
+                }
+                (ValidationCause::HookForwardOperation, None) => {
+                    Message::core_validation_hook_forward_operation()
+                }
+                (ValidationCause::HookForwardOperation, Some(node)) => {
+                    Message::core_validation_hook_forward_operation_node(node)
+                }
+                (ValidationCause::HookForwardInput, None) => {
+                    Message::core_validation_hook_forward_input()
+                }
+                (ValidationCause::HookForwardInput, Some(node)) => {
+                    Message::core_validation_hook_forward_input_node(node)
+                }
+                (ValidationCause::HookCallbackUse, None) => {
+                    Message::core_validation_hook_callback_use()
+                }
+                (ValidationCause::HookCallbackUse, Some(node)) => {
+                    Message::core_validation_hook_callback_use_node(node)
+                }
+                (ValidationCause::HookPreviousUse, None) => {
+                    Message::core_validation_hook_previous_use()
+                }
+                (ValidationCause::HookPreviousUse, Some(node)) => {
+                    Message::core_validation_hook_previous_use_node(node)
+                }
+                (ValidationCause::HookNextUse, None) => Message::core_validation_hook_next_use(),
+                (ValidationCause::HookNextUse, Some(node)) => {
+                    Message::core_validation_hook_next_use_node(node)
+                }
+                (ValidationCause::NonRowTailKind, None) => {
+                    Message::core_validation_non_row_tail_kind()
+                }
+                (ValidationCause::NonRowTailKind, Some(node)) => {
+                    Message::core_validation_non_row_tail_kind_node(node)
+                }
+            });
+        }
+        Some(match (self.reason, node) {
+            (ValidationReason::Handler, None) => Message::core_validation_handler(),
+            (ValidationReason::Handler, Some(node)) => Message::core_validation_handler_node(node),
+            (ValidationReason::NodeType, None) => Message::core_validation_node_type(),
+            (ValidationReason::NodeType, Some(node)) => {
+                Message::core_validation_node_type_node(node)
+            }
+            (ValidationReason::ApplicationType, None) => {
+                Message::core_validation_application_type()
+            }
+            (ValidationReason::ApplicationType, Some(node)) => {
+                Message::core_validation_application_type_node(node)
+            }
+            (ValidationReason::Registry, None) => Message::core_validation_registry(),
+            (ValidationReason::Registry, Some(node)) => {
+                Message::core_validation_registry_node(node)
+            }
+            (ValidationReason::Resource, None) => Message::core_validation_resource(),
+            (ValidationReason::Resource, Some(node)) => {
+                Message::core_validation_resource_node(node)
+            }
+            (ValidationReason::DialectMembership, None) => Message::core_validation_dialect(),
+            (ValidationReason::Root, None) => Message::core_validation_root(),
+            (ValidationReason::Cycle, None) => Message::core_validation_cycle(),
+            (ValidationReason::Unreachable, None) => Message::core_validation_unreachable(),
+            (ValidationReason::DialectMembership, Some(node)) => {
+                Message::core_validation_dialect_node(node)
+            }
+            (ValidationReason::Root, Some(node)) => Message::core_validation_root_node(node),
+            (ValidationReason::Cycle, Some(node)) => Message::core_validation_cycle_node(node),
+            (ValidationReason::Unreachable, Some(node)) => {
+                Message::core_validation_unreachable_node(node)
+            }
+            _ => return None,
+        })
+    }
+
     pub(super) const fn new(reason: ValidationReason, node: Option<NodeId>) -> Self {
-        Self { reason, node }
+        Self {
+            reason,
+            node,
+            cause: None,
+        }
+    }
+
+    fn origin_span_message(
+        error: crate::source::SourceError,
+        node: Option<usize>,
+    ) -> Option<crate::message::Message<'static>> {
+        use crate::{message::Message, source::SourceError};
+        Some(match (error, node) {
+            (SourceError::RangeOutsideSource { range, source_len }, None) => {
+                Message::core_validation_origin_range(
+                    range.start() as usize,
+                    range.end() as usize,
+                    source_len as usize,
+                )
+            }
+            (SourceError::RangeOutsideSource { range, source_len }, Some(node)) => {
+                Message::core_validation_origin_range_node(
+                    range.start() as usize,
+                    range.end() as usize,
+                    source_len as usize,
+                    node,
+                )
+            }
+            (SourceError::OffsetSplitsCodePoint { offset }, None) => {
+                Message::core_validation_origin_code_point(offset as usize)
+            }
+            (SourceError::OffsetSplitsCodePoint { offset }, Some(node)) => {
+                Message::core_validation_origin_code_point_node(offset as usize, node)
+            }
+            (SourceError::TextTooLarge, None) => Message::core_validation_origin_text_limit(),
+            (SourceError::TextTooLarge, Some(node)) => {
+                Message::core_validation_origin_text_limit_node(node)
+            }
+            (SourceError::InvalidLineState, None) => Message::core_validation_origin_index(),
+            (SourceError::InvalidLineState, Some(node)) => {
+                Message::core_validation_origin_index_node(node)
+            }
+            _ => return None,
+        })
+    }
+
+    const fn with_cause(cause: ValidationCause, node: Option<NodeId>) -> Self {
+        Self {
+            reason: match cause {
+                ValidationCause::CapturedResourceEscape { .. } => ValidationReason::ResourceEscape,
+                ValidationCause::UnsafeCoreDiscard(_)
+                | ValidationCause::CoreCleanupContext { .. } => ValidationReason::DiscardUnsafe,
+                ValidationCause::MissingChild
+                | ValidationCause::ForeignArena
+                | ValidationCause::MissingNode
+                | ValidationCause::NodeIdentityRange => ValidationReason::NodeBounds,
+                ValidationCause::EmptyMatch
+                | ValidationCause::RedundantArm { .. }
+                | ValidationCause::NonExhaustiveMatch => ValidationReason::Coverage,
+                ValidationCause::MissingOrigin
+                | ValidationCause::OriginDepth
+                | ValidationCause::RelatedOriginSource
+                | ValidationCause::UnadmittedOriginSource
+                | ValidationCause::InvalidOriginSpan(_) => ValidationReason::Provenance,
+                ValidationCause::EmptyRecursiveGroup
+                | ValidationCause::RecursiveFunctionInitializer
+                | ValidationCause::RecursiveTypeAbstraction
+                | ValidationCause::RecursiveTypeParameters
+                | ValidationCause::RecursiveFunctionBody
+                | ValidationCause::RecursiveValueType
+                | ValidationCause::RecursiveUnknownConstructor
+                | ValidationCause::RecursiveConstructorOwner
+                | ValidationCause::RecursiveMissingPayload
+                | ValidationCause::RecursiveUnexpectedPayload
+                | ValidationCause::RecursiveDataRoot
+                | ValidationCause::RecursivePayloadCall
+                | ValidationCause::RecursivePayloadForm => ValidationReason::RecursiveBinding,
+                ValidationCause::ForeignBinderArena
+                | ValidationCause::DuplicateBinder
+                | ValidationCause::UnknownVariableBinder
+                | ValidationCause::NonLexicalScopeOwner
+                | ValidationCause::UnknownScopeOwner
+                | ValidationCause::LocalScopeType
+                | ValidationCause::LocalScopeEffects
+                | ValidationCause::IncompleteScopeAnalysis
+                | ValidationCause::UnboundCoreBinder
+                | ValidationCause::UnboundLocalNominal
+                | ValidationCause::UnexpectedLocalScope
+                | ValidationCause::DuplicateLocalScope
+                | ValidationCause::MissingLocalScope
+                | ValidationCause::ScopeMissingChild
+                | ValidationCause::MissingCaptureRequirement
+                | ValidationCause::MissingRootRequirements
+                | ValidationCause::MissingNodeRequirements => ValidationReason::Scope,
+                ValidationCause::MissingGeneratedTypeBinder
+                | ValidationCause::UnresolvedCoreInference
+                | ValidationCause::TypeScopeMissingChild
+                | ValidationCause::MissingTypeRootRequirements
+                | ValidationCause::UnboundCoreTypeVariables
+                | ValidationCause::MissingTypeUseCount
+                | ValidationCause::ExhaustedTypeUseCount
+                | ValidationCause::MissingTypeRequirementSlot
+                | ValidationCause::MissingTypeRequirements
+                | ValidationCause::UnresolvedCoreRow
+                | ValidationCause::UnknownCoreRowBinder
+                | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::HookMissingEffect
+                | ValidationCause::HookDuplicateBinders
+                | ValidationCause::HookPreviousBindingShape
+                | ValidationCause::HookNextBindingShape
+                | ValidationCause::HookForwardRequestShape
+                | ValidationCause::HookCallbackApplicationShape
+                | ValidationCause::HookRegistrationResumeShape
+                | ValidationCause::HookForwardEffect
+                | ValidationCause::HookPreviousBinder
+                | ValidationCause::HookNextBinder
+                | ValidationCause::HookForwardOperation
+                | ValidationCause::HookForwardInput
+                | ValidationCause::HookCallbackUse
+                | ValidationCause::HookPreviousUse
+                | ValidationCause::HookNextUse => ValidationReason::Handler,
+                ValidationCause::CallbackScopeMissingParent
+                | ValidationCause::CallbackScopeBindingShape
+                | ValidationCause::CallbackScopeParentCount
+                | ValidationCause::CallbackScopeBindingBody
+                | ValidationCause::CallbackScopeBindingIdentity
+                | ValidationCause::CleanupBindingOrigin
+                | ValidationCause::CleanupActionIndex
+                | ValidationCause::CleanupActionParentCount
+                | ValidationCause::RegisteredHandlerParentShape
+                | ValidationCause::RegisteredHandlerParentBody
+                | ValidationCause::HookOperationCount
+                | ValidationCause::HookOperationType
+                | ValidationCause::HookClauseCount
+                | ValidationCause::HookInputPattern
+                | ValidationCause::HookRootResumeShape
+                | ValidationCause::HookRootValueShape
+                | ValidationCause::HookTargetInstance
+                | ValidationCause::HookOperationSpelling
+                | ValidationCause::HookOperationEndomorphism
+                | ValidationCause::HookContractOperation
+                | ValidationCause::HookClauseOperation
+                | ValidationCause::HookInputIdentity
+                | ValidationCause::HookRootInputUse
+                | ValidationCause::HookClauseContinuation
+                | ValidationCause::HookResumeOwner
+                | ValidationCause::HookResumeHandler
+                | ValidationCause::HookResumeUseState
+                | ValidationCause::HookScopeOrigin
+                | ValidationCause::HookTargetSpan
+                | ValidationCause::HookGeneratedOrigins => ValidationReason::Handler,
+                ValidationCause::CleanupActionShape
+                | ValidationCause::CleanupFunctionShape
+                | ValidationCause::CleanupFunctionType
+                | ValidationCause::CleanupCallbackIdentity
+                | ValidationCause::CleanupArgumentShape
+                | ValidationCause::CleanupDomainType
+                | ValidationCause::CleanupResultType
+                | ValidationCause::CleanupBodyType
+                | ValidationCause::CleanupScopeEffects
+                | ValidationCause::CleanupScopeOrigin
+                | ValidationCause::CleanupActionOrigin
+                | ValidationCause::RegistrationHandlerShape
+                | ValidationCause::RegistrationMissingContract
+                | ValidationCause::RegistrationHasRoot
+                | ValidationCause::RegistrationHandlerIdentity
+                | ValidationCause::RegistrationCallbackIdentity
+                | ValidationCause::RegistrationContractSpan
+                | ValidationCause::RegistrationScopeOrigin
+                | ValidationCause::RegistrationResultType
+                | ValidationCause::RegistrationScopeEffects
+                | ValidationCause::DuplicateHandlerIdentity
+                | ValidationCause::HandlerArgumentCount
+                | ValidationCause::HandlerClauseCount
+                | ValidationCause::DuplicateClauseContinuation
+                | ValidationCause::HandlerOperationRange
+                | ValidationCause::HandlerOperationSlot
+                | ValidationCause::DuplicateHandlerOperation
+                | ValidationCause::HandlerClauseCoverage
+                | ValidationCause::HandlerClauseType
+                | ValidationCause::HandlerClauseEffects => ValidationReason::Handler,
+                ValidationCause::CoreCleanupRow(_)
+                | ValidationCause::RowUnionAmbiguous
+                | ValidationCause::RowUnionMissing
+                | ValidationCause::RowUnionInfinite
+                | ValidationCause::RowRemovalAmbiguous
+                | ValidationCause::RowRemovalMissing
+                | ValidationCause::RowRemovalInfinite
+                | ValidationCause::PureDialectRow
+                | ValidationCause::ResourceScopeRow
+                | ValidationCause::RequestArgumentType
+                | ValidationCause::RequestResultType
+                | ValidationCause::RequestEffectRow
+                | ValidationCause::LinkedRootEffects
+                | ValidationCause::RowOwnerInference
+                | ValidationCause::MissingRowOwner
+                | ValidationCause::RowOwnerKind
+                | ValidationCause::RowOwnerScheme
+                | ValidationCause::UnprovedRowLacks
+                | ValidationCause::PureNodeEffectRow
+                | ValidationCause::MissingChildRow
+                | ValidationCause::MissingRowSlot
+                | ValidationCause::MissingRootRow
+                | ValidationCause::HandlerBodyType
+                | ValidationCause::HandlerBodyEffects
+                | ValidationCause::HandlerOutputRow => ValidationReason::EffectRow,
+                ValidationCause::UnboundContinuation
+                | ValidationCause::ContinuationBranchUsage
+                | ValidationCause::MissingClauseConsumption
+                | ValidationCause::RepeatedClauseConsumption
+                | ValidationCause::ForeignClauseContinuation
+                | ValidationCause::CapturedContinuation
+                | ValidationCause::ResumeUseState
+                | ValidationCause::DiscardUseState
+                | ValidationCause::DiscardResultType
+                | ValidationCause::DiscardMissingContract
+                | ValidationCause::ResumeMissingContract
+                | ValidationCause::ResumeHandlerShape
+                | ValidationCause::ResumeMissingClause
+                | ValidationCause::ResumeArgumentType
+                | ValidationCause::ResumeResultType
+                | ValidationCause::ResumeEffectRow
+                | ValidationCause::ResumeArgumentEffects => ValidationReason::Resume,
+                ValidationCause::PatternDepth
+                | ValidationCause::PatternTypeMismatch
+                | ValidationCause::PatternInvalidType
+                | ValidationCause::PatternBinderInvalidType
+                | ValidationCause::PatternBinderArena
+                | ValidationCause::PatternBinderType
+                | ValidationCause::PatternDuplicateBinder
+                | ValidationCause::PatternTupleType
+                | ValidationCause::PatternTupleArity
+                | ValidationCause::PatternHiddenConstructor
+                | ValidationCause::PatternNominalType
+                | ValidationCause::PatternUnknownConstructor
+                | ValidationCause::PatternNewtypeConstructor
+                | ValidationCause::PatternConstructorOwner
+                | ValidationCause::PatternMissingParameters
+                | ValidationCause::PatternNominalArity
+                | ValidationCause::PatternArgumentSpine
+                | ValidationCause::PatternMissingPayload
+                | ValidationCause::PatternUnexpectedPayload
+                | ValidationCause::PatternBooleanType
+                | ValidationCause::PatternUnitType
+                | ValidationCause::MatchScrutineeType => ValidationReason::Pattern,
+                ValidationCause::ExpectedTypeAbstraction
+                | ValidationCause::ExpectedTypeApplication
+                | ValidationCause::AdapterParameterIdentity
+                | ValidationCause::AbstractionBinderOwner
+                | ValidationCause::MethodInstantiationIdentity
+                | ValidationCause::MethodTypeArgumentCount
+                | ValidationCause::MethodTypeArgument
+                | ValidationCause::MethodInstantiationResult
+                | ValidationCause::MethodInstantiationRole
+                | ValidationCause::MissingMethodProducer
+                | ValidationCause::MethodInstantiationProducer
+                | ValidationCause::TypeAbstractionScheme
+                | ValidationCause::EmptyTypeAbstraction
+                | ValidationCause::AbstractionNominalParameter
+                | ValidationCause::AbstractionParameters
+                | ValidationCause::AbstractionBodyType
+                | ValidationCause::NestedTypeAbstraction
+                | ValidationCause::AbstractionTypeKind
+                | ValidationCause::TypeApplicationScheme
+                | ValidationCause::TypeApplicationArity
+                | ValidationCause::TypeApplicationRows
+                | ValidationCause::MissingRowArgument
+                | ValidationCause::MissingTypeArgument
+                | ValidationCause::TypeArgumentInvalid
+                | ValidationCause::TypeArgumentKind
+                | ValidationCause::TypeSubstitutionAmbiguous
+                | ValidationCause::TypeSubstitutionMissing
+                | ValidationCause::TypeSubstitutionInfinite
+                | ValidationCause::TypeApplicationResult => ValidationReason::TypeOperation,
+                ValidationCause::MissingTupleKinds
+                | ValidationCause::MissingArgumentKind
+                | ValidationCause::MissingFunctionKind
+                | ValidationCause::MissingCodomainKind
+                | ValidationCause::MissingDomainKind
+                | ValidationCause::CoreKindResultCount
+                | ValidationCause::DuplicateGeneratedTypeBinder
+                | ValidationCause::EffectAbstractionBody => ValidationReason::TypeOperation,
+                ValidationCause::UnknownCoreEffect
+                | ValidationCause::CoreOperationOwner
+                | ValidationCause::CoreEffectArgumentCount
+                | ValidationCause::CoreEffectInvalidArgument
+                | ValidationCause::CoreEffectArgumentKind
+                | ValidationCause::UnknownCoreOperation
+                | ValidationCause::CoreOperationSignature
+                | ValidationCause::UnsupportedResourceModule
+                | ValidationCause::ResourceProviderMethodCount => ValidationReason::EffectIdentity,
+                ValidationCause::ConversionUnknownOwner
+                | ValidationCause::ConversionOrdinaryOwner
+                | ValidationCause::ConversionMissingRepresentation
+                | ValidationCause::ConversionMissingParameters
+                | ValidationCause::ConversionExcessArguments
+                | ValidationCause::ConversionNominalOwner
+                | ValidationCause::ConversionMissingArguments
+                | ValidationCause::ConversionInvalidArgument
+                | ValidationCause::ConversionArgumentKind
+                | ValidationCause::ConversionRepresentationMismatch => {
+                    ValidationReason::NewtypeConversion
+                }
+            },
+            node,
+            cause: Some(cause),
+        }
     }
 
     const fn at_node(mut self, node: NodeId) -> Self {
@@ -359,8 +2846,8 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
                 Some(node),
             ));
         };
@@ -396,7 +2883,10 @@ pub(super) fn validate_effect_family(
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
+                Some(id),
+            ));
         };
         nodes.push(CoreTypedExpr {
             ty: stored.ty,
@@ -436,7 +2926,10 @@ pub(super) fn validate_effect_modules_family(
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
+                Some(id),
+            ));
         };
         nodes.push(CoreTypedExpr {
             ty: stored.ty,
@@ -490,8 +2983,8 @@ pub fn validate_modules(
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
                 Some(node),
             ));
         };
@@ -729,20 +3222,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
                 self.pure_kind(anchor.node)?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::ExpectedTypeAbstraction,
                     Some(anchor.node),
                 ));
             };
             for (parameter, _) in abstraction.parameters() {
                 self.charge_type_work(1)?;
-                if !matches!(parameter, crate::types::TypeVariableId::Generated(_))
-                    || type_binders
-                        .get(parameter)
-                        .is_none_or(|(_, owner)| *owner != anchor.node)
+                if !matches!(parameter, crate::types::TypeVariableId::Generated(_)) {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::AdapterParameterIdentity,
+                        Some(anchor.node),
+                    ));
+                }
+                if type_binders
+                    .get(parameter)
+                    .is_none_or(|(_, owner)| *owner != anchor.node)
                 {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::AbstractionBinderOwner,
                         Some(anchor.node),
                     ));
                 }
@@ -1237,8 +3735,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
                 self.pure_kind(current)?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::ExpectedTypeApplication,
                     Some(current),
                 ));
             };
@@ -2726,16 +5224,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
             F::pure(&stored.kind)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::ExpectedTypeApplication,
                 Some(anchor.node),
             ));
         };
-        if occurrence.checked_method != Some(anchor.method)
-            || occurrence.method_arguments.len() != application.arguments().len()
-        {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+        if occurrence.checked_method != Some(anchor.method) {
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationIdentity,
+                Some(anchor.node),
+            ));
+        }
+        if occurrence.method_arguments.len() != application.arguments().len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodTypeArgumentCount,
                 Some(anchor.node),
             ));
         }
@@ -2766,8 +5268,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, actual)? {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MethodTypeArgument,
                     Some(anchor.node),
                 ));
             }
@@ -2780,8 +5282,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, &stored.ty)? {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MethodInstantiationResult,
                     Some(anchor.node),
                 ));
             }
@@ -2793,8 +5295,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .get(anchor.expectation)
             .map(|expected| expected.role)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationRole,
                 Some(anchor.node),
             ));
         };
@@ -2803,7 +5305,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .find(|source| source.expectation == producer)
             .copied()
             .ok_or_else(|| {
-                ValidationError::new(ValidationReason::TypeOperation, Some(anchor.node))
+                ValidationError::with_cause(
+                    ValidationCause::MissingMethodProducer,
+                    Some(anchor.node),
+                )
             })?;
         let function = self.node(application.function())?;
         let producer_matches = match binder {
@@ -2819,8 +5324,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if producer_matches {
             Ok(())
         } else {
-            Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationProducer,
                 Some(anchor.node),
             ))
         }
@@ -3583,8 +6088,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&stored.kind)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::ExpectedTypeAbstraction,
                 Some(adapter.node),
             ));
         };
@@ -4934,7 +7439,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(budget.used())?;
         result
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
-            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+            .map_err(|error| ValidationError::row_union_failure(error, node))
     }
 
     fn remove_effect_row_charged(
@@ -4950,7 +7455,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(budget.used())?;
         result
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
-            .map_err(|_| ValidationError::new(ValidationReason::EffectRow, Some(node)))
+            .map_err(|error| ValidationError::row_removal_failure(error, node))
     }
 
     fn handler_outward_row(
@@ -4972,10 +7477,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             Err(crate::types::EffectRowError::Missing) => {
                 self.union_effect_rows_charged(&EffectRow::empty(), row, node)
             }
-            Err(_) => Err(ValidationError::new(
-                ValidationReason::EffectRow,
-                Some(node),
-            )),
+            Err(error) => Err(ValidationError::row_removal_failure(error, node)),
         }
     }
 
@@ -5151,8 +7653,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             crate::types::TypeVariableId::Generated(_) => {
                                 let Some((kind, _)) = type_binders.get(identity) else {
                                     self.charge_type_work(1)?;
-                                    return Err(ValidationError::new(
-                                        ValidationReason::TypeScope,
+                                    return Err(ValidationError::with_cause(
+                                        ValidationCause::MissingGeneratedTypeBinder,
                                         None,
                                     ));
                                 };
@@ -5166,13 +7668,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::Visit(Type::Inference(_)) => {
                     self.charge_type_work(1)?;
-                    return Err(ValidationError::new(
-                        match variable_kinds {
-                            MonotypeVariableKinds::Core(_) => ValidationReason::TypeScope,
-                            MonotypeVariableKinds::Registry { .. } => ValidationReason::Registry,
-                        },
-                        None,
-                    ));
+                    return Err(match variable_kinds {
+                        MonotypeVariableKinds::Core(_) => ValidationError::with_cause(
+                            ValidationCause::UnresolvedCoreInference,
+                            None,
+                        ),
+                        MonotypeVariableKinds::Registry { .. } => {
+                            ValidationError::new(ValidationReason::Registry, None)
+                        }
+                    });
                 }
                 Task::Visit(Type::Forall(_, _)) => {
                     self.charge_type_work(1)?;
@@ -5217,7 +7721,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishTuple(count) => {
                     if completed.len() < count {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingTupleKinds,
+                            None,
+                        ));
                     }
                     let kinds = completed.split_off(completed.len() - count);
                     for kind in kinds {
@@ -5230,10 +7737,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishApplication => {
                     let Some(argument) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingArgumentKind,
+                            None,
+                        ));
                     };
                     let Some(mut function) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingFunctionKind,
+                            None,
+                        ));
                     };
                     let Kind::Arrow(domain, codomain) = &mut function else {
                         return Ok(None);
@@ -5247,10 +7760,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishFunction => {
                     let Some(codomain) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingCodomainKind,
+                            None,
+                        ));
                     };
                     let Some(domain) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingDomainKind,
+                            None,
+                        ));
                     };
                     if !self.same_kind_charged(&domain, &Kind::Type)?
                         || !self.same_kind_charged(&codomain, &Kind::Type)?
@@ -5265,7 +7784,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if completed.len() == 1 {
             Ok(completed.pop())
         } else {
-            Err(ValidationError::new(ValidationReason::TypeOperation, None))
+            Err(ValidationError::with_cause(
+                ValidationCause::CoreKindResultCount,
+                None,
+            ))
         }
     }
 
@@ -5298,17 +7820,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 };
                 let Some(canonical) = canonical else {
                     self.charge_type_work(1)?;
-                    return Err(ValidationError::new(
-                        match parameter {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                ValidationReason::Registry
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                ValidationReason::TypeScope
-                            }
-                        },
-                        None,
-                    ));
+                    return Err(match parameter {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            ValidationError::new(ValidationReason::Registry, None)
+                        }
+                        crate::types::TypeVariableId::Generated(_) => ValidationError::with_cause(
+                            ValidationCause::MissingGeneratedTypeBinder,
+                            None,
+                        ),
+                    });
                 };
                 if !self.same_kind_charged(canonical, kind)? {
                     return Ok(false);
@@ -5436,7 +7956,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
             }
             if F::REQUIRES_EMPTY_ROWS && !F::effect_row(&node.effects).is_empty() {
-                return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PureDialectRow,
+                    Some(id),
+                ));
             }
             if node.dialect != DialectId::named(F::DIALECT_NAME) {
                 return Err(ValidationError::new(
@@ -5445,7 +7968,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ));
             }
             let Some(origin) = node.origin.as_ref() else {
-                return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MissingOrigin,
+                    Some(id),
+                ));
             };
             self.validate_origin(origin, id)?;
         }
@@ -5454,8 +7980,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_origin(&self, origin: &Origin, node: NodeId) -> Result<(), ValidationError> {
         if !origin_depth_within_limit(origin) {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::OriginDepth,
                 Some(node),
             ));
         }
@@ -5468,8 +7994,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     let primary_source = primary.primary_span().source();
                     for span in related {
                         if span.source() != primary_source {
-                            return Err(ValidationError::new(
-                                ValidationReason::Provenance,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::RelatedOriginSource,
                                 Some(node),
                             ));
                         }
@@ -5484,14 +8010,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_span(&self, span: Span, node: NodeId) -> Result<(), ValidationError> {
         let Some(source) = self.sources.get(&span.source()) else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::UnadmittedOriginSource,
                 Some(node),
             ));
         };
-        source
-            .span(span.range())
-            .map_err(|_| ValidationError::new(ValidationReason::Provenance, Some(node)))?;
+        source.span(span.range()).map_err(|error| {
+            ValidationError::with_cause(ValidationCause::InvalidOriginSpan(error), Some(node))
+        })?;
         Ok(())
     }
 
@@ -5525,16 +8051,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(GraphTask::Exit(id));
                     for child_index in (0..child_count).rev() {
                         let Some(child) = F::child_at(&node.kind, child_index) else {
-                            return Err(ValidationError::new(
-                                ValidationReason::NodeBounds,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::MissingChild,
                                 Some(id),
                             ));
                         };
-                        if self.node(child).is_err() {
-                            return Err(ValidationError::new(
-                                ValidationReason::NodeBounds,
-                                Some(id),
-                            ));
+                        if let Err(mut error) = self.node(child) {
+                            error.node = Some(id);
+                            return Err(error);
                         }
                         work.push(GraphTask::Enter(child));
                     }
@@ -5691,7 +8215,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         authenticated_nested: bool,
     ) -> Result<(), ValidationError> {
         if binder.arena() != self.program.arena {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ForeignBinderArena,
+                Some(node),
+            ));
         }
         self.validate_origin(binder.origin(), node)?;
         if let (Some(relation), Some(module)) = (&self.module_sources, binder.id().module())
@@ -5707,10 +8234,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             self.valid_monotype(Some(binder.ty()))?
         };
         if !type_valid {
+            if invalid_type == ValidationReason::Pattern {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternBinderInvalidType,
+                    Some(node),
+                ));
+            }
             return Err(ValidationError::new(invalid_type, Some(node)));
         }
         if self.binders.contains_key(&binder.id()) {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::DuplicateBinder,
+                Some(node),
+            ));
         }
         self.binders
             .try_reserve(1)
@@ -5785,17 +8321,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 if definitions.contains_key(parameter) {
-                    return Err(ValidationError::new(
-                        match parameter {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                ValidationReason::Registry
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                ValidationReason::TypeOperation
-                            }
-                        },
-                        Some(id),
-                    ));
+                    return Err(match parameter {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            ValidationError::new(ValidationReason::Registry, Some(id))
+                        }
+                        crate::types::TypeVariableId::Generated(_) => ValidationError::with_cause(
+                            ValidationCause::DuplicateGeneratedTypeBinder,
+                            Some(id),
+                        ),
+                    });
                 }
                 definitions
                     .try_reserve(1)
@@ -5882,7 +8416,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .map_err(|error| error.at_node(id))?,
                 Some(PureExprKind::Variable(variable)) => {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
-                        return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::UnknownVariableBinder,
+                            Some(id),
+                        ));
                     };
                     if !self.same_type_charged(&node.ty, binder.ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -6027,8 +8564,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             PureComputation::RecursiveBind(group) => {
                 if group.members().is_empty() {
-                    return Err(ValidationError::new(
-                        ValidationReason::RecursiveBinding,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::EmptyRecursiveGroup,
                         Some(id),
                     ));
                 }
@@ -6039,20 +8576,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .collect::<HashSet<_>>();
                 for member in group.members() {
                     let initializer = self.node(member.initializer())?;
-                    let safe = match member.binder().ty() {
-                        Type::Function(_, _) => matches!(
+                    let failure = match member.binder().ty() {
+                        Type::Function(_, _) => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(PureValue::Function(_)))
-                        ),
-                        Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => matches!(
+                        ))
+                        .then_some(ValidationCause::RecursiveFunctionInitializer),
+                        Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(PureValue::Function(_)))
-                        ),
+                        ))
+                        .then_some(ValidationCause::RecursiveFunctionInitializer),
                         ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
                             Some(owner) => {
                                 self.guarded_data_root(member.initializer(), owner, &recursive)?
                             }
-                            None => false,
+                            None => Some(ValidationCause::RecursiveValueType),
                         },
                         Type::Forall(parameters, body)
                             if matches!(body.as_ref(), Type::Function(_, _))
@@ -6063,18 +8602,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 abstraction,
                             ))) = F::pure(&initializer.kind)
                             else {
-                                return Err(ValidationError::new(
-                                    ValidationReason::RecursiveBinding,
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::RecursiveTypeAbstraction,
                                     Some(id),
                                 ));
                             };
-                            self.same_kinded_parameters(
+                            if !self.same_kinded_parameters(
                                 abstraction.parameters(),
                                 parameters.as_ref(),
-                            )? && matches!(
-                                F::pure(&self.node(abstraction.body())?.kind),
-                                Some(PureExprKind::Value(PureValue::Function(_)))
-                            )
+                            )? {
+                                Some(ValidationCause::RecursiveTypeParameters)
+                            } else {
+                                (!matches!(
+                                    F::pure(&self.node(abstraction.body())?.kind),
+                                    Some(PureExprKind::Value(PureValue::Function(_)))
+                                ))
+                                .then_some(ValidationCause::RecursiveFunctionBody)
+                            }
                         }
                         Type::Int
                         | Type::Bool
@@ -6085,13 +8629,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::EffectfulFunction(_, _)
-                        | Type::Forall(_, _) => false,
+                        | Type::Forall(_, _) => Some(ValidationCause::RecursiveValueType),
                     };
-                    if !safe {
-                        return Err(ValidationError::new(
-                            ValidationReason::RecursiveBinding,
-                            Some(id),
-                        ));
+                    if let Some(cause) = failure {
+                        return Err(ValidationError::with_cause(cause, Some(id)));
                     }
                     if !self.same_type_charged(&initializer.ty, member.binder().ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -6148,14 +8689,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureComputation::Match(match_node) => {
                 let scrutinee = self.node(match_node.scrutinee())?;
                 if !self.valid_monotype(Some(&scrutinee.ty))? {
-                    return Err(ValidationError::new(ValidationReason::Pattern, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::MatchScrutineeType,
+                        Some(id),
+                    ));
                 }
                 if match_node.arms().is_empty() {
-                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::EmptyMatch,
+                        Some(id),
+                    ));
                 }
                 let mut matrix = CorePatternMatrix(Vec::new());
                 let mut coverage_budget = UsefulnessBudget::default();
-                for arm in match_node.arms() {
+                for (index, arm) in match_node.arms().iter().enumerate() {
                     self.validate_origin(arm.origin(), id)?;
                     self.validate_pattern(arm.pattern(), &scrutinee.ty, id)?;
                     if !self.same_type_charged(&self.node(arm.body())?.ty, &node.ty)? {
@@ -6172,7 +8719,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                     .is_none()
                     {
-                        return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RedundantArm { arm: index + 1 },
+                            Some(id),
+                        ));
                     }
                     matrix.0.push(row.into_inner());
                 }
@@ -6185,36 +8735,55 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                 .is_some()
                 {
-                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
-                }
-            }
-            PureComputation::NewtypeConversion(conversion) => {
-                if !self.valid_newtype_conversion(node, *conversion, type_binders)? {
-                    return Err(ValidationError::new(
-                        ValidationReason::NewtypeConversion,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::NonExhaustiveMatch,
                         Some(id),
                     ));
                 }
             }
+            PureComputation::NewtypeConversion(conversion) => {
+                if let Some(cause) =
+                    self.valid_newtype_conversion(node, *conversion, type_binders)?
+                {
+                    return Err(ValidationError::with_cause(cause, Some(id)));
+                }
+            }
             PureComputation::LocalNominalScope(scope) => {
                 let body = self.node(scope.body())?;
-                if !scope.owner().is_lexical()
-                    || self.program.registry.nominal(scope.owner()).is_none()
-                    || !self.same_type_charged(&node.ty, &body.ty)?
-                    || !self.same_effect_row_charged(
-                        F::effect_row(&node.effects),
-                        F::effect_row(&body.effects),
-                        id,
-                    )?
-                {
-                    return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                if !scope.owner().is_lexical() {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::NonLexicalScopeOwner,
+                        Some(id),
+                    ));
+                }
+                if self.program.registry.nominal(scope.owner()).is_none() {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::UnknownScopeOwner,
+                        Some(id),
+                    ));
+                }
+                if !self.same_type_charged(&node.ty, &body.ty)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::LocalScopeType,
+                        Some(id),
+                    ));
+                }
+                if !self.same_effect_row_charged(
+                    F::effect_row(&node.effects),
+                    F::effect_row(&body.effects),
+                    id,
+                )? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::LocalScopeEffects,
+                        Some(id),
+                    ));
                 }
             }
             PureComputation::TypeAbstraction(abstraction) => {
                 let body = self.node(abstraction.body())?;
                 let Type::Forall(parameters, scheme_body) = &node.ty else {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::TypeAbstractionScheme,
                         Some(id),
                     ));
                 };
@@ -6235,40 +8804,54 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                     }
                 }
-                if abstraction.parameters().is_empty()
-                    || abstraction.parameters().iter().any(|(parameter, _)| {
-                        type_binders
-                            .get(parameter)
-                            .is_none_or(|(_, owner)| *owner != id)
-                    })
-                    || abstraction
-                        .parameters()
-                        .iter()
-                        .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
-                    || !self
-                        .same_kinded_parameters(abstraction.parameters(), parameters.as_ref())?
-                    || !self.same_type_charged(&body.ty, scheme_body)?
-                    || (!authenticated_method_evidence
-                        && (matches!(scheme_body.as_ref(), Type::Forall(_, _))
-                            || !self.valid_core_type_kind(&node.ty, type_binders)?))
+                let cause = if abstraction.parameters().is_empty() {
+                    Some(ValidationCause::EmptyTypeAbstraction)
+                } else if abstraction.parameters().iter().any(|(parameter, _)| {
+                    type_binders
+                        .get(parameter)
+                        .is_none_or(|(_, owner)| *owner != id)
+                }) {
+                    Some(ValidationCause::AbstractionBinderOwner)
+                } else if abstraction
+                    .parameters()
+                    .iter()
+                    .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
                 {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    Some(ValidationCause::AbstractionNominalParameter)
+                } else if !self
+                    .same_kinded_parameters(abstraction.parameters(), parameters.as_ref())?
+                {
+                    Some(ValidationCause::AbstractionParameters)
+                } else if !self.same_type_charged(&body.ty, scheme_body)? {
+                    Some(ValidationCause::AbstractionBodyType)
+                } else if !authenticated_method_evidence
+                    && matches!(scheme_body.as_ref(), Type::Forall(_, _))
+                {
+                    Some(ValidationCause::NestedTypeAbstraction)
+                } else if !authenticated_method_evidence
+                    && !self.valid_core_type_kind(&node.ty, type_binders)?
+                {
+                    Some(ValidationCause::AbstractionTypeKind)
+                } else {
+                    None
+                };
+                if let Some(cause) = cause {
+                    return Err(ValidationError::with_cause(cause, Some(id)));
                 }
             }
             PureComputation::TypeApplication(application) => {
-                let invalid = || ValidationError::new(ValidationReason::TypeOperation, Some(id));
+                let invalid = |cause| ValidationError::with_cause(cause, Some(id));
                 let function = self.node(application.function())?;
                 let Type::Forall(parameters, body) = &function.ty else {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationScheme));
                 };
                 if parameters.len()
                     != application.arguments().len() + application.row_arguments().len()
-                    || (!F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty())
                 {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationArity));
+                }
+                if !F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty() {
+                    return Err(invalid(ValidationCause::TypeApplicationRows));
                 }
                 self.charge_type_work(parameters.len())?;
                 let mut replacements = TypeReplacementMap::new();
@@ -6283,18 +8866,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut rows = application.row_arguments().iter();
                 for (parameter, kind) in parameters.iter() {
                     if matches!(kind, Kind::EffectRow) {
-                        let row = rows.next().ok_or_else(invalid)?;
+                        let row = rows
+                            .next()
+                            .ok_or_else(|| invalid(ValidationCause::MissingRowArgument))?;
                         row_replacements.insert(*parameter, self.clone_effect_row_charged(row)?);
                     } else {
-                        let argument = ordinary.next().ok_or_else(invalid)?;
+                        let argument = ordinary
+                            .next()
+                            .ok_or_else(|| invalid(ValidationCause::MissingTypeArgument))?;
                         let argument_kind = self
                             .synthesize_monotype_kind(
                                 argument,
                                 MonotypeVariableKinds::Core(type_binders),
                             )?
-                            .ok_or_else(invalid)?;
+                            .ok_or_else(|| invalid(ValidationCause::TypeArgumentInvalid))?;
                         if !self.same_kind_charged(kind, &argument_kind)? {
-                            return Err(invalid());
+                            return Err(invalid(ValidationCause::TypeArgumentKind));
                         }
                         replacements
                             .insert_replacing(*parameter, self.clone_type_charged(argument)?);
@@ -6307,10 +8894,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     |cells| self.charge_type_work(cells),
                     || ValidationError::new(ValidationReason::Resource, None),
                 )?
-                .map_err(|_| invalid())?;
+                .map_err(|cause| {
+                    invalid(match cause {
+                        crate::types::EffectRowError::Ambiguous => {
+                            ValidationCause::TypeSubstitutionAmbiguous
+                        }
+                        crate::types::EffectRowError::Missing => {
+                            ValidationCause::TypeSubstitutionMissing
+                        }
+                        crate::types::EffectRowError::Infinite => {
+                            ValidationCause::TypeSubstitutionInfinite
+                        }
+                    })
+                })?;
                 let instantiated = IterativeTypeOwner::new(instantiated);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationResult));
                 }
             }
         }
@@ -6407,11 +9006,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .try_reserve(children)
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
             for index in 0..children {
-                pending.push(
-                    F::child_at(&node.kind, index).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::NodeBounds, Some(id))
-                    })?,
-                );
+                pending.push(F::child_at(&node.kind, index).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
+                })?);
             }
         }
         Ok(false)
@@ -6422,18 +9019,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         node: &StoredNode<F>,
         conversion: super::NewtypeConversionNode,
         type_binders: &CoreTypeBinders<'program>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let Some(owner) = self.program.registry.nominal(conversion.owner()) else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionUnknownOwner));
         };
         if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionOrdinaryOwner));
         }
         let Some(representation) = owner.representation.as_ref() else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionMissingRepresentation));
         };
         let Some(parameters) = self.program.registry.nominal_parameters(owner.id) else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionMissingParameters));
         };
         let child = self.node(conversion.child())?;
         let (nominal, actual_representation) = match conversion.direction() {
@@ -6460,13 +9057,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut head = nominal;
         while let Type::Application(function, argument) = head {
             if arguments.len() == parameters.len() {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionExcessArguments));
             }
             arguments.push(argument.as_ref());
             head = function;
         }
-        if head != &Type::Nominal(owner.id) || arguments.len() != parameters.len() {
-            return Ok(false);
+        if head != &Type::Nominal(owner.id) {
+            return Ok(Some(ValidationCause::ConversionNominalOwner));
+        }
+        if arguments.len() != parameters.len() {
+            return Ok(Some(ValidationCause::ConversionMissingArguments));
         }
 
         let mut replacements = TypeReplacementMap::new();
@@ -6485,10 +9085,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let Some(argument_kind) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionInvalidArgument));
             };
             if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionArgumentKind));
             }
             replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
         }
@@ -6505,7 +9105,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, None),
         )?);
-        self.same_type_charged(&expected, actual_representation)
+        Ok((!self.same_type_charged(&expected, actual_representation)?)
+            .then_some(ValidationCause::ConversionRepresentationMismatch))
     }
 
     fn guarded_data_root(
@@ -6513,37 +9114,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         initializer: NodeId,
         owner: crate::types::NominalTypeId,
         recursive: &HashSet<BinderId>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let initializer = self.erase_type_applications(initializer)?;
         let root = self.node(initializer)?;
         let payload = match F::pure(&root.kind) {
             Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveUnknownConstructor));
                 };
-                if info.owner != owner || info.payload.is_some() {
-                    return Ok(false);
+                if info.owner != owner {
+                    return Ok(Some(ValidationCause::RecursiveConstructorOwner));
                 }
-                return Ok(true);
+                if info.payload.is_some() {
+                    return Ok(Some(ValidationCause::RecursiveMissingPayload));
+                }
+                return Ok(None);
             }
             Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                 let function = self.node(self.erase_type_applications(application.function())?)?;
                 let Some(PureExprKind::Value(PureValue::Constructor(constructor))) =
                     F::pure(&function.kind)
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveDataRoot));
                 };
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveUnknownConstructor));
                 };
-                if info.owner != owner || info.payload.is_none() {
-                    return Ok(false);
+                if info.owner != owner {
+                    return Ok(Some(ValidationCause::RecursiveConstructorOwner));
+                }
+                if info.payload.is_none() {
+                    return Ok(Some(ValidationCause::RecursiveUnexpectedPayload));
                 }
                 application.argument()
             }
-            _ => return Ok(false),
+            _ => return Ok(Some(ValidationCause::RecursiveDataRoot)),
         };
         self.guarded_payload(payload, recursive)
     }
@@ -6552,7 +9159,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         root: NodeId,
         recursive: &HashSet<BinderId>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let reaches_recursive = self.recursive_reachability(root, recursive)?;
         let mut work = vec![root];
         while let Some(id) = work.pop() {
@@ -6573,15 +9180,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         F::pure(&function.kind),
                         Some(PureExprKind::Value(PureValue::Constructor(_)))
                     ) {
-                        return Ok(false);
+                        return Ok(Some(ValidationCause::RecursivePayloadCall));
                     }
                     work.push(application.argument());
                 }
                 Some(PureExprKind::Value(PureValue::Function(_))) => {}
-                _ => return Ok(false),
+                _ => return Ok(Some(ValidationCause::RecursivePayloadForm)),
             }
         }
-        Ok(true)
+        Ok(None)
     }
 
     fn erase_type_applications(&self, mut id: NodeId) -> Result<NodeId, ValidationError> {
@@ -6625,7 +9232,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Finish(id));
                     for index in 0..child_count {
                         work.push(Task::Visit(F::child_at(&node.kind, index).ok_or_else(
-                            || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                            || ValidationError::with_cause(ValidationCause::MissingChild, Some(id)),
                         )?));
                     }
                 }
@@ -6640,7 +9247,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                            ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
                         })?;
                         reaches |= result.get(&child).copied().unwrap_or(false);
                     }
@@ -6723,21 +9330,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             };
             if depth > CORE_PATTERN_DEPTH_LIMIT {
-                return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternDepth,
+                    Some(node),
+                ));
             }
             self.validate_origin(&pattern.origin, node)?;
-            if !self.same_type_charged(&pattern.ty, expected.as_type())?
-                || !self.valid_monotype(Some(&pattern.ty))?
-            {
-                return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+            if !self.same_type_charged(&pattern.ty, expected.as_type())? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternTypeMismatch,
+                    Some(node),
+                ));
+            }
+            if !self.valid_monotype(Some(&pattern.ty))? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::PatternInvalidType,
+                    Some(node),
+                ));
             }
             match &pattern.kind {
                 CorePatternKind::Binder(binder) => {
-                    if binder.arena() != self.program.arena
-                        || !self.same_type_charged(binder.ty(), expected.as_type())?
-                        || !binders.insert(binder.id())
-                    {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                    if binder.arena() != self.program.arena {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternBinderArena,
+                            Some(node),
+                        ));
+                    }
+                    if !self.same_type_charged(binder.ty(), expected.as_type())? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternBinderType,
+                            Some(node),
+                        ));
+                    }
+                    if !binders.insert(binder.id()) {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternDuplicateBinder,
+                            Some(node),
+                        ));
                     }
                     self.validate_origin(binder.origin(), node)?;
                 }
@@ -6756,8 +9385,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let expected = expected.into_inner();
                         let Type::Tuple(types) = expected else {
                             discard_type_iteratively(expected);
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternTupleType,
                                 Some(node),
                             ));
                         };
@@ -6765,8 +9394,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             for ty in types {
                                 discard_type_iteratively(ty);
                             }
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternTupleArity,
                                 Some(node),
                             ));
                         }
@@ -6776,8 +9405,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             depth: depth.saturating_add(1),
                         });
                     }
+                    Expected::Borrowed(Type::Tuple(_)) => {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternTupleArity,
+                            Some(node),
+                        ));
+                    }
                     _ => {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternTupleType,
+                            Some(node),
+                        ));
                     }
                 },
                 CorePatternKind::Constructor {
@@ -6787,15 +9425,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     if crate::resolved::ResourceApi::for_module(constructor.owner().module())
                         .is_some_and(|api| api.hides_constructor(*constructor))
                     {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternHiddenConstructor,
+                            Some(node),
+                        ));
                     }
                     let Some((owner, arity)) =
                         self.nominal_application_head_and_arity(expected.as_type())?
                     else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNominalType,
+                            Some(node),
+                        ));
                     };
                     let Some(info) = self.program.registry.constructor(*constructor) else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternUnknownConstructor,
+                            Some(node),
+                        ));
                     };
                     if self
                         .program
@@ -6806,16 +9453,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 == crate::resolved::ResolvedNominalDeclarationKind::Newtype
                         })
                     {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNewtypeConstructor,
+                            Some(node),
+                        ));
                     }
                     if info.owner != owner {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternConstructorOwner,
+                            Some(node),
+                        ));
                     }
                     let Some(parameters) = self.program.registry.nominal_parameters(owner) else {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternMissingParameters,
+                            Some(node),
+                        ));
                     };
                     if parameters.len() != arity {
-                        return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::PatternNominalArity,
+                            Some(node),
+                        ));
                     }
                     let payload_type = if let Some(payload) = info.payload.as_ref() {
                         self.charge_type_work(parameters.len())?;
@@ -6826,8 +9485,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         let mut current = expected.as_type();
                         for parameter in parameters.iter().rev() {
                             let Type::Application(function, argument) = current else {
-                                return Err(ValidationError::new(
-                                    ValidationReason::Pattern,
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::PatternArgumentSpine,
                                     Some(node),
                                 ));
                             };
@@ -6851,16 +9510,31 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             Expected::Owned(payload_type),
                             depth.saturating_add(1),
                         )),
-                        _ => {
-                            return Err(ValidationError::new(
-                                ValidationReason::Pattern,
+                        (Some(_), None) => {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternMissingPayload,
+                                Some(node),
+                            ));
+                        }
+                        (None, Some(_)) => {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::PatternUnexpectedPayload,
                                 Some(node),
                             ));
                         }
                     }
                 }
-                CorePatternKind::Boolean(_) | CorePatternKind::Unit => {
-                    return Err(ValidationError::new(ValidationReason::Pattern, Some(node)));
+                CorePatternKind::Boolean(_) => {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::PatternBooleanType,
+                        Some(node),
+                    ));
+                }
+                CorePatternKind::Unit => {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::PatternUnitType,
+                        Some(node),
+                    ));
                 }
             }
         }
@@ -6871,21 +9545,30 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.validate_local_scope_bijection()?;
         let analysis = self.analyze_free_binders()?;
         if analysis.analyzed_nodes != self.program.nodes.len() {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::IncompleteScopeAnalysis,
+                None,
+            ));
         }
         if let Some((key, requirement)) = analysis
             .root_requirements
             .iter()
             .min_by_key(|(_, requirement)| requirement.occurrence.value())
         {
-            return Err(ValidationError::new(
-                if matches!(key, ScopeRequirementKey::Resume(_, _)) {
-                    ValidationReason::Resume
-                } else {
-                    ValidationReason::Scope
-                },
-                Some(requirement.occurrence),
-            ));
+            return Err(match key {
+                ScopeRequirementKey::Resume(_, _) => ValidationError::with_cause(
+                    ValidationCause::UnboundContinuation,
+                    Some(requirement.occurrence),
+                ),
+                ScopeRequirementKey::Binder(_) => ValidationError::with_cause(
+                    ValidationCause::UnboundCoreBinder,
+                    Some(requirement.occurrence),
+                ),
+                ScopeRequirementKey::LocalNominal(_) => ValidationError::with_cause(
+                    ValidationCause::UnboundLocalNominal,
+                    Some(requirement.occurrence),
+                ),
+            });
         }
         Ok(())
     }
@@ -6923,12 +9606,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             };
             let id = node_id(self.program.arena, index)?;
             self.charge_type_work(1)?;
-            if !expected.contains(&scope.owner()) || !introduced.insert(scope.owner()) {
-                return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+            if !expected.contains(&scope.owner()) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnexpectedLocalScope,
+                    Some(id),
+                ));
+            }
+            if !introduced.insert(scope.owner()) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::DuplicateLocalScope,
+                    Some(id),
+                ));
             }
         }
         if introduced != expected {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingLocalScope,
+                None,
+            ));
         }
         Ok(())
     }
@@ -6941,8 +9636,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let id = node_id(self.program.arena, index)?;
             self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
             for child_index in 0..F::child_count(&node.kind) {
-                let child = F::child_at(&node.kind, child_index)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(id)))?;
+                let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::TypeScopeMissingChild, Some(id))
+                })?;
                 let child_index = self.index(child)?;
                 remaining_uses[child_index] = remaining_uses[child_index]
                     .checked_add(1)
@@ -6968,7 +9664,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(ScopeAnalysisTask::Finish(id));
                     for child_index in (0..child_count).rev() {
                         let child = F::child_at(kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::TypeScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
@@ -6985,7 +9684,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for child_index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::TypeScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         let mut child_free = self.take_type_scope_requirements(
                             &mut requirements,
@@ -7127,12 +9829,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let root = requirements
             .get(self.index(self.program.root)?)
             .and_then(Option::as_ref)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, None))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::MissingTypeRootRequirements, None)
+            })?;
         if root.is_empty() {
             Ok(())
         } else {
-            Err(ValidationError::new(
-                ValidationReason::TypeScope,
+            Err(ValidationError::with_cause(
+                ValidationCause::UnboundCoreTypeVariables,
                 Some(self.program.root),
             ))
         }
@@ -7146,23 +9850,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         parent: NodeId,
     ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
         let child_index = self.index(child)?;
-        let remaining = remaining_uses
-            .get_mut(child_index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
-        *remaining = remaining
-            .checked_sub(1)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
-        let requirement = requirements
-            .get_mut(child_index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        let remaining = remaining_uses.get_mut(child_index).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeUseCount, Some(parent))
+        })?;
+        *remaining = remaining.checked_sub(1).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::ExhaustedTypeUseCount, Some(parent))
+        })?;
+        let requirement = requirements.get_mut(child_index).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeRequirementSlot, Some(parent))
+        })?;
         if *remaining == 0 {
-            return requirement
-                .take()
-                .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)));
+            return requirement.take().ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::MissingTypeRequirements, Some(parent))
+            });
         }
-        let requirement = requirement
-            .as_ref()
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        let requirement = requirement.as_ref().ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeRequirements, Some(parent))
+        })?;
         self.charge_type_work(requirement.len())?;
         let mut cloned = HashSet::new();
         cloned
@@ -7357,7 +10061,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(ScopeAnalysisTask::Finish(id));
                     for child_index in (0..child_count).rev() {
                         let child = F::child_at(kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Scope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::ScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
@@ -7404,8 +10111,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                         !initializer
                                             .contains_key(&ScopeRequirementKey::Binder(*capture))
                                     }) {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Scope,
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::MissingCaptureRequirement,
                                             Some(id),
                                         ));
                                     }
@@ -7477,8 +10184,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                             })
                                         })
                                     {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Resume,
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::ContinuationBranchUsage,
                                             Some(id),
                                         ));
                                     }
@@ -7524,7 +10231,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             for child_index in 0..F::child_count(&node.kind) {
                                 let child =
                                     F::child_at(&node.kind, child_index).ok_or_else(|| {
-                                        ValidationError::new(ValidationReason::Scope, Some(id))
+                                        ValidationError::with_cause(
+                                            ValidationCause::ScopeMissingChild,
+                                            Some(id),
+                                        )
                                     })?;
                                 let mut child_free = self.requirements_for(&requirements, child)?;
                                 F::visit_operation_child_binders(
@@ -7539,13 +10249,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 {
                                     let capability = child_free
                                         .remove(&ScopeRequirementKey::Resume(handler, owner));
-                                    if capability.is_none_or(|capability| capability.paths != 1)
-                                        || child_free.keys().any(|key| {
-                                            matches!(key, ScopeRequirementKey::Resume(_, _))
-                                        })
+                                    let cause = if capability.is_none() {
+                                        Some(ValidationCause::MissingClauseConsumption)
+                                    } else if capability
+                                        .is_some_and(|capability| capability.paths != 1)
                                     {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Resume,
+                                        Some(ValidationCause::RepeatedClauseConsumption)
+                                    } else if child_free
+                                        .keys()
+                                        .any(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
+                                    {
+                                        Some(ValidationCause::ForeignClauseContinuation)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(cause) = cause {
+                                        return Err(ValidationError::with_cause(
+                                            cause,
                                             Some(child),
                                         ));
                                     }
@@ -7568,7 +10288,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let root_index = self.index(self.program.root)?;
         let Some(root_requirements) = requirements[root_index].take() else {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingRootRequirements,
+                None,
+            ));
         };
         Ok(ScopeAnalysis {
             root_requirements,
@@ -7583,7 +10306,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<ScopeRequirements, ValidationError> {
         let index = self.index(id)?;
         let Some(free) = requirements.get(index).and_then(Option::as_ref) else {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingNodeRequirements,
+                Some(id),
+            ));
         };
         let capability_count = free
             .keys()
@@ -7612,7 +10338,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .keys()
             .any(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
         {
-            Err(ValidationError::new(ValidationReason::Resume, Some(owner)))
+            Err(ValidationError::with_cause(
+                ValidationCause::CapturedContinuation,
+                Some(owner),
+            ))
         } else {
             Ok(())
         }
@@ -7865,12 +10594,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn index(&self, id: NodeId) -> Result<usize, ValidationError> {
         if id.arena() != self.program.arena {
-            return Err(ValidationError::new(ValidationReason::NodeBounds, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ForeignArena,
+                Some(id),
+            ));
         }
         usize::try_from(id.value())
             .ok()
             .filter(|index| *index < self.program.nodes.len())
-            .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingNode, Some(id)))
     }
 
     fn node(&self, id: NodeId) -> Result<&'program StoredNode<F>, ValidationError> {
@@ -7878,7 +10610,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.program
             .nodes
             .get(index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingNode, Some(id)))
     }
 
     fn pure_kind(&self, id: NodeId) -> Result<&'program PureExprKind, ValidationError> {
@@ -7901,39 +10633,51 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         scope: &super::effect::CleanupScopeNode,
     ) -> Result<(), ValidationError> {
         use super::effect::EffectExprKind;
-        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         self.charge_type_work(4)?;
         let action = self.node(scope.action)?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
             &action.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::CleanupActionShape));
         };
         let function = self.node(application.function())?;
         let argument = self.node(application.argument())?;
         let EffectExprKind::Pure(PureExprKind::Variable(variable)) = &function.kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::CleanupFunctionShape));
         };
         let Some(signature) = function.ty.function_view() else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::CleanupFunctionType));
         };
         let body = self.node(scope.body)?;
         let effects = self.union_effect_rows_charged(&body.effects, &action.effects, id)?;
-        if variable.binder() != scope.callback
-            || !matches!(
-                &argument.kind,
-                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
-            )
-            || !self.same_type_charged(signature.domain(), &Type::Unit)?
-            || !self.same_type_charged(signature.value(), &Type::Unit)?
-            || !self.same_type_charged(&node.ty, &body.ty)?
-            || !self.same_effect_row_charged(&node.effects, &effects, id)?
-            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
-            || [action, function, argument].iter().any(|child| {
-                child.origin.as_ref().map(Origin::primary_span) != Some(scope.action_span)
-            })
+        let cause = if variable.binder() != scope.callback {
+            Some(ValidationCause::CleanupCallbackIdentity)
+        } else if !matches!(
+            &argument.kind,
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_)))
+        ) {
+            Some(ValidationCause::CleanupArgumentShape)
+        } else if !self.same_type_charged(signature.domain(), &Type::Unit)? {
+            Some(ValidationCause::CleanupDomainType)
+        } else if !self.same_type_charged(signature.value(), &Type::Unit)? {
+            Some(ValidationCause::CleanupResultType)
+        } else if !self.same_type_charged(&node.ty, &body.ty)? {
+            Some(ValidationCause::CleanupBodyType)
+        } else if !self.same_effect_row_charged(&node.effects, &effects, id)? {
+            Some(ValidationCause::CleanupScopeEffects)
+        } else if node.origin.as_ref().map(Origin::primary_span) != Some(scope.span) {
+            Some(ValidationCause::CleanupScopeOrigin)
+        } else if [action, function, argument]
+            .iter()
+            .any(|child| child.origin.as_ref().map(Origin::primary_span) != Some(scope.action_span))
         {
-            return Err(invalid());
+            Some(ValidationCause::CleanupActionOrigin)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         Ok(())
     }
@@ -7945,22 +10689,35 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         scope: &super::effect::RegistrationScopeNode,
     ) -> Result<(), ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
-        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         self.charge_type_work(1)?;
         let child = self.node(scope.body)?;
         let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &child.kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::RegistrationHandlerShape));
         };
-        let registration = handler.hook_registration.as_ref().ok_or_else(invalid)?;
-        if handler.hook_root.is_some()
-            || handler.id != scope.handler
-            || registration.callback != scope.callback
-            || registration.span != scope.span
-            || node.origin.as_ref().map(Origin::primary_span) != Some(scope.span)
-            || !self.same_type_charged(&node.ty, &child.ty)?
-            || !self.same_effect_row_charged(&node.effects, &child.effects, id)?
-        {
-            return Err(invalid());
+        let registration = handler
+            .hook_registration
+            .as_ref()
+            .ok_or_else(|| invalid(ValidationCause::RegistrationMissingContract))?;
+        let cause = if handler.hook_root.is_some() {
+            Some(ValidationCause::RegistrationHasRoot)
+        } else if handler.id != scope.handler {
+            Some(ValidationCause::RegistrationHandlerIdentity)
+        } else if registration.callback != scope.callback {
+            Some(ValidationCause::RegistrationCallbackIdentity)
+        } else if registration.span != scope.span {
+            Some(ValidationCause::RegistrationContractSpan)
+        } else if node.origin.as_ref().map(Origin::primary_span) != Some(scope.span) {
+            Some(ValidationCause::RegistrationScopeOrigin)
+        } else if !self.same_type_charged(&node.ty, &child.ty)? {
+            Some(ValidationCause::RegistrationResultType)
+        } else if !self.same_effect_row_charged(&node.effects, &child.effects, id)? {
+            Some(ValidationCause::RegistrationScopeEffects)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         Ok(())
     }
@@ -7973,26 +10730,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         contract: &crate::resolved::HookRegistrationContract,
     ) -> Result<(), ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
-        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         self.charge_type_work(18)?;
         let declaration = self
             .program
             .registry
             .effect(handler.effect.effect())
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid(ValidationCause::HookMissingEffect))?;
         let [operation] = &*declaration.operations else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookOperationCount));
         };
         let signature = operation
             .annotation
             .ty
             .function_view()
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid(ValidationCause::HookOperationType))?;
         let [clause] = &*handler.clauses else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookClauseCount));
         };
         let CorePatternKind::Binder(input) = &clause.pattern().kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookInputPattern));
         };
         let mut budget = TypeWorkBudget::with_limit(
             CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
@@ -8003,25 +10760,42 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &mut budget,
         );
         self.charge_type_work(budget.used())?;
-        if target_matches
+        let cause = if target_matches
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
             != std::cmp::Ordering::Equal
-            || handler.hook_root.is_some()
-            || operation.spelling != "publish"
-            || !self.same_type_charged(signature.domain(), signature.value())?
-            || contract.operation != operation.id
-            || clause.operation() != contract.operation
-            || input.id() != contract.input
-            || clause.resume() != contract.resume
-            || node.origin.as_ref().map(Origin::primary_span) != Some(contract.span)
-            || contract.target_span.source() != contract.span.source()
+        {
+            Some(ValidationCause::HookTargetInstance)
+        } else if handler.hook_root.is_some() {
+            Some(ValidationCause::RegistrationHasRoot)
+        } else if operation.spelling != "publish" {
+            Some(ValidationCause::HookOperationSpelling)
+        } else if !self.same_type_charged(signature.domain(), signature.value())? {
+            Some(ValidationCause::HookOperationEndomorphism)
+        } else if contract.operation != operation.id {
+            Some(ValidationCause::HookContractOperation)
+        } else if clause.operation() != contract.operation {
+            Some(ValidationCause::HookClauseOperation)
+        } else if input.id() != contract.input {
+            Some(ValidationCause::HookInputIdentity)
+        } else if clause.resume() != contract.resume {
+            Some(ValidationCause::HookClauseContinuation)
+        } else if node.origin.as_ref().map(Origin::primary_span) != Some(contract.span) {
+            Some(ValidationCause::HookScopeOrigin)
+        } else if contract.target_span.source() != contract.span.source()
             || contract.target_span.range().start() < contract.span.range().start()
             || contract.target_span.range().end() > contract.span.range().end()
-            || clause.origin().primary_span() != contract.target_span
+        {
+            Some(ValidationCause::HookTargetSpan)
+        } else if clause.origin().primary_span() != contract.target_span
             || clause.pattern().origin.primary_span() != contract.target_span
             || input.origin().primary_span() != contract.target_span
         {
-            return Err(invalid());
+            Some(ValidationCause::HookGeneratedOrigins)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         let binders = [
             contract.callback,
@@ -8031,35 +10805,35 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ];
         for (index, binder) in binders.iter().enumerate() {
             if binders[..index].contains(binder) {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookDuplicateBinders));
             }
         }
         let previous_node = self.node(clause.body())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(previous))) =
             &previous_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookPreviousBindingShape));
         };
         let next_node = self.node(previous.body())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(next))) =
             &next_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookNextBindingShape));
         };
         let request_node = self.node(previous.initializer())?;
         let EffectExprKind::Operation(EffectOperation::Request(request)) = &request_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookForwardRequestShape));
         };
         let application_node = self.node(next.initializer())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
             &application_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookCallbackApplicationShape));
         };
         let resume_node = self.node(next.body())?;
         let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &resume_node.kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookRegistrationResumeShape));
         };
         let variable = |node, binder| -> Result<bool, ValidationError> {
             let node = self.node(node)?;
@@ -8077,21 +10851,36 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &mut budget,
         );
         self.charge_type_work(budget.used())?;
-        if forwarding_matches
+        let cause = if forwarding_matches
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
             != std::cmp::Ordering::Equal
-            || previous.binder().id() != contract.previous
-            || next.binder().id() != contract.next
-            || request.operation() != contract.operation
-            || resume.handler() != handler.id()
-            || resume.owner() != contract.resume
-            || resume.use_state() != super::effect::ResumeUse::Consumed
-            || !variable(request.operand(), contract.input)?
-            || !variable(application.function(), contract.callback)?
-            || !variable(application.argument(), contract.previous)?
-            || !variable(resume.value(), contract.next)?
         {
-            return Err(invalid());
+            Some(ValidationCause::HookForwardEffect)
+        } else if previous.binder().id() != contract.previous {
+            Some(ValidationCause::HookPreviousBinder)
+        } else if next.binder().id() != contract.next {
+            Some(ValidationCause::HookNextBinder)
+        } else if request.operation() != contract.operation {
+            Some(ValidationCause::HookForwardOperation)
+        } else if resume.handler() != handler.id() {
+            Some(ValidationCause::HookResumeHandler)
+        } else if resume.owner() != contract.resume {
+            Some(ValidationCause::HookResumeOwner)
+        } else if resume.use_state() != super::effect::ResumeUse::Consumed {
+            Some(ValidationCause::HookResumeUseState)
+        } else if !variable(request.operand(), contract.input)? {
+            Some(ValidationCause::HookForwardInput)
+        } else if !variable(application.function(), contract.callback)? {
+            Some(ValidationCause::HookCallbackUse)
+        } else if !variable(application.argument(), contract.previous)? {
+            Some(ValidationCause::HookPreviousUse)
+        } else if !variable(resume.value(), contract.next)? {
+            Some(ValidationCause::HookNextUse)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         for stored in [
             previous_node,
@@ -8101,12 +10890,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             resume_node,
         ] {
             if stored.origin.as_ref().map(Origin::primary_span) != Some(contract.target_span) {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookGeneratedOrigins));
             }
         }
         for binder in [previous.binder(), next.binder()] {
             if binder.origin().primary_span() != contract.target_span {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookGeneratedOrigins));
             }
         }
         Ok(())
@@ -8135,16 +10924,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         for (index, node) in self.program.nodes.iter().enumerate() {
             self.charge_type_work(node.kind.child_count())?;
             for ordinal in 0..node.kind.child_count() {
-                let child = node
-                    .kind
-                    .child_at(ordinal)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
-                let parent =
-                    parents
-                        .get_mut(child.index().map_err(|_| {
-                            ValidationError::new(ValidationReason::NodeBounds, None)
-                        })?)
-                        .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, None))?;
+                let child = node.kind.child_at(ordinal).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::MissingChild, None)
+                })?;
+                let parent = parents
+                    .get_mut(child.index().map_err(|_| {
+                        ValidationError::with_cause(ValidationCause::MissingNode, None)
+                    })?)
+                    .ok_or_else(|| {
+                        ValidationError::with_cause(ValidationCause::MissingNode, None)
+                    })?;
                 parent.0 = parent
                     .0
                     .checked_add(1)
@@ -8155,23 +10944,41 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         for (index, node) in self.program.nodes.iter().enumerate() {
             self.charge_type_work(1)?;
             let id = node_id(self.program.arena, index)?;
-            let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+            let invalid = |cause| ValidationError::with_cause(cause, Some(id));
             match &node.kind {
                 EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                     let (count, parent) = parents[index];
                     let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
                         binding,
-                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    ))) =
+                        &self
+                            .node(parent.ok_or_else(|| {
+                                invalid(ValidationCause::CallbackScopeMissingParent)
+                            })?)?
+                            .kind
                     else {
-                        return Err(invalid());
+                        return Err(invalid(ValidationCause::CallbackScopeBindingShape));
                     };
-                    if count != 1
-                        || binding.body() != id
-                        || binding.binder().id() != scope.callback
-                        || binding.binder().origin().primary_span() != scope.action_span
-                        || parents[scope.action.index().map_err(|_| invalid())?].0 != 1
+                    let cause = if count != 1 {
+                        Some(ValidationCause::CallbackScopeParentCount)
+                    } else if binding.body() != id {
+                        Some(ValidationCause::CallbackScopeBindingBody)
+                    } else if binding.binder().id() != scope.callback {
+                        Some(ValidationCause::CallbackScopeBindingIdentity)
+                    } else if binding.binder().origin().primary_span() != scope.action_span {
+                        Some(ValidationCause::CleanupBindingOrigin)
+                    } else if parents[scope
+                        .action
+                        .index()
+                        .map_err(|_| invalid(ValidationCause::CleanupActionIndex))?]
+                    .0 != 1
                     {
-                        return Err(invalid());
+                        Some(ValidationCause::CleanupActionParentCount)
+                    } else {
+                        None
+                    };
+                    if let Some(cause) = cause {
+                        return Err(invalid(cause));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Handler(handler))
@@ -8179,25 +10986,42 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 {
                     let (count, parent) = parents[index];
                     let EffectExprKind::Operation(EffectOperation::Registration(scope)) =
-                        &self.node(parent.ok_or_else(invalid)?)?.kind
+                        &self
+                            .node(parent.ok_or_else(|| {
+                                invalid(ValidationCause::CallbackScopeMissingParent)
+                            })?)?
+                            .kind
                     else {
-                        return Err(invalid());
+                        return Err(invalid(ValidationCause::RegisteredHandlerParentShape));
                     };
-                    if count != 1 || scope.body != id {
-                        return Err(invalid());
+                    if count != 1 {
+                        return Err(invalid(ValidationCause::CallbackScopeParentCount));
+                    }
+                    if scope.body != id {
+                        return Err(invalid(ValidationCause::RegisteredHandlerParentBody));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                     let (count, parent) = parents[index];
                     let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
                         binding,
-                    ))) = &self.node(parent.ok_or_else(invalid)?)?.kind
+                    ))) =
+                        &self
+                            .node(parent.ok_or_else(|| {
+                                invalid(ValidationCause::CallbackScopeMissingParent)
+                            })?)?
+                            .kind
                     else {
-                        return Err(invalid());
+                        return Err(invalid(ValidationCause::CallbackScopeBindingShape));
                     };
-                    if count != 1 || binding.body() != id || binding.binder().id() != scope.callback
-                    {
-                        return Err(invalid());
+                    if count != 1 {
+                        return Err(invalid(ValidationCause::CallbackScopeParentCount));
+                    }
+                    if binding.body() != id {
+                        return Err(invalid(ValidationCause::CallbackScopeBindingBody));
+                    }
+                    if binding.binder().id() != scope.callback {
+                        return Err(invalid(ValidationCause::CallbackScopeBindingIdentity));
                     }
                 }
                 _ => {}
@@ -8294,18 +11118,34 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
             }
-            super::capture::Failure::Escape { .. } => {
-                ValidationError::new(ValidationReason::ResourceEscape, None)
-            }
-            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
-                ValidationReason::DiscardUnsafe,
+            super::capture::Failure::Escape {
+                source,
+                acquisition,
+            } => ValidationError::with_cause(
+                ValidationCause::CapturedResourceEscape {
+                    source,
+                    acquisition,
+                },
+                None,
+            ),
+            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::with_cause(
+                ValidationCause::UnsafeCoreDiscard(unsafe_discard),
                 Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
             ),
-            super::capture::Failure::CleanupContext { .. } => {
-                ValidationError::new(ValidationReason::DiscardUnsafe, None)
-            }
-            super::capture::Failure::CleanupRow { node, .. } => ValidationError::new(
-                ValidationReason::EffectRow,
+            super::capture::Failure::CleanupContext {
+                discard,
+                action,
+                handler,
+            } => ValidationError::with_cause(
+                ValidationCause::CoreCleanupContext {
+                    discard,
+                    action,
+                    handler,
+                },
+                None,
+            ),
+            super::capture::Failure::CleanupRow { node, source } => ValidationError::with_cause(
+                ValidationCause::CoreCleanupRow(source),
                 Some(NodeId::new(self.program.arena, node as u32)),
             ),
         })?;
@@ -8323,12 +11163,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .program
             .registry
             .effect(instance.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
-        if operation.owner() != declaration.id
-            || declaration.parameters.len() != instance.arguments().len()
-        {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(node))
+            })?;
+        if operation.owner() != declaration.id {
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreOperationOwner,
+                Some(node),
+            ));
+        }
+        if declaration.parameters.len() != instance.arguments().len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectArgumentCount,
                 Some(node),
             ));
         }
@@ -8336,14 +11182,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let Some(argument_kind) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectInvalidArgument,
                     Some(node),
                 ));
             };
             if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectArgumentKind,
                     Some(node),
                 ));
             }
@@ -8353,8 +11199,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .and_then(|index| declaration.operations.get(index))
             .filter(|candidate| candidate.id == operation)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::UnknownCoreOperation,
                 Some(node),
             ));
         };
@@ -8373,8 +11219,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         )?;
         let Type::Function(domain, result) = signature else {
             discard_type_iteratively(signature);
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreOperationSignature,
                 Some(node),
             ));
         };
@@ -8394,10 +11240,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .program
             .registry
             .effect(instance.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(node))
+            })?;
         if declaration.parameters.len() != instance.arguments().len() {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectArgumentCount,
                 Some(node),
             ));
         }
@@ -8405,14 +11253,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let Some(actual) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectInvalidArgument,
                     Some(node),
                 ));
             };
             if !self.same_kind_charged(&parameter.kind, &actual)? {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectArgumentKind,
                     Some(node),
                 ));
             }
@@ -8433,8 +11281,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if let Some(tail) = row.tail() {
             self.charge_type_work(tail.lacks().len().saturating_add(1))?;
             let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeScope,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnresolvedCoreRow,
                     Some(node),
                 ));
             };
@@ -8448,9 +11296,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     type_binders.get(&identity).map(|(kind, _)| *kind)
                 }
             };
-            if kind.is_none_or(|kind| !matches!(kind, Kind::EffectRow)) {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeScope,
+            let Some(kind) = kind else {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnknownCoreRowBinder,
+                    Some(node),
+                ));
+            };
+            if !matches!(kind, Kind::EffectRow) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::NonRowTailKind,
                     Some(node),
                 ));
             }
@@ -8516,15 +11370,31 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    fn resource_api(
+        &self,
+        acquisition: crate::resolved::ResourceAcquisition,
+        id: NodeId,
+    ) -> Result<crate::resolved::ResourceApi, ValidationError> {
+        let api =
+            crate::resolved::ResourceApi::for_module(acquisition.builtin).ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnsupportedResourceModule, Some(id))
+            })?;
+        if api.method_names().len() != acquisition.methods.len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResourceProviderMethodCount,
+                Some(id),
+            ));
+        }
+        Ok(api)
+    }
+
     fn resource_outward_row(
         &self,
         body: &EffectRow,
         acquisition: crate::resolved::ResourceAcquisition,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let api = acquisition
-            .api()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let api = self.resource_api(acquisition, id)?;
         self.charge_type_work(2)?;
         let instance =
             EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
@@ -8538,7 +11408,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             Err(crate::types::EffectRowError::Missing) => {
                 self.union_effect_rows_charged(&EffectRow::empty(), body, id)
             }
-            Err(_) => Err(ValidationError::new(ValidationReason::EffectRow, Some(id))),
+            Err(error) => Err(ValidationError::row_removal_failure(error, id)),
         }
     }
 
@@ -8549,9 +11419,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         resource: &super::effect::ResourceScopeNode,
     ) -> Result<(), ValidationError> {
         let authority = resource.acquisition;
-        let api = authority
-            .api()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let api = self.resource_api(authority, id)?;
         let initializer = self.node(resource.initializer)?;
         let body = self.node(resource.body)?;
         if authority.handle != resource.handle.id()
@@ -8571,7 +11439,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let outward = self.resource_outward_row(&body.effects, authority, id)?;
         let expected = self.union_effect_rows_charged(&initializer.effects, &outward, id)?;
         if !self.same_effect_row_charged(&node.effects, &expected, id)? {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResourceScopeRow,
+                Some(id),
+            ));
         }
         if authority
             .methods
@@ -8686,28 +11557,48 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     )?;
                     let operand = self.node(request.operand)?;
                     if !self.same_type_charged(&operand.ty, &domain)? {
-                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestArgumentType,
+                            Some(id),
+                        ));
                     }
                     let requested = self.singleton_effect_row_charged(&request.effect, id)?;
                     let expected =
                         self.union_effect_rows_charged(&operand.effects, &requested, id)?;
-                    if !self.same_type_charged(&node.ty, &result)?
-                        || !self.same_effect_row_charged(&node.effects, &expected, id)?
-                    {
-                        return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    if !self.same_type_charged(&node.ty, &result)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestResultType,
+                            Some(id),
+                        ));
+                    }
+                    if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RequestEffectRow,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
                     if resume.use_state != ResumeUse::Consumed {
-                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::ResumeUseState,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
                     has_discard = true;
-                    if discard.use_state() != ResumeUse::Consumed
-                        || !self.same_type_charged(&node.ty, &Type::Unit)?
-                    {
-                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                    if discard.use_state() != ResumeUse::Consumed {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardUseState,
+                            Some(id),
+                        ));
+                    }
+                    if !self.same_type_charged(&node.ty, &Type::Unit)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardResultType,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
@@ -8735,8 +11626,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
                     self.charge_type_work(1)?;
                     if !clause_contracts.contains_key(&(discard.handler(), discard.owner())) {
-                        return Err(ValidationError::new(
-                            ValidationReason::Resume,
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardMissingContract,
                             Some(node_id(self.program.arena, index)?),
                         ));
                     }
@@ -8745,8 +11636,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
         }
         if self.module_sources.is_some() && !self.node(self.program.root)?.effects.is_empty() {
-            return Err(ValidationError::new(
-                ValidationReason::EffectRow,
+            return Err(ValidationError::with_cause(
+                ValidationCause::LinkedRootEffects,
                 Some(self.program.root),
             ));
         }
@@ -8801,8 +11692,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         application,
                     ))) => current = application.function(),
                     _ => {
-                        return Err(ValidationError::new(
-                            ValidationReason::TypeOperation,
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::EffectAbstractionBody,
                             Some(root),
                         ));
                     }
@@ -8824,17 +11715,20 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         type_binders: &CoreTypeBinders<'_>,
         id: NodeId,
     ) -> Result<bool, ValidationError> {
-        let invalid = || ValidationError::new(ValidationReason::EffectRow, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         let resource = || ValidationError::new(ValidationReason::Resource, Some(id));
         self.charge_type_work(1)?;
         let crate::types::EffectRowVariable::Rigid(variable_id) = variable else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::RowOwnerInference));
         };
-        let Some((Kind::EffectRow, owner)) = type_binders.get(&variable_id) else {
-            return Err(invalid());
+        let Some((kind, owner)) = type_binders.get(&variable_id) else {
+            return Err(invalid(ValidationCause::MissingRowOwner));
         };
+        if !matches!(kind, Kind::EffectRow) {
+            return Err(invalid(ValidationCause::RowOwnerKind));
+        }
         let Type::Forall(_, contract) = &self.node(*owner)?.ty else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::RowOwnerScheme));
         };
         let mut work = Vec::new();
         self.charge_type_work(1)?;
@@ -8946,7 +11840,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             if !found {
                 if !self.row_owner_proves_lacks(tail.variable(), fact, type_binders, id)? {
-                    return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::UnprovedRowLacks,
+                        Some(id),
+                    ));
                 }
                 added = true;
             }
@@ -8992,9 +11889,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         };
         if effectful_children {
             for child_index in 0..kind.child_count() {
-                let child = kind
-                    .child_at(child_index)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::NodeBounds, Some(id)))?;
+                let child = kind.child_at(child_index).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
+                })?;
                 expected =
                     self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
             }
@@ -9014,7 +11911,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if self.same_effect_row_charged(&node.effects, &expected, id)? {
             Ok(())
         } else {
-            Err(ValidationError::new(ValidationReason::EffectRow, Some(id)))
+            Err(ValidationError::with_cause(
+                ValidationCause::PureNodeEffectRow,
+                Some(id),
+            ))
         }
     }
 
@@ -9064,7 +11964,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             for index in 0..child_count {
                 work.push(Task::Collect(
                     super::effect::EffectOperationFamily::child_at(&node.kind, index).ok_or_else(
-                        || ValidationError::new(ValidationReason::NodeBounds, Some(id)),
+                        || ValidationError::with_cause(ValidationCause::MissingChild, Some(id)),
                     )?,
                 ));
             }
@@ -9102,7 +12002,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         work.push(Task::Enter(
                             super::effect::EffectOperationFamily::child_at(&node.kind, index)
                                 .ok_or_else(|| {
-                                    ValidationError::new(ValidationReason::NodeBounds, Some(id))
+                                    ValidationError::with_cause(
+                                        ValidationCause::MissingChild,
+                                        Some(id),
+                                    )
                                 })?,
                         ));
                     }
@@ -9111,7 +12014,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     let node = self.node(id)?;
                     let child_row = |child: NodeId| {
                         rows.get(&child).and_then(Option::as_ref).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::EffectRow, Some(id))
+                            ValidationError::with_cause(ValidationCause::MissingChildRow, Some(id))
                         })
                     };
                     let row = match &node.kind {
@@ -9125,8 +12028,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                     row = self.union_effect_rows_charged(
                                         &row,
                                         child_row(kind.child_at(index).ok_or_else(|| {
-                                            ValidationError::new(
-                                                ValidationReason::NodeBounds,
+                                            ValidationError::with_cause(
+                                                ValidationCause::MissingChild,
                                                 Some(id),
                                             )
                                         })?)?,
@@ -9206,14 +12109,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         }
                     };
                     *rows.get_mut(&id).ok_or_else(|| {
-                        ValidationError::new(ValidationReason::EffectRow, Some(id))
+                        ValidationError::with_cause(ValidationCause::MissingRowSlot, Some(id))
                     })? = Some(row);
                 }
             }
         }
         rows.remove(&root)
             .flatten()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectRow, Some(root)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingRootRow, Some(root)))
     }
 
     fn validate_effect_handler(
@@ -9233,18 +12136,30 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .try_reserve(1)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
         if !handler_ids.insert(handler.id) {
-            return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::DuplicateHandlerIdentity,
+                Some(id),
+            ));
         }
         self.validate_effect_instance(&handler.effect, type_binders, id)?;
         let declaration = self
             .program
             .registry
             .effect(handler.effect.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
-        if declaration.parameters.len() != handler.effect.arguments().len()
-            || handler.clauses.len() != declaration.operations.len()
-        {
-            return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(id))
+            })?;
+        if declaration.parameters.len() != handler.effect.arguments().len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerArgumentCount,
+                Some(id),
+            ));
+        }
+        if handler.clauses.len() != declaration.operations.len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerClauseCount,
+                Some(id),
+            ));
         }
         let body = self.node(handler.body)?;
         if let Some(contract) = &handler.hook_registration {
@@ -9252,32 +12167,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         }
         if let Some(root) = &handler.hook_root {
             self.charge_type_work(1)?;
-            let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+            let invalid = |cause| ValidationError::with_cause(cause, Some(id));
             let [operation] = &*declaration.operations else {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookOperationCount));
             };
             let signature = operation
                 .annotation
                 .ty
                 .function_view()
-                .ok_or_else(invalid)?;
+                .ok_or_else(|| invalid(ValidationCause::HookOperationType))?;
             let [clause] = &*handler.clauses else {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookClauseCount));
             };
             let CorePatternKind::Binder(input) = &clause.pattern().kind else {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookInputPattern));
             };
             let clause_body = self.node(clause.body())?;
             let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Resume(
                 resume,
             )) = &clause_body.kind
             else {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookRootResumeShape));
             };
             let value = self.node(resume.value())?;
             let super::effect::EffectExprKind::Pure(PureExprKind::Variable(variable)) = &value.kind
             else {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookRootValueShape));
             };
             let mut budget = TypeWorkBudget::with_limit(
                 CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
@@ -9288,37 +12203,64 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &mut budget,
             );
             self.charge_type_work(budget.used())?;
-            if target_matches
+            let cause = if target_matches
                 .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
                 != std::cmp::Ordering::Equal
-                || operation.spelling != "publish"
-                || !self.same_type_charged(signature.domain(), signature.value())?
-                || root.operation != operation.id
-                || clause.operation() != root.operation
-                || root.input != input.id()
-                || variable.binder() != root.input
-                || root.resume != clause.resume()
-                || resume.owner() != root.resume
-                || resume.handler() != handler.id()
-                || resume.use_state() != super::effect::ResumeUse::Consumed
-                || node.origin.as_ref().map(Origin::primary_span) != Some(root.span)
-                || root.target_span.source() != root.span.source()
+            {
+                Some(ValidationCause::HookTargetInstance)
+            } else if operation.spelling != "publish" {
+                Some(ValidationCause::HookOperationSpelling)
+            } else if !self.same_type_charged(signature.domain(), signature.value())? {
+                Some(ValidationCause::HookOperationEndomorphism)
+            } else if root.operation != operation.id {
+                Some(ValidationCause::HookContractOperation)
+            } else if clause.operation() != root.operation {
+                Some(ValidationCause::HookClauseOperation)
+            } else if root.input != input.id() {
+                Some(ValidationCause::HookInputIdentity)
+            } else if variable.binder() != root.input {
+                Some(ValidationCause::HookRootInputUse)
+            } else if root.resume != clause.resume() {
+                Some(ValidationCause::HookClauseContinuation)
+            } else if resume.owner() != root.resume {
+                Some(ValidationCause::HookResumeOwner)
+            } else if resume.handler() != handler.id() {
+                Some(ValidationCause::HookResumeHandler)
+            } else if resume.use_state() != super::effect::ResumeUse::Consumed {
+                Some(ValidationCause::HookResumeUseState)
+            } else if node.origin.as_ref().map(Origin::primary_span) != Some(root.span) {
+                Some(ValidationCause::HookScopeOrigin)
+            } else if root.target_span.source() != root.span.source()
                 || root.target_span.range().start() < root.span.range().start()
                 || root.target_span.range().end() > root.span.range().end()
-                || clause.origin().primary_span() != root.target_span
+            {
+                Some(ValidationCause::HookTargetSpan)
+            } else if clause.origin().primary_span() != root.target_span
                 || clause.pattern().origin.primary_span() != root.target_span
                 || input.origin().primary_span() != root.target_span
                 || clause_body.origin.as_ref().map(Origin::primary_span) != Some(root.target_span)
                 || value.origin.as_ref().map(Origin::primary_span) != Some(root.target_span)
             {
-                return Err(invalid());
+                Some(ValidationCause::HookGeneratedOrigins)
+            } else {
+                None
+            };
+            if let Some(cause) = cause {
+                return Err(invalid(cause));
             }
         }
         let remainder = self.handler_outward_row(&body.effects, handler, id)?;
-        if !self.same_type_charged(&body.ty, &node.ty)?
-            || !self.effect_row_subset_charged(&remainder, &node.effects, id)?
-        {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+        if !self.same_type_charged(&body.ty, &node.ty)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerBodyType,
+                Some(id),
+            ));
+        }
+        if !self.effect_row_subset_charged(&remainder, &node.effects, id)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerBodyEffects,
+                Some(id),
+            ));
         }
         self.charge_type_work(declaration.operations.len())?;
         let mut covered = Vec::new();
@@ -9341,18 +12283,28 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 )
                 .is_some()
             {
-                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::DuplicateClauseContinuation,
+                    Some(id),
+                ));
             }
             self.validate_origin(clause.origin(), id)?;
             let (domain, _result) =
                 self.effect_signature(&handler.effect, clause.operation, id, type_binders)?;
-            let ordinal = usize::try_from(clause.operation.operation())
-                .map_err(|_| ValidationError::new(ValidationReason::Handler, Some(id)))?;
+            let ordinal = usize::try_from(clause.operation.operation()).map_err(|_| {
+                ValidationError::with_cause(ValidationCause::HandlerOperationRange, Some(id))
+            })?;
             let Some(slot) = covered.get_mut(ordinal) else {
-                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::HandlerOperationSlot,
+                    Some(id),
+                ));
             };
             if std::mem::replace(slot, true) {
-                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::DuplicateHandlerOperation,
+                    Some(id),
+                ));
             }
             let clause_body = self.node(clause.body())?;
             self.validate_pattern(clause.pattern(), &domain, id)?;
@@ -9366,15 +12318,31 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             )
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
             .is_some()
-                || !self.same_type_charged(&clause_body.ty, &node.ty)?
-                || !self.effect_row_subset_charged(&clause_body.effects, &node.effects, id)?
             {
-                return Err(ValidationError::new(ValidationReason::Handler, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::HandlerClauseCoverage,
+                    Some(id),
+                ));
+            }
+            if !self.same_type_charged(&clause_body.ty, &node.ty)? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::HandlerClauseType,
+                    Some(id),
+                ));
+            }
+            if !self.effect_row_subset_charged(&clause_body.effects, &node.effects, id)? {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::HandlerClauseEffects,
+                    Some(id),
+                ));
             }
         }
         let least = self.least_handler_output(id, type_binders)?;
         if !self.same_effect_row_charged(&node.effects, &least, id)? {
-            return Err(ValidationError::new(ValidationReason::EffectRow, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerOutputRow,
+                Some(id),
+            ));
         }
         Ok(())
     }
@@ -9393,28 +12361,40 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.charge_type_work(1)?;
         let contract = contracts
             .get(&(resume.handler(), resume.owner()))
-            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::ResumeMissingContract, Some(id))
+            })?;
         let handler_node = self.node(contract.handler)?;
         let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
             handler,
         )) = &handler_node.kind
         else {
-            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResumeHandlerShape,
+                Some(id),
+            ));
         };
-        let clause = handler
-            .clauses()
-            .get(contract.clause)
-            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+        let clause = handler.clauses().get(contract.clause).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
+        })?;
         let (_, result) =
             self.effect_signature(handler.effect(), clause.operation(), id, type_binders)?;
         let value = self.node(resume.value())?;
-        if resume.use_state() != super::effect::ResumeUse::Consumed
-            || !self.same_type_charged(&value.ty, &result)?
-            || !self.same_type_charged(&node.ty, &handler_node.ty)?
-            || !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)?
-            || !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)?
-        {
-            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+        let cause = if resume.use_state() != super::effect::ResumeUse::Consumed {
+            Some(ValidationCause::ResumeUseState)
+        } else if !self.same_type_charged(&value.ty, &result)? {
+            Some(ValidationCause::ResumeArgumentType)
+        } else if !self.same_type_charged(&node.ty, &handler_node.ty)? {
+            Some(ValidationCause::ResumeResultType)
+        } else if !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)? {
+            Some(ValidationCause::ResumeEffectRow)
+        } else if !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)? {
+            Some(ValidationCause::ResumeArgumentEffects)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(ValidationError::with_cause(cause, Some(id)));
         }
         Ok(())
     }
@@ -9445,7 +12425,7 @@ enum ScopeAnalysisTask {
 fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, ValidationError> {
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
-        .map_err(|_| ValidationError::new(ValidationReason::NodeBounds, None))
+        .map_err(|_| ValidationError::with_cause(ValidationCause::NodeIdentityRange, None))
 }
 
 #[cfg(test)]
@@ -9453,6 +12433,2626 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hook_root_identity_tampering_has_distinct_messages() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        for cause in [
+            ValidationCause::HookContractOperation,
+            ValidationCause::HookInputIdentity,
+        ] {
+            let (mut core, sources, relations) = hook_source_fixture(
+                "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nperform Adjust.publish 1\n}\n",
+            );
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            registration_proof_check(&core, &borrowed, &relations).unwrap();
+            let root = core
+                .nodes
+                .iter_mut()
+                .find_map(|node| match &mut node.kind {
+                    EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                        handler.hook_root.as_mut()
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            if cause == ValidationCause::HookContractOperation {
+                root.operation = OperationId::new(root.operation.owner(), u32::MAX);
+            } else {
+                root.input = BinderId::new(u32::MAX);
+            }
+            let error =
+                super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
+            assert_eq!(error.cause, Some(cause));
+            assert!(
+                crate::presentation::compile_core_validation_failure(&error, &borrowed).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn handler_owner_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::HookMissingEffect,
+                "hook-missing-effect",
+                "The compiler has no effect declaration for a Core hook registration contract.",
+            ),
+            (
+                ValidationCause::HookDuplicateBinders,
+                "hook-duplicate-binders",
+                "A Core hook registration contract reuses an identity among its callback, input, previous and next binders.",
+            ),
+            (
+                ValidationCause::HookPreviousBindingShape,
+                "hook-previous-binding-shape",
+                "A Core hook registration clause does not begin with its previous-result binding.",
+            ),
+            (
+                ValidationCause::HookNextBindingShape,
+                "hook-next-binding-shape",
+                "A Core hook registration does not bind the next result after the previous result.",
+            ),
+            (
+                ValidationCause::HookForwardRequestShape,
+                "hook-forward-request-shape",
+                "A Core hook registration's previous-result initializer is not an effect request.",
+            ),
+            (
+                ValidationCause::HookCallbackApplicationShape,
+                "hook-callback-application-shape",
+                "A Core hook registration's next-result initializer is not a callback application.",
+            ),
+            (
+                ValidationCause::HookRegistrationResumeShape,
+                "hook-registration-resume-shape",
+                "A Core hook registration does not resume after binding the callback result.",
+            ),
+            (
+                ValidationCause::HookForwardEffect,
+                "hook-forward-effect",
+                "A Core hook registration forwards a different effect instance from its contract target.",
+            ),
+            (
+                ValidationCause::HookPreviousBinder,
+                "hook-previous-binder",
+                "A Core hook registration binds the previous result with an identity different from its contract.",
+            ),
+            (
+                ValidationCause::HookNextBinder,
+                "hook-next-binder",
+                "A Core hook registration binds the next result with an identity different from its contract.",
+            ),
+            (
+                ValidationCause::HookForwardOperation,
+                "hook-forward-operation",
+                "A Core hook registration forwards a different operation from its contract.",
+            ),
+            (
+                ValidationCause::HookForwardInput,
+                "hook-forward-input",
+                "A Core hook registration's forwarded request does not use its recorded input at the target span.",
+            ),
+            (
+                ValidationCause::HookCallbackUse,
+                "hook-callback-use",
+                "A Core hook registration does not call its recorded callback at the target span.",
+            ),
+            (
+                ValidationCause::HookPreviousUse,
+                "hook-previous-use",
+                "A Core hook registration does not pass its recorded previous result to the callback at the target span.",
+            ),
+            (
+                ValidationCause::HookNextUse,
+                "hook-next-use",
+                "A Core hook registration does not resume with its recorded next result at the target span.",
+            ),
+            (
+                ValidationCause::CallbackScopeMissingParent,
+                "callback-scope-missing-parent",
+                "A Core callback scope or registration handler has no enclosing owner.",
+            ),
+            (
+                ValidationCause::CallbackScopeBindingShape,
+                "callback-scope-binding-shape",
+                "A Core callback scope is not enclosed by its callback binding.",
+            ),
+            (
+                ValidationCause::CallbackScopeParentCount,
+                "callback-scope-parent-count",
+                "A Core callback scope or registration handler does not have exactly one incoming ownership edge.",
+            ),
+            (
+                ValidationCause::CallbackScopeBindingBody,
+                "callback-scope-binding-body",
+                "A Core callback scope is not the body of its enclosing binding.",
+            ),
+            (
+                ValidationCause::CallbackScopeBindingIdentity,
+                "callback-scope-binding-identity",
+                "A Core callback scope names a different callback from its enclosing binding.",
+            ),
+            (
+                ValidationCause::CleanupBindingOrigin,
+                "cleanup-binding-origin",
+                "A Core cleanup callback binding's origin differs from the recorded cleanup-action span.",
+            ),
+            (
+                ValidationCause::CleanupActionIndex,
+                "cleanup-action-index",
+                "A Core cleanup action's node identity cannot be represented as an index.",
+            ),
+            (
+                ValidationCause::CleanupActionParentCount,
+                "cleanup-action-parent-count",
+                "A Core cleanup action does not have exactly one incoming ownership edge.",
+            ),
+            (
+                ValidationCause::RegisteredHandlerParentShape,
+                "registered-handler-parent-shape",
+                "A Core registration handler is not enclosed by a registration scope.",
+            ),
+            (
+                ValidationCause::RegisteredHandlerParentBody,
+                "registered-handler-parent-body",
+                "A Core registration handler is not the body recorded by its enclosing registration scope.",
+            ),
+            (
+                ValidationCause::HookOperationCount,
+                "hook-operation-count",
+                "A Core hook contract requires an effect declaration with exactly one operation.",
+            ),
+            (
+                ValidationCause::HookOperationType,
+                "hook-operation-type",
+                "A Core hook contract's operation has no function signature.",
+            ),
+            (
+                ValidationCause::HookClauseCount,
+                "hook-clause-count",
+                "A Core hook contract requires exactly one handler clause.",
+            ),
+            (
+                ValidationCause::HookInputPattern,
+                "hook-input-pattern",
+                "A Core hook clause does not bind its input with a binder pattern.",
+            ),
+            (
+                ValidationCause::HookRootResumeShape,
+                "hook-root-resume-shape",
+                "A Core hook-root clause does not directly resume its continuation.",
+            ),
+            (
+                ValidationCause::HookRootValueShape,
+                "hook-root-value-shape",
+                "A Core hook root does not resume with a variable referring to its input.",
+            ),
+            (
+                ValidationCause::HookTargetInstance,
+                "hook-target-instance",
+                "A Core hook contract targets a different effect instance from its handler.",
+            ),
+            (
+                ValidationCause::HookOperationSpelling,
+                "hook-operation-spelling",
+                "A Core hook contract's operation is not named publish.",
+            ),
+            (
+                ValidationCause::HookOperationEndomorphism,
+                "hook-operation-endomorphism",
+                "A Core hook operation has different input and output types.",
+            ),
+            (
+                ValidationCause::HookContractOperation,
+                "hook-contract-operation",
+                "A Core hook contract names a different operation from its declaration.",
+            ),
+            (
+                ValidationCause::HookClauseOperation,
+                "hook-clause-operation",
+                "A Core hook clause handles a different operation from its contract.",
+            ),
+            (
+                ValidationCause::HookInputIdentity,
+                "hook-input-identity",
+                "A Core hook clause binds a different input identity from its contract.",
+            ),
+            (
+                ValidationCause::HookRootInputUse,
+                "hook-root-input-use",
+                "A Core hook root resumes with a variable other than its recorded input.",
+            ),
+            (
+                ValidationCause::HookClauseContinuation,
+                "hook-clause-continuation",
+                "A Core hook clause has a different continuation owner from its contract.",
+            ),
+            (
+                ValidationCause::HookResumeOwner,
+                "hook-resume-owner",
+                "A Core hook resume names a different continuation owner from its contract.",
+            ),
+            (
+                ValidationCause::HookResumeHandler,
+                "hook-resume-handler",
+                "A Core hook resume names a different handler from its enclosing handler.",
+            ),
+            (
+                ValidationCause::HookResumeUseState,
+                "hook-resume-use-state",
+                "A Core hook resume does not carry the consumed-continuation state.",
+            ),
+            (
+                ValidationCause::HookScopeOrigin,
+                "hook-scope-origin",
+                "A Core hook handler's origin differs from its contract's scope span.",
+            ),
+            (
+                ValidationCause::HookTargetSpan,
+                "hook-target-span",
+                "A Core hook contract's target span is not contained in its scope span in the same source.",
+            ),
+            (
+                ValidationCause::HookGeneratedOrigins,
+                "hook-generated-origins",
+                "Generated Core hook nodes or binders have origins different from the contract's target span.",
+            ),
+            (
+                ValidationCause::CleanupActionShape,
+                "cleanup-action-shape",
+                "The compiler retained a cleanup action that is not a callback application.",
+            ),
+            (
+                ValidationCause::CleanupFunctionShape,
+                "cleanup-function-shape",
+                "A Core cleanup action does not refer to its callback through a variable.",
+            ),
+            (
+                ValidationCause::CleanupFunctionType,
+                "cleanup-function-type",
+                "A Core cleanup callback does not have a function type.",
+            ),
+            (
+                ValidationCause::CleanupCallbackIdentity,
+                "cleanup-callback-identity",
+                "A Core cleanup action refers to a different callback from its scope's recorded callback.",
+            ),
+            (
+                ValidationCause::CleanupArgumentShape,
+                "cleanup-argument-shape",
+                "A Core cleanup action does not supply the Unit value to its callback.",
+            ),
+            (
+                ValidationCause::CleanupDomainType,
+                "cleanup-domain-type",
+                "A Core cleanup callback's domain is not Unit.",
+            ),
+            (
+                ValidationCause::CleanupResultType,
+                "cleanup-result-type",
+                "A Core cleanup callback's result type is not Unit.",
+            ),
+            (
+                ValidationCause::CleanupBodyType,
+                "cleanup-body-type",
+                "A Core cleanup scope's result type differs from its body's type.",
+            ),
+            (
+                ValidationCause::CleanupScopeEffects,
+                "cleanup-scope-effects",
+                "A Core cleanup scope's effects differ from its body and cleanup action effects.",
+            ),
+            (
+                ValidationCause::CleanupScopeOrigin,
+                "cleanup-scope-origin",
+                "A Core cleanup scope's source origin differs from its recorded scope span.",
+            ),
+            (
+                ValidationCause::CleanupActionOrigin,
+                "cleanup-action-origin",
+                "A Core cleanup action or its callback/argument has an origin different from the recorded action span.",
+            ),
+            (
+                ValidationCause::RegistrationHandlerShape,
+                "registration-handler-shape",
+                "A Core registration scope's body is not a handler.",
+            ),
+            (
+                ValidationCause::RegistrationMissingContract,
+                "registration-missing-contract",
+                "A Core registration scope's handler has no registration contract.",
+            ),
+            (
+                ValidationCause::RegistrationHasRoot,
+                "registration-has-root",
+                "The compiler used a hook-root handler as a registration handler.",
+            ),
+            (
+                ValidationCause::RegistrationHandlerIdentity,
+                "registration-handler-identity",
+                "A Core registration scope records a different handler identity from its body.",
+            ),
+            (
+                ValidationCause::RegistrationCallbackIdentity,
+                "registration-callback-identity",
+                "A Core registration scope and its handler contract name different callbacks.",
+            ),
+            (
+                ValidationCause::RegistrationContractSpan,
+                "registration-contract-span",
+                "A Core registration scope and its handler contract retain different scope spans.",
+            ),
+            (
+                ValidationCause::RegistrationScopeOrigin,
+                "registration-scope-origin",
+                "A Core registration scope's origin differs from its recorded span.",
+            ),
+            (
+                ValidationCause::RegistrationResultType,
+                "registration-result-type",
+                "A Core registration scope's result type differs from its handler's result type.",
+            ),
+            (
+                ValidationCause::RegistrationScopeEffects,
+                "registration-scope-effects",
+                "A Core registration scope's effects differ from its handler's effects.",
+            ),
+            (
+                ValidationCause::DuplicateHandlerIdentity,
+                "duplicate-handler-identity",
+                "The compiler declared the same Core handler identity more than once.",
+            ),
+            (
+                ValidationCause::HandlerArgumentCount,
+                "handler-argument-count",
+                "A Core handler supplies a different number of effect arguments from its declaration.",
+            ),
+            (
+                ValidationCause::HandlerClauseCount,
+                "handler-clause-count",
+                "A Core handler has a different number of clauses from its effect's operations.",
+            ),
+            (
+                ValidationCause::DuplicateClauseContinuation,
+                "duplicate-clause-continuation",
+                "The compiler assigned the same continuation owner to more than one clause of a Core handler.",
+            ),
+            (
+                ValidationCause::HandlerOperationRange,
+                "handler-operation-range",
+                "A Core handler operation's ordinal cannot be represented as an index.",
+            ),
+            (
+                ValidationCause::HandlerOperationSlot,
+                "handler-operation-slot",
+                "A Core handler clause refers to an operation outside its coverage table.",
+            ),
+            (
+                ValidationCause::DuplicateHandlerOperation,
+                "duplicate-handler-operation",
+                "A Core handler contains more than one clause for the same operation.",
+            ),
+            (
+                ValidationCause::HandlerClauseCoverage,
+                "handler-clause-coverage",
+                "A Core handler clause's pattern does not cover every operation argument.",
+            ),
+            (
+                ValidationCause::HandlerClauseType,
+                "handler-clause-type",
+                "A Core handler clause's body type differs from the handler's result type.",
+            ),
+            (
+                ValidationCause::HandlerClauseEffects,
+                "handler-clause-effects",
+                "A Core handler clause has effects absent from the handler's output row.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.handler");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn cleanup_and_registration_owners_reject_wrong_body_forms_precisely() {
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let span = origin(&file).primary_span();
+        let scope = super::super::effect::CleanupScopeNode {
+            callback: BinderId::new(0),
+            body: root,
+            action: root,
+            span,
+            action_span: span,
+        };
+        let error = validator
+            .validate_cleanup_owner(root, &program.nodes[0], &scope)
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::Handler);
+        assert_eq!(error.cause, Some(ValidationCause::CleanupActionShape));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
+        let scope = super::super::effect::RegistrationScopeNode {
+            handler: super::super::effect::HandlerId::new(0),
+            callback: BinderId::new(0),
+            body: root,
+            span,
+        };
+        let error = validator
+            .validate_registration_owner(root, &program.nodes[0], &scope)
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::RegistrationHandlerShape));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
+    }
+
+    #[test]
+    fn core_effect_row_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::RowUnionAmbiguous,
+                "row-union-ambiguous",
+                "Core effect-row union would strengthen or equate unrelated open tails.",
+            ),
+            (
+                ValidationCause::RowUnionMissing,
+                "row-union-missing",
+                "Core effect-row union requires an effect instance that is absent.",
+            ),
+            (
+                ValidationCause::RowUnionInfinite,
+                "row-union-infinite",
+                "Core effect-row union would make a row tail contain itself.",
+            ),
+            (
+                ValidationCause::RowRemovalAmbiguous,
+                "row-removal-ambiguous",
+                "Core effect removal cannot establish the required relation with an open row tail.",
+            ),
+            (
+                ValidationCause::RowRemovalMissing,
+                "row-removal-missing",
+                "The compiler tried to remove an effect instance absent from a Core row.",
+            ),
+            (
+                ValidationCause::RowRemovalInfinite,
+                "row-removal-infinite",
+                "Core effect removal would make a row tail contain itself.",
+            ),
+            (
+                ValidationCause::PureDialectRow,
+                "pure-dialect-row",
+                "The compiler retained effects in a Core dialect that requires empty rows.",
+            ),
+            (
+                ValidationCause::ResourceScopeRow,
+                "resource-scope-row",
+                "A Core resource scope's effects differ from its initializer and outward body effects.",
+            ),
+            (
+                ValidationCause::RequestArgumentType,
+                "request-argument-type",
+                "A Core effect request's operand type differs from its operation's domain.",
+            ),
+            (
+                ValidationCause::RequestResultType,
+                "request-result-type",
+                "A Core effect request's result type differs from its operation's result type.",
+            ),
+            (
+                ValidationCause::RequestEffectRow,
+                "request-effect-row",
+                "A Core effect request's row differs from the union of its operand effects and requested effect.",
+            ),
+            (
+                ValidationCause::LinkedRootEffects,
+                "linked-root-effects",
+                "The compiler retained unhandled effects at the linked Core program's root.",
+            ),
+            (
+                ValidationCause::RowOwnerInference,
+                "row-owner-inference",
+                "The compiler tried to authenticate row exclusions using an unresolved inference tail.",
+            ),
+            (
+                ValidationCause::MissingRowOwner,
+                "missing-row-owner",
+                "The compiler has no type-binder owner for a row exclusion check.",
+            ),
+            (
+                ValidationCause::RowOwnerKind,
+                "row-owner-kind",
+                "The compiler used a binder of a kind other than EffectRow to authenticate row exclusions.",
+            ),
+            (
+                ValidationCause::RowOwnerScheme,
+                "row-owner-scheme",
+                "The owner of a Core row tail has no quantified type from which to authenticate exclusions.",
+            ),
+            (
+                ValidationCause::UnprovedRowLacks,
+                "unproved-row-lacks",
+                "A Core row reports an effect exclusion not established by its binder's contract.",
+            ),
+            (
+                ValidationCause::PureNodeEffectRow,
+                "pure-node-effect-row",
+                "A Core node's recorded effects differ from its evaluated children and latent function effects.",
+            ),
+            (
+                ValidationCause::MissingChildRow,
+                "missing-child-row",
+                "The compiler needs a child's inferred handler-output row before it is available.",
+            ),
+            (
+                ValidationCause::MissingRowSlot,
+                "missing-row-slot",
+                "The compiler has no result slot for a node's inferred handler-output row.",
+            ),
+            (
+                ValidationCause::MissingRootRow,
+                "missing-root-row",
+                "The compiler has no inferred output row for the handler root.",
+            ),
+            (
+                ValidationCause::HandlerBodyType,
+                "handler-body-type",
+                "A Core handler's body type differs from its result type.",
+            ),
+            (
+                ValidationCause::HandlerBodyEffects,
+                "handler-body-effects",
+                "A Core handler's body has outward effects absent from the handler's output row.",
+            ),
+            (
+                ValidationCause::HandlerOutputRow,
+                "handler-output-row",
+                "A Core handler's recorded output row differs from its least inferred output row.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.effect-row");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn core_cleanup_row_presentation_retains_its_source() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{
+                PresentationError, compile_core_validation_failure, write_human, write_json,
+            },
+        };
+        let file = source();
+        let span = origin(&file).primary_span();
+        for node in [
+            None,
+            Some(NodeId::new(super::super::dialect::ArenaId::new(101), 42)),
+        ] {
+            let error = ValidationError::with_cause(ValidationCause::CoreCleanupRow(span), node);
+            assert!(matches!(
+                compile_core_validation_failure(&error, &[]),
+                Err(PresentationError::MissingSource)
+            ));
+            let view = compile_core_validation_failure(&error, &[&file]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains("does not match its cleanup obligations")
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "core.validation.effect-row");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["labels"][0]["relationship"], "discard");
+            assert_eq!(json["labels"][0]["byte_start"], span.range().start());
+            assert_eq!(json["labels"][0]["byte_end"], span.range().end());
+        }
+    }
+
+    #[test]
+    fn core_row_operations_retain_their_failure_cause() {
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let row = |id| {
+            EffectRow::open(
+                crate::types::EffectRowVariable::Rigid(crate::types::TypeVariableId::new(id)),
+                Box::new([]),
+            )
+        };
+        let error = validator
+            .union_effect_rows_charged(&row(0), &row(1), root)
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::EffectRow);
+        assert_eq!(error.cause, Some(ValidationCause::RowUnionAmbiguous));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+        validator
+            .union_effect_rows_charged(&row(0), &row(0), root)
+            .unwrap();
+        let effect = EffectInstance::new(
+            crate::types::EffectId::new(ModuleId::from(file.id()), 0),
+            Box::new([]),
+        );
+        let error = validator
+            .remove_effect_row_charged(&EffectRow::empty(), &effect, root)
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::RowRemovalMissing));
+        let identity = crate::types::TypeVariableId::new(0);
+        let rigid = crate::types::EffectRowVariable::Rigid(identity);
+        let inferred =
+            crate::types::EffectRowVariable::Inference(crate::types::InferenceVariableId::new(0));
+        for (variable, kind, cause) in [
+            (inferred, None, ValidationCause::RowOwnerInference),
+            (rigid, None, ValidationCause::MissingRowOwner),
+            (rigid, Some(Kind::Type), ValidationCause::RowOwnerKind),
+            (
+                rigid,
+                Some(Kind::EffectRow),
+                ValidationCause::RowOwnerScheme,
+            ),
+        ] {
+            let binders = kind
+                .as_ref()
+                .map(|kind| HashMap::from([(identity, (kind, root))]))
+                .unwrap_or_default();
+            let error = validator
+                .row_owner_proves_lacks(variable, &effect, &binders, root)
+                .unwrap_err();
+            assert_eq!(error.cause, Some(cause));
+        }
+    }
+
+    #[test]
+    fn core_continuation_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::UnboundContinuation,
+                "unbound-continuation",
+                "The compiler retained a continuation use without its enclosing operation clause.",
+            ),
+            (
+                ValidationCause::ContinuationBranchUsage,
+                "continuation-branch-usage",
+                "Core match branches disagree about which continuations they consume or how many times they consume them.",
+            ),
+            (
+                ValidationCause::MissingClauseConsumption,
+                "missing-clause-consumption",
+                "A Core operation clause does not consume its continuation.",
+            ),
+            (
+                ValidationCause::RepeatedClauseConsumption,
+                "repeated-clause-consumption",
+                "A Core operation clause does not consume its continuation exactly once.",
+            ),
+            (
+                ValidationCause::ForeignClauseContinuation,
+                "foreign-clause-continuation",
+                "A Core operation clause retains a use of another clause's continuation.",
+            ),
+            (
+                ValidationCause::CapturedContinuation,
+                "captured-continuation",
+                "The compiler retained a continuation requirement across a boundary that forbids continuation capture.",
+            ),
+            (
+                ValidationCause::ResumeUseState,
+                "resume-use-state",
+                "The compiler retained a resume operation without a consumed-continuation state.",
+            ),
+            (
+                ValidationCause::DiscardUseState,
+                "discard-use-state",
+                "The compiler retained a discard operation without a consumed-continuation state.",
+            ),
+            (
+                ValidationCause::DiscardResultType,
+                "discard-result-type",
+                "A Core discard operation has a result type other than Unit.",
+            ),
+            (
+                ValidationCause::DiscardMissingContract,
+                "discard-missing-contract",
+                "The compiler has no operation-clause contract for a Core discard's handler and continuation owner.",
+            ),
+            (
+                ValidationCause::ResumeMissingContract,
+                "resume-missing-contract",
+                "The compiler has no operation-clause contract for a Core resume's handler and continuation owner.",
+            ),
+            (
+                ValidationCause::ResumeHandlerShape,
+                "resume-handler-shape",
+                "A Core continuation contract points to a node that is not a handler.",
+            ),
+            (
+                ValidationCause::ResumeMissingClause,
+                "resume-missing-clause",
+                "A Core continuation contract points to a clause absent from its handler.",
+            ),
+            (
+                ValidationCause::ResumeArgumentType,
+                "resume-argument-type",
+                "A Core resume argument's type differs from the operation's result type.",
+            ),
+            (
+                ValidationCause::ResumeResultType,
+                "resume-result-type",
+                "A Core resume's result type differs from its handler's result type.",
+            ),
+            (
+                ValidationCause::ResumeEffectRow,
+                "resume-effect-row",
+                "A Core resume's effect row differs from its handler's output row.",
+            ),
+            (
+                ValidationCause::ResumeArgumentEffects,
+                "resume-argument-effects",
+                "A Core resume argument has effects outside its handler's output row.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.resume");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn continuation_contract_failures_keep_missing_and_wrong_handler_distinct() {
+        use super::super::effect::{EffectCoreBuilder, HandlerId, ResumeNode, ResumeUse};
+        let file = source();
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let handler = HandlerId::new(0);
+        let owner = crate::resolved::ResumeId::new(0);
+        let resume = ResumeNode::new(handler, owner, ResumeUse::Consumed, root);
+        let mut contracts = HashMap::new();
+        let error = validator
+            .validate_effect_resume(
+                root,
+                &program.nodes[0],
+                &resume,
+                &HashMap::new(),
+                &contracts,
+            )
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::ResumeMissingContract));
+        contracts.insert(
+            (handler, owner),
+            EffectClauseContract {
+                handler: root,
+                clause: 0,
+            },
+        );
+        let error = validator
+            .validate_effect_resume(
+                root,
+                &program.nodes[0],
+                &resume,
+                &HashMap::new(),
+                &contracts,
+            )
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::ResumeHandlerShape));
+    }
+
+    #[test]
+    fn continuation_capture_failure_has_a_precise_message() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let mut requirements = HashMap::new();
+        validator
+            .reject_resume_capture(&requirements, root)
+            .unwrap();
+        validator
+            .retain_resume_requirement(
+                &mut requirements,
+                super::super::effect::HandlerId::new(0),
+                crate::resolved::ResumeId::new(0),
+                root,
+                1,
+            )
+            .unwrap();
+        let error = validator
+            .reject_resume_capture(&requirements, root)
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::Resume);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
+    }
+
+    #[test]
+    fn core_pattern_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::PatternDepth,
+                "pattern-depth",
+                "The compiler retained a Core pattern deeper than the validation limit.",
+            ),
+            (
+                ValidationCause::PatternTypeMismatch,
+                "pattern-type-mismatch",
+                "A Core pattern's recorded type differs from the type it must match.",
+            ),
+            (
+                ValidationCause::PatternInvalidType,
+                "pattern-invalid-type",
+                "The compiler retained a Core pattern without a valid monotype.",
+            ),
+            (
+                ValidationCause::PatternBinderInvalidType,
+                "pattern-binder-invalid-type",
+                "The compiler retained a pattern or operation binder without a valid monotype.",
+            ),
+            (
+                ValidationCause::PatternBinderArena,
+                "pattern-binder-arena",
+                "A Core pattern binder belongs to a different arena.",
+            ),
+            (
+                ValidationCause::PatternBinderType,
+                "pattern-binder-type",
+                "A Core pattern binder's type differs from the type it must match.",
+            ),
+            (
+                ValidationCause::PatternDuplicateBinder,
+                "pattern-duplicate-binder",
+                "The compiler bound the same identity more than once in a Core pattern.",
+            ),
+            (
+                ValidationCause::PatternTupleType,
+                "pattern-tuple-type",
+                "The compiler used a tuple pattern to match a non-tuple type.",
+            ),
+            (
+                ValidationCause::PatternTupleArity,
+                "pattern-tuple-arity",
+                "A Core tuple pattern has a different number of elements from its expected type.",
+            ),
+            (
+                ValidationCause::PatternHiddenConstructor,
+                "pattern-hidden-constructor",
+                "The compiler exposed a hidden resource constructor in a Core pattern.",
+            ),
+            (
+                ValidationCause::PatternNominalType,
+                "pattern-nominal-type",
+                "The compiler used a constructor pattern to match a type without a nominal head.",
+            ),
+            (
+                ValidationCause::PatternUnknownConstructor,
+                "pattern-unknown-constructor",
+                "A Core pattern names a constructor absent from the registry.",
+            ),
+            (
+                ValidationCause::PatternNewtypeConstructor,
+                "pattern-newtype-constructor",
+                "The compiler retained a newtype constructor in an ordinary Core constructor pattern.",
+            ),
+            (
+                ValidationCause::PatternConstructorOwner,
+                "pattern-constructor-owner",
+                "A Core pattern's constructor belongs to a different nominal type from the expected type.",
+            ),
+            (
+                ValidationCause::PatternMissingParameters,
+                "pattern-missing-parameters",
+                "The compiler has no nominal parameter declaration for a Core constructor pattern's expected type.",
+            ),
+            (
+                ValidationCause::PatternNominalArity,
+                "pattern-nominal-arity",
+                "A Core constructor pattern's expected type has a different argument count from its nominal declaration.",
+            ),
+            (
+                ValidationCause::PatternArgumentSpine,
+                "pattern-argument-spine",
+                "The compiler could not read a recorded nominal type argument while instantiating a pattern payload.",
+            ),
+            (
+                ValidationCause::PatternMissingPayload,
+                "pattern-missing-payload",
+                "A Core constructor pattern omits a payload required by its constructor.",
+            ),
+            (
+                ValidationCause::PatternUnexpectedPayload,
+                "pattern-unexpected-payload",
+                "A Core constructor pattern supplies a payload for a constructor that has none.",
+            ),
+            (
+                ValidationCause::PatternBooleanType,
+                "pattern-boolean-type",
+                "The compiler used a Boolean pattern to match a non-Boolean type.",
+            ),
+            (
+                ValidationCause::PatternUnitType,
+                "pattern-unit-type",
+                "The compiler used a Unit pattern to match a type other than Unit.",
+            ),
+            (
+                ValidationCause::MatchScrutineeType,
+                "match-scrutinee-type",
+                "The compiler retained a Core match whose scrutinee has no valid monotype.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.pattern");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn pattern_checks_distinguish_types_arity_and_binders() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Bool, origin(&file));
+        for (ty, expected, kind, cause) in [
+            (
+                Type::Bool,
+                Type::Unit,
+                CorePatternKind::Unit,
+                ValidationCause::PatternTypeMismatch,
+            ),
+            (
+                Type::Bool,
+                Type::Bool,
+                CorePatternKind::Unit,
+                ValidationCause::PatternUnitType,
+            ),
+            (
+                Type::Unit,
+                Type::Unit,
+                CorePatternKind::Boolean(true),
+                ValidationCause::PatternBooleanType,
+            ),
+            (
+                Type::Bool,
+                Type::Bool,
+                CorePatternKind::Tuple(Box::new([])),
+                ValidationCause::PatternTupleType,
+            ),
+            (
+                Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+                Type::Tuple(Box::new([Type::Unit, Type::Unit])),
+                CorePatternKind::Tuple(Box::new([])),
+                ValidationCause::PatternTupleArity,
+            ),
+            (
+                Type::Unit,
+                Type::Unit,
+                CorePatternKind::Binder(binder),
+                ValidationCause::PatternBinderType,
+            ),
+        ] {
+            let pattern = CorePattern::new(ty, origin(&file), kind);
+            let error = validator
+                .validate_pattern(&pattern, &expected, root)
+                .unwrap_err();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Unit, origin(&file));
+        let ty = Type::Tuple(Box::new([Type::Unit, Type::Unit]));
+        let pattern = CorePattern::new(
+            ty.clone(),
+            origin(&file),
+            CorePatternKind::Tuple(Box::new([
+                CorePattern::new(
+                    Type::Unit,
+                    origin(&file),
+                    CorePatternKind::Binder(binder.clone()),
+                ),
+                CorePattern::new(Type::Unit, origin(&file), CorePatternKind::Binder(binder)),
+            ])),
+        );
+        let error = validator.validate_pattern(&pattern, &ty, root).unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::PatternDuplicateBinder));
+    }
+
+    #[test]
+    fn core_type_operation_messages_preserve_the_failed_check() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::ExpectedTypeAbstraction,
+                "expected-type-abstraction",
+                "The compiler recorded a Core type abstraction at a node of a different form.",
+            ),
+            (
+                ValidationCause::ExpectedTypeApplication,
+                "expected-type-application",
+                "The compiler recorded a Core type application at a node of a different form.",
+            ),
+            (
+                ValidationCause::AdapterParameterIdentity,
+                "adapter-parameter-identity",
+                "The compiler used a non-generated type parameter in a method adapter.",
+            ),
+            (
+                ValidationCause::AbstractionBinderOwner,
+                "abstraction-binder-owner",
+                "A Core type abstraction does not own one of its recorded type parameters.",
+            ),
+            (
+                ValidationCause::MethodInstantiationIdentity,
+                "method-instantiation-identity",
+                "The compiler instantiated a different method from the checked method occurrence.",
+            ),
+            (
+                ValidationCause::MethodTypeArgumentCount,
+                "method-type-argument-count",
+                "The compiler retained a method instantiation with a different type-argument count from the checked occurrence.",
+            ),
+            (
+                ValidationCause::MethodTypeArgument,
+                "method-type-argument",
+                "A Core method type argument differs from its checked argument after scope substitution.",
+            ),
+            (
+                ValidationCause::MethodInstantiationResult,
+                "method-instantiation-result",
+                "A Core method instantiation's result type differs from its checked result after scope substitution.",
+            ),
+            (
+                ValidationCause::MethodInstantiationRole,
+                "method-instantiation-role",
+                "The compiler has no instantiation-role expectation for this Core method use.",
+            ),
+            (
+                ValidationCause::MissingMethodProducer,
+                "missing-method-producer",
+                "The compiler has no retained producer anchor for this Core method instantiation.",
+            ),
+            (
+                ValidationCause::MethodInstantiationProducer,
+                "method-instantiation-producer",
+                "A Core method instantiation does not use its recorded producer or binder.",
+            ),
+            (
+                ValidationCause::TypeAbstractionScheme,
+                "type-abstraction-scheme",
+                "A Core type abstraction does not carry a universally quantified type.",
+            ),
+            (
+                ValidationCause::EmptyTypeAbstraction,
+                "empty-type-abstraction",
+                "The compiler retained a Core type abstraction without type parameters.",
+            ),
+            (
+                ValidationCause::AbstractionNominalParameter,
+                "abstraction-nominal-parameter",
+                "A Core type abstraction reuses a type parameter owned by a nominal declaration.",
+            ),
+            (
+                ValidationCause::AbstractionParameters,
+                "abstraction-parameters",
+                "A Core type abstraction's parameters differ in identity, order or kind from its quantified type.",
+            ),
+            (
+                ValidationCause::AbstractionBodyType,
+                "abstraction-body-type",
+                "A Core type abstraction's body type differs from the body of its quantified type.",
+            ),
+            (
+                ValidationCause::NestedTypeAbstraction,
+                "nested-type-abstraction",
+                "The compiler retained nested type quantification without method-evidence authentication.",
+            ),
+            (
+                ValidationCause::AbstractionTypeKind,
+                "abstraction-type-kind",
+                "A Core type abstraction's quantified type is not well-kinded.",
+            ),
+            (
+                ValidationCause::TypeApplicationScheme,
+                "type-application-scheme",
+                "The compiler applied type arguments to a Core expression without a quantified type.",
+            ),
+            (
+                ValidationCause::TypeApplicationArity,
+                "type-application-arity",
+                "A Core type application supplies a different number of arguments from its quantified parameters.",
+            ),
+            (
+                ValidationCause::TypeApplicationRows,
+                "type-application-rows",
+                "The compiler retained effect-row arguments in a Core dialect that does not permit them.",
+            ),
+            (
+                ValidationCause::MissingRowArgument,
+                "missing-row-argument",
+                "A Core type application has no row argument for an EffectRow parameter.",
+            ),
+            (
+                ValidationCause::MissingTypeArgument,
+                "missing-type-argument",
+                "A Core type application has no ordinary type argument for its next parameter.",
+            ),
+            (
+                ValidationCause::TypeArgumentInvalid,
+                "type-argument-invalid",
+                "A Core type application's argument has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::TypeArgumentKind,
+                "type-argument-kind",
+                "A Core type application's argument kind differs from its parameter kind.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionAmbiguous,
+                "type-substitution-ambiguous",
+                "Core type application would strengthen or equate unrelated open effect-row tails.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionMissing,
+                "type-substitution-missing",
+                "Core type application tried to remove an effect instance absent from the substituted row.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionInfinite,
+                "type-substitution-infinite",
+                "Core type application would make an effect-row tail contain itself.",
+            ),
+            (
+                ValidationCause::TypeApplicationResult,
+                "type-application-result",
+                "A Core type application's recorded result differs from the instantiated type.",
+            ),
+            (
+                ValidationCause::MissingTupleKinds,
+                "missing-tuple-kinds",
+                "The compiler's Core kind analysis has fewer tuple-element results than required.",
+            ),
+            (
+                ValidationCause::MissingArgumentKind,
+                "missing-argument-kind",
+                "The compiler's Core kind analysis has no result for a type application's argument.",
+            ),
+            (
+                ValidationCause::MissingFunctionKind,
+                "missing-function-kind",
+                "The compiler's Core kind analysis has no result for a type application's function.",
+            ),
+            (
+                ValidationCause::MissingCodomainKind,
+                "missing-codomain-kind",
+                "The compiler's Core kind analysis has no result for a function type's codomain.",
+            ),
+            (
+                ValidationCause::MissingDomainKind,
+                "missing-domain-kind",
+                "The compiler's Core kind analysis has no result for a function type's domain.",
+            ),
+            (
+                ValidationCause::CoreKindResultCount,
+                "core-kind-result-count",
+                "The compiler's Core kind analysis did not finish with exactly one result.",
+            ),
+            (
+                ValidationCause::DuplicateGeneratedTypeBinder,
+                "duplicate-generated-type-binder",
+                "The compiler declared the same generated type-variable identity in more than one Core type abstraction.",
+            ),
+            (
+                ValidationCause::EffectAbstractionBody,
+                "effect-abstraction-body",
+                "The compiler retained an effect-Core type abstraction whose body is not an inert value or type application.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.type-operation");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn capture_failure_presentation_preserves_cross_file_causes() {
+        use super::super::capture::{CompletionOwner, UnsafeDiscard};
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{
+                PresentationError, compile_core_validation_failure, write_human, write_json,
+            },
+        };
+        let first = SourceFile::new("discard.ash", "discard").unwrap();
+        let second = SourceFile::new("owner.ash", "cleanup").unwrap();
+        let source = first.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let request = second.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let owner = second.span(ByteRange::new(1, 7).unwrap()).unwrap();
+        let unsafe_discard = |owner| {
+            ValidationCause::UnsafeCoreDiscard(UnsafeDiscard {
+                node: 42,
+                discard: source,
+                request,
+                owner,
+            })
+        };
+        for (cause, name, reason, english, relations) in [
+            (
+                ValidationCause::CapturedResourceEscape {
+                    source,
+                    acquisition: request,
+                },
+                "captured-resource-escape",
+                "core.validation.resource-escape",
+                "depends on a resource beyond",
+                vec![
+                    (source, "escaping_dependency"),
+                    (request, "resource_acquisition"),
+                ],
+            ),
+            (
+                ValidationCause::CoreCleanupContext {
+                    discard: source,
+                    action: request,
+                    handler: owner,
+                },
+                "cleanup-context",
+                "core.validation.discard-unsafe",
+                "removes a handler required by cleanup",
+                vec![
+                    (source, "discard"),
+                    (request, "cleanup_action"),
+                    (owner, "abandoned_handler"),
+                ],
+            ),
+            (
+                unsafe_discard(None),
+                "discard-unproved",
+                "core.validation.discard-unsafe",
+                "without proof",
+                vec![(source, "discard"), (request, "capturing_request")],
+            ),
+            (
+                unsafe_discard(Some(CompletionOwner::Cleanup(owner))),
+                "discard-cleanup",
+                "core.validation.discard-unsafe",
+                "skips a cleanup action",
+                vec![
+                    (source, "discard"),
+                    (request, "capturing_request"),
+                    (owner, "cleanup_action"),
+                ],
+            ),
+            (
+                unsafe_discard(Some(CompletionOwner::Clause(owner))),
+                "discard-clause",
+                "core.validation.discard-unsafe",
+                "skips a clause",
+                vec![
+                    (source, "discard"),
+                    (request, "capturing_request"),
+                    (owner, "completion_clause"),
+                ],
+            ),
+        ] {
+            for node in [
+                None,
+                Some(NodeId::new(super::super::dialect::ArenaId::new(101), 42)),
+            ] {
+                let error = ValidationError::with_cause(cause, node);
+                assert!(matches!(
+                    compile_core_validation_failure(&error, &[]),
+                    Err(PresentationError::MissingSource)
+                ));
+                assert!(matches!(
+                    compile_core_validation_failure(&error, &[&first]),
+                    Err(PresentationError::MissingSource)
+                ));
+                let view = compile_core_validation_failure(&error, &[&first, &second]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(output.contains("discard.ash"));
+                    assert!(output.contains("owner.ash"));
+                    if locale == Locale::English {
+                        assert!(output.contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], reason);
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert_eq!(json["labels"].as_array().unwrap().len(), relations.len());
+                for (index, (span, relationship)) in relations.iter().enumerate() {
+                    assert_eq!(json["labels"][index]["relationship"], *relationship);
+                    assert_eq!(json["labels"][index]["byte_start"], span.range().start());
+                    assert_eq!(json["labels"][index]["byte_end"], span.range().end());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn effect_identity_messages_preserve_the_failed_relation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::UnknownCoreEffect,
+                "unknown-core-effect",
+                "The compiler retained an effect identity absent from the Core registry.",
+            ),
+            (
+                ValidationCause::CoreOperationOwner,
+                "core-operation-owner",
+                "The compiler used an operation belonging to a different effect declaration.",
+            ),
+            (
+                ValidationCause::CoreEffectArgumentCount,
+                "core-effect-argument-count",
+                "The compiler retained an effect instance with a different number of type arguments from its declaration.",
+            ),
+            (
+                ValidationCause::CoreEffectInvalidArgument,
+                "core-effect-invalid-argument",
+                "The compiler retained an effect type argument that has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::CoreEffectArgumentKind,
+                "core-effect-argument-kind",
+                "An effect instance's type argument has a different kind from its declared parameter.",
+            ),
+            (
+                ValidationCause::UnknownCoreOperation,
+                "unknown-core-operation",
+                "The compiler retained an operation identity absent from its effect declaration.",
+            ),
+            (
+                ValidationCause::CoreOperationSignature,
+                "core-operation-signature",
+                "The compiler retained an effect operation whose instantiated signature is not a function type.",
+            ),
+            (
+                ValidationCause::UnsupportedResourceModule,
+                "unsupported-resource-module",
+                "The compiler retained a resource acquisition whose built-in module has no supported provider API.",
+            ),
+            (
+                ValidationCause::ResourceProviderMethodCount,
+                "resource-provider-method-count",
+                "The compiler retained a resource acquisition with a different number of methods from its provider API.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.effect-identity");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn effect_identity_checks_distinguish_argument_and_operation_failures() {
+        use crate::resolved::{ResolvedEffectDeclaration, ResolvedTypeVariable};
+        let file = source();
+        let span = origin(&file).primary_span();
+        let module = ModuleId::from(file.id());
+        let effect = crate::types::EffectId::new(module, 0);
+        let registry = crate::resolved::ResolvedRegistry::default().with_effects(vec![
+            ResolvedEffectDeclaration {
+                id: effect,
+                public: false,
+                spelling: "Ask".into(),
+                parameters: Box::new([ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::resolved(module, 0),
+                    spelling: "T".into(),
+                    kind: Kind::Type,
+                    origin: origin(&file),
+                }]),
+                operations: Box::new([]),
+                origin: origin(&file),
+                span,
+            },
+        ]);
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let binders = HashMap::new();
+        for (arguments, cause) in [
+            (vec![], Some(ValidationCause::CoreEffectArgumentCount)),
+            (vec![Type::Int], None),
+            (
+                vec![Type::Application(Box::new(Type::Int), Box::new(Type::Int))],
+                Some(ValidationCause::CoreEffectInvalidArgument),
+            ),
+        ] {
+            let instance = EffectInstance::new(effect, arguments.into_boxed_slice());
+            let result = validator.validate_effect_instance(&instance, &binders, root);
+            assert_eq!(result.err().map(|error| error.cause.unwrap()), cause);
+        }
+        let instance = EffectInstance::new(effect, Box::new([Type::Int]));
+        for (operation, cause) in [
+            (
+                OperationId::new(crate::types::EffectId::new(module, 1), 0),
+                ValidationCause::CoreOperationOwner,
+            ),
+            (
+                OperationId::new(effect, 0),
+                ValidationCause::UnknownCoreOperation,
+            ),
+        ] {
+            let error = validator
+                .effect_signature(&instance, operation, root, &binders)
+                .err()
+                .unwrap();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+    }
+
+    #[test]
+    fn newtype_conversion_messages_preserve_the_failed_relation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::ConversionUnknownOwner,
+                "conversion-unknown-owner",
+                "The compiler retained a newtype conversion whose owner is absent from the registry.",
+            ),
+            (
+                ValidationCause::ConversionOrdinaryOwner,
+                "conversion-ordinary-owner",
+                "The compiler used an ordinary nominal type as the owner of a newtype conversion.",
+            ),
+            (
+                ValidationCause::ConversionMissingRepresentation,
+                "conversion-missing-representation",
+                "The compiler retained a newtype conversion whose owner has no representation type.",
+            ),
+            (
+                ValidationCause::ConversionMissingParameters,
+                "conversion-missing-parameters",
+                "The compiler retained a newtype conversion without its owner's parameter declaration.",
+            ),
+            (
+                ValidationCause::ConversionExcessArguments,
+                "conversion-excess-arguments",
+                "The compiler applied more type arguments than the newtype conversion's owner declares.",
+            ),
+            (
+                ValidationCause::ConversionNominalOwner,
+                "conversion-nominal-owner",
+                "The nominal side of a compiler-retained newtype conversion does not name its declared owner.",
+            ),
+            (
+                ValidationCause::ConversionMissingArguments,
+                "conversion-missing-arguments",
+                "The compiler applied fewer type arguments than the newtype conversion's owner declares.",
+            ),
+            (
+                ValidationCause::ConversionInvalidArgument,
+                "conversion-invalid-argument",
+                "The compiler retained a newtype conversion with a type argument that has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::ConversionArgumentKind,
+                "conversion-argument-kind",
+                "A newtype conversion's type argument has a different kind from its declared parameter.",
+            ),
+            (
+                ValidationCause::ConversionRepresentationMismatch,
+                "conversion-representation-mismatch",
+                "The representation side of a compiler-retained newtype conversion differs from its instantiated representation type.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.newtype-conversion");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn type_scope_messages_preserve_causes_and_optional_nodes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::MissingGeneratedTypeBinder,
+                "missing-generated-type-binder",
+                "The compiler retained a generated Core type variable without its declared kind.",
+            ),
+            (
+                ValidationCause::UnresolvedCoreInference,
+                "unresolved-core-inference",
+                "The compiler retained an unresolved inference variable in a Core type.",
+            ),
+            (
+                ValidationCause::TypeScopeMissingChild,
+                "type-scope-missing-child",
+                "The compiler stored a Core node whose declared child edge cannot be read.",
+            ),
+            (
+                ValidationCause::MissingTypeRootRequirements,
+                "missing-type-root-requirements",
+                "The compiler has no retained type-scope requirements for the Core root.",
+            ),
+            (
+                ValidationCause::UnboundCoreTypeVariables,
+                "unbound-core-type-variables",
+                "The compiler retained free type-variable requirements at the Core root.",
+            ),
+            (
+                ValidationCause::MissingTypeUseCount,
+                "missing-type-use-count",
+                "The compiler has no child-use count needed for Core type-scope analysis.",
+            ),
+            (
+                ValidationCause::ExhaustedTypeUseCount,
+                "exhausted-type-use-count",
+                "The compiler consumed a Core child's type-scope requirements more times than recorded.",
+            ),
+            (
+                ValidationCause::MissingTypeRequirementSlot,
+                "missing-type-requirement-slot",
+                "The compiler has no type-scope result slot for a referenced Core child.",
+            ),
+            (
+                ValidationCause::MissingTypeRequirements,
+                "missing-type-requirements",
+                "The compiler needs a Core child's type-scope requirements before they are available.",
+            ),
+            (
+                ValidationCause::UnresolvedCoreRow,
+                "unresolved-core-row",
+                "The compiler retained an unresolved inference tail in a Core effect row.",
+            ),
+            (
+                ValidationCause::UnknownCoreRowBinder,
+                "unknown-core-row-binder",
+                "The compiler retained a Core effect-row tail without a declared binder kind.",
+            ),
+            (
+                ValidationCause::NonRowTailKind,
+                "non-row-tail-kind",
+                "The compiler retained a Core effect-row tail whose binder is not of kind EffectRow.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.type-scope");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn type_scope_requirement_consumption_preserves_failures_and_last_use() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        for (mut requirements, mut counts, cause) in [
+            (
+                vec![Some(HashSet::new())],
+                vec![],
+                ValidationCause::MissingTypeUseCount,
+            ),
+            (
+                vec![Some(HashSet::new())],
+                vec![0],
+                ValidationCause::ExhaustedTypeUseCount,
+            ),
+            (vec![], vec![1], ValidationCause::MissingTypeRequirementSlot),
+            (
+                vec![None],
+                vec![1],
+                ValidationCause::MissingTypeRequirements,
+            ),
+            (
+                vec![None],
+                vec![2],
+                ValidationCause::MissingTypeRequirements,
+            ),
+        ] {
+            let error = validator
+                .take_type_scope_requirements(&mut requirements, &mut counts, root, root)
+                .unwrap_err();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+        for count in [1, 2] {
+            let expected = HashSet::from([crate::types::TypeVariableId::new(0)]);
+            let mut requirements = vec![Some(expected.clone())];
+            let mut counts = vec![count];
+            let actual = validator
+                .take_type_scope_requirements(&mut requirements, &mut counts, root, root)
+                .unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(counts, [count - 1]);
+            assert_eq!(requirements[0].is_some(), count > 1);
+        }
+    }
+
+    #[test]
+    fn unresolved_core_inference_has_a_precise_message() {
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let error = validator
+            .valid_core_type_kind(
+                &Type::Inference(crate::types::InferenceVariableId::new(0)),
+                &HashMap::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::TypeScope);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+        assert_eq!(error.cause, Some(ValidationCause::UnresolvedCoreInference));
+        let identity = crate::types::TypeVariableId::new(0);
+        let error = validator
+            .valid_core_type_kind(&Type::Variable(identity), &HashMap::new())
+            .unwrap_err();
+        assert_eq!(
+            error.cause,
+            Some(ValidationCause::MissingGeneratedTypeBinder)
+        );
+        let rigid = crate::types::EffectRowVariable::Rigid(identity);
+        let inferred =
+            crate::types::EffectRowVariable::Inference(crate::types::InferenceVariableId::new(0));
+        for (tail, kind, cause) in [
+            (inferred, None, Some(ValidationCause::UnresolvedCoreRow)),
+            (rigid, None, Some(ValidationCause::UnknownCoreRowBinder)),
+            (
+                rigid,
+                Some(Kind::Type),
+                Some(ValidationCause::NonRowTailKind),
+            ),
+            (rigid, Some(Kind::EffectRow), None),
+        ] {
+            let binders = kind
+                .as_ref()
+                .map(|kind| HashMap::from([(identity, (kind, root))]))
+                .unwrap_or_default();
+            let result =
+                validator.validate_effect_row(&EffectRow::open(tail, Box::new([])), &binders, root);
+            assert_eq!(result.err().map(|error| error.cause.unwrap()), cause);
+        }
+    }
+    #[test]
+    fn scope_failure_messages_keep_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::ForeignBinderArena,
+                "foreign-binder-arena",
+                "The compiler retained a Core binder owned by a different arena.",
+            ),
+            (
+                ValidationCause::DuplicateBinder,
+                "duplicate-binder",
+                "The compiler declared the same Core binder identity more than once.",
+            ),
+            (
+                ValidationCause::UnknownVariableBinder,
+                "unknown-variable-binder",
+                "The compiler retained a Core variable whose binder is not declared.",
+            ),
+            (
+                ValidationCause::NonLexicalScopeOwner,
+                "non-lexical-scope-owner",
+                "The compiler used a non-lexical nominal identity as a local Core scope owner.",
+            ),
+            (
+                ValidationCause::UnknownScopeOwner,
+                "unknown-scope-owner",
+                "The compiler retained a local Core scope whose nominal owner is absent from the registry.",
+            ),
+            (
+                ValidationCause::LocalScopeType,
+                "local-scope-type",
+                "The compiler retained a local Core scope whose result type differs from its body's type.",
+            ),
+            (
+                ValidationCause::LocalScopeEffects,
+                "local-scope-effects",
+                "The compiler retained a local Core scope whose effects differ from its body's effects.",
+            ),
+            (
+                ValidationCause::IncompleteScopeAnalysis,
+                "incomplete-scope-analysis",
+                "The compiler's scope analysis did not cover every stored Core node.",
+            ),
+            (
+                ValidationCause::UnboundCoreBinder,
+                "unbound-core-binder",
+                "The compiler retained a Core use without an enclosing scope for its binder.",
+            ),
+            (
+                ValidationCause::UnboundLocalNominal,
+                "unbound-local-nominal",
+                "The compiler retained a local nominal type requirement without its enclosing Core scope.",
+            ),
+            (
+                ValidationCause::UnexpectedLocalScope,
+                "unexpected-local-scope",
+                "The compiler retained a local Core scope not listed among the registry's lexical nominal identities.",
+            ),
+            (
+                ValidationCause::DuplicateLocalScope,
+                "duplicate-local-scope",
+                "The compiler introduced the same local nominal identity in more than one Core scope.",
+            ),
+            (
+                ValidationCause::MissingLocalScope,
+                "missing-local-scope",
+                "The compiler retained a lexical nominal identity without a corresponding Core scope.",
+            ),
+            (
+                ValidationCause::ScopeMissingChild,
+                "scope-missing-child",
+                "The compiler stored a Core node whose declared child edge cannot be read.",
+            ),
+            (
+                ValidationCause::MissingCaptureRequirement,
+                "missing-capture-requirement",
+                "A compiler-recorded implementation capture is absent from the initializer's scope requirements.",
+            ),
+            (
+                ValidationCause::MissingRootRequirements,
+                "missing-root-requirements",
+                "The compiler has no retained scope-analysis result for the Core root.",
+            ),
+            (
+                ValidationCause::MissingNodeRequirements,
+                "missing-node-requirements",
+                "The compiler needs a Core node's scope-analysis result before it is available.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.scope");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn binder_scope_checks_keep_distinct_causes() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let mut program = builder.finish(root).unwrap();
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Unit, origin(&file));
+        let mut validator = Validator::new(&program, &[&file]);
+        validator
+            .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+            .unwrap();
+        let error = validator
+            .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+            .unwrap_err();
+        assert_eq!(error.cause_name(), Some("duplicate-binder"));
+        let error = validator.requirements_for(&[None], root).err().unwrap();
+        assert_eq!(error.cause_name(), Some("missing-node-requirements"));
+        drop(validator);
+        program.nodes[0].kind =
+            PureExprKind::Variable(super::super::variable::VariableNode::new(binder.id()));
+        let mut validator = Validator::new(&program, &[&file]);
+        let error = validator.run().unwrap_err();
+        assert_eq!(error.cause_name(), Some("unknown-variable-binder"));
+        let error = validator.validate_scopes().unwrap_err();
+        assert_eq!(error.cause_name(), Some("unbound-core-binder"));
+    }
+
+    #[test]
+    fn recursive_constructor_checks_keep_the_failed_relationship() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let other = crate::types::NominalTypeId::new(file.id(), 1);
+        let nullary = ConstructorId::new(owner, 0);
+        let payload = ConstructorId::new(owner, 1);
+        let unknown = ConstructorId::new(owner, 2);
+        let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+            Vec::new(),
+            vec![
+                crate::resolved::ResolvedConstructor {
+                    id: nullary,
+                    owner,
+                    spelling: "Empty".into(),
+                    payload: None,
+                    origin: origin(&file),
+                },
+                crate::resolved::ResolvedConstructor {
+                    id: payload,
+                    owner,
+                    spelling: "Value".into(),
+                    payload: Some(Type::Unit),
+                    origin: origin(&file),
+                },
+            ],
+        ));
+        let mut builder = CoreBuilder::with_registry(registry);
+        let nullary_node = builder
+            .constructor(nullary, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let payload_node = builder
+            .constructor(
+                payload,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(owner))),
+                origin(&file),
+            )
+            .unwrap();
+        let unknown_node = builder
+            .constructor(unknown, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let unit = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let applied_nullary = builder
+            .application(nullary_node, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let applied_payload = builder
+            .application(payload_node, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let applied_unit = builder
+            .application(unit, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let program = builder.finish(applied_payload).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        for (node, owner, expected) in [
+            (nullary_node, owner, None),
+            (applied_payload, owner, None),
+            (
+                nullary_node,
+                other,
+                Some(ValidationCause::RecursiveConstructorOwner),
+            ),
+            (
+                unknown_node,
+                owner,
+                Some(ValidationCause::RecursiveUnknownConstructor),
+            ),
+            (
+                payload_node,
+                owner,
+                Some(ValidationCause::RecursiveMissingPayload),
+            ),
+            (
+                applied_nullary,
+                owner,
+                Some(ValidationCause::RecursiveUnexpectedPayload),
+            ),
+            (unit, owner, Some(ValidationCause::RecursiveDataRoot)),
+            (
+                applied_unit,
+                owner,
+                Some(ValidationCause::RecursiveDataRoot),
+            ),
+        ] {
+            assert_eq!(
+                validator
+                    .guarded_data_root(node, owner, &HashSet::new())
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_failure_messages_preserve_precise_causes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::EmptyRecursiveGroup,
+                "empty-recursive-group",
+                "The compiler retained a Core recursive group with no members.",
+            ),
+            (
+                ValidationCause::RecursiveFunctionInitializer,
+                "recursive-function-initializer",
+                "The compiler retained a recursive function whose initializer is not a function value.",
+            ),
+            (
+                ValidationCause::RecursiveTypeAbstraction,
+                "recursive-type-abstraction",
+                "The compiler retained a polymorphic recursive function without its type abstraction.",
+            ),
+            (
+                ValidationCause::RecursiveTypeParameters,
+                "recursive-type-parameters",
+                "The compiler retained a recursive type abstraction whose parameters disagree with the binding's type.",
+            ),
+            (
+                ValidationCause::RecursiveFunctionBody,
+                "recursive-function-body",
+                "The compiler retained a recursive type abstraction whose body is not a function value.",
+            ),
+            (
+                ValidationCause::RecursiveValueType,
+                "recursive-value-type",
+                "The compiler retained a recursive binding whose type is neither a supported function type nor a nominal data type.",
+            ),
+            (
+                ValidationCause::RecursiveUnknownConstructor,
+                "recursive-unknown-constructor",
+                "The compiler retained a recursive data initializer whose constructor is absent from the registry.",
+            ),
+            (
+                ValidationCause::RecursiveConstructorOwner,
+                "recursive-constructor-owner",
+                "The compiler retained a recursive data initializer using a constructor of a different nominal type.",
+            ),
+            (
+                ValidationCause::RecursiveMissingPayload,
+                "recursive-missing-payload",
+                "The compiler retained a recursive data constructor without its required payload.",
+            ),
+            (
+                ValidationCause::RecursiveUnexpectedPayload,
+                "recursive-unexpected-payload",
+                "The compiler supplied a payload to a recursive data constructor that takes none.",
+            ),
+            (
+                ValidationCause::RecursiveDataRoot,
+                "recursive-data-root",
+                "The compiler retained a recursive data initializer that is not rooted in a constructor.",
+            ),
+            (
+                ValidationCause::RecursivePayloadCall,
+                "recursive-payload-call",
+                "The compiler retained a recursive data payload that uses recursive bindings in a call to a non-constructor.",
+            ),
+            (
+                ValidationCause::RecursivePayloadForm,
+                "recursive-payload-form",
+                "The compiler retained a recursive data payload that uses recursive bindings outside the permitted guarded forms.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.recursive-binding");
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn empty_recursive_group_has_a_precise_message() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let function = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        for (ty, cause) in [
+            (None, "empty-recursive-group"),
+            (Some(Type::Unit), "recursive-value-type"),
+            (Some(function.clone()), "recursive-function-initializer"),
+            (
+                Some(Type::Forall(Box::new([]), Box::new(function))),
+                "recursive-type-abstraction",
+            ),
+        ] {
+            let members = ty
+                .into_iter()
+                .map(|ty| {
+                    super::super::recursion::RecursiveBindingMember::new(
+                        TypedBinder::new(program.arena, BinderId::new(0), ty, origin(&file)),
+                        root,
+                    )
+                })
+                .collect();
+            let computation = PureComputation::RecursiveBind(
+                super::super::recursion::RecursiveBindingNode::new(members, root),
+            );
+            let error = validator
+                .validate_computation(
+                    root,
+                    &program.nodes[0],
+                    &computation,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::RecursiveBinding);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+        }
+    }
+    #[test]
+    fn provenance_checks_retain_precise_causes() {
+        let file = source();
+        let foreign = SourceFile::new("foreign.ash", "xx").unwrap();
+        let mut deep = origin(&file);
+        for _ in 0..=super::super::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+            deep = Origin::Related {
+                primary: Box::new(deep),
+                related: Vec::new(),
+            };
+        }
+        let related = Origin::Related {
+            primary: Box::new(origin(&file)),
+            related: vec![foreign.span(ByteRange::new(0, 1).unwrap()).unwrap()],
+        };
+        for (origin_override, cause) in [
+            (None, "missing-origin"),
+            (Some(deep), "origin-depth"),
+            (Some(related), "related-origin-source"),
+            (Some(origin(&foreign)), "unadmitted-origin-source"),
+        ] {
+            let mut builder = CoreBuilder::new();
+            let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+            let mut program = builder.finish(root).unwrap();
+            program.nodes[0].origin = origin_override;
+            let error = validate(program, &[&file]).unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::Provenance);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert_eq!(error.node(), Some(root));
+        }
+    }
+
+    #[test]
+    fn provenance_messages_preserve_source_failures() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+            source::SourceError,
+        };
+        let file = SourceFile::new("unicode.ash", "я").unwrap();
+        let range_failure = file.span(ByteRange::new(0, 5).unwrap()).unwrap_err();
+        let unicode_failure = file.span(ByteRange::new(0, 1).unwrap()).unwrap_err();
+        let arena = super::super::dialect::ArenaId::new(101);
+        for cause in [
+            ValidationCause::MissingOrigin,
+            ValidationCause::OriginDepth,
+            ValidationCause::RelatedOriginSource,
+            ValidationCause::UnadmittedOriginSource,
+            ValidationCause::InvalidOriginSpan(range_failure),
+            ValidationCause::InvalidOriginSpan(unicode_failure),
+            ValidationCause::InvalidOriginSpan(SourceError::TextTooLarge),
+            ValidationCause::InvalidOriginSpan(SourceError::InvalidLineState),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 0))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.provenance");
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts.iter().any(|fact| fact["name"] == "cause"
+                        && fact["value"] == error.cause_name().unwrap())
+                );
+                if let Some(source_error) = error.origin_span_failure() {
+                    assert!(facts.iter().any(|fact| fact["name"] == "source_failure"
+                        && fact["value"] == source_error.diagnostic_name()));
+                    if source_error == range_failure {
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "end" && fact["value"] == 5)
+                        );
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "source_length" && fact["value"] == 2)
+                        );
+                    } else if source_error == unicode_failure {
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "offset" && fact["value"] == 1)
+                        );
+                    }
+                }
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn coverage_messages_retain_failure_and_arm_number() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let file = source();
+        for (patterns, expected, arm_number) in [
+            (vec![], "empty-match", None),
+            (
+                vec![CorePatternKind::Boolean(true)],
+                "non-exhaustive-match",
+                None,
+            ),
+            (
+                vec![CorePatternKind::Wildcard, CorePatternKind::Wildcard],
+                "redundant-arm",
+                Some(2),
+            ),
+        ] {
+            let mut program = unchecked_pattern_program(&file, 0);
+            program.nodes[0].ty = Type::Bool;
+            program.nodes[0].kind = PureExprKind::Value(PureValue::Boolean(
+                super::super::literal::BooleanNode::new(true),
+            ));
+            let match_id = NodeId::new(program.arena, 2);
+            let arms = patterns
+                .into_iter()
+                .map(|pattern| {
+                    super::super::CoreMatchArm::new(
+                        CorePattern::new(Type::Bool, origin(&file), pattern),
+                        NodeId::new(program.arena, 1),
+                        origin(&file),
+                    )
+                })
+                .collect();
+            program.nodes[2].kind = PureExprKind::Computation(PureComputation::Match(
+                super::super::MatchNode::new(NodeId::new(program.arena, 0), arms),
+            ));
+            let validator = Validator::new(&program, &[&file]);
+            let PureExprKind::Computation(computation) = &program.nodes[2].kind else {
+                unreachable!()
+            };
+            let error = validator
+                .validate_computation(
+                    match_id,
+                    &program.nodes[2],
+                    computation,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::Coverage);
+            assert_eq!(error.cause_name(), Some(expected));
+            assert_eq!(error.arm_number(), arm_number);
+            for node in [None, Some(match_id)] {
+                let mut failure = error.clone();
+                failure.node = node;
+                let view = compile_core_validation_failure(&failure, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if arm_number.is_some() && locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains("match arm 2"));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == expected)
+                );
+                let arm_fact = facts.iter().find(|fact| fact["name"] == "arm");
+                assert_eq!(
+                    arm_fact.map(|fact| fact["value"].as_u64().unwrap()),
+                    arm_number.map(|arm| arm as u64)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn node_bounds_messages_preserve_causes_and_optional_node() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, text) in [
+            (
+                ValidationCause::MissingChild,
+                "missing-child",
+                "child edge cannot be read",
+            ),
+            (
+                ValidationCause::ForeignArena,
+                "foreign-arena",
+                "different arena",
+            ),
+            (
+                ValidationCause::MissingNode,
+                "missing-node",
+                "outside the program's stored nodes",
+            ),
+            (
+                ValidationCause::NodeIdentityRange,
+                "node-identity-range",
+                "index as a node identity",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, u32::MAX))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(text));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["reason"], "core.validation.node-bounds");
+                let facts = json["facts"].as_array().unwrap();
+                assert_eq!(facts.last().unwrap()["name"], "cause");
+                assert_eq!(facts.last().unwrap()["value"], name);
+                if node.is_some() {
+                    assert_eq!(facts[0]["value"], u32::MAX);
+                }
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+        if let Ok(index) = usize::try_from(u64::from(u32::MAX) + 1) {
+            let error = node_id(arena, index).unwrap_err();
+            assert_eq!(error.cause_name(), Some("node-identity-range"));
+            assert_eq!(error.node(), None);
+        }
+    }
+
+    #[test]
+    fn reason_only_failure_messages_preserve_optional_node_identity() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        for (reason, explanation) in [
+            (
+                ValidationReason::DialectMembership,
+                "The compiler stored a Core node from a different dialect than the selected program.",
+            ),
+            (
+                ValidationReason::Root,
+                "The compiler selected a root node that is not valid in this Core arena.",
+            ),
+            (
+                ValidationReason::Cycle,
+                "The compiler constructed a cycle in the Core expression graph.",
+            ),
+            (
+                ValidationReason::Unreachable,
+                "The compiler retained a Core node that cannot be reached from the program root.",
+            ),
+            (
+                ValidationReason::Resource,
+                "The compiler could not complete Core validation within its work or storage limits.",
+            ),
+            (
+                ValidationReason::NodeType,
+                "The compiler produced inconsistent type information for a Core node or its checked evidence.",
+            ),
+            (
+                ValidationReason::ApplicationType,
+                "The compiler produced a Core application that does not match its checked function or argument information.",
+            ),
+            (
+                ValidationReason::Registry,
+                "The compiler's Core declaration or module registry is inconsistent.",
+            ),
+            (
+                ValidationReason::Handler,
+                "The compiler produced inconsistent handler or capture-safety information in Core.",
+            ),
+        ] {
+            for node in [
+                None,
+                Some(NodeId::new(
+                    super::super::dialect::ArenaId::new(100),
+                    u32::MAX,
+                )),
+            ] {
+                let error = ValidationError::new(reason, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    if locale == Locale::English {
+                        assert!(output.contains(explanation));
+                    }
+                    if node.is_some() {
+                        assert!(output.contains("4294967295"));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], reason.to_string());
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(json["labels"].as_array().unwrap().is_empty());
+                if node.is_some() {
+                    assert_eq!(json["facts"][0]["name"], "core_node");
+                    assert_eq!(json["facts"][0]["value"], u32::MAX);
+                } else {
+                    assert!(json["facts"].as_array().unwrap().is_empty());
+                }
+            }
+        }
+        assert!(
+            compile_core_validation_failure(
+                &ValidationError::new(ValidationReason::NodeBounds, None),
+                &[]
+            )
+            .is_err()
+        );
+    }
+
     type HookFixture = (
         super::super::effect::UnvalidatedEffectProgram,
         Vec<SourceFile>,
@@ -9655,12 +15255,15 @@ mod tests {
                 unreachable!()
             };
             scope.callback = outer.callback;
+            let error =
+                super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
             assert_eq!(
-                super::super::validate_effect_modules(core, &borrowed, &relations)
-                    .unwrap_err()
-                    .reason(),
+                error.reason(),
                 ValidationReason::Handler,
                 "pass {pass}: two scopes cannot share one acquisition binding"
+            );
+            assert!(
+                crate::presentation::compile_core_validation_failure(&error, &borrowed).is_ok()
             );
         }
     }
@@ -9785,12 +15388,15 @@ mod tests {
                 EffectExprKind::Pure(PureExprKind::Variable(
                     crate::core::variable::VariableNode::new(dangerous.unwrap()),
                 ));
+            let error =
+                super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
             assert_eq!(
-                super::super::validate_effect_modules(core, &borrowed, &relations)
-                    .unwrap_err()
-                    .reason(),
+                error.reason(),
                 ValidationReason::ResourceEscape,
                 "pass {pass}"
+            );
+            assert!(
+                crate::presentation::compile_core_validation_failure(&error, &borrowed).is_ok()
             );
         }
     }
@@ -9881,11 +15487,20 @@ mod tests {
                         "7"
                     );
                 } else {
+                    let error = result.unwrap_err();
                     assert_eq!(
-                        result.unwrap_err().reason(),
+                        error.reason(),
                         ValidationReason::DiscardUnsafe,
                         "pass {pass}"
                     );
+                    let view =
+                        crate::presentation::compile_core_validation_failure(&error, &borrowed)
+                            .unwrap();
+                    let mut output = Vec::new();
+                    crate::presentation::write_json(&mut output, &view).unwrap();
+                    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                    assert_eq!(json["labels"][0]["relationship"], "discard");
+                    assert!(json["labels"].as_array().unwrap().len() > 1);
                 }
             }
         }
@@ -10190,13 +15805,31 @@ mod tests {
                     }
                     _ => node.effects = EffectRow::empty(),
                 }
-                assert!(
-                    super::Validator::new_modules(&core, &borrowed, &relations)
-                        .unwrap()
-                        .run_effect()
-                        .is_err(),
-                    "pass {pass}, forgery {corruption} reached proof success"
-                );
+                let error = super::Validator::new_modules(&core, &borrowed, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .expect_err("forged registration must reject");
+                let expected = match corruption {
+                    0 => Some(ValidationCause::HookTargetInstance),
+                    1 => Some(ValidationCause::HookDuplicateBinders),
+                    2 => Some(ValidationCause::HookInputIdentity),
+                    5 => Some(ValidationCause::HookClauseContinuation),
+                    _ => None,
+                };
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        error.cause,
+                        Some(expected),
+                        "pass {pass}, forgery {corruption}"
+                    );
+                }
+                if error.reason() == ValidationReason::Handler {
+                    assert!(
+                        crate::presentation::compile_core_validation_failure(&error, &borrowed)
+                            .is_ok(),
+                        "pass {pass}, forgery {corruption} has no message"
+                    );
+                }
                 core.discard_iteratively();
             }
         }
@@ -16870,8 +22503,8 @@ mod tests {
             };
             let Some(origin) = stored.origin else {
                 return ConsumingModuleValidationAttempt {
-                    result: Err(ValidationError::new(
-                        ValidationReason::Provenance,
+                    result: Err(ValidationError::with_cause(
+                        ValidationCause::MissingOrigin,
                         Some(node),
                     )),
                     type_work,
@@ -18096,6 +23729,7 @@ mod tests {
                 "{mutation:?}"
             );
             assert_eq!(error.node(), Some(application), "{mutation:?}");
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
         }
     }
 
@@ -19923,6 +25557,7 @@ mod tests {
             .expect_err("forged local representation effect metadata must reject");
         assert_eq!(error.reason(), ValidationReason::EffectIdentity);
         assert_eq!(error.node(), Some(program.root));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -20728,6 +26363,7 @@ mod tests {
         let error = validate(unchecked_pattern_program(&file, 41), &[&file])
             .expect_err("an unchecked 41-deep pattern must fail");
         assert_eq!(error.reason(), ValidationReason::Pattern);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
     }
 
     #[test]
@@ -21653,6 +27289,7 @@ mod tests {
             .expect_err("distinct abstraction nodes must define distinct type-variable identities");
         assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(right_abstraction));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
     }
 
     #[test]
@@ -23059,6 +28696,7 @@ mod tests {
                     )
                     .expect_err("the second wildcard is redundant");
                 assert_eq!(error.reason(), ValidationReason::Coverage);
+                assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
                 drop(validator);
                 program.discard_iteratively();
             })
@@ -23293,7 +28931,9 @@ mod tests {
         )
         .expect_err("a conversion without a registry relation must not validate");
         assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+        assert_eq!(error.cause, Some(ValidationCause::ConversionUnknownOwner));
         assert_eq!(error.node(), Some(root));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -23518,6 +29158,18 @@ mod tests {
             };
             assert_eq!(error.reason(), reason, "{case:?}");
             assert_eq!(error.node(), Some(node), "{case:?}");
+            let cause = match case {
+                Case::Direction | Case::ResultType => Some(ValidationCause::ConversionNominalOwner),
+                Case::OrdinaryOwner => Some(ValidationCause::ConversionOrdinaryOwner),
+                Case::ParameterOrder | Case::FreshBinderSubstitution => {
+                    Some(ValidationCause::ConversionRepresentationMismatch)
+                }
+                _ => None,
+            };
+            if let Some(cause) = cause {
+                assert_eq!(error.cause, Some(cause), "{case:?}");
+                assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+            }
         }
     }
 
@@ -23770,6 +29422,7 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("missing origin");
         assert_eq!(error.reason(), ValidationReason::Provenance);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -23826,34 +29479,46 @@ mod tests {
         let error = validate(program, &[&file]).expect_err("foreign binder capability");
         assert_eq!(error.reason(), ValidationReason::Scope);
         assert_eq!(error.node(), Some(NodeId::new(arena, 1)));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
     fn rejects_out_of_bounds_and_cycles_without_recursion() {
         let file = source();
         let arena = super::super::dialect::ArenaId::new(101);
-        let stored = StoredNode {
-            dialect: DialectId::PURE,
-            effects: (),
-            ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
-            origin: Some(origin(&file)),
-            kind: PureExprKind::Value(PureValue::Function(
-                super::super::function::FunctionNode::new(
-                    TypedBinder::new(arena, BinderId::new(0), Type::Unit, origin(&file)),
-                    NodeId::new(arena, 1),
-                ),
-            )),
-        };
-        let program = UnvalidatedProgram {
-            registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
-            method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
-            method_evidence_anchors: Box::new([]),
-            arena,
-            nodes: vec![stored],
-            root: NodeId::new(arena, 0),
-        };
-        let error = validate(program, &[&file]).expect_err("out-of-bounds child");
-        assert_eq!(error.reason(), ValidationReason::NodeBounds);
+        for (child, cause) in [
+            (NodeId::new(arena, 1), "missing-node"),
+            (
+                NodeId::new(super::super::dialect::ArenaId::new(102), 0),
+                "foreign-arena",
+            ),
+        ] {
+            let stored = StoredNode {
+                dialect: DialectId::PURE,
+                effects: (),
+                ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                origin: Some(origin(&file)),
+                kind: PureExprKind::Value(PureValue::Function(
+                    super::super::function::FunctionNode::new(
+                        TypedBinder::new(arena, BinderId::new(0), Type::Unit, origin(&file)),
+                        child,
+                    ),
+                )),
+            };
+            let program = UnvalidatedProgram {
+                registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+                method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+                method_evidence_anchors: Box::new([]),
+                arena,
+                nodes: vec![stored],
+                root: NodeId::new(arena, 0),
+            };
+            let error = validate(program, &[&file]).expect_err("out-of-bounds child");
+            assert_eq!(error.reason(), ValidationReason::NodeBounds);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert_eq!(error.node(), Some(NodeId::new(arena, 0)));
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
+        }
 
         let cyclic = StoredNode {
             dialect: DialectId::PURE,

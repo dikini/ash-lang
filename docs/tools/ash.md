@@ -3,12 +3,43 @@
 `ash` loads and runs one modular Ash program:
 
 ```text
-ash [--root name=path]... <entry-file>
+ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>
 ```
 
 The invocation requires exactly one entry path. Every `--root` option must
 precede that path. The executable reads UTF-8 Ash source files and does not read
 a program from standard input.
+
+## Diagnostic formats and locales
+
+Diagnostics use human-readable explanations by default. Explicit options select
+the format and locale:
+
+```text
+ash --message-format human --locale bg entry.ash
+ash --message-format json entry.ash
+```
+
+`human` gives localized explanations and source context; `short` gives compact
+localized text. `json` writes one locale-independent JSON object per diagnostic,
+with `schema_version: 1`, the original reason, responsibility, named facts and
+causal labels. Runtime records retain resource details, the first teardown
+failure and cleanup status. Output remains on standard error; selecting a format
+does not change success output or exit status.
+
+Diagnostic options must precede the entry path and may each occur only once.
+An explicit locale overrides the first nonempty `LC_ALL`, `LC_MESSAGES` or
+`LANG`. English and Bulgarian are supported. POSIX locale spelling and parent
+fallback are accepted; unsupported, malformed, `C`, `POSIX` and absent locales
+select English. Supplying only `--locale` selects human output.
+
+If a failure lacks facts or source context required for presentation, an
+exceptional JSON fallback retains its original reason and diagnostic details
+under `developer_details`, with a marked `presentation_error`. An unavailable
+catalogue also falls back to JSON, preserving available structured facts.
+Neither path recursively reports a diagnostic-write failure. Automation should
+select `--message-format json` and inspect reasons, facts and causal labels,
+not human wording.
 
 The entry file's containing directory is the implicit root for its relative
 imports. A relative import maps dotted segments to child directories and adds
@@ -278,7 +309,10 @@ main () = {
         }
     }
     match observed {
-        Report(Failed(primary), FailureItem(first, FailureItem(second, NoFailures))) => primary * 10000 + first * 100 + second
+        Report(
+            Failed(primary),
+            FailureItem(first, FailureItem(second, NoFailures))
+        ) => primary * 10000 + first * 100 + second
         _ => 0
     }
 }
@@ -550,10 +584,13 @@ Next(1, <cycle>) : Stream
 
 ## Failures
 
+The reason codes below identify failures independently of their presentation.
+All formats use the same failure classifications.
+
 A source rejection writes structured diagnostics to standard error, writes no
-success value to standard output, and exits with status `1`. The first line is
-a stable reason code followed by a plain-text explanation and causal source
-labels.
+success value to standard output, and exits with status `1`. Human output starts
+with an explanation and includes causal source labels and the stable reason
+code. JSON exposes these fields separately.
 
 Source-caused loading failures include `module.unknown-root`,
 `module.not-found`, `module.path-escape`, `module.unknown-builtin`, and
@@ -673,8 +710,9 @@ with requested and available amounts when known. Causes distinguish
 last means the storage API did not distinguish allocator refusal from a
 representation bound; it does not identify a RAM-quota violation.
 If host teardown also fails, the report retains the original failure, the first
-teardown failure and the observed cleanup status. This path avoids rich message
-allocation and does not retry a failed write. External termination, including termination
+teardown failure and the observed cleanup status. Localized runtime messages are
+prepared before execution; reporting does not allocate or invoke the catalogue,
+and does not retry a failed write. External termination, including termination
 inside an infallible host allocation API, cannot guarantee an in-process report.
 
 An output write or flush failure also exits with status `2` and attempts to
@@ -685,3 +723,30 @@ remains the only guaranteed observation.
 
 Exact diagnostic colors, gutters, and prose are presentation details. Stable
 reason codes and causal source labels remain structured before rendering.
+
+## Maintaining diagnostic messages
+
+Reuse the phase's reason, facts and spans. Declare a message and its typed
+arguments in `src/message.rs`; for example, the existing term lookup message is:
+
+```rust
+resolve_unknown_term => "resolve-unknown-term" { name: &'a str = "missing" },
+```
+
+The example value supplies the generated catalogue test. Add the same key and
+arguments to both `locales/en-US.ftl` and `locales/bg.ftl`:
+
+```text
+resolve-unknown-term = No term named `{ $name }` is in scope.
+```
+
+The phase selects `Message::resolve_unknown_term(name)` from its retained facts;
+the presentation adapter supplies semantic JSON facts and label relationships.
+Renderers do not need a new message-specific branch. To change wording or a
+translation, edit the appropriate catalogue entry, retaining its key and named
+arguments. Update exact-wording assertions where applicable; do not change JSON
+reasons or facts just because the prose changed.
+
+Run the catalogue tests and the affected phase's human/JSON tests together.
+Runtime messages additionally require pre-execution preparation and tests of the
+separate allocation-independent reporter; do not format them after failure.

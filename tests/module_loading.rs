@@ -241,6 +241,37 @@ fn rejects_a_canonical_target_outside_its_owning_root() {
 
     assert_eq!(failure.module_reason(), Some(ModuleReason::PathEscape));
     assert!(failure.is_source_rejection());
+    let target = failure
+        .failure()
+        .as_module_failure()
+        .unwrap()
+        .path()
+        .unwrap()
+        .to_path_buf();
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    for (locale, prefix) in [
+        (ash::message::Locale::English, "The imported source file"),
+        (
+            ash::message::Locale::Bulgarian,
+            "Импортираният изходен файл",
+        ),
+    ] {
+        let mut output = Vec::new();
+        ash::presentation::write_short(
+            &mut output,
+            &diagnostics[0],
+            &ash::message::Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        assert!(String::from_utf8(output).unwrap().contains(prefix));
+    }
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "source");
+    assert_eq!(json["facts"][0]["value"], target.to_str().unwrap());
+    assert_eq!(json["labels"][0]["path"], entry.to_str().unwrap());
 }
 
 #[cfg(unix)]
@@ -319,6 +350,15 @@ fn overlapping_owner_failures_follow_source_order_through_descendants() {
             .is_some_and(|path| path.ends_with("outside-first/child.ash")),
         "the first source branch should fail first: {failure:?}"
     );
+    let span = failure.as_module_failure().unwrap().primary_span().unwrap();
+    drop(tree);
+    let source = failure
+        .sources()
+        .find(|source| source.id() == span.source())
+        .unwrap();
+    assert!(Path::new(source.display_path()).ends_with("root/pkg/deep.ash"));
+    assert_eq!(source.text(), "import escape_first.child as Child\n");
+    assert_eq!(source.location(span).unwrap().start().line(), 1);
 }
 
 #[test]
@@ -330,7 +370,7 @@ fn imported_syntax_failures_retain_the_parser_stage() {
     let failure = load_module_graph(&entry, &ModuleRoots::empty())
         .expect_err("the imported source should fail parsing");
 
-    assert!(matches!(&failure, LoadGraphError::Syntax(_)));
+    assert!(matches!(failure.failure(), LoadGraphError::Syntax(_)));
     assert_eq!(failure.module_reason(), None);
     assert!(failure.is_source_rejection());
 }
@@ -349,7 +389,7 @@ fn imported_syntax_resource_failures_retain_the_rejected_source() {
     let failure = load_module_graph(&entry, &ModuleRoots::empty())
         .expect_err("the imported source should exhaust structural syntax depth");
 
-    let LoadGraphError::Syntax(failure) = failure else {
+    let LoadGraphError::Syntax(failure) = failure.failure() else {
         panic!("syntax resources should remain owned by the parser stage");
     };
     assert_eq!(failure.source.display_path(), rejected.to_string_lossy());
@@ -502,5 +542,198 @@ fn root_configuration_rejects_every_reserved_word() {
             "{spelling}"
         );
         assert!(!failure.is_source_rejection(), "{spelling}");
+    }
+}
+#[test]
+fn failed_nested_import_retains_admitted_sources_after_files_are_removed() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    let child_text = "import missing as Missing\n";
+    tree.write("child.ash", child_text);
+    let error = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    let span = error.as_module_failure().unwrap().primary_span().unwrap();
+    drop(tree);
+    let source = error
+        .sources()
+        .find(|source| source.id() == span.source())
+        .unwrap();
+    assert_eq!(source.text(), child_text);
+    assert_eq!(source.location(span).unwrap().start().line(), 1);
+    assert_eq!(error.sources().count(), 2);
+    assert_eq!(error.module_reason(), Some(ModuleReason::NotFound));
+    assert!(error.is_source_rejection());
+}
+#[test]
+fn rejected_dependency_keeps_its_source_and_the_import_location() {
+    let tree = TempTree::create();
+    let entry_text = "import child as Child\n";
+    let entry = tree.write("entry.ash", entry_text);
+    let rejected_text = "main : Unit -> Int\nmain () = (41\n";
+    tree.write("child.ash", rejected_text);
+    let error = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    drop(tree);
+    let import = error.failure().import_span().unwrap();
+    let importer = error
+        .sources()
+        .find(|source| source.id() == import.source())
+        .unwrap();
+    assert_eq!(importer.text(), entry_text);
+    assert_eq!(error.sources().count(), 2);
+    let LoadGraphError::Syntax(failure) = error.failure() else {
+        panic!("syntax failure");
+    };
+    assert_eq!(failure.source.text(), rejected_text);
+    let sources: Vec<_> = error.sources().collect();
+    let view = ash::presentation::compile_parse_diagnostic(&failure.parser[0], &sources).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_human(
+        &mut output,
+        &view,
+        &ash::message::Catalogue::new(ash::message::Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(String::from_utf8(output).unwrap().contains("main () = (41"));
+}
+#[test]
+fn imported_non_utf8_input_keeps_input_responsibility_and_the_import_label() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    fs::write(tree.path("child.ash"), [0xff]).unwrap();
+    let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    assert!(!failure.is_source_rejection());
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "input");
+    assert_eq!(json["reason"], "input.invalid-utf8");
+    assert_eq!(json["labels"][0]["relationship"], "import_target");
+    assert!(
+        json["labels"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry.ash")
+    );
+    assert!(
+        json["facts"][0]["value"]
+            .as_str()
+            .unwrap()
+            .ends_with("child.ash")
+    );
+}
+#[test]
+fn graph_syntax_rendering_merges_stages_and_retains_import_context() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    tree.write(
+        "child.ash",
+        "import @ as Missing\nmain : Unit -> Int\nmain () = 42 #\n",
+    );
+    let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    assert!(diagnostics.len() >= 2);
+    let mut output = Vec::new();
+    for diagnostic in &diagnostics {
+        ash::presentation::write_json(&mut output, diagnostic).unwrap();
+    }
+    let output = String::from_utf8(output).unwrap();
+    let json: Vec<serde_json::Value> = output
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(json[0]["reason"], "parse.expected-form");
+    assert_eq!(json.last().unwrap()["reason"], "lex.unknown-character");
+    for item in json {
+        assert_eq!(item["responsibility"], "source");
+        let labels = item["labels"].as_array().unwrap();
+        assert!(labels[0]["path"].as_str().unwrap().ends_with("child.ash"));
+        let import = labels.last().unwrap();
+        assert_eq!(import["role"], "related");
+        assert_eq!(import["relationship"], "import_context");
+        assert!(import["path"].as_str().unwrap().ends_with("entry.ash"));
+    }
+}
+
+#[test]
+fn module_source_errors_render_retained_imports_and_target_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_graph_diagnostics, write_json, write_short},
+    };
+    for (source, reason, en, bg) in [
+        (
+            "import @absent.helper as Helper\n",
+            "module.unknown-root",
+            "No module root named `absent` is configured.",
+            "Не е зададен корен за модули с име `absent`.",
+        ),
+        (
+            "import @builtin.absent as Absent\n",
+            "module.unknown-builtin",
+            "This import names no compiler-owned module.",
+            "Този импорт не посочва модул, предоставен от компилатора.",
+        ),
+        (
+            "import absent as Absent\n",
+            "module.not-found",
+            "The imported source file",
+            "Импортираният изходен файл",
+        ),
+        (
+            "import entry as Entry\n",
+            "module.import-cycle",
+            "This import creates a dependency cycle",
+            "Този импорт създава цикъл от зависимости",
+        ),
+    ] {
+        let tree = TempTree::create();
+        let entry = tree.write("entry.ash", source);
+        let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+        drop(tree);
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        for (locale, expected) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason);
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["labels"][0]["relationship"], "import_target");
+        assert_eq!(json["labels"][0]["path"], entry.to_str().unwrap());
+        for (locale, label) in [
+            (
+                Locale::English,
+                "The failure occurred while processing this import.",
+            ),
+            (
+                Locale::Bulgarian,
+                "Неуспехът възникна при обработката на този импорт.",
+            ),
+        ] {
+            let mut output = Vec::new();
+            ash::presentation::write_human(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(label));
+        }
+        if reason == "module.unknown-root" {
+            assert_eq!(json["facts"][0]["value"], "absent");
+        } else if reason == "module.not-found" || reason == "module.import-cycle" {
+            assert_eq!(json["facts"][0]["kind"], "path");
+        }
     }
 }

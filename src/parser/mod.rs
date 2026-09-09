@@ -219,6 +219,38 @@ pub enum ExpectedForm {
     EndOfFile,
 }
 
+impl ExpectedForm {
+    /// Stable grammar category retained independently of localized wording.
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Expression => "expression",
+            Self::Operand => "operand",
+            Self::Identifier => "identifier",
+            Self::Type => "type",
+            Self::EffectRow => "effect-row",
+            Self::Kind => "kind",
+            Self::Pattern => "pattern",
+            Self::InterfaceParameter => "interface-parameter",
+            Self::InterfaceMethod => "interface-method",
+            Self::EffectOperation => "effect-operation",
+            Self::InterfaceApplication => "interface-application",
+            Self::ImplementationMethod => "implementation-method",
+            Self::Comma => "comma",
+            Self::LeftParen => "left-paren",
+            Self::RightParen => "right-paren",
+            Self::LeftBrace => "left-brace",
+            Self::RightBrace => "right-brace",
+            Self::Greater => "greater",
+            Self::Colon => "colon",
+            Self::Equal => "equal",
+            Self::Arrow => "arrow",
+            Self::FatArrow => "fat-arrow",
+            Self::LineEnd => "line-end",
+            Self::EndOfFile => "end-of-file",
+        }
+    }
+}
+
 /// A parser-owned reason retained independently from rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseReason {
@@ -289,19 +321,103 @@ pub enum SynchronizationBoundary {
     EndOfFile,
 }
 
+impl SynchronizationBoundary {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::LogicalLineEnd => "logical-line-end",
+            Self::TypeParameterSeparator => "type-parameter-separator",
+            Self::TypeParameterListClosing => "type-parameter-list-closing",
+            Self::TypeDeclarationEqual => "type-declaration-equal",
+            Self::EquationalGlobalColon => "equational-global-colon",
+            Self::InterfaceMethodColon => "interface-method-colon",
+            Self::OperationalParameterOpeningParen => "operational-parameter-opening-paren",
+            Self::ImplementationInterfaceHead => "implementation-interface-head",
+            Self::InterfaceBodyOpeningBrace => "interface-body-opening-brace",
+            Self::ImplementationBodyOpeningBrace => "implementation-body-opening-brace",
+            Self::OperationalBodyOpeningBrace => "operational-body-opening-brace",
+            Self::BlockClosingBrace => "block-closing-brace",
+            Self::InterfaceClosingBrace => "interface-closing-brace",
+            Self::ImplementationClosingBrace => "implementation-closing-brace",
+            Self::ParenthesisClosing => "parenthesis-closing",
+            Self::EndOfFile => "end-of-file",
+        }
+    }
+}
+
 /// One structured parser diagnostic and its parser-specific recovery facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseDiagnostic {
     diagnostic: Diagnostic<ParseReason>,
+    expected_form: Option<ExpectedForm>,
+    found_token: Option<FoundToken>,
+    recovery_position: Option<Span>,
     /// Structured completion or synchronization facts.
     pub context: Vec<ParseContext>,
 }
 
 impl ParseDiagnostic {
-    fn new(diagnostic: Diagnostic<ParseReason>) -> Self {
+    fn new(
+        diagnostic: Diagnostic<ParseReason>,
+        expected_form: Option<ExpectedForm>,
+        found_token: Option<FoundToken>,
+        recovery_position: Option<Span>,
+    ) -> Self {
         Self {
             diagnostic,
+            expected_form,
+            found_token,
+            recovery_position,
             context: Vec::new(),
+        }
+    }
+
+    /// Returns the required grammar form, independently of legacy wording.
+    #[must_use]
+    pub const fn expected_form(&self) -> Option<ExpectedForm> {
+        self.expected_form
+    }
+
+    /// Returns the encountered token category or fixed source spelling.
+    #[must_use]
+    pub const fn found_token(&self) -> Option<FoundToken> {
+        self.found_token
+    }
+
+    /// Returns the immediate recovery position, not a later synchronization.
+    #[must_use]
+    pub const fn recovery_position(&self) -> Option<Span> {
+        self.recovery_position
+    }
+}
+
+/// A token description that separates grammar categories from Ash spellings.
+/// No identifier or integer payload is copied into this diagnostic fact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FoundToken {
+    /// An ordinary identifier.
+    Identifier,
+    /// An uppercase identifier.
+    UpperIdentifier,
+    /// An integer literal.
+    Integer,
+    /// Fixed punctuation, keyword or builtin type spelling.
+    Spelling(&'static str),
+    /// A logical line boundary.
+    LineEnd,
+    /// End of input.
+    EndOfFile,
+}
+
+impl FoundToken {
+    /// Grammar category or fixed Ash spelling, never an English description.
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Identifier => "identifier",
+            Self::UpperIdentifier => "uppercase-identifier",
+            Self::Integer => "integer",
+            Self::Spelling(spelling) => spelling,
+            Self::LineEnd => "line-end",
+            Self::EndOfFile => "end-of-file",
         }
     }
 }
@@ -326,6 +442,35 @@ impl fmt::Display for ParseReason {
             Self::Semicolon => "parse.semicolon",
             Self::UnexpectedToken => "parse.unexpected-token",
         })
+    }
+}
+
+impl ParseDiagnostic {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'static>> {
+        use crate::message::Message;
+        Some(match self.reason {
+            ParseReason::ExpectedForm => Message::parse_expected(self.expected_form?),
+            ParseReason::ExpectedOperand => Message::parse_operand(),
+            ParseReason::UnclosedGroup => Message::parse_unclosed_group(),
+            ParseReason::RepeatedEquality => Message::parse_repeated_equality(),
+            ParseReason::ExpectedRecursiveMember => Message::parse_recursive_member(),
+            ParseReason::UnexpectedAnd => Message::parse_unexpected_and(),
+            ParseReason::Semicolon => Message::parse_semicolon(),
+            ParseReason::UnexpectedToken => Message::parse_unexpected_token(),
+        })
+    }
+
+    pub(crate) const fn primary_relationship(&self) -> &'static str {
+        match self.diagnostic.reason {
+            ParseReason::ExpectedForm => "expected_form",
+            ParseReason::ExpectedOperand => "operator",
+            ParseReason::UnclosedGroup => "opening_group",
+            ParseReason::RepeatedEquality => "repeated_equality",
+            ParseReason::ExpectedRecursiveMember => "expected_recursive_member",
+            ParseReason::UnexpectedAnd | ParseReason::Semicolon | ParseReason::UnexpectedToken => {
+                "unexpected_token"
+            }
+        }
     }
 }
 
@@ -523,7 +668,12 @@ impl Parser<'_> {
         diagnostic.expected = Some(expected_name(expected).into());
         diagnostic.found = self.current().map(token_name).map(str::to_owned);
         let index = self.diagnostics.len();
-        self.diagnostics.push(ParseDiagnostic::new(diagnostic));
+        self.diagnostics.push(ParseDiagnostic::new(
+            diagnostic,
+            Some(expected),
+            self.current().map(retained_token),
+            related,
+        ));
         Some(index)
     }
 
@@ -539,7 +689,12 @@ impl Parser<'_> {
         };
         let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(at, primary_message(reason)));
         diagnostic.found = self.current().map(token_name).map(str::to_owned);
-        self.diagnostics.push(ParseDiagnostic::new(diagnostic));
+        self.diagnostics.push(ParseDiagnostic::new(
+            diagnostic,
+            None,
+            self.current().map(retained_token),
+            None,
+        ));
     }
 
     fn current_span(&self) -> Option<Span> {
@@ -725,62 +880,73 @@ fn same_variant(left: &TokenKind, right: &TokenKind) -> bool {
     std::mem::discriminant(left) == std::mem::discriminant(right)
 }
 
-fn token_name(kind: &TokenKind) -> &'static str {
+fn retained_token(kind: &TokenKind) -> FoundToken {
     match kind {
-        TokenKind::Identifier(_) => "identifier",
-        TokenKind::UpperIdentifier(_) => "uppercase identifier",
-        TokenKind::Wildcard => "_",
-        TokenKind::Integer(_) => "integer",
-        TokenKind::True => "true",
-        TokenKind::False => "false",
-        TokenKind::Fn => "fn",
-        TokenKind::Let => "let",
-        TokenKind::Rec => "rec",
-        TokenKind::And => "and",
-        TokenKind::Type => "type",
-        TokenKind::Newtype => "newtype",
-        TokenKind::Effect => "effect",
-        TokenKind::Match => "match",
-        TokenKind::Perform => "perform",
-        TokenKind::Handle => "handle",
-        TokenKind::With => "with",
-        TokenKind::Resume => "resume",
-        TokenKind::Resource => "resource",
-        TokenKind::Hook => "hook",
-        TokenKind::Register => "register",
-        TokenKind::Cleanup => "cleanup",
-        TokenKind::Discard => "discard",
-        TokenKind::Import => "import",
-        TokenKind::As => "as",
-        TokenKind::Pub => "pub",
-        TokenKind::Opaque => "opaque",
-        TokenKind::Interface => "interface",
-        TokenKind::Impl => "impl",
-        TokenKind::Where => "where",
-        TokenKind::IntType => "Int",
-        TokenKind::BoolType => "Bool",
-        TokenKind::UnitType => "Unit",
-        TokenKind::LeftParen => "(",
-        TokenKind::RightParen => ")",
-        TokenKind::LeftBrace => "{",
-        TokenKind::RightBrace => "}",
-        TokenKind::Colon => ":",
-        TokenKind::Equal => "=",
-        TokenKind::EqualEqual => "==",
-        TokenKind::Plus => "+",
-        TokenKind::Star => "*",
-        TokenKind::Arrow => "->",
-        TokenKind::FatArrow => "=>",
-        TokenKind::Pipe => "|",
-        TokenKind::Bang => "!",
-        TokenKind::Comma => ",",
-        TokenKind::Less => "<",
-        TokenKind::Greater => ">",
-        TokenKind::Semicolon => ";",
-        TokenKind::At => "@",
-        TokenKind::Dot => ".",
-        TokenKind::LineEnd => "line end",
-        TokenKind::EndOfFile => "end of input",
+        TokenKind::Identifier(_) => FoundToken::Identifier,
+        TokenKind::UpperIdentifier(_) => FoundToken::UpperIdentifier,
+        TokenKind::Wildcard => FoundToken::Spelling("_"),
+        TokenKind::Integer(_) => FoundToken::Integer,
+        TokenKind::True => FoundToken::Spelling("true"),
+        TokenKind::False => FoundToken::Spelling("false"),
+        TokenKind::Fn => FoundToken::Spelling("fn"),
+        TokenKind::Let => FoundToken::Spelling("let"),
+        TokenKind::Rec => FoundToken::Spelling("rec"),
+        TokenKind::And => FoundToken::Spelling("and"),
+        TokenKind::Type => FoundToken::Spelling("type"),
+        TokenKind::Newtype => FoundToken::Spelling("newtype"),
+        TokenKind::Effect => FoundToken::Spelling("effect"),
+        TokenKind::Match => FoundToken::Spelling("match"),
+        TokenKind::Perform => FoundToken::Spelling("perform"),
+        TokenKind::Handle => FoundToken::Spelling("handle"),
+        TokenKind::With => FoundToken::Spelling("with"),
+        TokenKind::Resume => FoundToken::Spelling("resume"),
+        TokenKind::Resource => FoundToken::Spelling("resource"),
+        TokenKind::Hook => FoundToken::Spelling("hook"),
+        TokenKind::Register => FoundToken::Spelling("register"),
+        TokenKind::Cleanup => FoundToken::Spelling("cleanup"),
+        TokenKind::Discard => FoundToken::Spelling("discard"),
+        TokenKind::Import => FoundToken::Spelling("import"),
+        TokenKind::As => FoundToken::Spelling("as"),
+        TokenKind::Pub => FoundToken::Spelling("pub"),
+        TokenKind::Opaque => FoundToken::Spelling("opaque"),
+        TokenKind::Interface => FoundToken::Spelling("interface"),
+        TokenKind::Impl => FoundToken::Spelling("impl"),
+        TokenKind::Where => FoundToken::Spelling("where"),
+        TokenKind::IntType => FoundToken::Spelling("Int"),
+        TokenKind::BoolType => FoundToken::Spelling("Bool"),
+        TokenKind::UnitType => FoundToken::Spelling("Unit"),
+        TokenKind::LeftParen => FoundToken::Spelling("("),
+        TokenKind::RightParen => FoundToken::Spelling(")"),
+        TokenKind::LeftBrace => FoundToken::Spelling("{"),
+        TokenKind::RightBrace => FoundToken::Spelling("}"),
+        TokenKind::Colon => FoundToken::Spelling(":"),
+        TokenKind::Equal => FoundToken::Spelling("="),
+        TokenKind::EqualEqual => FoundToken::Spelling("=="),
+        TokenKind::Plus => FoundToken::Spelling("+"),
+        TokenKind::Star => FoundToken::Spelling("*"),
+        TokenKind::Arrow => FoundToken::Spelling("->"),
+        TokenKind::FatArrow => FoundToken::Spelling("=>"),
+        TokenKind::Pipe => FoundToken::Spelling("|"),
+        TokenKind::Bang => FoundToken::Spelling("!"),
+        TokenKind::Comma => FoundToken::Spelling(","),
+        TokenKind::Less => FoundToken::Spelling("<"),
+        TokenKind::Greater => FoundToken::Spelling(">"),
+        TokenKind::Semicolon => FoundToken::Spelling(";"),
+        TokenKind::At => FoundToken::Spelling("@"),
+        TokenKind::Dot => FoundToken::Spelling("."),
+        TokenKind::LineEnd => FoundToken::LineEnd,
+        TokenKind::EndOfFile => FoundToken::EndOfFile,
+    }
+}
+
+fn token_name(kind: &TokenKind) -> &'static str {
+    match retained_token(kind) {
+        FoundToken::Identifier => "identifier",
+        FoundToken::UpperIdentifier => "uppercase identifier",
+        FoundToken::Integer => "integer",
+        FoundToken::Spelling(spelling) => spelling,
+        FoundToken::LineEnd => "line end",
+        FoundToken::EndOfFile => "end of input",
     }
 }
 

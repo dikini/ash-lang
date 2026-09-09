@@ -725,19 +725,20 @@ fn run(name: &str, text: &str) -> Result<ash::driver::Observation, PipelineFailu
         roots: ModuleRoots::empty(),
     }) {
         Ok(observation) => Ok(observation),
-        Err(FileFailure::Pipeline(failure)) => Err(failure),
-        Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
-            Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
-                lexical: failure.lexical,
-                parser: failure.parser,
-                resource: failure.resource,
-            })))
-        }
-        Err(FileFailure::Graph(LoadGraphError::Projection { error, .. })) => {
-            Err(PipelineFailure::Projection(error))
-        }
-        Err(FileFailure::Graph(LoadGraphError::SourceModel { error, .. }))
-        | Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
+        Err(FileFailure::Pipeline(context)) => Err(context.into_failure()),
+        Err(FileFailure::Graph(context)) => match context.into_failure() {
+            LoadGraphError::Syntax(failure) => {
+                Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+                    lexical: failure.lexical,
+                    parser: failure.parser,
+                    resource: failure.resource,
+                })))
+            }
+            LoadGraphError::Projection { error, .. } => Err(PipelineFailure::Projection(error)),
+            LoadGraphError::SourceModel { error, .. } => Err(PipelineFailure::SourceModel(error)),
+            failure => panic!("the specification module reached an input failure: {failure}"),
+        },
+        Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
         Err(failure) => panic!("the specification module reached an input failure: {failure}"),
     }
 }
@@ -1046,7 +1047,8 @@ fn overview_name_only_import_has_structured_unsatisfied_constraint() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("a name-only import should not make implementation evidence available");
-    let FileFailure::Pipeline(PipelineFailure::Typing(TypeError::Interface(diagnostic))) = failure
+    let PipelineFailure::Typing(TypeError::Interface(diagnostic)) =
+        failure.pipeline_failure().expect("pipeline failure")
     else {
         panic!("the name-only method use should retain an interface diagnostic")
     };
@@ -2113,7 +2115,7 @@ fn tool_source_rejection_uses_status_one_and_stderr() {
         .expect("the documented executable should start");
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("type.operator-operand\n"));
+    assert!(String::from_utf8_lossy(&output.stderr).ends_with("reason: type.operator-operand\n"));
     assert_documented("docs/tools/ash.md", TYPE_REJECTION_MODULE);
 }
 

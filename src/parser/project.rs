@@ -37,6 +37,44 @@ pub enum ProjectionError {
     MalformedTree(InternalReason),
 }
 
+impl ProjectionError {
+    pub(crate) const fn reason_code(self) -> &'static str {
+        match self {
+            Self::ResourceLimit(resource) => resource.reason_code(),
+            Self::RecoveryNodesPresent => "internal.projection.recovery-nodes",
+            Self::MalformedTree(_) => "internal.projection.malformed-tree",
+        }
+    }
+
+    pub(crate) fn message(self, path: &str) -> crate::message::Message<'_> {
+        use crate::message::Message;
+        match self {
+            Self::ResourceLimit(ResourceFailure::StructuralDepth { limit }) => {
+                Message::syntax_depth(path, limit)
+            }
+            Self::ResourceLimit(ResourceFailure::SyntaxWork { limit }) => {
+                Message::syntax_work(path, limit)
+            }
+            Self::RecoveryNodesPresent => Message::projection_recovery(path),
+            Self::MalformedTree(cause) => Message::projection_malformed(path, cause),
+        }
+    }
+
+    pub(crate) fn message_without_path(self) -> crate::message::Message<'static> {
+        use crate::message::Message;
+        match self {
+            Self::ResourceLimit(ResourceFailure::StructuralDepth { limit }) => {
+                Message::syntax_depth_unlocated(limit)
+            }
+            Self::ResourceLimit(ResourceFailure::SyntaxWork { limit }) => {
+                Message::syntax_work_unlocated(limit)
+            }
+            Self::RecoveryNodesPresent => Message::projection_recovery_unlocated(),
+            Self::MalformedTree(cause) => Message::projection_malformed_unlocated(cause),
+        }
+    }
+}
+
 /// Projects a complete, recovery-free module tree to surface syntax.
 ///
 /// # Errors
