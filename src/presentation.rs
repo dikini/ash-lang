@@ -14,7 +14,7 @@ use crate::{
     source::{SourceError, SourceFile, Span},
 };
 
-/// A missing fact or unsupported adapter in the staged compile-time migration.
+/// A missing fact, missing source or unsupported compile-time diagnostic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresentationError {
     /// This diagnostic family has not yet been migrated.
@@ -137,8 +137,7 @@ pub fn compile_type_mismatch_diagnostic<'a>(
 /// Exposes retained type-error facts without inspecting diagnostic prose.
 ///
 /// # Errors
-/// Returns an unsupported family or a missing causal fact/source. This staged
-/// adapter is not yet selected by the executable's default renderer.
+/// Returns an unsupported family or a missing causal fact/source.
 pub fn compile_type_diagnostic<'a>(
     diagnostic: &'a crate::elaborate::TypeDiagnostic,
     sources: &[&'a SourceFile],
@@ -809,7 +808,7 @@ pub fn compile_kind_diagnostic<'a>(
 /// Exposes phase-owned resolution facts without interpreting diagnostic prose.
 ///
 /// # Errors
-/// Returns an unsupported staged family, missing facts or source context.
+/// Returns an unsupported family, missing facts or source context.
 pub fn compile_resolve_diagnostic<'a>(
     error: &'a crate::resolve::ResolveError,
     sources: &[&'a SourceFile],
@@ -1099,7 +1098,7 @@ pub fn compile_parse_diagnostic<'a>(
 /// deliberately excluded and must use the separate runtime reporting interface.
 ///
 /// # Errors
-/// Returns an unsupported staged cause or missing source context. Legacy bare
+/// Returns an unsupported cause or missing source context. Legacy bare
 /// syntax failures do not identify their owning
 /// source; graph-loading failures retain that context and use the graph adapter.
 pub fn compile_file_diagnostics(
@@ -1300,7 +1299,7 @@ pub fn compile_output_write_diagnostic() -> CompileDiagnostic<'static> {
     }
 }
 
-/// Writes retained legacy details when a staged adapter cannot construct a view.
+/// Writes retained legacy details when required presentation context is missing.
 ///
 /// This explicitly marked fallback is not presentation coverage. It emits JSON
 /// in every format and retains the original reason and existing diagnostic
@@ -1361,7 +1360,7 @@ pub fn write_unadapted_file_diagnostic(
 /// Exposes input and graph failure facts. Syntax collections keep their causal order.
 ///
 /// # Errors
-/// Returns an unsupported staged family or missing admitted source context.
+/// Returns an unsupported family or missing admitted source context.
 pub fn compile_graph_diagnostics(
     context: &GraphDiagnostic,
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {

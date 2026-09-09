@@ -987,6 +987,15 @@ localization language. Color is not required for completion.
   empty output channels matched; no presentation fallback occurred. Ash-doc
   remained clean and its historical pins and verifier were not changed. This is
   an upstream compatibility canary, not adoption or an edition migration.
+- Human-readable diagnostics are now the executable default. The legacy
+  no-option branch and staged `requested` flag were removed; explicit formats
+  use the same reporting path. CLI expectations now check the current wording
+  and unchanged reasons, labels, exit statuses, stdout and writer-failure rules.
+  A regression compares default and explicit human output. Wording tests pin
+  their locale without mutating process-global environment. The 53 executable,
+  CLI, option, reporting and runtime-reporting tests passed, as did warnings-denied
+  Clippy. The tool guide describes the default and exceptional fallback.
+  Full verification, implementation review and closeout remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

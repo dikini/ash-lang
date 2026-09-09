@@ -8,12 +8,9 @@ use std::{
 
 use ash::{
     driver::{FileFailure, Observation, PipelineFailure, RunConfiguration, run_path},
-    eval::RuntimeFailure,
     module::{LoadGraphError, ModuleRoots},
     render,
 };
-
-const USAGE: &[u8] = b"usage: ash [--root name=path]... <entry-file>\n";
 
 fn main() -> ExitCode {
     let mut stdout = io::stdout().lock();
@@ -45,51 +42,7 @@ where
             env::var_os("LANG"),
         ],
     );
-    // Keep the existing no-option behavior until the coordinated default-output
-    // checkpoint. Explicit options exercise the retained reporting interfaces.
-    if selected.requested {
-        return execute_with_diagnostics(selected, stdout, stderr, runner);
-    }
-    let configuration = match configuration(selected.program_arguments) {
-        Ok(configuration) => configuration,
-        Err(ConfigurationFailure::Usage) => {
-            let _ = write_output(stderr, USAGE);
-            return 2;
-        }
-        Err(ConfigurationFailure::Roots(failure)) => {
-            let failure = FileFailure::Graph(LoadGraphError::Module(failure).into());
-            let _ = write_output(stderr, render::file_failure(&failure).as_bytes());
-            return 2;
-        }
-    };
-
-    match runner(configuration) {
-        Ok(observation) => {
-            if write_output(stdout, render::observation(&observation).as_bytes()).is_ok() {
-                0
-            } else {
-                let _ = write_output(
-                    stderr,
-                    b"internal.output-write\nfailed to write standard output\n",
-                );
-                2
-            }
-        }
-        Err(failure) => {
-            if let Some(PipelineFailure::Runtime(RuntimeFailure::Report(report))) =
-                failure.pipeline_failure()
-            {
-                let _ = render::write_runtime_report(stderr, report);
-                return 2;
-            }
-            let status = if failure.is_source_rejection() { 1 } else { 2 };
-            if write_output(stderr, render::file_failure(&failure).as_bytes()).is_ok() {
-                status
-            } else {
-                2
-            }
-        }
-    }
+    execute_with_diagnostics(selected, stdout, stderr, runner)
 }
 
 fn execute_with_diagnostics<O: Write, E: Write, R>(
@@ -494,7 +447,11 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = execute(
-            [source.0.clone().into_os_string()],
+            [
+                OsString::from("--locale"),
+                OsString::from("en"),
+                source.0.clone().into_os_string(),
+            ],
             &mut stdout,
             &mut stderr,
         );
@@ -502,7 +459,7 @@ mod tests {
         assert_eq!(status, 2);
         assert_eq!(
             stderr,
-            b"internal.output-write\nfailed to write standard output\n"
+            b"Ash could not write the program result to standard output.\nreason: internal.output-write\n"
         );
     }
 
@@ -535,7 +492,11 @@ mod tests {
 
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, USAGE);
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("invocation.usage")
+        );
     }
 
     #[cfg(unix)]
@@ -558,7 +519,11 @@ mod tests {
         let mut stderr = AlwaysFails;
 
         let status = execute(
-            [source.0.clone().into_os_string()],
+            [
+                OsString::from("--locale"),
+                OsString::from("en"),
+                source.0.clone().into_os_string(),
+            ],
             &mut stdout,
             &mut stderr,
         );
@@ -574,7 +539,11 @@ mod tests {
         let mut stderr = AlwaysFails;
 
         let status = execute(
-            [source.0.clone().into_os_string()],
+            [
+                OsString::from("--locale"),
+                OsString::from("en"),
+                source.0.clone().into_os_string(),
+            ],
             &mut stdout,
             &mut stderr,
         );
@@ -589,7 +558,11 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = execute(
-            [source.0.clone().into_os_string()],
+            [
+                OsString::from("--locale"),
+                OsString::from("en"),
+                source.0.clone().into_os_string(),
+            ],
             &mut stdout,
             &mut stderr,
         );
@@ -598,7 +571,7 @@ mod tests {
         assert_eq!(stdout.bytes, b"7 : Int\n");
         assert_eq!(
             stderr,
-            b"internal.output-write\nfailed to write standard output\n"
+            b"Ash could not write the program result to standard output.\nreason: internal.output-write\n"
         );
     }
 
@@ -609,14 +582,22 @@ mod tests {
         let mut stderr = FlushFails::default();
 
         let status = execute(
-            [source.0.clone().into_os_string()],
+            [
+                OsString::from("--locale"),
+                OsString::from("en"),
+                source.0.clone().into_os_string(),
+            ],
             &mut stdout,
             &mut stderr,
         );
 
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert!(stderr.bytes.starts_with(b"type.operator-operand\n"));
+        assert!(
+            String::from_utf8(stderr.bytes)
+                .unwrap()
+                .contains("reason: type.operator-operand\n")
+        );
     }
 
     #[test]
@@ -625,7 +606,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = execute_with_runner(
-            [OsString::from("injected.ash")],
+            ["--locale", "en", "injected.ash"].map(OsString::from),
             &mut stdout,
             &mut stderr,
             |_| Err(injected_validation_failure()),
@@ -633,7 +614,7 @@ mod tests {
 
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, b"core.validation.node-type\nnode: 0\n");
+        assert_eq!(stderr, b"The compiler produced inconsistent type information for a Core node or its checked evidence. Core node: 0.\nreason: core.validation.node-type\n");
     }
 
     #[test]
@@ -642,7 +623,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         let status = execute_with_runner(
-            [OsString::from("injected.ash")],
+            ["--locale", "en", "injected.ash"].map(OsString::from),
             &mut stdout,
             &mut stderr,
             |_| {
@@ -656,7 +637,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             stderr,
-            b"runtime.missing-binding\nruntime lexical binding is absent\n"
+            b"The runtime could not find a variable's lexical binding. [runtime.missing-binding]\nCleanup status: Host cleanup completion has not been established.\n"
         );
     }
 
@@ -698,7 +679,7 @@ mod tests {
             let mut output = [0; 512];
             let mut remaining = output.as_mut_slice();
             let status = execute_with_runner(
-                [OsString::from("injected.ash")],
+                ["--locale", "en", "injected.ash"].map(OsString::from),
                 &mut stdout.as_mut_slice(),
                 &mut remaining,
                 |_| {
@@ -710,12 +691,12 @@ mod tests {
             assert_eq!(status, 2);
             let used = 512 - remaining.len();
             let output = std::str::from_utf8(&output[..used]).unwrap();
-            assert!(output.starts_with(legacy.reason_code()));
-            assert!(output.contains(&format!("cause: {}\n", cause.reason_code())));
-            assert!(output.contains(&format!("phase: {}\n", phase.label())));
-            assert!(output.ends_with("cleanup: complete\n"));
+            assert!(output.contains(&format!("[{}]", legacy.reason_code())));
+            assert!(output.contains(&format!("[{}]", cause.reason_code())));
+            assert!(output.contains(phase.label()));
+            assert!(output.ends_with("Cleanup status: Host cleanup completed.\n"));
             assert_eq!(
-                output.contains("underlying cause: undetermined"),
+                output.contains("underlying cause is undetermined"),
                 cause == ResourceFailureCause::StorageReservationFailed
             );
         }
@@ -746,14 +727,14 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = execute_with_runner(
-            [OsString::from("injected.ash")],
+            ["--locale", "en", "injected.ash"].map(OsString::from),
             &mut stdout,
             &mut stderr,
             |_| Err(FileFailure::from(PipelineFailure::Runtime(failure))),
         );
         assert_eq!(status, 2);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, b"runtime.work-budget-exhausted\nphase: access\nresource: runtime work units\nrequested: 3\navailable: 2\nteardown: runtime.allocator-refused\nphase: teardown\nresource: control frames\nrequested: 8\ncleanup: incomplete\n");
+        assert_eq!(stderr, b"The runtime work budget cannot admit the requested work. [runtime.work-budget-exhausted]\nPhase: effect access\nResource: runtime work units\nRequested additional units: 3\nAvailable additional units: 2\nFirst teardown failure: The host allocator refused a storage reservation. [runtime.allocator-refused]\nPhase: host teardown\nResource: control frames\nRequested additional units: 8\nCleanup status: Host cleanup stopped before all retained state was released.\n");
     }
 
     #[test]
@@ -781,7 +762,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Refuses { calls: 0 };
         let status = execute_with_runner(
-            [OsString::from("injected.ash")],
+            ["--locale", "en", "injected.ash"].map(OsString::from),
             &mut stdout,
             &mut stderr,
             |_| Err(FileFailure::from(PipelineFailure::Runtime(failure))),

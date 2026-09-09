@@ -12,7 +12,8 @@ a program from standard input.
 
 ## Diagnostic formats and locales
 
-Explicit diagnostic options select the new reporting path:
+Diagnostics use human-readable explanations by default. Explicit options select
+the format and locale:
 
 ```text
 ash --message-format human --locale bg entry.ash
@@ -32,13 +33,13 @@ An explicit locale overrides the first nonempty `LC_ALL`, `LC_MESSAGES` or
 fallback are accepted; unsupported, malformed, `C`, `POSIX` and absent locales
 select English. Supplying only `--locale` selects human output.
 
-This is a staged integration: without either diagnostic option, the existing
-reason-first output remains unchanged. Some compiler-internal adapters remain
-incomplete. They emit JSON with the original reason and a marked
-`developer_details.presentation_error`, retaining existing diagnostic details;
-this fallback does not imply complete human-message coverage. An unavailable
-catalogue also falls back to JSON, preserving the available structured facts.
-Neither path recursively reports a diagnostic-write failure.
+If a failure lacks facts or source context required for presentation, an
+exceptional JSON fallback retains its original reason and diagnostic details
+under `developer_details`, with a marked `presentation_error`. An unavailable
+catalogue also falls back to JSON, preserving available structured facts.
+Neither path recursively reports a diagnostic-write failure. Automation should
+select `--message-format json` and inspect reasons, facts and causal labels,
+not human wording.
 
 The entry file's containing directory is the implicit root for its relative
 imports. A relative import maps dotted segments to child directories and adds
@@ -580,13 +581,13 @@ Next(1, <cycle>) : Stream
 
 ## Failures
 
-The reason-first examples below describe invocation without diagnostic options.
-Explicit options use the formats described above with the same classifications.
+The reason codes below identify failures independently of their presentation.
+All formats use the same failure classifications.
 
 A source rejection writes structured diagnostics to standard error, writes no
-success value to standard output, and exits with status `1`. The first line is
-a stable reason code followed by a plain-text explanation and causal source
-labels.
+success value to standard output, and exits with status `1`. Human output starts
+with an explanation and includes causal source labels and the stable reason
+code. JSON exposes these fields separately.
 
 Source-caused loading failures include `module.unknown-root`,
 `module.not-found`, `module.path-escape`, `module.unknown-builtin`, and
@@ -706,8 +707,9 @@ with requested and available amounts when known. Causes distinguish
 last means the storage API did not distinguish allocator refusal from a
 representation bound; it does not identify a RAM-quota violation.
 If host teardown also fails, the report retains the original failure, the first
-teardown failure and the observed cleanup status. This path avoids rich message
-allocation and does not retry a failed write. External termination, including termination
+teardown failure and the observed cleanup status. Localized runtime messages are
+prepared before execution; reporting does not allocate or invoke the catalogue,
+and does not retry a failed write. External termination, including termination
 inside an infallible host allocation API, cannot guarantee an in-process report.
 
 An output write or flush failure also exits with status `2` and attempts to

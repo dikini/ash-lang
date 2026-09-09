@@ -135,6 +135,7 @@ impl Drop for TempFile {
 
 fn ash(arguments: &[&Path]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_ash"))
+        .env("LC_ALL", "C")
         .args(arguments)
         .output()
         .expect("the Ash executable should start")
@@ -187,13 +188,29 @@ fn handled_effect_prints_the_resumed_value_and_pure_entry_type() {
 }
 
 #[test]
+fn default_diagnostics_match_explicit_human_output() {
+    let source = TempFile::write(b"main : Unit -> Int\nmain () = true + 1\n");
+    let default = ash(&[source.path()]);
+    let explicit = ash(&[
+        std::path::Path::new("--message-format"),
+        std::path::Path::new("human"),
+        source.path(),
+    ]);
+    assert_eq!(default.status.code(), Some(1));
+    assert_eq!(default.stderr, explicit.stderr);
+    let text = String::from_utf8(default.stderr).unwrap();
+    assert!(!text.starts_with("type.operator-operand"));
+    assert!(text.contains("reason: type.operator-operand"));
+}
+
+#[test]
 fn invocation_requires_exactly_one_source_path() {
     let none = ash(&[]);
     assert_eq!(none.status.code(), Some(2));
     assert!(none.stdout.is_empty());
     assert_eq!(
         none.stderr,
-        b"usage: ash [--root name=path]... <entry-file>\n"
+        ash(&[Path::new("--message-format"), Path::new("human")]).stderr
     );
 
     let first = TempFile::write(b"main : Unit -> Int\nmain () = 1\n");
@@ -201,10 +218,7 @@ fn invocation_requires_exactly_one_source_path() {
     let many = ash(&[first.path(), second.path()]);
     assert_eq!(many.status.code(), Some(2));
     assert!(many.stdout.is_empty());
-    assert_eq!(
-        many.stderr,
-        b"usage: ash [--root name=path]... <entry-file>\n"
-    );
+    assert_eq!(many.stderr, none.stderr);
 }
 
 #[test]
@@ -214,13 +228,21 @@ fn missing_and_invalid_utf8_inputs_are_invocation_failures() {
     let missing_output = ash(&[&missing]);
     assert_eq!(missing_output.status.code(), Some(2));
     assert!(missing_output.stdout.is_empty());
-    assert!(missing_output.stderr.starts_with(b"input.read\n"));
+    assert!(
+        String::from_utf8(missing_output.stderr)
+            .unwrap()
+            .contains("reason: input.read\n")
+    );
 
     let invalid_utf8 = TempFile::write(&[0xff, 0xfe]);
     let invalid_output = ash(&[invalid_utf8.path()]);
     assert_eq!(invalid_output.status.code(), Some(2));
     assert!(invalid_output.stdout.is_empty());
-    assert!(invalid_output.stderr.starts_with(b"input.invalid-utf8\n"));
+    assert!(
+        String::from_utf8(invalid_output.stderr)
+            .unwrap()
+            .contains("reason: input.invalid-utf8\n")
+    );
 }
 
 #[test]
@@ -230,7 +252,11 @@ fn excluded_bare_carriage_return_is_a_source_rejection() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(output.stderr.starts_with(b"lex.bare-carriage-return\n"));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("reason: lex.bare-carriage-return\n")
+    );
 }
 
 #[test]
@@ -242,8 +268,8 @@ fn rejected_ash_source_uses_status_one_without_success_output() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
     assert!(stderr.contains("type.operator-operand"));
-    assert!(stderr.contains("expected Int"));
-    assert!(stderr.contains("found Bool"));
+    assert!(stderr.contains("requires an `Int`"));
+    assert!(stderr.contains("has type `Bool`"));
 }
 
 #[test]
@@ -274,7 +300,7 @@ fn recursive_source_rejections_use_stable_cli_categories() {
         assert!(output.stdout.is_empty(), "category: {category}");
         let stderr = String::from_utf8(output.stderr).expect("diagnostics should be UTF-8");
         assert!(
-            stderr.starts_with(&format!("{category}\n")),
+            stderr.contains(&format!("reason: {category}\n")),
             "unexpected stderr for {category}: {stderr:?}"
         );
     }
@@ -302,10 +328,10 @@ fn parse_failure_reports_the_primary_and_recovery_labels() {
         include_bytes!("fixtures/first-stratum/parse/p003-independent-recovery.ash"),
         "parse.expected-operand",
         &[
-            "the operator requires a right operand",
-            "parsing resumes at this block closing brace",
+            "The operator needs a right operand.",
+            "Parsing resumes at this boundary.",
             "parse.unclosed-group",
-            "the opening parenthesis is not closed",
+            "This opening parenthesis has no matching `)`.",
         ],
     );
 }
@@ -316,9 +342,9 @@ fn resolution_failure_reports_both_duplicate_definitions() {
         include_bytes!("fixtures/first-stratum/resolve/r002-duplicate-global.ash"),
         "resolve.duplicate-global",
         &[
-            "this global name is already defined",
-            "the first global name is here",
-            "the first complete definition is here",
+            "This name conflicts with an earlier declaration.",
+            "First declaration of this name.",
+            "Complete earlier definition.",
         ],
     );
 }
@@ -329,10 +355,9 @@ fn type_failure_reports_the_argument_and_declared_domain() {
         include_bytes!("fixtures/first-stratum/type/t004-argument.ash"),
         "type.argument",
         &[
-            "this argument does not match the function domain",
-            "the function domain is required here",
-            "expected Int",
-            "found Bool",
+            "This has type `Bool`.",
+            "This function requires an argument of type `Int`.",
+            "This is the containing function application.",
         ],
     );
 }
@@ -343,10 +368,9 @@ fn kind_failure_reports_the_causal_occurrence_and_declared_constructor() {
         b"type Option<A> =\nNone\n| Some(A)\n\nbad : Option -> Int\nbad _ = 0\n",
         "kind.expected-type",
         &[
-            "this function domain must have kind Type",
-            "the found kind is fixed by this declaration",
-            "expected Type",
-            "found Type -> Type",
+            "Found kind `Type -> Type` here.",
+            "This declaration fixes the kind as `Type -> Type`.",
+            "requires a complete value type (kind `Type`)",
         ],
     );
 }
@@ -357,10 +381,8 @@ fn annotated_binding_failure_reports_the_initializer_and_annotation() {
         include_bytes!("fixtures/first-stratum/type/binding-initializer.ash"),
         "type.binding-initializer",
         &[
-            "this initializer has type Int",
-            "this binding annotation requires Bool",
-            "expected Bool",
-            "found Int",
+            "This initializer has type `Int`.",
+            "This annotation requires type `Bool`.",
         ],
     );
 }
