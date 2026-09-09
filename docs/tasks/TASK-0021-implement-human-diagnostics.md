@@ -434,6 +434,14 @@ localization language. Color is not required for completion.
   34 of 35 source reasons, with 183 templates per locale. All 108 focused
   tests and warnings-denied Clippy passed. Language acceptance, failure order
   and runtime reporting remain unchanged.
+- Polymorphic-recursion presentation borrows the retained expected and found
+  types. Both producers retain typed function/application label roles without
+  changing their spans or order. A source fixture covers rigid method recursion;
+  an adapter test covers no related label, either role alone and both roles,
+  including rejection of missing required labels. Type presentation now covers
+  all 35 source reasons, with 186 templates per locale. All 83 focused tests
+  and warnings-denied Clippy passed. Internal failures,
+  interface/constraint presentation and runtime reporting remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

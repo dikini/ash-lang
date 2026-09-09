@@ -1488,6 +1488,38 @@ fn missing_handled_effect_explains_exact_instance_requirement() {
     }
 }
 
+#[test]
+fn polymorphic_recursion_presentation_retains_types_and_causes() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let text = "interface Repeat<I> {\nrepeat<A> : (I, A) -> A\n}\nimpl Repeat<Int> {\nrepeat (owner, value) = repeat((owner, (value, value)))\n}\n";
+    let fixture = ModuleFixture::load("recursive-message.ash", text);
+    let TypeError::Source(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected source error")
+    };
+    assert_eq!(error.reason, TypeReason::PolymorphicRecursion);
+    for label in &mut error.related {
+        *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+    }
+    let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("ignored legacy prose"));
+        if locale == Locale::English {
+            assert!(output.contains("This recursive call requires type A, but uses (A, A)."));
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["value"], "A");
+    assert_eq!(json["facts"][1]["value"], "(A, A)");
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

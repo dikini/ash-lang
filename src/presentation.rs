@@ -222,7 +222,7 @@ pub fn compile_type_diagnostic<'a>(
         .reason
         .message(expected, found)
         .ok_or(PresentationError::Unsupported)?;
-    if diagnostic.related.is_empty() {
+    if diagnostic.related.len() < diagnostic.comparison_minimum_related() {
         return Err(PresentationError::MissingFact);
     }
     let (primary_message, primary_relationship) = diagnostic
@@ -261,8 +261,7 @@ pub fn compile_type_diagnostic<'a>(
     let mut related = Vec::with_capacity(diagnostic.related.len());
     for (index, original) in diagnostic.related.iter().enumerate() {
         let (message, relationship, expected) = diagnostic
-            .reason
-            .related_message(index, expected)
+            .comparison_related_message(index, expected)
             .ok_or(PresentationError::Unsupported)?;
         related.push(label(
             original.span(),

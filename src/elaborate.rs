@@ -467,6 +467,7 @@ impl TypeReason {
             Self::DefinitionResult => Message::type_definition_result(expected, found),
             Self::OperatorOperand => Message::type_operator_operand(found),
             Self::Argument => Message::type_argument(expected, found),
+            Self::PolymorphicRecursion => Message::type_polymorphic_recursion(expected, found),
             Self::NotApplicable => Message::type_not_applicable(found),
             Self::EquationInterfaceNotFunction => Message::type_equation_signature(found),
             _ => return None,
@@ -485,6 +486,7 @@ impl TypeReason {
             Self::DefinitionResult => "definition_result",
             Self::OperatorOperand => "operator_operand",
             Self::Argument => "argument",
+            Self::PolymorphicRecursion => "recursive_argument",
             Self::NotApplicable => "application_function",
             Self::EquationInterfaceNotFunction => "equation_signature",
             _ => return None,
@@ -706,6 +708,13 @@ enum TypeDiagnosticContext {
     CompletionOutside(CompletionOperation),
     EffectRow(EffectRowCause),
     DiscardUnsafe(Option<crate::core::capture::CompletionOwner>),
+    PolymorphicRecursion([Option<RecursionLabel>; 2]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecursionLabel {
+    Function,
+    Application,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -765,6 +774,35 @@ impl std::ops::DerefMut for TypeDiagnostic {
 }
 
 impl TypeDiagnostic {
+    pub(crate) fn comparison_minimum_related(&self) -> usize {
+        match self.context {
+            TypeDiagnosticContext::PolymorphicRecursion(labels) => labels.iter().flatten().count(),
+            _ => 1,
+        }
+    }
+
+    pub(crate) fn comparison_related_message<'a>(
+        &self,
+        index: usize,
+        expected: &'a str,
+    ) -> Option<(crate::message::Message<'a>, &'static str, Option<&'a str>)> {
+        if self.reason != TypeReason::PolymorphicRecursion {
+            return self.reason.related_message(index, expected);
+        }
+        let TypeDiagnosticContext::PolymorphicRecursion(labels) = self.context else {
+            return None;
+        };
+        use crate::message::Message;
+        Some(match labels.get(index).copied().flatten()? {
+            RecursionLabel::Function => (
+                Message::recursive_function(),
+                "recursive_function",
+                Some(expected),
+            ),
+            RecursionLabel::Application => (Message::recursive_application(), "application", None),
+        })
+    }
+
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
         if self.reason == TypeReason::DiscardUnsafe {
             let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
@@ -4785,6 +4823,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     let found = IterativeTypeOwner::new(self.zonk(method_argument)?);
                     let site = check.site();
                     let primary = site.argument_span().unwrap_or(site.occurrence_span());
+                    let mut labels = [None; 2];
                     let mut diagnostic = Diagnostic::new(
                         TypeReason::PolymorphicRecursion,
                         SourceLabel::new(
@@ -4793,6 +4832,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         ),
                     );
                     if primary != site.occurrence_span() {
+                        labels[diagnostic.related.len()] = Some(RecursionLabel::Function);
                         diagnostic.related.push(SourceLabel::new(
                             site.occurrence_span(),
                             "this recursive function is checked monomorphically",
@@ -4802,6 +4842,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         && application_span != primary
                         && application_span != site.occurrence_span()
                     {
+                        labels[diagnostic.related.len()] = Some(RecursionLabel::Application);
                         diagnostic.related.push(SourceLabel::new(
                             application_span,
                             "this application supplies the recursive argument",
@@ -4809,7 +4850,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     diagnostic.expected = Some(self.registry.display_source_type(&expected));
                     diagnostic.found = Some(self.registry.display_source_type(&found));
-                    return Err(TypeError::source(diagnostic));
+                    return Err(TypeError::Source(Box::new(TypeDiagnostic {
+                        diagnostic,
+                        context: TypeDiagnosticContext::PolymorphicRecursion(labels),
+                    })));
                 }
             }
         }
@@ -20724,7 +20768,13 @@ fn check_mismatch(
                 ));
                 diagnostic.expected = Some(registry.display_source_type(&expected));
                 diagnostic.found = Some(registry.display_source_type(&found));
-                return TypeError::source(diagnostic);
+                return TypeError::Source(Box::new(TypeDiagnostic {
+                    diagnostic,
+                    context: TypeDiagnosticContext::PolymorphicRecursion([
+                        Some(RecursionLabel::Function),
+                        None,
+                    ]),
+                }));
             }
             let expected = registry.display_source_type(&expected);
             let found = registry.display_source_type(&found);
@@ -23875,6 +23925,55 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn recursive_presentation_preserves_optional_label_roles() {
+        use crate::presentation::{compile_type_diagnostic, write_json};
+        let source = SourceFile::new("recursive.ash", "call").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for labels in [
+            [None, None],
+            [Some(RecursionLabel::Function), None],
+            [Some(RecursionLabel::Application), None],
+            [
+                Some(RecursionLabel::Function),
+                Some(RecursionLabel::Application),
+            ],
+        ] {
+            let mut diagnostic = Diagnostic::new(
+                TypeReason::PolymorphicRecursion,
+                SourceLabel::new(span, "ignored"),
+            );
+            diagnostic.expected = Some("A".into());
+            diagnostic.found = Some("(A, A)".into());
+            for _ in labels.iter().flatten() {
+                diagnostic.related.push(SourceLabel::new(span, "ignored"));
+            }
+            let mut error = TypeDiagnostic {
+                diagnostic,
+                context: TypeDiagnosticContext::PolymorphicRecursion(labels),
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            let actual = json["labels"].as_array().unwrap();
+            assert_eq!(actual.len(), 1 + labels.iter().flatten().count());
+            for (label, expected) in actual.iter().skip(1).zip(labels.iter().flatten()) {
+                assert_eq!(
+                    label["relationship"],
+                    match expected {
+                        RecursionLabel::Function => "recursive_function",
+                        RecursionLabel::Application => "application",
+                    }
+                );
+            }
+            if !error.related.is_empty() {
+                error.related.pop();
+                assert!(compile_type_diagnostic(&error, &[&source]).is_err());
+            }
+        }
     }
 
     #[test]

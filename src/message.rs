@@ -150,6 +150,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A recursive call changes its required instantiation.
+    type_polymorphic_recursion => "type-polymorphic-recursion" { expected: &'a str = "A", found: &'a str = "(A, A)" },
+    /// The recursive function keeps one instantiation.
+    recursive_function => "recursive-function" {},
+    /// The application supplies a recursive argument.
+    recursive_application => "recursive-application" {},
     /// Ordinary handlers require an explicitly present exact effect instance.
     missing_handled_effect => "missing-handled-effect" {},
     /// Ash cannot prove that this continuation can be discarded without skipping required completion.
