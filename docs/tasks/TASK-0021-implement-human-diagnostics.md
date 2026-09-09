@@ -735,6 +735,13 @@ localization language. Color is not required for completion.
   JSON facts. Core coverage is 11/23 reasons and overall coverage is 167/197.
   All 1,271 library tests, 86 diagnostic/catalogue tests and warnings-denied
   Clippy passed.
+- Core effect-identity diagnostics retain nine causes for effect/operation
+  lookup, operation ownership and signature, argument counts and kinds, and
+  resource-provider API module/method-count agreement. Check order and charges
+  are unchanged. Tests cover argument/operation failures, forged effect metadata
+  and 18 optional-node localized/JSON layouts. Core coverage is 12/23 reasons
+  and overall coverage is 168/197. All 1,273 library tests, 86 diagnostic/catalogue
+  tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

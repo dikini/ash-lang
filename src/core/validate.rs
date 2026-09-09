@@ -311,6 +311,15 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    UnknownCoreEffect,
+    CoreOperationOwner,
+    CoreEffectArgumentCount,
+    CoreEffectInvalidArgument,
+    CoreEffectArgumentKind,
+    UnknownCoreOperation,
+    CoreOperationSignature,
+    UnsupportedResourceModule,
+    ResourceProviderMethodCount,
     ConversionUnknownOwner,
     ConversionOrdinaryOwner,
     ConversionMissingRepresentation,
@@ -380,6 +389,15 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::UnknownCoreEffect => "unknown-core-effect",
+            ValidationCause::CoreOperationOwner => "core-operation-owner",
+            ValidationCause::CoreEffectArgumentCount => "core-effect-argument-count",
+            ValidationCause::CoreEffectInvalidArgument => "core-effect-invalid-argument",
+            ValidationCause::CoreEffectArgumentKind => "core-effect-argument-kind",
+            ValidationCause::UnknownCoreOperation => "unknown-core-operation",
+            ValidationCause::CoreOperationSignature => "core-operation-signature",
+            ValidationCause::UnsupportedResourceModule => "unsupported-resource-module",
+            ValidationCause::ResourceProviderMethodCount => "resource-provider-method-count",
             ValidationCause::ConversionUnknownOwner => "conversion-unknown-owner",
             ValidationCause::ConversionOrdinaryOwner => "conversion-ordinary-owner",
             ValidationCause::ConversionMissingRepresentation => "conversion-missing-representation",
@@ -781,6 +799,60 @@ impl ValidationError {
                 (ValidationCause::ConversionRepresentationMismatch, Some(node)) => {
                     Message::core_validation_conversion_representation_mismatch_node(node)
                 }
+                (ValidationCause::UnknownCoreEffect, None) => {
+                    Message::core_validation_unknown_core_effect()
+                }
+                (ValidationCause::UnknownCoreEffect, Some(node)) => {
+                    Message::core_validation_unknown_core_effect_node(node)
+                }
+                (ValidationCause::CoreOperationOwner, None) => {
+                    Message::core_validation_core_operation_owner()
+                }
+                (ValidationCause::CoreOperationOwner, Some(node)) => {
+                    Message::core_validation_core_operation_owner_node(node)
+                }
+                (ValidationCause::CoreEffectArgumentCount, None) => {
+                    Message::core_validation_core_effect_argument_count()
+                }
+                (ValidationCause::CoreEffectArgumentCount, Some(node)) => {
+                    Message::core_validation_core_effect_argument_count_node(node)
+                }
+                (ValidationCause::CoreEffectInvalidArgument, None) => {
+                    Message::core_validation_core_effect_invalid_argument()
+                }
+                (ValidationCause::CoreEffectInvalidArgument, Some(node)) => {
+                    Message::core_validation_core_effect_invalid_argument_node(node)
+                }
+                (ValidationCause::CoreEffectArgumentKind, None) => {
+                    Message::core_validation_core_effect_argument_kind()
+                }
+                (ValidationCause::CoreEffectArgumentKind, Some(node)) => {
+                    Message::core_validation_core_effect_argument_kind_node(node)
+                }
+                (ValidationCause::UnknownCoreOperation, None) => {
+                    Message::core_validation_unknown_core_operation()
+                }
+                (ValidationCause::UnknownCoreOperation, Some(node)) => {
+                    Message::core_validation_unknown_core_operation_node(node)
+                }
+                (ValidationCause::CoreOperationSignature, None) => {
+                    Message::core_validation_core_operation_signature()
+                }
+                (ValidationCause::CoreOperationSignature, Some(node)) => {
+                    Message::core_validation_core_operation_signature_node(node)
+                }
+                (ValidationCause::UnsupportedResourceModule, None) => {
+                    Message::core_validation_unsupported_resource_module()
+                }
+                (ValidationCause::UnsupportedResourceModule, Some(node)) => {
+                    Message::core_validation_unsupported_resource_module_node(node)
+                }
+                (ValidationCause::ResourceProviderMethodCount, None) => {
+                    Message::core_validation_resource_provider_method_count()
+                }
+                (ValidationCause::ResourceProviderMethodCount, Some(node)) => {
+                    Message::core_validation_resource_provider_method_count_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -910,6 +982,15 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::UnknownCoreEffect
+                | ValidationCause::CoreOperationOwner
+                | ValidationCause::CoreEffectArgumentCount
+                | ValidationCause::CoreEffectInvalidArgument
+                | ValidationCause::CoreEffectArgumentKind
+                | ValidationCause::UnknownCoreOperation
+                | ValidationCause::CoreOperationSignature
+                | ValidationCause::UnsupportedResourceModule
+                | ValidationCause::ResourceProviderMethodCount => ValidationReason::EffectIdentity,
                 ValidationCause::ConversionUnknownOwner
                 | ValidationCause::ConversionOrdinaryOwner
                 | ValidationCause::ConversionMissingRepresentation
@@ -9089,12 +9170,18 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .program
             .registry
             .effect(instance.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
-        if operation.owner() != declaration.id
-            || declaration.parameters.len() != instance.arguments().len()
-        {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(node))
+            })?;
+        if operation.owner() != declaration.id {
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreOperationOwner,
+                Some(node),
+            ));
+        }
+        if declaration.parameters.len() != instance.arguments().len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectArgumentCount,
                 Some(node),
             ));
         }
@@ -9102,14 +9189,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let Some(argument_kind) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectInvalidArgument,
                     Some(node),
                 ));
             };
             if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectArgumentKind,
                     Some(node),
                 ));
             }
@@ -9119,8 +9206,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .and_then(|index| declaration.operations.get(index))
             .filter(|candidate| candidate.id == operation)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::UnknownCoreOperation,
                 Some(node),
             ));
         };
@@ -9139,8 +9226,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         )?;
         let Type::Function(domain, result) = signature else {
             discard_type_iteratively(signature);
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreOperationSignature,
                 Some(node),
             ));
         };
@@ -9160,10 +9247,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .program
             .registry
             .effect(instance.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(node)))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(node))
+            })?;
         if declaration.parameters.len() != instance.arguments().len() {
-            return Err(ValidationError::new(
-                ValidationReason::EffectIdentity,
+            return Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectArgumentCount,
                 Some(node),
             ));
         }
@@ -9171,14 +9260,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let Some(actual) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectInvalidArgument,
                     Some(node),
                 ));
             };
             if !self.same_kind_charged(&parameter.kind, &actual)? {
-                return Err(ValidationError::new(
-                    ValidationReason::EffectIdentity,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::CoreEffectArgumentKind,
                     Some(node),
                 ));
             }
@@ -9288,15 +9377,31 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    fn resource_api(
+        &self,
+        acquisition: crate::resolved::ResourceAcquisition,
+        id: NodeId,
+    ) -> Result<crate::resolved::ResourceApi, ValidationError> {
+        let api =
+            crate::resolved::ResourceApi::for_module(acquisition.builtin).ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnsupportedResourceModule, Some(id))
+            })?;
+        if api.method_names().len() != acquisition.methods.len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResourceProviderMethodCount,
+                Some(id),
+            ));
+        }
+        Ok(api)
+    }
+
     fn resource_outward_row(
         &self,
         body: &EffectRow,
         acquisition: crate::resolved::ResourceAcquisition,
         id: NodeId,
     ) -> Result<EffectRow, ValidationError> {
-        let api = acquisition
-            .api()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let api = self.resource_api(acquisition, id)?;
         self.charge_type_work(2)?;
         let instance =
             EffectInstance::new(api.ops(), Box::new([Type::Variable(acquisition.identity)]));
@@ -9321,9 +9426,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         resource: &super::effect::ResourceScopeNode,
     ) -> Result<(), ValidationError> {
         let authority = resource.acquisition;
-        let api = authority
-            .api()
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+        let api = self.resource_api(authority, id)?;
         let initializer = self.node(resource.initializer)?;
         let body = self.node(resource.body)?;
         if authority.handle != resource.handle.id()
@@ -10015,7 +10118,9 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .program
             .registry
             .effect(handler.effect.effect())
-            .ok_or_else(|| ValidationError::new(ValidationReason::EffectIdentity, Some(id)))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(id))
+            })?;
         if declaration.parameters.len() != handler.effect.arguments().len()
             || handler.clauses.len() != declaration.operations.len()
         {
@@ -10228,6 +10333,146 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn effect_identity_messages_preserve_the_failed_relation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::UnknownCoreEffect,
+                "unknown-core-effect",
+                "The compiler retained an effect identity absent from the Core registry.",
+            ),
+            (
+                ValidationCause::CoreOperationOwner,
+                "core-operation-owner",
+                "The compiler used an operation belonging to a different effect declaration.",
+            ),
+            (
+                ValidationCause::CoreEffectArgumentCount,
+                "core-effect-argument-count",
+                "The compiler retained an effect instance with a different number of type arguments from its declaration.",
+            ),
+            (
+                ValidationCause::CoreEffectInvalidArgument,
+                "core-effect-invalid-argument",
+                "The compiler retained an effect type argument that has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::CoreEffectArgumentKind,
+                "core-effect-argument-kind",
+                "An effect instance's type argument has a different kind from its declared parameter.",
+            ),
+            (
+                ValidationCause::UnknownCoreOperation,
+                "unknown-core-operation",
+                "The compiler retained an operation identity absent from its effect declaration.",
+            ),
+            (
+                ValidationCause::CoreOperationSignature,
+                "core-operation-signature",
+                "The compiler retained an effect operation whose instantiated signature is not a function type.",
+            ),
+            (
+                ValidationCause::UnsupportedResourceModule,
+                "unsupported-resource-module",
+                "The compiler retained a resource acquisition whose built-in module has no supported provider API.",
+            ),
+            (
+                ValidationCause::ResourceProviderMethodCount,
+                "resource-provider-method-count",
+                "The compiler retained a resource acquisition with a different number of methods from its provider API.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.effect-identity");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn effect_identity_checks_distinguish_argument_and_operation_failures() {
+        use crate::resolved::{ResolvedEffectDeclaration, ResolvedTypeVariable};
+        let file = source();
+        let span = origin(&file).primary_span();
+        let module = ModuleId::from(file.id());
+        let effect = crate::types::EffectId::new(module, 0);
+        let registry = crate::resolved::ResolvedRegistry::default().with_effects(vec![
+            ResolvedEffectDeclaration {
+                id: effect,
+                public: false,
+                spelling: "Ask".into(),
+                parameters: Box::new([ResolvedTypeVariable {
+                    id: crate::types::TypeVariableId::resolved(module, 0),
+                    spelling: "T".into(),
+                    kind: Kind::Type,
+                    origin: origin(&file),
+                }]),
+                operations: Box::new([]),
+                origin: origin(&file),
+                span,
+            },
+        ]);
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(registry));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let binders = HashMap::new();
+        for (arguments, cause) in [
+            (vec![], Some(ValidationCause::CoreEffectArgumentCount)),
+            (vec![Type::Int], None),
+            (
+                vec![Type::Application(Box::new(Type::Int), Box::new(Type::Int))],
+                Some(ValidationCause::CoreEffectInvalidArgument),
+            ),
+        ] {
+            let instance = EffectInstance::new(effect, arguments.into_boxed_slice());
+            let result = validator.validate_effect_instance(&instance, &binders, root);
+            assert_eq!(result.err().map(|error| error.cause.unwrap()), cause);
+        }
+        let instance = EffectInstance::new(effect, Box::new([Type::Int]));
+        for (operation, cause) in [
+            (
+                OperationId::new(crate::types::EffectId::new(module, 1), 0),
+                ValidationCause::CoreOperationOwner,
+            ),
+            (
+                OperationId::new(effect, 0),
+                ValidationCause::UnknownCoreOperation,
+            ),
+        ] {
+            let error = validator
+                .effect_signature(&instance, operation, root, &binders)
+                .err()
+                .unwrap();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+    }
 
     #[test]
     fn newtype_conversion_messages_preserve_the_failed_relation() {
@@ -21670,6 +21915,7 @@ mod tests {
             .expect_err("forged local representation effect metadata must reject");
         assert_eq!(error.reason(), ValidationReason::EffectIdentity);
         assert_eq!(error.node(), Some(program.root));
+        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
     }
 
     #[test]
