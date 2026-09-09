@@ -26,29 +26,29 @@
 
 ## Work
 
-1. Use retained checked-export-summary corruption fixtures as presentation
-   evidence. Report compiler responsibility and cause without changing the
-   repaired authentication relation.
-2. Replace `ResolvedBuildFailure::InvalidState` at the import-authentication
-   boundary with a small structured invariant family and safe developer facts.
-   Retain targeted corruption tests and preserve the implemented producer-side
-   authentication before publication and its resource accounting.
-3. Compare existing catalogue formats using the English and Bulgarian cases in
-   DN-0029. Record the evidence and retain the least mechanism that meets the
-   accepted requirements.
-4. Expose the existing phase-specific diagnostic facts through a small
-   driver-owned presentation view. Retain enough source context to resolve
-   every causal span without copying the compiler's semantic policy into the
-   renderer.
-5. Add explicit human, short, and versioned JSON-lines renderers. Make human the
-   default and preserve stdout and exit-status behavior.
-6. Add embedded, complete English and Bulgarian catalogues with typed named
-   arguments, deterministic locale selection, and validated fallback.
-7. Move every reachable CLI failure to the common presentation path. Do not
-   retain mixed legacy output.
-8. Update tool documentation, compiler terminology, tests, and downstream
-   migration verification. Change specification wording only where it exposes
-   avoidable implementation terminology; do not change semantics.
+1. Implement one compile-time type-mismatch diagnostic end to end: checked
+   message construction, English and Bulgarian human/short output, source
+   context and JSON. Use the selected Fluent integration. Verify that adding
+   a message or changing wording does not require renderer edits before
+   migrating all phases. This internal slice does not switch the CLI default.
+2. Extend that compile-time path by phase, retaining semantic reasons and
+   causal order. Keep one message declaration with checked named arguments,
+   catalogue-owned wording and a small borrowed presentation view. Retain
+   source text needed for excerpts without rereading files or copying every
+   source on success. JSON preserves semantic label relationships and facts.
+3. Preserve specific internal causes through summary production and import
+   boundaries. Use corruption fixtures, a small private cause representation
+   and safe facts; do not change authentication acceptance or its accounting.
+4. Implement runtime reporting as a separate slice and interface. Preserve
+   allocation-independent resource reporting, primary/teardown distinctions,
+   cleanup outcomes and stop-on-write-failure behavior. Share output contracts,
+   not an allocating compile-time presentation pipeline.
+5. Wire explicit human, short and JSON formats and the defaults in AD-0010.
+   Complete both catalogues and all reachable failure paths before switching
+   the CLI default. Preserve stdout and exit classifications.
+6. Update tool documentation, tests and coordinated downstream automation.
+   Change specification wording only where it obscures the representation;
+   do not change semantics. Ash-doc owns its separate edition migration.
 
 The implementation should reuse existing diagnostic types, source text, line
 starts, reasons, and labels. It must not add runtime catalogue loading,
@@ -63,6 +63,8 @@ localization language. Color is not required for completion.
   the test-first implementation and verification sequence.
 - Compiler repair is complete and recorded separately. Diagnostic presentation
   implementation has not started.
+- The reviewed plan separates compile-time and runtime reporting and begins
+  with one end-to-end compile-time example before broad migration.
 
 ## Verification
 
@@ -77,7 +79,12 @@ localization language. Color is not required for completion.
   combining characters, wide characters, multiline spans, and cross-file
   labels.
 - Verify one JSON object per diagnostic, schema versioning, locale independence,
-  stable facts and byte spans, and multiple parser diagnostics.
+  stable facts, semantic label relationships, byte spans and parser ordering.
+- Verify checked message construction, catalogue completeness and that wording
+  changes need no compiler or renderer edits. Exercise all AD-0010 defaults.
+- Verify runtime resource reporting independently: no required allocation or
+  source effects, no recovery, preserved primary/teardown/cleanup facts and no
+  retry after writer failure.
 - Run `cargo xtask verify`.
 - Check changed Markdown, relative links, artifact authority, tool examples,
   and agreement between documented and tested CLI behavior.

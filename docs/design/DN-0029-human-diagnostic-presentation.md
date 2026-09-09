@@ -2,7 +2,10 @@
 
 - ID: `DN-0029`
 - Status: exploring
-- Related: [AD-0005: Parser Architecture](../decisions/AD-0005-parser-architecture.md), [AD-0006: Front-End Semantic Boundaries](../decisions/AD-0006-front-end-semantic-boundaries.md), [AD-0010: Human Diagnostic Presentation and Localization](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md)
+- Related:
+  [AD-0005](../decisions/AD-0005-parser-architecture.md),
+  [AD-0006](../decisions/AD-0006-front-end-semantic-boundaries.md),
+  [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md)
 
 > This design note is informative. It does not define current Ash or accept an architecture.
 
@@ -56,6 +59,10 @@ the representation a checked export summary.
 - Existing phase-specific diagnostic types remain the semantic owners. A
   presentation boundary must not duplicate them into a speculative universal
   error algebra.
+- Compile-time presentation and runtime reporting have distinct interfaces.
+  Compile-time formatting may allocate within compiler resource limits.
+  Runtime reporting must preserve failure and cleanup outcomes without source
+  effects or recovery; resource reporting cannot depend on allocation.
 
 ## Candidate directions
 
@@ -122,8 +129,8 @@ embedded catalogues, deterministic fallback, and translator workflow.
 
 ## Selected presentation model
 
-Phase failures expose their existing typed reason, facts, and source labels
-through a small driver-owned presentation view. The view adds responsibility
+Compile-time failures expose their existing typed reason, facts, and source
+labels through a small borrowed presentation view. The view adds responsibility
 (`source`, `compiler`, or `environment`) and safe developer details where the
 phase failure does not already carry them. A source catalogue resolves spans
 for presentation. Three renderers consume the same view:
@@ -132,11 +139,32 @@ for presentation. Three renderers consume the same view:
 - `short` renders one compact localized log line; and
 - `json` emits one locale-independent, schema-versioned object per diagnostic.
 
-The human catalogue uses separate keys for titles, primary labels, related
-labels, explanations, and justified help. It never constructs a sentence by
-concatenating independently translated fragments. Templates receive semantic
-text roles so source spellings remain escaped and visually distinguishable
-from prose.
+Declare each message identity and its typed named arguments once in compiler
+code. Construction checks argument names and types; catalogue tests check
+translation completeness and agreement with that declaration. Avoid parallel
+hand-maintained lists of IDs, keys and argument schemas. Catalogues contain
+complete messages, not translated sentence fragments. Add title, label or help
+messages only where they add information; do not require every diagnostic to
+fill every presentation slot. Source spellings remain verbatim and escaped.
+
+The executable renders one diagnostic to a writer. A collection is an ordered
+loop over that operation, not a separate streaming framework. Detection sites
+construct facts and select messages, but never print or choose a locale.
+Wording edits change catalogue entries only. An ordinary new diagnostic needs
+its declaration, translations, construction site and tests, not renderer edits.
+
+JSON preserves semantic reasons, named facts and label relationships such as
+the relevant import or declaration, alongside primary/related roles and spans.
+Use the same retained facts for message arguments and JSON rather than keeping
+parallel payloads. Presentation keys may change with wording structure and are
+not automatically part of the stable machine schema.
+
+Runtime reporting is a separate interface and implementation slice. It shares
+output conventions where safe, not the compile-time allocation path or a safety
+flag. Preserve the existing primary failure, first teardown failure and cleanup
+status, allocation-independent resource reporting and stop-on-write-failure
+behavior. Any runtime localization preparation must precede execution; failure
+reporting cannot require catalogue initialization or formatting allocations.
 
 Locale selection follows an explicit `--locale` option, then the supported
 process locale. `C`, `POSIX`, an absent locale, or an unsupported locale falls
@@ -144,6 +172,12 @@ back to English. Tests always choose a locale explicitly. Requested locales
 fall back through their parent to English. The first implementation embeds
 catalogues in the executable and does not load arbitrary runtime catalogue
 files.
+
+AD-0010 specifies defaults for unsupported locales, invalid invocations,
+catalogue defects and writer failures. Missing required messages are test
+failures, not a reason to silently substitute generic prose. Optional help may
+be absent. Fallback must preserve the original diagnostic and requested JSON
+format without recursively reporting a rendering failure.
 
 For checked-export-summary validation, a small closed invariant family and a
 summary section retain the failed relationship. The design does not require
@@ -185,13 +219,17 @@ producer validation before publication and current-language source or execution
 outcomes for the eight retained migration triggers. Preserve those outcomes.
 The diagnostic product checkpoint must additionally establish:
 
-- every reachable CLI failure uses the new presentation path;
+- every reachable CLI failure has the selected output contract, with distinct
+  compile-time and runtime reporting paths;
 - every English and Bulgarian message key accepts exactly its declared named
   arguments;
 - human layout handles tabs, Cyrillic, combining characters, wide characters,
   multiline spans, and labels from several files;
 - JSON preserves stable reasons, responsibility, facts, byte spans, and causal
-  order independently from localized prose; and
+  relationships and order independently from localized prose;
+- runtime resource reporting preserves its allocation and failure guarantees;
+- one end-to-end compile-time diagnostic demonstrates the message-addition and
+  wording-update workflow before migration of all error producers; and
 - `ash-doc` migration checks consume JSON rather than default human text.
 
 ## Intentional exclusions
@@ -205,7 +243,7 @@ relationship.
 
 ## Open questions
 
-- Which small invariant families describe checked-export-summary failures
-  without losing the exact failed relationship?
-- Which Bulgarian terminology guide should govern recurring compiler and source
-  concepts?
+- Which small private cause representation preserves checked-summary failures
+  without exposing an unnecessary public taxonomy?
+- Review Bulgarian terms alongside the first concrete messages; keep recurring
+  choices in catalogue comments rather than creating a terminology subsystem.
