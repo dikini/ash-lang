@@ -150,6 +150,18 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An implementation's selection key cannot consist only of bare type variables.
+    impl_variable_head => "impl-variable-head" {},
+    /// This prerequisite uses a type variable that does not occur in the implementation head.
+    impl_prerequisite_variable => "impl-prerequisite-variable" {},
+    /// This generic prerequisite does not have a strictly smaller selection key than the implementation head.
+    impl_prerequisite_decrease => "impl-prerequisite-decrease" {},
+    /// This is the interface being implemented.
+    impl_selected_interface => "impl-selected-interface" {},
+    /// Every prerequisite type variable must occur in this implementation head.
+    impl_head_variables => "impl-head-variables" {},
+    /// Each prerequisite key argument must equal or be a strict syntactic subterm of its corresponding head argument, with at least one strict decrease.
+    impl_head_decrease => "impl-head-decrease" {},
     /// An interface method must have a function type with a top-level arrow.
     interface_method_function => "interface-method-function" {},
     /// This method signature is declared here.

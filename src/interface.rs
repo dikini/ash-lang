@@ -1965,12 +1965,23 @@ impl InterfaceReason {
                 | Self::ImplMissingMethod
                 | Self::ImplDuplicateMethod
                 | Self::ImplExtraMethod
+                | Self::ImplVariableHead
+                | Self::ImplPrerequisiteVariable
+                | Self::ImplPrerequisiteNotDecreasing
         ))
     }
 
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::ImplVariableHead => (Message::impl_variable_head(), "implementation_key"),
+            Self::ImplPrerequisiteVariable => (
+                Message::impl_prerequisite_variable(),
+                "prerequisite_variable",
+            ),
+            Self::ImplPrerequisiteNotDecreasing => {
+                (Message::impl_prerequisite_decrease(), "prerequisite")
+            }
             Self::EvidenceMissingLocalKey => (Message::evidence_local_key(), "evidence_key"),
             Self::EvidenceDuplicate => (Message::evidence_duplicate(), "evidence_key"),
             Self::EvidenceDeterminationConflict => {
@@ -2015,6 +2026,13 @@ impl InterfaceReason {
             Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::ImplVariableHead => (Message::impl_selected_interface(), "implemented_interface"),
+            Self::ImplPrerequisiteVariable => {
+                (Message::impl_head_variables(), "implementation_head")
+            }
+            Self::ImplPrerequisiteNotDecreasing => {
+                (Message::impl_head_decrease(), "implementation_head")
+            }
             _ => return None,
         })
     }

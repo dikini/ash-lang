@@ -1571,6 +1571,45 @@ fn interface_method_messages_explain_declaration_and_implementation_failures() {
     }
 }
 
+#[test]
+fn implementation_head_and_prerequisite_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<A> {\nequal value = value\n}\n",
+            InterfaceReason::ImplVariableHead,
+            "An implementation's selection key cannot consist only of bare type variables.",
+        ),
+        (
+            "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<B> Relation<Int, B> where Relation<Int, C> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplPrerequisiteVariable,
+            "This prerequisite uses a type variable that does not occur in the implementation head.",
+        ),
+        (
+            "type Pair<Left, Right> = Pair(Left, Right)\ninterface Construct<F : Type -> Type> {\nconstruct : F<Int> -> Bool\n}\ninterface Inspect<A> {\ninspect : A -> Bool\n}\nimpl<Left : Type, Right : Type> Inspect<Pair<Left, Right>> where Construct<Pair<Right>> {\ninspect value = true\n}\n",
+            InterfaceReason::ImplPrerequisiteNotDecreasing,
+            "This generic prerequisite does not have a strictly smaller selection key than the implementation head.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("implementation-header-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

@@ -459,6 +459,14 @@ localization language. Color is not required for completion.
   Interface/constraint coverage is 10 of 28 reasons, with 202 templates per
   locale. All 162 focused tests and warnings-denied Clippy passed. No producer,
   language check or runtime behavior changed.
+- Implementation header messages distinguish an all-variable selection key,
+  a prerequisite-only type variable and a non-decreasing prerequisite. Related
+  labels identify the selected interface or governing implementation head.
+  Three source fixtures exercise both locales; existing implementation and
+  interface diagnostic tests retain semantic and precedence coverage. All
+  163 focused tests and warnings-denied Clippy passed. Interface/constraint
+  coverage is 13 of 28 reasons, with 208 templates per locale. No producer or
+  language check changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
