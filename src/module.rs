@@ -372,7 +372,7 @@ pub enum ModuleReason {
     InvalidRootName,
     /// A configured root path cannot be used as a directory.
     RootUnavailable,
-    /// Projected module data contains no path segment where one is required.
+    /// Internal module data lacks required path segments or a canonical parent.
     InvalidPath,
     /// Module graph work exceeded an implementation budget.
     ResourceLimit,
@@ -482,6 +482,13 @@ fn allocate_module_graph_identity() -> Result<u32, LoadGraphError> {
         .map_err(|_| ModuleFailure::resource(ModuleResource::GraphIdentities).into())
 }
 
+/// The internal module-path relationship that failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModulePathCause {
+    MissingParent,
+    MissingSegments,
+}
+
 /// A typed module-stage or root-configuration failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleFailure {
@@ -492,6 +499,7 @@ pub struct ModuleFailure {
     root: Option<String>,
     io_kind: Option<io::ErrorKind>,
     resource: Option<ModuleResource>,
+    path_cause: Option<ModulePathCause>,
 }
 
 impl ModuleFailure {
@@ -526,7 +534,10 @@ impl ModuleFailure {
                 Some(kind) => Message::module_root_io(self.path()?, self.root()?, kind),
                 None => Message::module_root_unavailable(self.path()?, self.root()?),
             },
-            ModuleReason::InvalidPath => return None,
+            ModuleReason::InvalidPath => match self.path_cause? {
+                ModulePathCause::MissingParent => Message::module_missing_parent(),
+                ModulePathCause::MissingSegments => Message::module_missing_segments(),
+            },
         })
     }
 
@@ -539,6 +550,7 @@ impl ModuleFailure {
             root: None,
             io_kind: None,
             resource: None,
+            path_cause: None,
         }
     }
 
@@ -546,6 +558,21 @@ impl ModuleFailure {
         let mut failure = Self::source(ModuleReason::UnknownRoot, primary, None);
         failure.root = Some(root);
         failure
+    }
+
+    fn invalid_path(primary: Span, path: Option<PathBuf>, cause: ModulePathCause) -> Self {
+        let mut failure = Self::source(ModuleReason::InvalidPath, primary, path);
+        failure.source_rejection = false;
+        failure.path_cause = Some(cause);
+        failure
+    }
+
+    pub(crate) const fn path_cause_name(&self) -> Option<&'static str> {
+        match self.path_cause {
+            Some(ModulePathCause::MissingParent) => Some("missing-canonical-parent"),
+            Some(ModulePathCause::MissingSegments) => Some("missing-path-segments"),
+            None => None,
+        }
     }
 
     fn invocation(
@@ -562,6 +589,7 @@ impl ModuleFailure {
             root,
             io_kind,
             resource: None,
+            path_cause: None,
         }
     }
 
@@ -574,6 +602,7 @@ impl ModuleFailure {
             root: None,
             io_kind: None,
             resource: Some(resource),
+            path_cause: None,
         }
     }
 
@@ -589,7 +618,7 @@ impl ModuleFailure {
         self.source_rejection
     }
 
-    /// Returns the import occurrence that caused a source rejection.
+    /// Returns the import occurrence associated with this failure.
     #[must_use]
     pub const fn primary_span(&self) -> Option<Span> {
         self.primary
@@ -631,6 +660,88 @@ impl Error for ModuleFailure {}
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+    #[test]
+    fn corrupt_projected_paths_report_compiler_failures_with_specific_causes() {
+        for (input, missing_parent, expected_cause) in [
+            ("import child as Child\n", true, "missing-canonical-parent"),
+            ("import child as Child\n", false, "missing-path-segments"),
+            (
+                "import @std.child as Child\n",
+                false,
+                "missing-path-segments",
+            ),
+        ] {
+            let (source, mut surface) = parse_surface_module(
+                Path::new("entry.ash"),
+                input.into(),
+                None,
+                &mut SyntaxBudget::default(),
+            )
+            .unwrap();
+            if !missing_parent {
+                match &mut surface.imports[0].path {
+                    SurfaceModulePath::Relative(segments)
+                    | SurfaceModulePath::Absolute { segments, .. } => segments.clear(),
+                }
+            }
+            let module = StagedModule {
+                id: ModuleId::new(0),
+                canonical_path: if missing_parent {
+                    PathBuf::new()
+                } else {
+                    PathBuf::from("entry.ash")
+                },
+                owners: OwnerSet {
+                    ordered: Vec::new(),
+                    membership: HashSet::new(),
+                },
+                source,
+                surface,
+                dependencies: Vec::new(),
+                relative_edges: Vec::new(),
+                state: VisitState::Active,
+            };
+            let roots = ModuleRoots {
+                named: HashMap::from([(ModuleRootName::new("std").unwrap(), PathBuf::from("."))]),
+            };
+            let failure = resolve_import(&module, &module.surface.imports[0], &roots).unwrap_err();
+            assert_eq!(failure.module_reason(), Some(ModuleReason::InvalidPath));
+            assert!(
+                !failure.is_source_rejection(),
+                "corrupt compiler data must not reject source"
+            );
+            let context = GraphDiagnostic {
+                failure: Box::new(failure),
+                sources: vec![module.source].into_boxed_slice(),
+            };
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&context).unwrap();
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert!(
+                json["facts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|fact| fact["name"] == "cause" && fact["value"] == expected_cause)
+            );
+            assert_eq!(json["labels"][0]["path"], "entry.ash");
+            for locale in [
+                crate::message::Locale::English,
+                crate::message::Locale::Bulgarian,
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert!(String::from_utf8(output).unwrap().contains("Ash"));
+            }
+        }
+    }
     #[test]
     fn unavailable_root_retains_io_facts_without_inventing_a_directory_cause() {
         for kind in [None, Some(io::ErrorKind::PermissionDenied)] {
@@ -1515,16 +1626,20 @@ fn resolve_import(
     match &import.path {
         SurfaceModulePath::Relative(segments) => {
             let parent = module.canonical_path.parent().ok_or_else(|| {
-                ModuleFailure::source(
-                    ModuleReason::InvalidPath,
+                ModuleFailure::invalid_path(
                     import.span,
                     Some(module.canonical_path.clone()),
+                    ModulePathCause::MissingParent,
                 )
             })?;
             let candidate =
                 target_path(parent, segments.iter().map(|segment| segment.text.as_str()))
                     .ok_or_else(|| {
-                        ModuleFailure::source(ModuleReason::InvalidPath, import.span, None)
+                        ModuleFailure::invalid_path(
+                            import.span,
+                            None,
+                            ModulePathCause::MissingSegments,
+                        )
                     })?;
             let canonical = canonical_import_target(candidate, import.span)?;
             for owner in &module.owners.ordered {
@@ -1540,7 +1655,11 @@ fn resolve_import(
             let candidate =
                 target_path(owner, segments.iter().map(|segment| segment.text.as_str()))
                     .ok_or_else(|| {
-                        ModuleFailure::source(ModuleReason::InvalidPath, import.span, None)
+                        ModuleFailure::invalid_path(
+                            import.span,
+                            None,
+                            ModulePathCause::MissingSegments,
+                        )
                     })?;
             let canonical = canonical_import_target(candidate, import.span)?;
             require_within_owner(&canonical, owner, import.span)?;

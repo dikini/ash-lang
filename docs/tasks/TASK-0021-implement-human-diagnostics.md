@@ -174,8 +174,7 @@ localization language. Color is not required for completion.
   or allocation cause. Presentation now obtains responsibility explicitly from
   the module owner rather than treating every non-source failure as invocation.
   Legacy source-rejection classification and CLI exits are unchanged.
-- Invalid-internal-path messages remain outstanding.
-  Review found no actionable defects
+- Review found no actionable defects
   in the path-escape and module-resource presentation changes.
 - This checkpoint passed all 1,228 library tests, the focused module-loading,
   input, catalogue and existing diagnostic suites, and warnings-denied Clippy.
@@ -219,6 +218,16 @@ localization language. Color is not required for completion.
 - Projection verification passed all 1,230 library tests, four focused suites,
   warnings-denied Clippy, Markdown lint and diff whitespace checks. Followup
   review confirmed the wording correction. The full slice-2 gate remains open.
+- Internal module-path failures now retain missing-parent or missing-segments
+  causes and use compiler responsibility. Corruption fixtures call the actual
+  resolver for all three producer paths. Their former source-rejection
+  classification is corrected to compiler failure (status 2), without changing
+  ordinary import behavior or the stable `module.invalid-path` reason. Review
+  found no actionable defects in this correction.
+- Internal-path verification passed all 1,231 library tests, four focused
+  suites, the bidirectional type-field ownership check and warnings-denied
+  Clippy. Markdown lint and diff whitespace checks passed. Broader compile-time
+  presentation and the full slice-2 gate remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
@@ -251,11 +260,10 @@ localization language. Color is not required for completion.
 
 ## Discoveries
 
-- `ModuleReason::InvalidPath` currently uses the source-rejection constructor,
-  but its producers detect missing projected path segments or an impossible
-  canonical parent. Resolve this owner-classification inconsistency explicitly
-  in the internal-failure work, with tests; do not infer responsibility from
-  the old boolean or invent a source correction.
+- `ModuleReason::InvalidPath` used the source-rejection constructor despite
+  detecting corrupt projected paths or an impossible canonical parent. This
+  inconsistency is now corrected at its three producers, with retained causes
+  and corruption tests; human wording does not invent a source correction.
 - The historical summary failure confused private access-only families with
   the retained semantic closure. A minimal unused private type reproduced the
   mismatch on the repair baseline, although the original search examples

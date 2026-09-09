@@ -144,6 +144,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A retained canonical module path has no parent directory.
+    module_missing_parent => "module-missing-parent" {},
+    /// A projected import has no module-name segments.
+    module_missing_segments => "module-missing-segments" {},
     /// Syntax-recovery information crossed the checked projection boundary.
     projection_recovery => "projection-recovery" { path: &'a str = "source.ash" },
     /// A retained concrete-syntax invariant failed.

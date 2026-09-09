@@ -432,6 +432,13 @@ pub fn compile_graph_diagnostics(
                 value: FactValue::Text(io_kind_name(kind)),
             });
         }
+        if let Some(cause) = failure.path_cause_name() {
+            facts.push(Fact {
+                name: "cause",
+                kind: "module-path",
+                value: FactValue::Text(cause),
+            });
+        }
         return Ok(vec![CompileDiagnostic {
             reason: failure.reason().to_string(),
             responsibility: failure.responsibility(),
