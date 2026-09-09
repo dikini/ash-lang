@@ -168,11 +168,19 @@ localization language. Color is not required for completion.
   processing-context wording in both catalogues; followup review confirmed the
   fix. Six focused suites, all 1,227 library tests and warnings-denied Clippy
   passed. Markdown lint and diff whitespace checks passed separately.
-- Path escape, unavailable root, invalid internal path and module resource
-  messages remain outstanding, along with source-model and projection failures.
-  Before admitting internal module failures, replace the staged source-versus-
-  invocation presentation split with explicit owner responsibility; the existing
-  source-rejection boolean cannot distinguish invocation from compiler failure.
+- Path-escape presentation retains the canonical target and selecting import,
+  including when several roots own a module. Module resource messages identify
+  each of the six retained resource categories without inventing a numeric limit
+  or allocation cause. Presentation now obtains responsibility explicitly from
+  the module owner rather than treating every non-source failure as invocation.
+  Legacy source-rejection classification and CLI exits are unchanged.
+- Unavailable-root and invalid-internal-path messages remain outstanding, along
+  with source-model and projection failures. Review found no actionable defects
+  in the path-escape and module-resource presentation changes.
+- This checkpoint passed all 1,228 library tests, the focused module-loading,
+  input, catalogue and existing diagnostic suites, and warnings-denied Clippy.
+  Markdown lint and diff whitespace checks passed. The full slice-2 gate remains
+  outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

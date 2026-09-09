@@ -316,13 +316,16 @@ pub fn compile_graph_diagnostics(
                 value: FactValue::Path(path),
             });
         }
+        if let Some(resource) = failure.resource_kind() {
+            facts.push(Fact {
+                name: "resource",
+                kind: "resource",
+                value: FactValue::Text(resource.diagnostic_name()),
+            });
+        }
         return Ok(vec![CompileDiagnostic {
             reason: failure.reason().to_string(),
-            responsibility: if failure.is_source_rejection() {
-                "source"
-            } else {
-                "invocation"
-            },
+            responsibility: failure.responsibility(),
             message,
             primary: import_label(context, "import_target")?,
             related: Vec::new(),

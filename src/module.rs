@@ -461,6 +461,19 @@ pub enum ModuleResource {
 
 static NEXT_MODULE_GRAPH: AtomicU32 = AtomicU32::new(1);
 
+impl ModuleResource {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::GraphIdentities => "graph-identities",
+            Self::Sources => "sources",
+            Self::Edges => "edges",
+            Self::PathSegments => "path-segments",
+            Self::OwnerFacts => "owner-facts",
+            Self::PendingWork => "pending-work",
+        }
+    }
+}
+
 fn allocate_module_graph_identity() -> Result<u32, LoadGraphError> {
     NEXT_MODULE_GRAPH
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -482,6 +495,21 @@ pub struct ModuleFailure {
 }
 
 impl ModuleFailure {
+    pub(crate) const fn responsibility(&self) -> &'static str {
+        match self.reason {
+            ModuleReason::ReservedRoot
+            | ModuleReason::DuplicateRoot
+            | ModuleReason::InvalidRootName
+            | ModuleReason::RootUnavailable => "invocation",
+            ModuleReason::UnknownBuiltin
+            | ModuleReason::UnknownRoot
+            | ModuleReason::NotFound
+            | ModuleReason::PathEscape
+            | ModuleReason::ImportCycle => "source",
+            ModuleReason::InvalidPath | ModuleReason::ResourceLimit => "compiler",
+        }
+    }
+
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         use crate::message::Message;
         Some(match self.reason {
@@ -492,10 +520,9 @@ impl ModuleFailure {
             ModuleReason::UnknownBuiltin => Message::module_unknown_builtin(),
             ModuleReason::NotFound => Message::module_not_found(self.path()?),
             ModuleReason::ImportCycle => Message::module_import_cycle(self.path()?),
-            ModuleReason::PathEscape
-            | ModuleReason::RootUnavailable
-            | ModuleReason::InvalidPath
-            | ModuleReason::ResourceLimit => return None,
+            ModuleReason::PathEscape => Message::module_path_escape(self.path()?),
+            ModuleReason::ResourceLimit => Message::module_resource(self.resource_kind()?),
+            ModuleReason::RootUnavailable | ModuleReason::InvalidPath => return None,
         })
     }
 
@@ -596,6 +623,79 @@ impl fmt::Display for ModuleFailure {
 }
 
 impl Error for ModuleFailure {}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    #[test]
+    fn module_resource_messages_preserve_compiler_responsibility_and_kind() {
+        for (resource, name, en, bg) in [
+            (
+                ModuleResource::GraphIdentities,
+                "graph-identities",
+                "module graph identities",
+                "идентичности на графи от модули",
+            ),
+            (
+                ModuleResource::Sources,
+                "sources",
+                "module sources",
+                "изходни файлове на модули",
+            ),
+            (
+                ModuleResource::Edges,
+                "edges",
+                "import edges",
+                "ребра на импорти",
+            ),
+            (
+                ModuleResource::PathSegments,
+                "path-segments",
+                "module path segments",
+                "сегменти на пътища към модули",
+            ),
+            (
+                ModuleResource::OwnerFacts,
+                "owner-facts",
+                "module ownership facts",
+                "факти за принадлежност на модули",
+            ),
+            (
+                ModuleResource::PendingWork,
+                "pending-work",
+                "pending module-loading work",
+                "чакаща работа по зареждане на модули",
+            ),
+        ] {
+            let failure =
+                GraphDiagnostic::from(LoadGraphError::Module(ModuleFailure::resource(resource)));
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&failure).unwrap();
+            for (locale, detail) in [
+                (crate::message::Locale::English, en),
+                (crate::message::Locale::Bulgarian, bg),
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert!(String::from_utf8(output).unwrap().contains(detail));
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["reason"], "internal.resource.module-graph");
+            assert_eq!(json["labels"], serde_json::json!([]));
+            assert_eq!(
+                json["facts"],
+                serde_json::json!([{"name":"resource", "kind":"resource", "value":name}])
+            );
+        }
+    }
+}
 
 /// Structured syntax facts retained for one rejected module source.
 #[derive(Clone, Debug, Eq, PartialEq)]

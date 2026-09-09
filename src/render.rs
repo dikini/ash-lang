@@ -250,14 +250,7 @@ const fn module_primary_message(reason: ModuleReason) -> &'static str {
 }
 
 const fn module_resource(resource: ModuleResource) -> &'static str {
-    match resource {
-        ModuleResource::GraphIdentities => "graph-identities",
-        ModuleResource::Sources => "sources",
-        ModuleResource::Edges => "edges",
-        ModuleResource::PathSegments => "path-segments",
-        ModuleResource::OwnerFacts => "owner-facts",
-        ModuleResource::PendingWork => "pending-work",
-    }
+    resource.diagnostic_name()
 }
 
 fn append_optional_import_primary(output: &mut String, span: Option<Span>, message: &str) {

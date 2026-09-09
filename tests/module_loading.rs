@@ -241,6 +241,37 @@ fn rejects_a_canonical_target_outside_its_owning_root() {
 
     assert_eq!(failure.module_reason(), Some(ModuleReason::PathEscape));
     assert!(failure.is_source_rejection());
+    let target = failure
+        .failure()
+        .as_module_failure()
+        .unwrap()
+        .path()
+        .unwrap()
+        .to_path_buf();
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    for (locale, prefix) in [
+        (ash::message::Locale::English, "The imported source file"),
+        (
+            ash::message::Locale::Bulgarian,
+            "Импортираният изходен файл",
+        ),
+    ] {
+        let mut output = Vec::new();
+        ash::presentation::write_short(
+            &mut output,
+            &diagnostics[0],
+            &ash::message::Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        assert!(String::from_utf8(output).unwrap().contains(prefix));
+    }
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "source");
+    assert_eq!(json["facts"][0]["value"], target.to_str().unwrap());
+    assert_eq!(json["labels"][0]["path"], entry.to_str().unwrap());
 }
 
 #[cfg(unix)]

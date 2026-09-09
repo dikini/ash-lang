@@ -110,6 +110,12 @@ impl Argument<'_> for usize {
     }
 }
 
+impl Argument<'_> for crate::module::ModuleResource {
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(self.diagnostic_name())
+    }
+}
+
 // One declaration supplies typed constructors and exhaustive test examples.
 // The concrete carrier remains visible to the source ownership inventory.
 macro_rules! messages {
@@ -132,6 +138,8 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Resource exhaustion in a specific module-loader operation.
+    module_resource => "module-resource" { resource: crate::module::ModuleResource = crate::module::ModuleResource::Sources },
     /// A configured root attempts to replace a compiler-owned root.
     module_reserved_root => "module-reserved-root" { root: &'a str = "builtin" },
     /// One root name appears more than once in the invocation.
@@ -146,6 +154,8 @@ messages! {
     module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },
     /// An import reaches a module active in the current traversal.
     module_import_cycle => "module-import-cycle" { path: &'a Path = Path::new("entry.ash") },
+    /// A canonical target lies outside at least one retained owning root.
+    module_path_escape => "module-path-escape" { path: &'a Path = Path::new("outside.ash") },
     /// Compiler protection for syntax nesting stopped parsing.
     syntax_depth => "syntax-depth" { path: &'a str = "source.ash", limit: usize = 128 },
     /// Cumulative retained syntax work reached the compiler budget.

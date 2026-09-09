@@ -107,4 +107,13 @@ module-unknown-root = No module root named `{ $root }` is configured.
 module-unknown-builtin = This import names no compiler-owned module.
 module-not-found = The imported source file `{ $path }` does not exist.
 module-import-cycle = This import creates a dependency cycle through `{ $path }`.
+module-path-escape = The imported source file `{ $path }` is outside a root that must contain it.
+module-resource = Ash exhausted resources for { $resource ->
+    [graph-identities] module graph identities
+    [sources] module sources
+    [edges] import edges
+    [path-segments] module path segments
+    [owner-facts] module ownership facts
+   *[pending-work] pending module-loading work
+    }.
 syntax-work = Processing `{ $path }` reached the compiler's syntax-work limit of { $limit }.
