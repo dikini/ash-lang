@@ -701,6 +701,16 @@ localization language. Color is not required for completion.
   UTF-8 source failures. Core coverage is 7/23 reasons, overall coverage is
   163/197, and catalogues contain 445 templates per locale. All 1,262 library
   tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
+- Core recursive-binding diagnostics retain 13 causes across empty groups,
+  initializer/function shape, polymorphic parameter/body checks, constructor
+  identity/owner/payload checks and guarded recursive payload forms. The guarded
+  data helpers return a retained failure cause instead of discarding it into a
+  boolean; traversal, short-circuit order and resource charges stay unchanged.
+  Tests cover group-shape failures, accepted/rejected constructor relationships
+  and 26 optional-node localized/JSON layouts. Core coverage is 8/23 reasons,
+  overall coverage is 164/197, and catalogues contain 471 templates per locale.
+  All 1,265 library tests, 86 diagnostic/catalogue tests and warnings-denied
+  Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

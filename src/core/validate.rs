@@ -269,6 +269,19 @@ enum ValidationCause {
     RelatedOriginSource,
     UnadmittedOriginSource,
     InvalidOriginSpan(crate::source::SourceError),
+    EmptyRecursiveGroup,
+    RecursiveFunctionInitializer,
+    RecursiveTypeAbstraction,
+    RecursiveTypeParameters,
+    RecursiveFunctionBody,
+    RecursiveValueType,
+    RecursiveUnknownConstructor,
+    RecursiveConstructorOwner,
+    RecursiveMissingPayload,
+    RecursiveUnexpectedPayload,
+    RecursiveDataRoot,
+    RecursivePayloadCall,
+    RecursivePayloadForm,
 }
 
 impl ValidationError {
@@ -286,6 +299,19 @@ impl ValidationError {
             ValidationCause::RelatedOriginSource => "related-origin-source",
             ValidationCause::UnadmittedOriginSource => "unadmitted-origin-source",
             ValidationCause::InvalidOriginSpan(_) => "invalid-origin-span",
+            ValidationCause::EmptyRecursiveGroup => "empty-recursive-group",
+            ValidationCause::RecursiveFunctionInitializer => "recursive-function-initializer",
+            ValidationCause::RecursiveTypeAbstraction => "recursive-type-abstraction",
+            ValidationCause::RecursiveTypeParameters => "recursive-type-parameters",
+            ValidationCause::RecursiveFunctionBody => "recursive-function-body",
+            ValidationCause::RecursiveValueType => "recursive-value-type",
+            ValidationCause::RecursiveUnknownConstructor => "recursive-unknown-constructor",
+            ValidationCause::RecursiveConstructorOwner => "recursive-constructor-owner",
+            ValidationCause::RecursiveMissingPayload => "recursive-missing-payload",
+            ValidationCause::RecursiveUnexpectedPayload => "recursive-unexpected-payload",
+            ValidationCause::RecursiveDataRoot => "recursive-data-root",
+            ValidationCause::RecursivePayloadCall => "recursive-payload-call",
+            ValidationCause::RecursivePayloadForm => "recursive-payload-form",
         })
     }
 
@@ -369,6 +395,84 @@ impl ValidationError {
                 (ValidationCause::InvalidOriginSpan(error), _) => {
                     return Self::origin_span_message(error, node);
                 }
+                (ValidationCause::EmptyRecursiveGroup, None) => {
+                    Message::core_validation_empty_recursive_group()
+                }
+                (ValidationCause::EmptyRecursiveGroup, Some(node)) => {
+                    Message::core_validation_empty_recursive_group_node(node)
+                }
+                (ValidationCause::RecursiveFunctionInitializer, None) => {
+                    Message::core_validation_recursive_function_initializer()
+                }
+                (ValidationCause::RecursiveFunctionInitializer, Some(node)) => {
+                    Message::core_validation_recursive_function_initializer_node(node)
+                }
+                (ValidationCause::RecursiveTypeAbstraction, None) => {
+                    Message::core_validation_recursive_type_abstraction()
+                }
+                (ValidationCause::RecursiveTypeAbstraction, Some(node)) => {
+                    Message::core_validation_recursive_type_abstraction_node(node)
+                }
+                (ValidationCause::RecursiveTypeParameters, None) => {
+                    Message::core_validation_recursive_type_parameters()
+                }
+                (ValidationCause::RecursiveTypeParameters, Some(node)) => {
+                    Message::core_validation_recursive_type_parameters_node(node)
+                }
+                (ValidationCause::RecursiveFunctionBody, None) => {
+                    Message::core_validation_recursive_function_body()
+                }
+                (ValidationCause::RecursiveFunctionBody, Some(node)) => {
+                    Message::core_validation_recursive_function_body_node(node)
+                }
+                (ValidationCause::RecursiveValueType, None) => {
+                    Message::core_validation_recursive_value_type()
+                }
+                (ValidationCause::RecursiveValueType, Some(node)) => {
+                    Message::core_validation_recursive_value_type_node(node)
+                }
+                (ValidationCause::RecursiveUnknownConstructor, None) => {
+                    Message::core_validation_recursive_unknown_constructor()
+                }
+                (ValidationCause::RecursiveUnknownConstructor, Some(node)) => {
+                    Message::core_validation_recursive_unknown_constructor_node(node)
+                }
+                (ValidationCause::RecursiveConstructorOwner, None) => {
+                    Message::core_validation_recursive_constructor_owner()
+                }
+                (ValidationCause::RecursiveConstructorOwner, Some(node)) => {
+                    Message::core_validation_recursive_constructor_owner_node(node)
+                }
+                (ValidationCause::RecursiveMissingPayload, None) => {
+                    Message::core_validation_recursive_missing_payload()
+                }
+                (ValidationCause::RecursiveMissingPayload, Some(node)) => {
+                    Message::core_validation_recursive_missing_payload_node(node)
+                }
+                (ValidationCause::RecursiveUnexpectedPayload, None) => {
+                    Message::core_validation_recursive_unexpected_payload()
+                }
+                (ValidationCause::RecursiveUnexpectedPayload, Some(node)) => {
+                    Message::core_validation_recursive_unexpected_payload_node(node)
+                }
+                (ValidationCause::RecursiveDataRoot, None) => {
+                    Message::core_validation_recursive_data_root()
+                }
+                (ValidationCause::RecursiveDataRoot, Some(node)) => {
+                    Message::core_validation_recursive_data_root_node(node)
+                }
+                (ValidationCause::RecursivePayloadCall, None) => {
+                    Message::core_validation_recursive_payload_call()
+                }
+                (ValidationCause::RecursivePayloadCall, Some(node)) => {
+                    Message::core_validation_recursive_payload_call_node(node)
+                }
+                (ValidationCause::RecursivePayloadForm, None) => {
+                    Message::core_validation_recursive_payload_form()
+                }
+                (ValidationCause::RecursivePayloadForm, Some(node)) => {
+                    Message::core_validation_recursive_payload_form_node(node)
+                }
             });
         }
         Some(match (self.reason, node) {
@@ -450,6 +554,19 @@ impl ValidationError {
                 | ValidationCause::RelatedOriginSource
                 | ValidationCause::UnadmittedOriginSource
                 | ValidationCause::InvalidOriginSpan(_) => ValidationReason::Provenance,
+                ValidationCause::EmptyRecursiveGroup
+                | ValidationCause::RecursiveFunctionInitializer
+                | ValidationCause::RecursiveTypeAbstraction
+                | ValidationCause::RecursiveTypeParameters
+                | ValidationCause::RecursiveFunctionBody
+                | ValidationCause::RecursiveValueType
+                | ValidationCause::RecursiveUnknownConstructor
+                | ValidationCause::RecursiveConstructorOwner
+                | ValidationCause::RecursiveMissingPayload
+                | ValidationCause::RecursiveUnexpectedPayload
+                | ValidationCause::RecursiveDataRoot
+                | ValidationCause::RecursivePayloadCall
+                | ValidationCause::RecursivePayloadForm => ValidationReason::RecursiveBinding,
             },
             node,
             cause: Some(cause),
@@ -6231,8 +6348,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             PureComputation::RecursiveBind(group) => {
                 if group.members().is_empty() {
-                    return Err(ValidationError::new(
-                        ValidationReason::RecursiveBinding,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::EmptyRecursiveGroup,
                         Some(id),
                     ));
                 }
@@ -6243,20 +6360,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .collect::<HashSet<_>>();
                 for member in group.members() {
                     let initializer = self.node(member.initializer())?;
-                    let safe = match member.binder().ty() {
-                        Type::Function(_, _) => matches!(
+                    let failure = match member.binder().ty() {
+                        Type::Function(_, _) => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(PureValue::Function(_)))
-                        ),
-                        Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => matches!(
+                        ))
+                        .then_some(ValidationCause::RecursiveFunctionInitializer),
+                        Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => (!matches!(
                             F::pure(&initializer.kind),
                             Some(PureExprKind::Value(PureValue::Function(_)))
-                        ),
+                        ))
+                        .then_some(ValidationCause::RecursiveFunctionInitializer),
                         ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
                             Some(owner) => {
                                 self.guarded_data_root(member.initializer(), owner, &recursive)?
                             }
-                            None => false,
+                            None => Some(ValidationCause::RecursiveValueType),
                         },
                         Type::Forall(parameters, body)
                             if matches!(body.as_ref(), Type::Function(_, _))
@@ -6267,18 +6386,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 abstraction,
                             ))) = F::pure(&initializer.kind)
                             else {
-                                return Err(ValidationError::new(
-                                    ValidationReason::RecursiveBinding,
+                                return Err(ValidationError::with_cause(
+                                    ValidationCause::RecursiveTypeAbstraction,
                                     Some(id),
                                 ));
                             };
-                            self.same_kinded_parameters(
+                            if !self.same_kinded_parameters(
                                 abstraction.parameters(),
                                 parameters.as_ref(),
-                            )? && matches!(
-                                F::pure(&self.node(abstraction.body())?.kind),
-                                Some(PureExprKind::Value(PureValue::Function(_)))
-                            )
+                            )? {
+                                Some(ValidationCause::RecursiveTypeParameters)
+                            } else {
+                                (!matches!(
+                                    F::pure(&self.node(abstraction.body())?.kind),
+                                    Some(PureExprKind::Value(PureValue::Function(_)))
+                                ))
+                                .then_some(ValidationCause::RecursiveFunctionBody)
+                            }
                         }
                         Type::Int
                         | Type::Bool
@@ -6289,13 +6413,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::EffectfulFunction(_, _)
-                        | Type::Forall(_, _) => false,
+                        | Type::Forall(_, _) => Some(ValidationCause::RecursiveValueType),
                     };
-                    if !safe {
-                        return Err(ValidationError::new(
-                            ValidationReason::RecursiveBinding,
-                            Some(id),
-                        ));
+                    if let Some(cause) = failure {
+                        return Err(ValidationError::with_cause(cause, Some(id)));
                     }
                     if !self.same_type_charged(&initializer.ty, member.binder().ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -6724,37 +6845,43 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         initializer: NodeId,
         owner: crate::types::NominalTypeId,
         recursive: &HashSet<BinderId>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let initializer = self.erase_type_applications(initializer)?;
         let root = self.node(initializer)?;
         let payload = match F::pure(&root.kind) {
             Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveUnknownConstructor));
                 };
-                if info.owner != owner || info.payload.is_some() {
-                    return Ok(false);
+                if info.owner != owner {
+                    return Ok(Some(ValidationCause::RecursiveConstructorOwner));
                 }
-                return Ok(true);
+                if info.payload.is_some() {
+                    return Ok(Some(ValidationCause::RecursiveMissingPayload));
+                }
+                return Ok(None);
             }
             Some(PureExprKind::Computation(PureComputation::Apply(application))) => {
                 let function = self.node(self.erase_type_applications(application.function())?)?;
                 let Some(PureExprKind::Value(PureValue::Constructor(constructor))) =
                     F::pure(&function.kind)
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveDataRoot));
                 };
                 let Some(info) = self.program.registry.constructor(constructor.constructor())
                 else {
-                    return Ok(false);
+                    return Ok(Some(ValidationCause::RecursiveUnknownConstructor));
                 };
-                if info.owner != owner || info.payload.is_none() {
-                    return Ok(false);
+                if info.owner != owner {
+                    return Ok(Some(ValidationCause::RecursiveConstructorOwner));
+                }
+                if info.payload.is_none() {
+                    return Ok(Some(ValidationCause::RecursiveUnexpectedPayload));
                 }
                 application.argument()
             }
-            _ => return Ok(false),
+            _ => return Ok(Some(ValidationCause::RecursiveDataRoot)),
         };
         self.guarded_payload(payload, recursive)
     }
@@ -6763,7 +6890,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         &self,
         root: NodeId,
         recursive: &HashSet<BinderId>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let reaches_recursive = self.recursive_reachability(root, recursive)?;
         let mut work = vec![root];
         while let Some(id) = work.pop() {
@@ -6784,15 +6911,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         F::pure(&function.kind),
                         Some(PureExprKind::Value(PureValue::Constructor(_)))
                     ) {
-                        return Ok(false);
+                        return Ok(Some(ValidationCause::RecursivePayloadCall));
                     }
                     work.push(application.argument());
                 }
                 Some(PureExprKind::Value(PureValue::Function(_))) => {}
-                _ => return Ok(false),
+                _ => return Ok(Some(ValidationCause::RecursivePayloadForm)),
             }
         }
-        Ok(true)
+        Ok(None)
     }
 
     fn erase_type_applications(&self, mut id: NodeId) -> Result<NodeId, ValidationError> {
@@ -9670,6 +9797,242 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recursive_constructor_checks_keep_the_failed_relationship() {
+        let file = source();
+        let owner = crate::types::NominalTypeId::new(file.id(), 0);
+        let other = crate::types::NominalTypeId::new(file.id(), 1);
+        let nullary = ConstructorId::new(owner, 0);
+        let payload = ConstructorId::new(owner, 1);
+        let unknown = ConstructorId::new(owner, 2);
+        let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
+            Vec::new(),
+            vec![
+                crate::resolved::ResolvedConstructor {
+                    id: nullary,
+                    owner,
+                    spelling: "Empty".into(),
+                    payload: None,
+                    origin: origin(&file),
+                },
+                crate::resolved::ResolvedConstructor {
+                    id: payload,
+                    owner,
+                    spelling: "Value".into(),
+                    payload: Some(Type::Unit),
+                    origin: origin(&file),
+                },
+            ],
+        ));
+        let mut builder = CoreBuilder::with_registry(registry);
+        let nullary_node = builder
+            .constructor(nullary, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let payload_node = builder
+            .constructor(
+                payload,
+                Type::Function(Box::new(Type::Unit), Box::new(Type::Nominal(owner))),
+                origin(&file),
+            )
+            .unwrap();
+        let unknown_node = builder
+            .constructor(unknown, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let unit = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let applied_nullary = builder
+            .application(nullary_node, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let applied_payload = builder
+            .application(payload_node, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let applied_unit = builder
+            .application(unit, unit, Type::Nominal(owner), origin(&file))
+            .unwrap();
+        let program = builder.finish(applied_payload).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        for (node, owner, expected) in [
+            (nullary_node, owner, None),
+            (applied_payload, owner, None),
+            (
+                nullary_node,
+                other,
+                Some(ValidationCause::RecursiveConstructorOwner),
+            ),
+            (
+                unknown_node,
+                owner,
+                Some(ValidationCause::RecursiveUnknownConstructor),
+            ),
+            (
+                payload_node,
+                owner,
+                Some(ValidationCause::RecursiveMissingPayload),
+            ),
+            (
+                applied_nullary,
+                owner,
+                Some(ValidationCause::RecursiveUnexpectedPayload),
+            ),
+            (unit, owner, Some(ValidationCause::RecursiveDataRoot)),
+            (
+                applied_unit,
+                owner,
+                Some(ValidationCause::RecursiveDataRoot),
+            ),
+        ] {
+            assert_eq!(
+                validator
+                    .guarded_data_root(node, owner, &HashSet::new())
+                    .unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_failure_messages_preserve_precise_causes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::EmptyRecursiveGroup,
+                "empty-recursive-group",
+                "The compiler retained a Core recursive group with no members.",
+            ),
+            (
+                ValidationCause::RecursiveFunctionInitializer,
+                "recursive-function-initializer",
+                "The compiler retained a recursive function whose initializer is not a function value.",
+            ),
+            (
+                ValidationCause::RecursiveTypeAbstraction,
+                "recursive-type-abstraction",
+                "The compiler retained a polymorphic recursive function without its type abstraction.",
+            ),
+            (
+                ValidationCause::RecursiveTypeParameters,
+                "recursive-type-parameters",
+                "The compiler retained a recursive type abstraction whose parameters disagree with the binding's type.",
+            ),
+            (
+                ValidationCause::RecursiveFunctionBody,
+                "recursive-function-body",
+                "The compiler retained a recursive type abstraction whose body is not a function value.",
+            ),
+            (
+                ValidationCause::RecursiveValueType,
+                "recursive-value-type",
+                "The compiler retained a recursive binding whose type is neither a supported function type nor a nominal data type.",
+            ),
+            (
+                ValidationCause::RecursiveUnknownConstructor,
+                "recursive-unknown-constructor",
+                "The compiler retained a recursive data initializer whose constructor is absent from the registry.",
+            ),
+            (
+                ValidationCause::RecursiveConstructorOwner,
+                "recursive-constructor-owner",
+                "The compiler retained a recursive data initializer using a constructor of a different nominal type.",
+            ),
+            (
+                ValidationCause::RecursiveMissingPayload,
+                "recursive-missing-payload",
+                "The compiler retained a recursive data constructor without its required payload.",
+            ),
+            (
+                ValidationCause::RecursiveUnexpectedPayload,
+                "recursive-unexpected-payload",
+                "The compiler supplied a payload to a recursive data constructor that takes none.",
+            ),
+            (
+                ValidationCause::RecursiveDataRoot,
+                "recursive-data-root",
+                "The compiler retained a recursive data initializer that is not rooted in a constructor.",
+            ),
+            (
+                ValidationCause::RecursivePayloadCall,
+                "recursive-payload-call",
+                "The compiler retained a recursive data payload that uses recursive bindings in a call to a non-constructor.",
+            ),
+            (
+                ValidationCause::RecursivePayloadForm,
+                "recursive-payload-form",
+                "The compiler retained a recursive data payload that uses recursive bindings outside the permitted guarded forms.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.recursive-binding");
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn empty_recursive_group_has_a_precise_message() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let function = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        for (ty, cause) in [
+            (None, "empty-recursive-group"),
+            (Some(Type::Unit), "recursive-value-type"),
+            (Some(function.clone()), "recursive-function-initializer"),
+            (
+                Some(Type::Forall(Box::new([]), Box::new(function))),
+                "recursive-type-abstraction",
+            ),
+        ] {
+            let members = ty
+                .into_iter()
+                .map(|ty| {
+                    super::super::recursion::RecursiveBindingMember::new(
+                        TypedBinder::new(program.arena, BinderId::new(0), ty, origin(&file)),
+                        root,
+                    )
+                })
+                .collect();
+            let computation = PureComputation::RecursiveBind(
+                super::super::recursion::RecursiveBindingNode::new(members, root),
+            );
+            let error = validator
+                .validate_computation(
+                    root,
+                    &program.nodes[0],
+                    &computation,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::RecursiveBinding);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        }
+    }
     #[test]
     fn provenance_checks_retain_precise_causes() {
         let file = source();
