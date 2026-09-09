@@ -71,13 +71,26 @@ impl fmt::Display for EvidenceValidationReason {
 pub struct EvidenceValidationFailure {
     reason: EvidenceValidationReason,
     primary: Span,
+    kind_context: Option<(Span, crate::kind::KindInternalCause)>,
 }
 
 impl EvidenceValidationFailure {
+    fn with_kind_context(mut self, failure: &KindFailure) -> Self {
+        self.kind_context = failure.internal_context();
+        self
+    }
+
+    pub(crate) fn kind_context(self) -> Option<(Span, crate::kind::KindInternalCause)> {
+        self.kind_context
+    }
+
     pub(crate) fn diagnostic_message(
         self,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
+        if let Some((_, cause)) = self.kind_context {
+            return Some((cause.message(), "validation_site"));
+        }
         Some(match self.reason {
             EvidenceValidationReason::UnavailableImplementation => (
                 Message::evidence_unavailable_implementation(),
@@ -102,7 +115,11 @@ impl EvidenceValidationFailure {
     }
 
     const fn new(reason: EvidenceValidationReason, primary: Span) -> Self {
-        Self { reason, primary }
+        Self {
+            reason,
+            primary,
+            kind_context: None,
+        }
     }
 
     /// Returns the stable validation reason.
@@ -2191,14 +2208,18 @@ fn collect_linked_constraint_variables(
 fn map_kind_type_failure(failure: KindFailure, span: Span) -> EvidenceValidationFailure {
     match failure {
         KindFailure::Resource(_) => type_resource(span),
-        KindFailure::Internal(_) | KindFailure::Source(_) => unknown(span),
+        failure @ (KindFailure::Internal(_) | KindFailure::Source(_)) => {
+            unknown(span).with_kind_context(&failure)
+        }
     }
 }
 
 fn map_kind_constraint_failure(failure: KindFailure, span: Span) -> EvidenceValidationFailure {
     match failure {
         KindFailure::Resource(_) => resource(span),
-        KindFailure::Internal(_) | KindFailure::Source(_) => unknown(span),
+        failure @ (KindFailure::Internal(_) | KindFailure::Source(_)) => {
+            unknown(span).with_kind_context(&failure)
+        }
     }
 }
 
@@ -2262,7 +2283,9 @@ fn authenticate_selected_substitution_kinds<'a>(
 fn map_selected_kind_type_failure(failure: KindFailure, span: Span) -> EvidenceValidationFailure {
     match failure {
         KindFailure::Resource(_) => type_resource(span),
-        KindFailure::Internal(_) | KindFailure::Source(_) => invalid_root(span),
+        failure @ (KindFailure::Internal(_) | KindFailure::Source(_)) => {
+            invalid_root(span).with_kind_context(&failure)
+        }
     }
 }
 
@@ -2272,7 +2295,9 @@ fn map_selected_kind_constraint_failure(
 ) -> EvidenceValidationFailure {
     match failure {
         KindFailure::Resource(_) => resource(span),
-        KindFailure::Internal(_) | KindFailure::Source(_) => invalid_root(span),
+        failure @ (KindFailure::Internal(_) | KindFailure::Source(_)) => {
+            invalid_root(span).with_kind_context(&failure)
+        }
     }
 }
 
@@ -7833,6 +7858,106 @@ mod tests {
     };
 
     static FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn kind_causes_survive_all_evidence_adapters() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_evidence_failure, write_human, write_json},
+        };
+        let declaration = SourceFile::new("declaration.ash", "binder").unwrap();
+        let occurrence = SourceFile::new("occurrence.ash", "use").unwrap();
+        let declaration_span = declaration.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let occurrence_span = occurrence.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        type KindAdapter = fn(KindFailure, Span) -> EvidenceValidationFailure;
+        let adapters: [(
+            KindAdapter,
+            EvidenceValidationReason,
+            EvidenceValidationReason,
+        ); 4] = [
+            (
+                map_kind_type_failure,
+                EvidenceValidationReason::UnknownIdentity,
+                EvidenceValidationReason::TypeResourceExhausted,
+            ),
+            (
+                map_kind_constraint_failure,
+                EvidenceValidationReason::UnknownIdentity,
+                EvidenceValidationReason::ConstraintResourceExhausted,
+            ),
+            (
+                map_selected_kind_type_failure,
+                EvidenceValidationReason::InvalidEvidenceRoot,
+                EvidenceValidationReason::TypeResourceExhausted,
+            ),
+            (
+                map_selected_kind_constraint_failure,
+                EvidenceValidationReason::InvalidEvidenceRoot,
+                EvidenceValidationReason::ConstraintResourceExhausted,
+            ),
+        ];
+        for (adapt, reason, resource_reason) in adapters {
+            for span in [declaration_span, occurrence_span] {
+                let mut environments = KindEnvironments::new();
+                let identity = TypeVariableId::new(0);
+                let kind = Kind::Type;
+                environments
+                    .insert_declared(
+                        identity,
+                        &kind,
+                        declaration_span,
+                        &mut TypeWorkBudget::with_limit(1),
+                    )
+                    .unwrap();
+                let error = environments
+                    .insert_declared(
+                        identity,
+                        &kind,
+                        declaration_span,
+                        &mut TypeWorkBudget::with_limit(1),
+                    )
+                    .unwrap_err();
+                let failure = adapt(error, span);
+                assert_eq!(failure.reason(), reason);
+                assert_eq!(failure.primary(), span);
+                let view =
+                    compile_evidence_failure(&failure, &[&declaration, &occurrence]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(
+                            String::from_utf8(output)
+                                .unwrap()
+                                .contains("duplicate type-variable identity")
+                        );
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["facts"][1]["name"], "kind_cause");
+                assert_eq!(json["facts"][1]["value"], "duplicate-binder");
+                assert_eq!(
+                    json["labels"].as_array().unwrap().len(),
+                    if span == declaration_span { 1 } else { 2 }
+                );
+                if span != declaration_span {
+                    assert_eq!(json["labels"][1]["relationship"], "kind_failure_origin");
+                    assert!(compile_evidence_failure(&failure, &[&occurrence]).is_err());
+                }
+                let error = KindEnvironments::new()
+                    .insert_declared(
+                        identity,
+                        &kind,
+                        declaration_span,
+                        &mut TypeWorkBudget::with_limit(0),
+                    )
+                    .unwrap_err();
+                assert_eq!(adapt(error, span).reason(), resource_reason);
+            }
+        }
+    }
 
     #[test]
     fn evidence_failure_messages_preserve_resource_and_occurrence_context() {

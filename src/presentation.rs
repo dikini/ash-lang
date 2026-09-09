@@ -434,18 +434,45 @@ pub fn compile_evidence_failure<'a>(
             value: FactValue::Text(resource),
         });
     }
+    let mut primary_message = message.clone();
+    let mut related = Vec::new();
+    if let Some((origin, cause)) = error.kind_context() {
+        facts.push(Fact {
+            name: "kind_cause",
+            kind: "kind-internal-cause",
+            value: FactValue::Text(cause.name()),
+        });
+        if origin != span {
+            let origin_source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == origin.source())
+                .ok_or(PresentationError::MissingSource)?;
+            origin_source
+                .location(origin)
+                .map_err(|_| PresentationError::MissingSource)?;
+            primary_message = Message::evidence_kind_use();
+            related.push(Label {
+                source: origin_source,
+                span: origin,
+                message: cause.message(),
+                relationship: "kind_failure_origin",
+                facts: Vec::new(),
+            });
+        }
+    }
     Ok(CompileDiagnostic {
         reason: error.reason().to_string(),
         responsibility: "compiler",
         primary: Some(Label {
             source,
             span,
-            message: message.clone(),
+            message: primary_message,
             relationship,
             facts: Vec::new(),
         }),
         message,
-        related: Vec::new(),
+        related,
         facts,
     })
 }

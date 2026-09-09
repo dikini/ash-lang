@@ -510,3 +510,4 @@ kind-internal-lookup-global-index = Редът на декларациите в 
 kind-internal-lookup-implementation-index = Редът на декларациите в компилатора съдържа невалиден индекс на реализация.
 kind-internal-lookup-interface-index = Редът на декларациите в компилатора съдържа невалиден индекс на интерфейс.
 kind-internal-lookup-nominal-index = Редът на декларациите в компилатора съдържа невалиден индекс на номинален тип.
+evidence-kind-use = Проверката на родовете се провали при проверка на свидетелството на това използване.

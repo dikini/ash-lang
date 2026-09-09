@@ -224,7 +224,7 @@ pub enum KindFailure {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum KindInternalCause {
+pub(crate) enum KindInternalCause {
     BodyFreeConstructorOwner,
     BodyFreeInterfaceKind,
     BodyFreeConstructorKind,
@@ -351,7 +351,7 @@ enum KindInternalCause {
 }
 
 impl KindInternalCause {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::BodyFreeConstructorOwner => "body-free-constructor-owner",
             Self::BodyFreeInterfaceKind => "body-free-interface-kind",
@@ -731,7 +731,7 @@ impl KindInternalCause {
             Self::MissingOwnerBinder => "a linked owner binder has no canonical registry fact",
         }
     }
-    fn message(self) -> crate::message::Message<'static> {
+    pub(crate) fn message(self) -> crate::message::Message<'static> {
         match self {
             Self::BodyFreeConstructorOwner => {
                 crate::message::Message::kind_internal_body_free_constructor_owner()
@@ -1063,6 +1063,13 @@ impl KindInternalCause {
 }
 
 impl KindFailure {
+    pub(crate) fn internal_context(&self) -> Option<(Span, KindInternalCause)> {
+        let Self::Internal(detail) = self else {
+            return None;
+        };
+        Some((detail.span, detail.cause?))
+    }
+
     fn internal_cause(span: Span, cause: KindInternalCause) -> Self {
         Self::Internal(KindStageFailure {
             span,

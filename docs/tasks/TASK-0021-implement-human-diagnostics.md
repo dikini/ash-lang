@@ -624,6 +624,16 @@ localization language. Color is not required for completion.
   warnings-denied Clippy passed. Legacy text and checks remain unchanged.
   Preserving kind causes through callers that collapse them into broader
   failures remains part of the compiler-cause boundary work.
+- Internal kind causes now survive all four kind-to-evidence adapters. The
+  evidence failure retains the copyable cause and its original span alongside
+  the unchanged evidence reason and primary span. Human output and JSON preserve
+  cross-file origins without duplicating a same-span label. Resource failures
+  still map to their owning type/constraint category. Eight real duplicate-binder
+  cases exercise the adapters, source retention and resource mapping. All 138
+  evidence-validation tests, three catalogue tests and warnings-denied Clippy
+  passed. Catalogues contain
+  413 templates each. Other unknown-identity/invalid-root causes remain unmapped,
+  so reason-family coverage is unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
