@@ -71,7 +71,7 @@ impl fmt::Display for EvidenceValidationReason {
 pub struct EvidenceValidationFailure {
     reason: EvidenceValidationReason,
     primary: Span,
-    kind_context: Option<(Span, crate::kind::KindInternalCause)>,
+    kind_context: Option<crate::kind::KindFailureContext>,
 }
 
 impl EvidenceValidationFailure {
@@ -80,7 +80,7 @@ impl EvidenceValidationFailure {
         self
     }
 
-    pub(crate) fn kind_context(self) -> Option<(Span, crate::kind::KindInternalCause)> {
+    pub(crate) fn kind_context(self) -> Option<crate::kind::KindFailureContext> {
         self.kind_context
     }
 
@@ -88,7 +88,7 @@ impl EvidenceValidationFailure {
         self,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
-        if let Some((_, cause)) = self.kind_context {
+        if let Some(cause) = self.kind_context {
             return Some((cause.message(), "validation_site"));
         }
         Some(match self.reason {

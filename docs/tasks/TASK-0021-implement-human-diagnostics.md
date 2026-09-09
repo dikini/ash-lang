@@ -634,6 +634,13 @@ localization language. Color is not required for completion.
   passed. Catalogues contain
   413 templates each. Other unknown-identity/invalid-root causes remain unmapped,
   so reason-family coverage is unchanged.
+- The retained kind cause/span now uses an opaque, copyable `KindFailureContext`.
+  Evidence adapters use this carrier and the cause enum is private again. This
+  provides a carrier for the public failure boundaries on the matching,
+  selection and summary routes without exposing the 123 internal variants.
+  Propagation through those routes remains outstanding; no coverage count or
+  message wording changes in this refactor. The eight-case evidence-adapter
+  regression test and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

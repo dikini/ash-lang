@@ -224,7 +224,7 @@ pub enum KindFailure {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum KindInternalCause {
+enum KindInternalCause {
     BodyFreeConstructorOwner,
     BodyFreeInterfaceKind,
     BodyFreeConstructorKind,
@@ -351,7 +351,7 @@ pub(crate) enum KindInternalCause {
 }
 
 impl KindInternalCause {
-    pub(crate) fn name(self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Self::BodyFreeConstructorOwner => "body-free-constructor-owner",
             Self::BodyFreeInterfaceKind => "body-free-interface-kind",
@@ -731,7 +731,7 @@ impl KindInternalCause {
             Self::MissingOwnerBinder => "a linked owner binder has no canonical registry fact",
         }
     }
-    pub(crate) fn message(self) -> crate::message::Message<'static> {
+    fn message(self) -> crate::message::Message<'static> {
         match self {
             Self::BodyFreeConstructorOwner => {
                 crate::message::Message::kind_internal_body_free_constructor_owner()
@@ -1062,12 +1062,39 @@ impl KindInternalCause {
     }
 }
 
+/// A retained internal kind-checking cause and its original source location.
+///
+/// This opaque, copyable context can cross compiler failure boundaries without
+/// retaining legacy diagnostic strings or exposing the internal cause enum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KindFailureContext {
+    span: Span,
+    cause: KindInternalCause,
+}
+
+impl KindFailureContext {
+    pub(crate) const fn span(self) -> Span {
+        self.span
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        self.cause.name()
+    }
+
+    pub(crate) fn message(self) -> crate::message::Message<'static> {
+        self.cause.message()
+    }
+}
+
 impl KindFailure {
-    pub(crate) fn internal_context(&self) -> Option<(Span, KindInternalCause)> {
+    pub(crate) fn internal_context(&self) -> Option<KindFailureContext> {
         let Self::Internal(detail) = self else {
             return None;
         };
-        Some((detail.span, detail.cause?))
+        Some(KindFailureContext {
+            span: detail.span,
+            cause: detail.cause?,
+        })
     }
 
     fn internal_cause(span: Span, cause: KindInternalCause) -> Self {
@@ -1081,11 +1108,8 @@ impl KindFailure {
     pub(crate) fn internal_presentation(
         &self,
     ) -> Option<(Span, crate::message::Message<'static>, &'static str)> {
-        let Self::Internal(detail) = self else {
-            return None;
-        };
-        let cause = detail.cause?;
-        Some((detail.span, cause.message(), cause.name()))
+        let context = self.internal_context()?;
+        Some((context.span(), context.message(), context.name()))
     }
 
     pub(crate) fn resource_presentation(&self) -> Option<(Span, crate::message::Message<'static>)> {

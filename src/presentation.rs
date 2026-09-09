@@ -436,7 +436,8 @@ pub fn compile_evidence_failure<'a>(
     }
     let mut primary_message = message.clone();
     let mut related = Vec::new();
-    if let Some((origin, cause)) = error.kind_context() {
+    if let Some(cause) = error.kind_context() {
+        let origin = cause.span();
         facts.push(Fact {
             name: "kind_cause",
             kind: "kind-internal-cause",
