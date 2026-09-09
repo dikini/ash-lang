@@ -422,6 +422,12 @@ messages! {
     core_validation_missing_node_node => "core-validation-missing-node-node" { node: usize = 42 },
     core_validation_identity_range => "core-validation-identity-range" {},
     core_validation_identity_range_node => "core-validation-identity-range-node" { node: usize = 42 },
+    core_validation_empty_match => "core-validation-empty-match" {},
+    core_validation_empty_match_node => "core-validation-empty-match-node" { node: usize = 42 },
+    core_validation_redundant_arm => "core-validation-redundant-arm" { arm: usize = 2 },
+    core_validation_redundant_arm_node => "core-validation-redundant-arm-node" { arm: usize = 2, node: usize = 42 },
+    core_validation_non_exhaustive => "core-validation-non-exhaustive" {},
+    core_validation_non_exhaustive_node => "core-validation-non-exhaustive-node" { node: usize = 42 },
     /// The compiler stored a Core node from a different dialect than the selected program.
     core_validation_dialect => "core-validation-dialect" {},
     /// The compiler selected a root node that is not valid in this Core arena.

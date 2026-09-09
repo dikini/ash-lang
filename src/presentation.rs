@@ -545,6 +545,13 @@ pub fn compile_core_validation_failure(
             value: FactValue::Text(cause),
         });
     }
+    if let Some(arm) = error.arm_number() {
+        facts.push(Fact {
+            name: "arm",
+            kind: "match-arm-number",
+            value: FactValue::Integer(arm),
+        });
+    }
     Ok(CompileDiagnostic {
         reason: error.reason().to_string(),
         responsibility: "compiler",

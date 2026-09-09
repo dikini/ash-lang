@@ -261,6 +261,9 @@ enum ValidationCause {
     ForeignArena,
     MissingNode,
     NodeIdentityRange,
+    EmptyMatch,
+    RedundantArm { arm: usize },
+    NonExhaustiveMatch,
 }
 
 impl ValidationError {
@@ -270,7 +273,17 @@ impl ValidationError {
             ValidationCause::ForeignArena => "foreign-arena",
             ValidationCause::MissingNode => "missing-node",
             ValidationCause::NodeIdentityRange => "node-identity-range",
+            ValidationCause::EmptyMatch => "empty-match",
+            ValidationCause::RedundantArm { .. } => "redundant-arm",
+            ValidationCause::NonExhaustiveMatch => "non-exhaustive-match",
         })
+    }
+
+    pub(crate) fn arm_number(&self) -> Option<usize> {
+        match self.cause {
+            Some(ValidationCause::RedundantArm { arm }) => Some(arm),
+            _ => None,
+        }
     }
 
     pub(crate) fn diagnostic_message(&self) -> Option<crate::message::Message<'static>> {
@@ -280,8 +293,8 @@ impl ValidationError {
             .map(|node| usize::try_from(node.value()))
             .transpose()
             .ok()?;
-        if self.reason == ValidationReason::NodeBounds {
-            return Some(match (self.cause?, node) {
+        if let Some(cause) = self.cause {
+            return Some(match (cause, node) {
                 (ValidationCause::MissingChild, None) => Message::core_validation_missing_child(),
                 (ValidationCause::ForeignArena, None) => Message::core_validation_foreign_arena(),
                 (ValidationCause::MissingNode, None) => Message::core_validation_missing_node(),
@@ -299,6 +312,22 @@ impl ValidationError {
                 }
                 (ValidationCause::NodeIdentityRange, Some(node)) => {
                     Message::core_validation_identity_range_node(node)
+                }
+                (ValidationCause::EmptyMatch, None) => Message::core_validation_empty_match(),
+                (ValidationCause::EmptyMatch, Some(node)) => {
+                    Message::core_validation_empty_match_node(node)
+                }
+                (ValidationCause::RedundantArm { arm }, None) => {
+                    Message::core_validation_redundant_arm(arm)
+                }
+                (ValidationCause::RedundantArm { arm }, Some(node)) => {
+                    Message::core_validation_redundant_arm_node(arm, node)
+                }
+                (ValidationCause::NonExhaustiveMatch, None) => {
+                    Message::core_validation_non_exhaustive()
+                }
+                (ValidationCause::NonExhaustiveMatch, Some(node)) => {
+                    Message::core_validation_non_exhaustive_node(node)
                 }
             });
         }
@@ -327,9 +356,17 @@ impl ValidationError {
         }
     }
 
-    const fn node_bounds(cause: ValidationCause, node: Option<NodeId>) -> Self {
+    const fn with_cause(cause: ValidationCause, node: Option<NodeId>) -> Self {
         Self {
-            reason: ValidationReason::NodeBounds,
+            reason: match cause {
+                ValidationCause::MissingChild
+                | ValidationCause::ForeignArena
+                | ValidationCause::MissingNode
+                | ValidationCause::NodeIdentityRange => ValidationReason::NodeBounds,
+                ValidationCause::EmptyMatch
+                | ValidationCause::RedundantArm { .. }
+                | ValidationCause::NonExhaustiveMatch => ValidationReason::Coverage,
+            },
             node,
             cause: Some(cause),
         }
@@ -5601,7 +5638,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(GraphTask::Exit(id));
                     for child_index in (0..child_count).rev() {
                         let Some(child) = F::child_at(&node.kind, child_index) else {
-                            return Err(ValidationError::node_bounds(
+                            return Err(ValidationError::with_cause(
                                 ValidationCause::MissingChild,
                                 Some(id),
                             ));
@@ -6225,11 +6262,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     return Err(ValidationError::new(ValidationReason::Pattern, Some(id)));
                 }
                 if match_node.arms().is_empty() {
-                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::EmptyMatch,
+                        Some(id),
+                    ));
                 }
                 let mut matrix = CorePatternMatrix(Vec::new());
                 let mut coverage_budget = UsefulnessBudget::default();
-                for arm in match_node.arms() {
+                for (index, arm) in match_node.arms().iter().enumerate() {
                     self.validate_origin(arm.origin(), id)?;
                     self.validate_pattern(arm.pattern(), &scrutinee.ty, id)?;
                     if !self.same_type_charged(&self.node(arm.body())?.ty, &node.ty)? {
@@ -6246,7 +6286,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                     .is_none()
                     {
-                        return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::RedundantArm { arm: index + 1 },
+                            Some(id),
+                        ));
                     }
                     matrix.0.push(row.into_inner());
                 }
@@ -6259,7 +6302,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?
                 .is_some()
                 {
-                    return Err(ValidationError::new(ValidationReason::Coverage, Some(id)));
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::NonExhaustiveMatch,
+                        Some(id),
+                    ));
                 }
             }
             PureComputation::NewtypeConversion(conversion) => {
@@ -6482,7 +6528,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(id)))?;
             for index in 0..children {
                 pending.push(F::child_at(&node.kind, index).ok_or_else(|| {
-                    ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
+                    ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
                 })?);
             }
         }
@@ -6697,12 +6743,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Finish(id));
                     for index in 0..child_count {
                         work.push(Task::Visit(F::child_at(&node.kind, index).ok_or_else(
-                            || {
-                                ValidationError::node_bounds(
-                                    ValidationCause::MissingChild,
-                                    Some(id),
-                                )
-                            },
+                            || ValidationError::with_cause(ValidationCause::MissingChild, Some(id)),
                         )?));
                     }
                 }
@@ -6717,7 +6758,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, index).ok_or_else(|| {
-                            ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
+                            ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
                         })?;
                         reaches |= result.get(&child).copied().unwrap_or(false);
                     }
@@ -7942,7 +7983,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn index(&self, id: NodeId) -> Result<usize, ValidationError> {
         if id.arena() != self.program.arena {
-            return Err(ValidationError::node_bounds(
+            return Err(ValidationError::with_cause(
                 ValidationCause::ForeignArena,
                 Some(id),
             ));
@@ -7950,7 +7991,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         usize::try_from(id.value())
             .ok()
             .filter(|index| *index < self.program.nodes.len())
-            .ok_or_else(|| ValidationError::node_bounds(ValidationCause::MissingNode, Some(id)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingNode, Some(id)))
     }
 
     fn node(&self, id: NodeId) -> Result<&'program StoredNode<F>, ValidationError> {
@@ -7958,7 +7999,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.program
             .nodes
             .get(index)
-            .ok_or_else(|| ValidationError::node_bounds(ValidationCause::MissingNode, Some(id)))
+            .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingNode, Some(id)))
     }
 
     fn pure_kind(&self, id: NodeId) -> Result<&'program PureExprKind, ValidationError> {
@@ -8216,14 +8257,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.charge_type_work(node.kind.child_count())?;
             for ordinal in 0..node.kind.child_count() {
                 let child = node.kind.child_at(ordinal).ok_or_else(|| {
-                    ValidationError::node_bounds(ValidationCause::MissingChild, None)
+                    ValidationError::with_cause(ValidationCause::MissingChild, None)
                 })?;
                 let parent = parents
                     .get_mut(child.index().map_err(|_| {
-                        ValidationError::node_bounds(ValidationCause::MissingNode, None)
+                        ValidationError::with_cause(ValidationCause::MissingNode, None)
                     })?)
                     .ok_or_else(|| {
-                        ValidationError::node_bounds(ValidationCause::MissingNode, None)
+                        ValidationError::with_cause(ValidationCause::MissingNode, None)
                     })?;
                 parent.0 = parent
                     .0
@@ -9073,7 +9114,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if effectful_children {
             for child_index in 0..kind.child_count() {
                 let child = kind.child_at(child_index).ok_or_else(|| {
-                    ValidationError::node_bounds(ValidationCause::MissingChild, Some(id))
+                    ValidationError::with_cause(ValidationCause::MissingChild, Some(id))
                 })?;
                 expected =
                     self.union_effect_rows_charged(&expected, &self.node(child)?.effects, id)?;
@@ -9144,7 +9185,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             for index in 0..child_count {
                 work.push(Task::Collect(
                     super::effect::EffectOperationFamily::child_at(&node.kind, index).ok_or_else(
-                        || ValidationError::node_bounds(ValidationCause::MissingChild, Some(id)),
+                        || ValidationError::with_cause(ValidationCause::MissingChild, Some(id)),
                     )?,
                 ));
             }
@@ -9182,7 +9223,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         work.push(Task::Enter(
                             super::effect::EffectOperationFamily::child_at(&node.kind, index)
                                 .ok_or_else(|| {
-                                    ValidationError::node_bounds(
+                                    ValidationError::with_cause(
                                         ValidationCause::MissingChild,
                                         Some(id),
                                     )
@@ -9208,7 +9249,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                     row = self.union_effect_rows_charged(
                                         &row,
                                         child_row(kind.child_at(index).ok_or_else(|| {
-                                            ValidationError::node_bounds(
+                                            ValidationError::with_cause(
                                                 ValidationCause::MissingChild,
                                                 Some(id),
                                             )
@@ -9528,7 +9569,7 @@ enum ScopeAnalysisTask {
 fn node_id(arena: super::dialect::ArenaId, index: usize) -> Result<NodeId, ValidationError> {
     u32::try_from(index)
         .map(|index| NodeId::new(arena, index))
-        .map_err(|_| ValidationError::node_bounds(ValidationCause::NodeIdentityRange, None))
+        .map_err(|_| ValidationError::with_cause(ValidationCause::NodeIdentityRange, None))
 }
 
 #[cfg(test)]
@@ -9536,6 +9577,93 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coverage_messages_retain_failure_and_arm_number() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let file = source();
+        for (patterns, expected, arm_number) in [
+            (vec![], "empty-match", None),
+            (
+                vec![CorePatternKind::Boolean(true)],
+                "non-exhaustive-match",
+                None,
+            ),
+            (
+                vec![CorePatternKind::Wildcard, CorePatternKind::Wildcard],
+                "redundant-arm",
+                Some(2),
+            ),
+        ] {
+            let mut program = unchecked_pattern_program(&file, 0);
+            program.nodes[0].ty = Type::Bool;
+            program.nodes[0].kind = PureExprKind::Value(PureValue::Boolean(
+                super::super::literal::BooleanNode::new(true),
+            ));
+            let match_id = NodeId::new(program.arena, 2);
+            let arms = patterns
+                .into_iter()
+                .map(|pattern| {
+                    super::super::CoreMatchArm::new(
+                        CorePattern::new(Type::Bool, origin(&file), pattern),
+                        NodeId::new(program.arena, 1),
+                        origin(&file),
+                    )
+                })
+                .collect();
+            program.nodes[2].kind = PureExprKind::Computation(PureComputation::Match(
+                super::super::MatchNode::new(NodeId::new(program.arena, 0), arms),
+            ));
+            let validator = Validator::new(&program, &[&file]);
+            let PureExprKind::Computation(computation) = &program.nodes[2].kind else {
+                unreachable!()
+            };
+            let error = validator
+                .validate_computation(
+                    match_id,
+                    &program.nodes[2],
+                    computation,
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::Coverage);
+            assert_eq!(error.cause_name(), Some(expected));
+            assert_eq!(error.arm_number(), arm_number);
+            for node in [None, Some(match_id)] {
+                let mut failure = error.clone();
+                failure.node = node;
+                let view = compile_core_validation_failure(&failure).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if arm_number.is_some() && locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains("match arm 2"));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == expected)
+                );
+                let arm_fact = facts.iter().find(|fact| fact["name"] == "arm");
+                assert_eq!(
+                    arm_fact.map(|fact| fact["value"].as_u64().unwrap()),
+                    arm_number.map(|arm| arm as u64)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
     #[test]
     fn node_bounds_messages_preserve_causes_and_optional_node() {
         use crate::{
@@ -9566,7 +9694,7 @@ mod tests {
             ),
         ] {
             for node in [None, Some(NodeId::new(arena, u32::MAX))] {
-                let error = ValidationError::node_bounds(cause, node);
+                let error = ValidationError::with_cause(cause, node);
                 let view = compile_core_validation_failure(&error).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
@@ -23269,6 +23397,7 @@ mod tests {
                     )
                     .expect_err("the second wildcard is redundant");
                 assert_eq!(error.reason(), ValidationReason::Coverage);
+                assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
                 drop(validator);
                 program.discard_iteratively();
             })

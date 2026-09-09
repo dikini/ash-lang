@@ -683,6 +683,15 @@ localization language. Color is not required for completion.
   identity conversion. Core coverage is now 5/23 reasons and overall coverage
   is 161/197. Catalogues contain 423 templates per locale. All 1,259 library
   tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
+- Core match-coverage presentation distinguishes no arms, a redundant arm and
+  uncovered inputs. Redundant arms retain their one-based ordinal for both
+  localized messages and JSON. The private cause constructor now derives its
+  reason, preventing mismatched reason/cause pairs. Tests exercise all three
+  validation branches and six optional-node layouts; the existing deep-pattern
+  teardown regression also checks presentation. Core coverage is 6/23 reasons,
+  overall coverage is 162/197, and catalogues contain 429 templates per locale.
+  All 1,260 library tests, 86 diagnostic/catalogue tests and warnings-denied
+  Clippy passed. Markdown lint and `git diff --check` passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
