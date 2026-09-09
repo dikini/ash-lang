@@ -1466,6 +1466,28 @@ fn effect_row_messages_distinguish_union_and_declared_effects() {
     }
 }
 
+#[test]
+fn missing_handled_effect_explains_exact_instance_requirement() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human},
+    };
+    let text = "effect State<S> {\nget : Unit -> S\n}\nmain : Unit -> Int\nmain () = handle (perform State<Int>.get ()) with State<Bool> {\nget ignored => resume false\n}\n";
+    let fixture = ModuleFixture::load("missing-effect.ash", text);
+    let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected source error")
+    };
+    assert_eq!(error.reason, TypeReason::MissingHandledEffect);
+    let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        if locale == Locale::English {
+            assert!(String::from_utf8(output).unwrap().contains("The handled computation must explicitly request this exact effect instance, including its type arguments."));
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

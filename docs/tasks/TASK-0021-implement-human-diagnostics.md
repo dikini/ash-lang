@@ -425,6 +425,15 @@ localization language. Color is not required for completion.
   All 107 focused tests and warnings-denied Clippy passed.
   Missing handled effects remain outstanding;
   their two producers are in the cleanup-row submodule.
+- Unsafe-discard presentation retains the existing optional completion owner:
+  clause, cleanup action or unknown. Human labels explain the capturing request
+  and identified owner; JSON retains those relationships and the owner kind.
+  Exact and insufficient work-budget cases preserve the existing charges.
+  Missing-handled-effect presentation states the explicitly present exact
+  instance requirement, including type arguments. Type presentation covers
+  34 of 35 source reasons, with 183 templates per locale. All 108 focused
+  tests and warnings-denied Clippy passed. Language acceptance, failure order
+  and runtime reporting remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

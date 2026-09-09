@@ -150,6 +150,20 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Ordinary handlers require an explicitly present exact effect instance.
+    missing_handled_effect => "missing-handled-effect" {},
+    /// Ash cannot prove that this continuation can be discarded without skipping required completion.
+    discard_unknown => "discard-unknown" {},
+    /// This discard would skip a clause that still requires completion.
+    discard_clause => "discard-clause" {},
+    /// This discard would skip a cleanup action that must complete.
+    discard_cleanup => "discard-cleanup" {},
+    /// This request or call can capture the continuation.
+    discard_request => "discard-request" {},
+    /// This clause still requires completion.
+    discard_clause_owner => "discard-clause-owner" {},
+    /// This cleanup action must complete.
+    discard_cleanup_owner => "discard-cleanup-owner" {},
     /// The cleanup effects do not satisfy the required effect row.
     effect_row_cleanup_requirement => "effect-row-cleanup-requirement" {},
     /// Ash cannot determine the effect row remaining after this handler removes its exact effect instance.

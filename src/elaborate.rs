@@ -338,6 +338,9 @@ impl TypeReason {
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
             Self::HookApi => (Message::hook_api(), "hook_api", None),
+            Self::MissingHandledEffect => {
+                (Message::missing_handled_effect(), "handled_effect", None)
+            }
             Self::LocalNominalEscape => {
                 (Message::local_nominal_escape(), "escaping_dependency", None)
             }
@@ -702,6 +705,7 @@ enum TypeDiagnosticContext {
     HandlerCoverage(HandlerCoverageCause),
     CompletionOutside(CompletionOperation),
     EffectRow(EffectRowCause),
+    DiscardUnsafe(Option<crate::core::capture::CompletionOwner>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -762,6 +766,24 @@ impl std::ops::DerefMut for TypeDiagnostic {
 
 impl TypeDiagnostic {
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason == TypeReason::DiscardUnsafe {
+            let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
+                return None;
+            };
+            use crate::{core::capture::CompletionOwner, message::Message};
+            let (message, kind) = match owner {
+                None => (Message::discard_unknown(), "unknown"),
+                Some(CompletionOwner::Clause(_)) => (Message::discard_clause(), "clause"),
+                Some(CompletionOwner::Cleanup(_)) => (Message::discard_cleanup(), "cleanup"),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "discard",
+                fact: Some(("completion_owner", kind)),
+                fact_kind: "completion-owner",
+                minimum_related: 1 + usize::from(owner.is_some()),
+            });
+        }
         if self.reason == TypeReason::AmbiguousEffectRow {
             let TypeDiagnosticContext::EffectRow(cause) = self.context else {
                 return None;
@@ -905,6 +927,22 @@ impl TypeDiagnostic {
         &self,
         index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if self.reason == TypeReason::DiscardUnsafe {
+            let TypeDiagnosticContext::DiscardUnsafe(owner) = self.context else {
+                return None;
+            };
+            use crate::{core::capture::CompletionOwner, message::Message};
+            return match (index, owner) {
+                (0, _) => Some((Message::discard_request(), "capturing_request")),
+                (1, Some(CompletionOwner::Clause(_))) => {
+                    Some((Message::discard_clause_owner(), "completion_clause"))
+                }
+                (1, Some(CompletionOwner::Cleanup(_))) => {
+                    Some((Message::discard_cleanup_owner(), "cleanup_action"))
+                }
+                _ => None,
+            };
+        }
         if self.reason != TypeReason::FunctionNeedsContext {
             return self.reason.source_related_message(index);
         }
@@ -22825,7 +22863,10 @@ fn capture_failure(
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
             }
-            TypeError::source(diagnostic)
+            TypeError::Source(Box::new(TypeDiagnostic {
+                diagnostic,
+                context: TypeDiagnosticContext::DiscardUnsafe(unsafe_discard.owner),
+            }))
         }
     }
 }
@@ -23834,6 +23875,58 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn unsafe_discard_presentation_retains_completion_owner_and_budget() {
+        use crate::{
+            core::capture::{CompletionOwner, Failure, UnsafeDiscard},
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("discard.ash", "discard request owner").unwrap();
+        let span = |start, end| source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        for (owner, kind) in [
+            (None, "unknown"),
+            (Some(CompletionOwner::Clause(span(16, 21))), "clause"),
+            (Some(CompletionOwner::Cleanup(span(16, 21))), "cleanup"),
+        ] {
+            let failure = Failure::Unsafe(UnsafeDiscard {
+                node: 0,
+                discard: span(0, 7),
+                request: span(8, 15),
+                owner,
+            });
+            let work = 2 + usize::from(owner.is_some());
+            let mut short = TypeWorkBudget::with_limit(work - 1);
+            assert!(matches!(
+                capture_failure(failure, &mut short),
+                TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+            ));
+            let mut budget = TypeWorkBudget::with_limit(work);
+            let TypeError::Source(mut error) = capture_failure(failure, &mut budget) else {
+                unreachable!()
+            };
+            assert_eq!(budget.used(), work);
+            for label in &mut error.related {
+                *label = SourceLabel::new(label.span(), "ignored legacy prose");
+            }
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("ignored legacy prose")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], kind);
+            assert_eq!(json["labels"].as_array().unwrap().len(), work);
+        }
     }
 
     #[test]
