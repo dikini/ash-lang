@@ -99,7 +99,8 @@ the retained checker limit. Separate admitted witnesses cover recursive discard,
 mixed closing order and deep teardown; no limit was raised and no execution of
 the combined case is claimed.
 
-TASK-0024's ash-doc repair/migration remains separate post-main work and has not
-started. It is neither absorbed by this closure nor represented as already
-repaired. General FFI, files and library acquisition
-remain later work.
+At this milestone closure, TASK-0024's compiler repair had not started and
+remained separate post-main work. Its later
+[verified repair](../migration-repair-evidence.md) is not part of this
+milestone. The ash-doc documentation migration remains separate downstream
+work. General FFI, files and library acquisition remain later work.

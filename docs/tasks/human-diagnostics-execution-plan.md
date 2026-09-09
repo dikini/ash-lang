@@ -11,12 +11,12 @@
 ---
 
 This plan belongs to TASK-0021. It does not define Ash semantics. Implement it
-in a dedicated worktree from the commit containing this plan; do not reuse any
+in a dedicated worktree from verified current `main`; do not reuse any
 registered Effect Ash worktree. The plan's parent, `5430432`, allocated
 DN-0029, AD-0010, and TASK-0021 after checking every registered worktree.
 
-[TASK-0024](TASK-0024-repair-migration-regressions-after-effect-ash.md) owns
-the compiler repair and producer-side publication check on current `main`.
+The compiler repair and producer-side publication check are complete on
+verified `main`; see the [repair evidence](../design/migration-repair-evidence.md).
 The ash-doc project owns its later documentation migration. This plan changes
 presentation and structured failure data without changing summary acceptance.
 
@@ -42,10 +42,9 @@ Keep the checkpoint narrow:
 
 **Step 1: Retain the failure as presentation evidence.**
 
-Use the isolated honest-summary failure recorded by TASK-0021 and targeted
-corruption fixtures to test cause preservation. Do not correct the acceptance
-relation or add the producer publication pass here. TASK-0024 must revalidate
-the repair against integrated effects code before changing that relation.
+Use targeted corruption fixtures to test cause preservation. Preserve the
+implemented acceptance relation and full producer publication checks; the
+compiler repair is already verified against integrated effects code.
 
 **Step 2: Name the failed invariant.**
 
@@ -75,8 +74,7 @@ the same cause through `ElaborationFailure`.
 Run `cargo test --lib withheld_constructor` and
 `cargo test --test module_resolution`. Assert that authentication results stay
 the same while failures retain the invariant family through importer context.
-Keep corruption rejection coverage. Record the still-unrepaired honest failure
-without treating it as the specified outcome for valid source.
+Keep corruption rejection coverage and restored honest-summary acceptance.
 
 **Step 4: Commit the structured failure data.**
 
@@ -573,9 +571,9 @@ the applicable stdout, value, type, and exit-status assertions.
 
 If ash-doc is still pinned to Lib Ash, verify a separately identified exact
 canary without replacing the active pin or breaking its checks. Preserve the
-historical two-pin lab verifier and source hashes. A retained compiler failure
-may gain structured presentation; do not describe it as repaired. TASK-0024
-owns the compiler repair and restored outcomes. The ash-doc project owns its
+historical two-pin lab verifier and source hashes. Current-main canaries must
+preserve the outcomes recorded in the repair evidence; historical compiler
+failures remain historical evidence. The ash-doc project owns its
 edition target, documentation migration and publication gate.
 
 Verify changed shell scripts with `bash -n`, then run every affected verifier
@@ -632,9 +630,8 @@ rerun the affected focused checks plus `cargo xtask verify`.
 **Step 5: Close TASK-0021 only after both repositories verify.**
 
 Record the exact Ash and ash-doc commits, commands, outcomes, catalogue
-selection, retained failure causes, and any deviations in TASK-0021. Keep
-TASK-0024 open until its compiler fixes are verified and integrated into main.
-Remove the
+selection, retained failure causes, and any deviations in TASK-0021. Compiler
+repair is separately complete on verified main. Remove the
 temporary execution plan and active-task/index entries according to the
 project artifact policy only when the implementation is retained and no work
 remains.

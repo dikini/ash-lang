@@ -1,8 +1,8 @@
 # Migration-discovered compiler repair evidence
 
 This informative report records TASK-0024's repair work from main baseline
-`274bdbe`, after the `effect-ash` closeout `a64f10b`. Full worktree verification
-passed; main integration remains pending. The
+`274bdbe`, after the `effect-ash` closeout `a64f10b`. The repairs are integrated
+on verified main by signed merge `a271ac3`. The
 [specification](../../spec/README.md) defines correct language behavior; this
 report records implementation evidence.
 
@@ -68,8 +68,9 @@ and pass. No capacity test was weakened to accommodate publication checks.
 
 ## Original-source outcomes
 
-Each entry below was run unchanged with the repair worktree's freshly built
-`target/debug/ash`. Source and evidence files in ash-doc were not edited.
+Each entry below was run unchanged with freshly built repair-worktree and
+merged-main `target/debug/ash` binaries. Source and evidence files in ash-doc
+were not edited.
 All rejected entries have empty stdout. Successful entries have empty stderr.
 
 | Directory | Entry | Status | Result |
@@ -139,8 +140,8 @@ Ash, not a remaining internal compiler failure.
 Focused import verification passed 128 resolver tests, 16 library-import tests
 and 9 module-resolution tests before the later method-index and producer changes.
 The method-index budget test and method-rich source regression passed afterward.
-Full worktree verification and independent final reviews passed. Main
-integration and merged-main verification remain required before completion.
+Full worktree verification, independent final reviews and merged-main
+verification passed.
 
 Checkpoint `a7138e1` passed formatting. Its full library run passed 1,215 tests
 and failed five accounting fixtures. The followup passed all 1,220 library
@@ -193,8 +194,26 @@ The combined clone-preflight implementation and deep dual-budget retry test
 also passed both reviews. All eight original entries and three dependency
 controls retained their recorded outcomes after that change.
 
+## Integration and closeout
+
+- Baseline main: `274bdbe4ff8b3898d0fb6bd9b344ed689b2b7104`.
+- Retained repair tip: `964279cd885d1d4c0b8c75039d0542915a45c393`, including
+  checkpoint `a7138e1` and its verified followup.
+- Signed main merge: `a271ac317a632e363c650daa6ad3e5d5e063e264`.
+  `git verify-commit` reports a good signature. Its tree exactly matches the
+  retained repair tip.
+- Unfiltered `cargo xtask verify` passed both in the repair worktree and on
+  merged main, including all workspace tests and warnings-denied Clippy and
+  rustdoc checks.
+- The merged-main corpus replay checked all eight original entries and three
+  dependency controls: status, stdout hashes or emptiness, stderr reasons and
+  the causal byte ranges recorded above.
+- TASK-0024 is complete. This report retains its evidence; Git retains the
+  removed task and all repair commits.
+
 ## Handoff boundary
 
 No backports, tag movement, push, ash-doc target change or teaching-source edit
-belongs to this repair. After verified fixes land on main, ash-doc owns its own
-documentation migration. TASK-0021's presentation and JSON work remains separate.
+belongs to this repair. The fixes are now on verified main; ash-doc owns its
+own documentation migration. TASK-0021's presentation and JSON work remains
+separate.

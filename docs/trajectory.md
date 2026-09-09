@@ -111,9 +111,10 @@ on `main`. Final merged-main verification passed, as recorded in the
 [milestone closure evidence](design/effect-ash/milestone-closure-evidence.md).
 
 The ash-doc migration exposed checked dependency-summary failures at the exact
-Lib Ash checkpoint. [TASK-0024](tasks/TASK-0024-repair-migration-regressions-after-effect-ash.md)
-owns their repair on current `main`, with no backports. After those fixes land,
-the ash-doc project owns its separate documentation migration.
+Lib Ash checkpoint. The compiler repairs are now verified on `main`, with no
+backports; the [repair evidence](design/migration-repair-evidence.md) records
+the causes and original-source outcomes. The ash-doc project owns its separate
+documentation migration.
 [TASK-0021](tasks/TASK-0021-implement-human-diagnostics.md) retains the separate
 human-diagnostic feature. Historical migration evidence and published tags
 remain unchanged.

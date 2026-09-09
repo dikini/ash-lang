@@ -180,11 +180,11 @@ Compare candidates with English and Bulgarian versions of:
 - a message containing Ash identifiers, operators, and paths that must remain
   verbatim and escaped.
 
-The product checkpoint must additionally establish:
+The separate [compiler repair](migration-repair-evidence.md) established
+producer validation before publication and current-language source or execution
+outcomes for the eight retained migration triggers. Preserve those outcomes.
+The diagnostic product checkpoint must additionally establish:
 
-- every honestly produced checked export summary validates before publication;
-- the eight retained migration triggers reach their current-language source or
-  execution outcomes rather than a compiler-internal failure;
 - every reachable CLI failure uses the new presentation path;
 - every English and Bulgarian message key accepts exactly its declared named
   arguments;

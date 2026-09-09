@@ -93,9 +93,9 @@ The implementation must provide:
 - mutation tests for structured causes in specific invariant families;
 - producer-side validation before atomic publication and restored
   current-language outcomes for all eight migration triggers at the separate
-  post-`effect-ash` repair checkpoint owned by
-  [TASK-0024](../tasks/TASK-0024-repair-migration-regressions-after-effect-ash.md);
-  these repair obligations do not gate TASK-0021 presentation completion;
+  post-`effect-ash` repair checkpoint, now verified on `main` in the
+  [repair evidence](../design/migration-repair-evidence.md);
+  this separate repair does not complete TASK-0021 presentation work;
 - English and Bulgarian catalogue completeness and typed-argument validation;
 - representative human snapshots across syntax, resolution, kind, type,
   interface, constraint, pattern, coverage, entry, input, and internal failure
