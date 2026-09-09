@@ -1831,6 +1831,58 @@ pub enum BuildError {
     InvalidNodeId,
 }
 
+impl BuildError {
+    pub(crate) fn diagnostic_message(self) -> (crate::message::Message<'static>, &'static str) {
+        use crate::message::Message;
+        match self {
+            Self::ArenaIdExhausted => (
+                Message::core_build_arena_id_exhausted(),
+                "arena-id-exhausted",
+            ),
+            Self::NodeIdExhausted => (Message::core_build_node_id_exhausted(), "node-id-exhausted"),
+            Self::BinderIdExhausted => (
+                Message::core_build_binder_id_exhausted(),
+                "binder-id-exhausted",
+            ),
+            Self::DuplicateBinderReservation => (
+                Message::core_build_duplicate_binder_reservation(),
+                "duplicate-binder-reservation",
+            ),
+            Self::BinderReservationPhaseStarted => (
+                Message::core_build_binder_reservation_phase_started(),
+                "binder-reservation-phase-started",
+            ),
+            Self::UnreservedResolvedBinder => (
+                Message::core_build_unreserved_resolved_binder(),
+                "unreserved-resolved-binder",
+            ),
+            Self::DuplicateResolvedBinder => (
+                Message::core_build_duplicate_resolved_binder(),
+                "duplicate-resolved-binder",
+            ),
+            Self::ForeignBinder => (Message::core_build_foreign_binder(), "foreign-binder"),
+            Self::TypeDepthExceeded => (
+                Message::core_build_type_depth_exceeded(),
+                "type-depth-exceeded",
+            ),
+            Self::TypeWorkExceeded => (
+                Message::core_build_type_work_exceeded(),
+                "type-work-exceeded",
+            ),
+            Self::OriginDepthExceeded => (
+                Message::core_build_origin_depth_exceeded(),
+                "origin-depth-exceeded",
+            ),
+            Self::PatternDepthExceeded => (
+                Message::core_build_pattern_depth_exceeded(),
+                "pattern-depth-exceeded",
+            ),
+            Self::InvalidPayload => (Message::core_build_invalid_payload(), "invalid-payload"),
+            Self::InvalidNodeId => (Message::core_build_invalid_node_id(), "invalid-node-id"),
+        }
+    }
+}
+
 impl fmt::Display for BuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {

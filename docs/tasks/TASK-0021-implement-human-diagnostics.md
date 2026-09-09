@@ -527,6 +527,14 @@ localization language. Color is not required for completion.
   28 of 28 reasons, with 258 templates per locale. All 1,245 library tests,
   216 focused integration tests and warnings-denied Clippy passed. Existing
   semantic checks, failure precedence and work charges remain unchanged.
+- Core construction presentation preserves all 14 existing `BuildError` causes,
+  including identity exhaustion, structural limits and inconsistent binder or
+  payload state. Messages identify compiler responsibility; JSON retains stable
+  cause names without inventing source spans. The compile-time elaboration
+  adapter rejects other, not-yet-covered failures. Both locales cover every
+  constructor. All 84 focused tests and warnings-denied Clippy passed. This
+  covers one of the six elaboration internal/resource reasons and brings the
+  catalogue to 272 templates per locale. No checks or budgets changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

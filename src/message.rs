@@ -150,6 +150,34 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler has exhausted its Core arena identities.
+    core_build_arena_id_exhausted => "core-build-arena-id-exhausted" {},
+    /// The compiler has exhausted the node identities in this Core arena.
+    core_build_node_id_exhausted => "core-build-node-id-exhausted" {},
+    /// The compiler has exhausted its Core binder identities.
+    core_build_binder_id_exhausted => "core-build-binder-id-exhausted" {},
+    /// The compiler reserved the same resolved binder identity more than once.
+    core_build_duplicate_binder_reservation => "core-build-duplicate-binder-reservation" {},
+    /// The compiler tried to reserve resolved binder identities after Core binder construction had begun.
+    core_build_binder_reservation_phase_started => "core-build-binder-reservation-phase-started" {},
+    /// The compiler tried to construct a Core binder without reserving its resolved identity.
+    core_build_unreserved_resolved_binder => "core-build-unreserved-resolved-binder" {},
+    /// The compiler tried to construct a resolved Core binder more than once.
+    core_build_duplicate_resolved_binder => "core-build-duplicate-resolved-binder" {},
+    /// The compiler used a binder from a different Core arena.
+    core_build_foreign_binder => "core-build-foreign-binder" {},
+    /// A type exceeds the compiler's Core type nesting limit.
+    core_build_type_depth_exceeded => "core-build-type-depth-exceeded" {},
+    /// Core construction exhausted the compiler's type-work budget.
+    core_build_type_work_exceeded => "core-build-type-work-exceeded" {},
+    /// Source-origin metadata exceeds the compiler's Core nesting limit.
+    core_build_origin_depth_exceeded => "core-build-origin-depth-exceeded" {},
+    /// A pattern exceeds the compiler's Core pattern nesting limit.
+    core_build_pattern_depth_exceeded => "core-build-pattern-depth-exceeded" {},
+    /// The compiler encountered inconsistent state while rebuilding a Core payload.
+    core_build_invalid_payload => "core-build-invalid-payload" {},
+    /// The compiler requested a root node that does not belong to this Core arena.
+    core_build_invalid_node_id => "core-build-invalid-node-id" {},
     /// These requirements have the same determining arguments but different dependent arguments.
     determination_requirement_conflict => "determination-requirement-conflict" {},
     /// These prerequisites have the same determining arguments but different dependent arguments.

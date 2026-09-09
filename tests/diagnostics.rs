@@ -1896,6 +1896,105 @@ fn interface_parameter_causes_are_precise() {
 }
 
 #[test]
+fn core_construction_messages_preserve_failure_causes() {
+    use ash::{
+        core::BuildError,
+        elaborate::ElaborationFailure,
+        message::{Catalogue, Locale},
+        presentation::{compile_elaboration_failure, write_human, write_json},
+    };
+    for (cause, name, explanation) in [
+        (
+            BuildError::ArenaIdExhausted,
+            "arena-id-exhausted",
+            "The compiler has exhausted its Core arena identities.",
+        ),
+        (
+            BuildError::NodeIdExhausted,
+            "node-id-exhausted",
+            "The compiler has exhausted the node identities in this Core arena.",
+        ),
+        (
+            BuildError::BinderIdExhausted,
+            "binder-id-exhausted",
+            "The compiler has exhausted its Core binder identities.",
+        ),
+        (
+            BuildError::DuplicateBinderReservation,
+            "duplicate-binder-reservation",
+            "The compiler reserved the same resolved binder identity more than once.",
+        ),
+        (
+            BuildError::BinderReservationPhaseStarted,
+            "binder-reservation-phase-started",
+            "The compiler tried to reserve resolved binder identities after Core binder construction had begun.",
+        ),
+        (
+            BuildError::UnreservedResolvedBinder,
+            "unreserved-resolved-binder",
+            "The compiler tried to construct a Core binder without reserving its resolved identity.",
+        ),
+        (
+            BuildError::DuplicateResolvedBinder,
+            "duplicate-resolved-binder",
+            "The compiler tried to construct a resolved Core binder more than once.",
+        ),
+        (
+            BuildError::ForeignBinder,
+            "foreign-binder",
+            "The compiler used a binder from a different Core arena.",
+        ),
+        (
+            BuildError::TypeDepthExceeded,
+            "type-depth-exceeded",
+            "A type exceeds the compiler's Core type nesting limit.",
+        ),
+        (
+            BuildError::TypeWorkExceeded,
+            "type-work-exceeded",
+            "Core construction exhausted the compiler's type-work budget.",
+        ),
+        (
+            BuildError::OriginDepthExceeded,
+            "origin-depth-exceeded",
+            "Source-origin metadata exceeds the compiler's Core nesting limit.",
+        ),
+        (
+            BuildError::PatternDepthExceeded,
+            "pattern-depth-exceeded",
+            "A pattern exceeds the compiler's Core pattern nesting limit.",
+        ),
+        (
+            BuildError::InvalidPayload,
+            "invalid-payload",
+            "The compiler encountered inconsistent state while rebuilding a Core payload.",
+        ),
+        (
+            BuildError::InvalidNodeId,
+            "invalid-node-id",
+            "The compiler requested a root node that does not belong to this Core arena.",
+        ),
+    ] {
+        let error = ElaborationFailure::Core(cause);
+        let view = compile_elaboration_failure(&error).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "internal.core-build");
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["value"], name);
+        assert!(json["labels"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn conflicting_determination_requirements_have_distinct_roles() {
     use ash::{
         message::{Catalogue, Locale},
