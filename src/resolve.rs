@@ -833,6 +833,13 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<LookupScope>);
 enum LookupScope {
     Term,
     EffectOperation,
+    Type,
+    EffectRowParameter,
+    InterfaceParameter,
+    Constructor,
+    Interface,
+    Effect,
+    ExportedEffect,
 }
 
 impl ResolveError {
@@ -840,6 +847,13 @@ impl ResolveError {
         match self.1 {
             Some(LookupScope::Term) => Some("term"),
             Some(LookupScope::EffectOperation) => Some("effect-operation"),
+            Some(LookupScope::Type) => Some("type"),
+            Some(LookupScope::EffectRowParameter) => Some("effect-row-parameter"),
+            Some(LookupScope::InterfaceParameter) => Some("interface-parameter"),
+            Some(LookupScope::Constructor) => Some("constructor"),
+            Some(LookupScope::Interface) => Some("interface"),
+            Some(LookupScope::Effect) => Some("effect"),
+            Some(LookupScope::ExportedEffect) => Some("exported-effect"),
             None => None,
         }
     }
@@ -851,6 +865,17 @@ impl ResolveError {
             LookupScope::EffectOperation => {
                 crate::message::Message::resolve_unknown_operation(name)
             }
+            LookupScope::Type => crate::message::Message::resolve_unknown_type(name),
+            LookupScope::EffectRowParameter => {
+                crate::message::Message::resolve_unknown_row_parameter(name)
+            }
+            LookupScope::InterfaceParameter => {
+                crate::message::Message::resolve_unknown_interface_parameter(name)
+            }
+            LookupScope::Constructor => crate::message::Message::resolve_unknown_constructor(name),
+            LookupScope::Interface => crate::message::Message::resolve_unknown_interface(name),
+            LookupScope::Effect => crate::message::Message::resolve_unknown_effect(name),
+            LookupScope::ExportedEffect => crate::message::Message::resolve_unexported_effect(name),
         })
     }
     /// Returns the common structured diagnostic fields.
@@ -5382,7 +5407,7 @@ impl Resolver {
                 SourceLabel::new(name.span, "this nominal type is not declared"),
             );
             diagnostic.found = Some(name.text.clone());
-            ResolveError::from(diagnostic)
+            ResolveError(Box::new(diagnostic), Some(LookupScope::Type))
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -5460,9 +5485,10 @@ impl Resolver {
                     "this uppercase name does not denote an effect",
                 ));
             }
-            return Err(error(
-                ResolveReason::UnknownEffect,
+            return Err(lookup_error(
+                LookupScope::ExportedEffect,
                 member.span,
+                &member.text,
                 "this effect is not exported by the selected module",
             ));
         }
@@ -5478,9 +5504,10 @@ impl Resolver {
                 "this uppercase name does not denote an effect",
             ));
         }
-        Err(error(
-            ResolveReason::UnknownEffect,
+        Err(lookup_error(
+            LookupScope::Effect,
             member.span,
+            &member.text,
             "this effect is not declared",
         ))
     }
@@ -5591,9 +5618,10 @@ impl Resolver {
                     .copied()
                     .map(EffectRowVariable::rigid)
                     .ok_or_else(|| {
-                        error(
-                            ResolveReason::UnknownType,
+                        lookup_error(
+                            LookupScope::EffectRowParameter,
                             tail.span,
+                            &tail.text,
                             "this effect-row tail parameter is not declared",
                         )
                     })
@@ -5692,7 +5720,7 @@ impl Resolver {
                 })
             })
             .ok_or_else(|| {
-                unknown_name_error(
+                lookup_error(
                     LookupScope::EffectOperation,
                     operation.span,
                     &operation.text,
@@ -5907,7 +5935,10 @@ impl Resolver {
             SourceLabel::new(reference.member().span, "this constructor is not declared"),
         );
         diagnostic.found = Some(reference.member().text.clone());
-        Err(diagnostic.into())
+        Err(ResolveError(
+            Box::new(diagnostic),
+            Some(LookupScope::Constructor),
+        ))
     }
 
     fn allocate_global_binder(
@@ -7618,9 +7649,10 @@ impl Resolver {
                                         .copied()
                                         .map(EffectRowVariable::rigid)
                                         .ok_or_else(|| {
-                                            error(
-                                                ResolveReason::UnknownType,
+                                            lookup_error(
+                                                LookupScope::EffectRowParameter,
                                                 tail.span,
+                                                &tail.text,
                                                 "this effect-row tail parameter is not declared",
                                             )
                                         })
@@ -9680,9 +9712,9 @@ impl Resolver {
                                 SourceLabel::new(member.span, "this constructor is not declared"),
                             );
                             diagnostic.found = Some(member.text.clone());
-                            ResolveError::from(diagnostic)
+                            ResolveError(Box::new(diagnostic), Some(LookupScope::Constructor))
                         } else {
-                            unknown_name_error(
+                            lookup_error(
                                 LookupScope::Term,
                                 member.span,
                                 &member.text,
@@ -10140,14 +10172,22 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
-fn unknown_name_error(
+fn lookup_error(
     scope: LookupScope,
     span: crate::source::Span,
     name: &str,
     message: &str,
 ) -> ResolveError {
-    let mut diagnostic =
-        Diagnostic::new(ResolveReason::UnknownName, SourceLabel::new(span, message));
+    let reason = match scope {
+        LookupScope::Term | LookupScope::EffectOperation => ResolveReason::UnknownName,
+        LookupScope::Type | LookupScope::EffectRowParameter | LookupScope::InterfaceParameter => {
+            ResolveReason::UnknownType
+        }
+        LookupScope::Constructor => ResolveReason::UnknownConstructor,
+        LookupScope::Interface => ResolveReason::UnknownInterface,
+        LookupScope::Effect | LookupScope::ExportedEffect => ResolveReason::UnknownEffect,
+    };
+    let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = Some(name.to_owned());
     ResolveError(Box::new(diagnostic), Some(scope))
 }
@@ -10286,7 +10326,7 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
         SourceLabel::new(span, "this interface is not declared"),
     );
     diagnostic.found = Some(spelling.to_owned());
-    diagnostic.into()
+    ResolveError(Box::new(diagnostic), Some(LookupScope::Interface))
 }
 
 fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
@@ -10299,7 +10339,7 @@ fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
     );
     diagnostic.expected = Some("interface parameter".to_owned());
     diagnostic.found = Some(name.text.clone());
-    diagnostic.into()
+    ResolveError(Box::new(diagnostic), Some(LookupScope::InterfaceParameter))
 }
 
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {

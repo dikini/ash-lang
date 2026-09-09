@@ -205,6 +205,126 @@ fn unknown_name_presentation_distinguishes_terms_from_effect_operations() {
     }
 }
 
+#[test]
+fn unknown_type_presentation_retains_the_actual_parameter_scope() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, scope, en, bg) in [
+        (
+            "type Wrapped<A> = Wrapped(Missing)\n",
+            "type",
+            "No type named `Missing` is in scope.",
+            "Няма тип с име `Missing` в текущия обхват.",
+        ),
+        (
+            "probe<A> : A -> Unit ! {| Missing}\nprobe value = ()\n",
+            "effect-row-parameter",
+            "No effect-row parameter named `Missing` is in scope.",
+            "Няма параметър за ред от ефекти с име `Missing` в текущия обхват.",
+        ),
+        (
+            "fn probe(value : Unit) -> Unit ! {| Missing} {\n()\n}\n",
+            "effect-row-parameter",
+            "No effect-row parameter named `Missing` is in scope.",
+            "Няма параметър за ред от ефекти с име `Missing` в текущия обхват.",
+        ),
+        (
+            "interface Relation<A, B> where Missing -> B {\nrelate : A -> B\n}\n",
+            "interface-parameter",
+            "The owning interface has no parameter named `Missing`.",
+            "Интерфейсът собственик няма параметър с име `Missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("unknown-type.ash", text);
+        let ResolveModuleError::Resolution(error) =
+            resolve_module(fixture.loaded(), &[]).unwrap_err()
+        else {
+            panic!("expected resolution failure");
+        };
+        assert_eq!(error.reason, ResolveReason::UnknownType);
+        let diagnostic = compile_resolve_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for (locale, expected) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([
+                {"name":"name", "kind":"identifier", "value":"Missing"},
+                {"name":"lookup_scope", "kind":"lookup-scope", "value":scope},
+            ])
+        );
+    }
+}
+
+#[test]
+fn remaining_lookup_scopes_render_from_driver_retained_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, scope, english) in [
+        (
+            "main : Unit -> Int\nmain () = Missing\n",
+            ResolveReason::UnknownConstructor,
+            "constructor",
+            "No constructor named `Missing` is in scope.",
+        ),
+        (
+            "impl Missing<Int> {\n}\n",
+            ResolveReason::UnknownInterface,
+            "interface",
+            "No interface named `Missing` is in scope.",
+        ),
+        (
+            "probe : Unit -> Unit ! {Missing}\nprobe () = ()\n",
+            ResolveReason::UnknownEffect,
+            "effect",
+            "No effect named `Missing` is in scope.",
+        ),
+        (
+            "import @builtin.cell as Cell\nprobe : Unit -> Unit ! {Cell.Missing}\nprobe () = ()\n",
+            ResolveReason::UnknownEffect,
+            "exported-effect",
+            "The selected module exports no effect named `Missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("lookup.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected resolution failure: {failure:?}");
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let text = String::from_utf8(output).unwrap();
+            if locale == Locale::English {
+                assert!(text.contains(english));
+            } else {
+                assert!(text.contains("`Missing`"));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], "Missing");
+        assert_eq!(json["facts"][1]["value"], scope);
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)

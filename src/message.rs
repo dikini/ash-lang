@@ -144,6 +144,20 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An ordinary type lookup failed.
+    resolve_unknown_type => "resolve-unknown-type" { name: &'a str = "Missing" },
+    /// An effect-row parameter lookup failed.
+    resolve_unknown_row_parameter => "resolve-unknown-row-parameter" { name: &'a str = "Missing" },
+    /// A determination names no parameter of its owning interface.
+    resolve_unknown_interface_parameter => "resolve-unknown-interface-parameter" { name: &'a str = "Missing" },
+    /// No constructor is available in this scope.
+    resolve_unknown_constructor => "resolve-unknown-constructor" { name: &'a str = "Missing" },
+    /// No interface is available in this scope.
+    resolve_unknown_interface => "resolve-unknown-interface" { name: &'a str = "Missing" },
+    /// No effect is available in this scope.
+    resolve_unknown_effect => "resolve-unknown-effect" { name: &'a str = "Missing" },
+    /// The selected module exports no effect with this name.
+    resolve_unexported_effect => "resolve-unexported-effect" { name: &'a str = "Missing" },
     /// Ordinary term lookup found no binding.
     resolve_unknown_term => "resolve-unknown-term" { name: &'a str = "missing" },
     /// The selected effect declares no operation with this spelling.

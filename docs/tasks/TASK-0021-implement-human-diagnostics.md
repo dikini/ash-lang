@@ -234,15 +234,22 @@ localization language. Color is not required for completion.
   those facts; the renderer does not inspect legacy English labels. Real
   resolver fixtures exercise both contexts. Other resolver families remain
   explicitly unsupported by the staged presentation adapter.
-- Lookup inspection identified separate type/nominal, effect-row parameter,
+- Lookup migration now covers separate type/nominal, effect-row parameter,
   owning-interface determination parameter, constructor, interface, unqualified
-  effect and selected-module effect contexts for the next migration. Qualified
+  effect and selected-module effect contexts. Qualified
   unavailable exports retain their existing separate reason family.
 - Initial resolver verification passed all 1,231 library tests, five focused
   suites, the bidirectional type-field ownership check and warnings-denied
   Clippy. The existing unknown-term test now requires the retained spelling,
   while still rejecting unjustified help or unrelated labels. Review found no
   actionable defects; Markdown lint and diff whitespace checks passed.
+- The remaining lookup contexts were implemented and verified as one batch,
+  reusing the existing adapter. Fixtures cover both effect-row producers,
+  determination parameters and driver-retained constructor/interface/effect
+  failures, including a qualified builtin-module import. The batch passed 1,231
+  library tests, 49 diagnostic tests, catalogue and module-resolution suites,
+  warnings-denied Clippy, Markdown lint and diff whitespace checks. No subagent
+  runs or repeated full-workspace gates were needed for this mechanical batch.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
