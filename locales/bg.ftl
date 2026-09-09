@@ -1182,6 +1182,35 @@ resolve-work-state = Вътрешното състояние на компила
     [lexical-method-body] тяло на лексикален метод
     [lexical-method-group] група лексикални методи
     [request-operand] операнд на заявка
+    [private-constructor] частен конструктор
+    [opaque-constructor] непрозрачен конструктор
+    [public-constructor] публичен конструктор
+    [export-effect-fact] проверена информация за ефект в експортиран модул
+    [effective-route-rank] пореден ранг на действащ път към реализация
+    [public-route-rank] пореден ранг на публичен път към реализация
+    [route-selected-fact] избрана информация за реализация за ранг на път
+    [implementation-interface-fact] информация за определящия интерфейс на реализация
+    [implementation-capture-effect] метаданни за ефект, посочен от графа на прихващанията на реализация
+    [public-implementation-fact] избрана информация за публична реализация
+    [export-capture-effect] метаданни за ефект, посочен от експортиран граф на прихващанията
+    [export-scheme-effect] метаданни за ефект, посочен от експортирана типова схема
+    [export-scheme-nominal] номинални метаданни, посочени от експортирана типова схема
+    [opaque-scheme-representation] каноничното представяне на схема на непрозрачен newtype
+    [route-nominal-closure] номиналното затваряне на зависимостите за алтернативен път на импорт
+    [opaque-export-representation] каноничното представяне на експортиран непрозрачен newtype
+    [transparent-constructor] конструктор на експортиран прозрачен тип
+    [constructor-nominal-metadata] номинални метаданни, посочени от експортиран конструктор
+    [constructor-owner-metadata] метаданни за собственика на експортиран конструктор
+    [nominal-identity] идентичност на номинална декларация
+    [global-binder-slot] позиция за глобално обвързване
+    [implementation-plan] план на реализация
+    [global-binder] глобално обвързване
+    [hidden-method-binder] скрито обвързване на метод
+    [newtype-representation] представянето на разрешен newtype
+    [newtype-representation-origin] произход в източника на представянето на разрешен newtype
+    [pure-effect-origin] произход на аргументи на ефекти върху чиста функция
+    [method-parameters] параметри на метод
+    [resource-builtin-origin] произход в източника на вградена ресурсна операция
    *[expression] израз
     [match-pattern] шаблон на съпоставяне
     [function-pattern] шаблон на параметър на функция

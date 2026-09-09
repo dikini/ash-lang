@@ -1833,6 +1833,10 @@ fn build_export_candidate(
                         constructor.span,
                         "the resolver lost a private constructor",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "private-constructor",
+                        problem: "missing",
+                    })
                 })?;
                 candidate
                     .try_insert_withheld(
@@ -1890,6 +1894,10 @@ fn build_export_candidate(
                         constructor.span,
                         "the resolver lost an opaque constructor",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "opaque-constructor",
+                        problem: "missing",
+                    })
                 })?;
                 candidate
                     .try_insert_withheld(
@@ -1918,6 +1926,10 @@ fn build_export_candidate(
                     constructor.span,
                     "the resolver lost a public constructor",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-constructor",
+                    problem: "missing",
+                })
             })?;
             candidate
                 .try_insert_constructor(
@@ -3867,6 +3879,10 @@ impl Resolver {
                     import_span,
                     "an export summary lost an effect fact",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-effect-fact",
+                    problem: "missing",
+                })
             })?;
             self.retain_imported_effect(fact, import_span)?;
         }
@@ -4328,6 +4344,10 @@ impl Resolver {
                         span,
                         "an effective implementation route lost its transient ordering rank",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "effective-route-rank",
+                        problem: "missing",
+                    })
                 })?;
             let existing_public_rank = self
                 .public_implementation_route_ranks
@@ -4342,6 +4362,10 @@ impl Resolver {
                         span,
                         "an implementation route rank has no selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "route-selected-fact",
+                        problem: "missing",
+                    })
                 })?;
             let replace_effective_rank = effective_implementation_route_precedes(
                 &authorization,
@@ -4356,7 +4380,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "a public implementation route lost its transient ordering rank",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "public-route-rank",
+                    problem: "missing",
+                }));
             }
             let replace_public_rank = if let Some(candidate) = &public_authorization {
                 match (&existing.public_authorization, existing_public_rank) {
@@ -4374,7 +4402,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             span,
                             "a public implementation route lost its transient ordering rank",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "public-route-rank",
+                            problem: "missing",
+                        }));
                     }
                 }
             } else {
@@ -4397,6 +4429,10 @@ impl Resolver {
                         span,
                         "an implementation route rank has no selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "route-selected-fact",
+                        problem: "missing",
+                    })
                 })?;
             if replace_effective_rank {
                 self.implementation_route_ranks
@@ -4524,6 +4560,10 @@ impl Resolver {
                     span,
                     "an implementation summary has no defining interface fact",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "implementation-interface-fact",
+                    problem: "missing",
+                })
             })?;
         for (index, method) in fact.methods.iter().enumerate() {
             let method_retention_work = method
@@ -4666,6 +4706,10 @@ impl Resolver {
                             span,
                             "an implementation capture graph references missing effect metadata",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "implementation-capture-effect",
+                            problem: "missing",
+                        })
                     })?;
                     self.retain_imported_effect(declaration, span)?;
                 }
@@ -4767,6 +4811,10 @@ impl Resolver {
                         span,
                         "a public implementation lost its selected fact",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "public-implementation-fact",
+                        problem: "missing",
+                    })
                 })?;
         }
         Ok(())
@@ -4922,6 +4970,10 @@ impl Resolver {
                         span,
                         "an exported capture graph references missing effect metadata",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "export-capture-effect",
+                        problem: "missing",
+                    })
                 })?;
                 self.retain_imported_effect(declaration, span)?;
             }
@@ -5309,6 +5361,10 @@ impl Resolver {
                     span,
                     "an exported scheme references missing effect metadata",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "export-scheme-effect",
+                    problem: "missing",
+                })
             })?;
             self.retain_imported_effect(exported, span)?;
         }
@@ -5326,6 +5382,10 @@ impl Resolver {
                 span,
                 "an exported scheme references missing nominal metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "export-scheme-nominal",
+                problem: "missing",
+            })
         })?;
         if exported.declaration_kind == ResolvedNominalDeclarationKind::Newtype
             && exported.access == ImportedTypeAccess::Opaque
@@ -5336,6 +5396,10 @@ impl Resolver {
                     span,
                     "an opaque newtype scheme is missing its canonical representation",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-scheme-representation",
+                    problem: "missing",
+                })
             });
         }
         Ok(exported)
@@ -5354,6 +5418,10 @@ impl Resolver {
                     span,
                     "an alternate route lost its retained nominal closure",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "route-nominal-closure",
+                    problem: "missing",
+                })
             })?;
             let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
             let matches = same_imported_nominal_closure_with_constraint_budget(
@@ -5439,7 +5507,11 @@ impl Resolver {
                     ResolveReason::InternalState,
                     span,
                     "an opaque newtype export is missing its canonical representation",
-                ));
+                )
+                .with_context(ResolveContext::WorkState {
+                    part: "opaque-export-representation",
+                    problem: "missing",
+                }));
             }
             if exported.declaration_kind == ResolvedNominalDeclarationKind::Data
                 && canonical_representation.is_some()
@@ -5549,6 +5621,10 @@ impl Resolver {
                     span,
                     "a transparent type summary lost one of its constructors",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "transparent-constructor",
+                    problem: "missing",
+                })
             })?;
             if let Some(existing) = self.imported.constructor(*identity) {
                 let matches = same_imported_constructor_fact_observing_nominals_with_budget(
@@ -5599,6 +5675,10 @@ impl Resolver {
                     span,
                     "an exported constructor references missing nominal metadata",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "constructor-nominal-metadata",
+                    problem: "missing",
+                })
             })?;
             if *id == owner.id {
                 owner_metadata_observed = true;
@@ -5872,6 +5952,10 @@ impl Resolver {
                 span,
                 "an exported constructor references missing owner metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "constructor-owner-metadata",
+                problem: "missing",
+            })
         })?;
         self.retain_imported_constructor_family_once_per_route(
             owner,
@@ -5894,6 +5978,10 @@ impl Resolver {
                 span,
                 "an exported constructor references missing owner metadata",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "constructor-owner-metadata",
+                problem: "missing",
+            })
         })?;
         self.retain_imported_constructor_family(owner, summary, span)
     }
@@ -6711,6 +6799,10 @@ impl Resolver {
                             source.span,
                             "the resolver lost a nominal declaration identity",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "nominal-identity",
+                            problem: "missing",
+                        })
                     })?;
                     nominal_type_parameters
                         .push((identity.id, self.allocate_nominal_type_parameters(source)?));
@@ -6984,6 +7076,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a global binder slot",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "global-binder-slot",
+                            problem: "missing",
+                        })
                     })?;
                     *slot = Some(binder);
                 }
@@ -7005,6 +7101,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost an implementation plan",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "implementation-plan",
+                            problem: "missing",
+                        })
                     })?;
                     for group in &mut pending.method_groups {
                         let first = implementation
@@ -7037,6 +7137,10 @@ impl Resolver {
                         surface_definitions[index].span,
                         "the resolver did not allocate a global binder",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "global-binder",
+                        problem: "missing",
+                    })
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -7398,6 +7502,10 @@ impl Resolver {
                             first.span,
                             "the resolver did not allocate a hidden method binder",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "hidden-method-binder",
+                            problem: "missing",
+                        })
                     })?;
                     let method = self.method_names.get(&first.name.text).and_then(|binding| {
                         match binding.term {
@@ -7945,6 +8053,10 @@ impl Resolver {
                                 constructor.span,
                                 "a resolved newtype has no representation",
                             )
+                            .with_context(ResolveContext::WorkState {
+                                part: "newtype-representation",
+                                problem: "missing",
+                            })
                         })?;
                         let representation_provenance =
                             field_provenance.first().cloned().ok_or_else(|| {
@@ -7952,6 +8064,12 @@ impl Resolver {
                                     ResolveReason::InternalState,
                                     constructor.span,
                                     "a resolved newtype has no representation provenance",
+                                )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "newtype-representation-origin",
+                                        problem: "missing",
+                                    },
                                 )
                             })?;
                         let (nominal, constructor_fact) = resolved_newtype_fact_pair(
@@ -8241,150 +8359,155 @@ impl Resolver {
                             problem: "missing",
                         })
                     })?;
-                    let (ty, effect_argument_roots) =
-                        if let Some(effects) = effects {
-                            self.type_work.charge(effects.effects.len()).map_err(|()| {
+                    let (ty, effect_argument_roots) = if let Some(effects) = effects {
+                        self.type_work.charge(effects.effects.len()).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                effects.span,
+                                "effect-row storage exceeded its type-work budget",
+                            )
+                        })?;
+                        let mut written = Vec::new();
+                        written
+                            .try_reserve_exact(effects.effects.len())
+                            .map_err(|_| {
                                 error(
                                     ResolveReason::TypeResourceExhausted,
                                     effects.span,
                                     "effect-row storage exceeded its type-work budget",
                                 )
                             })?;
-                            let mut written = Vec::new();
-                            written
-                                .try_reserve_exact(effects.effects.len())
-                                .map_err(|_| {
+                        for source_instance in effects.effects.iter().rev() {
+                            let count = source_instance.arguments.len();
+                            self.type_work
+                                .charge(count.checked_mul(2).ok_or_else(|| {
                                     error(
                                         ResolveReason::TypeResourceExhausted,
-                                        effects.span,
-                                        "effect-row storage exceeded its type-work budget",
+                                        source_instance.span,
+                                        "effect-argument provenance exceeded its type-work budget",
                                     )
-                                })?;
-                            for source_instance in effects.effects.iter().rev() {
-                                let count = source_instance.arguments.len();
-                                self.type_work.charge(count.checked_mul(2).ok_or_else(|| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    source_instance.span,
-                                    "effect-argument provenance exceeded its type-work budget",
-                                )
-                            })?).map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    source_instance.span,
-                                    "effect-argument storage exceeded its type-work budget",
-                                )
-                            })?;
-                                let mut arguments = Vec::new();
-                                let mut roots = Vec::new();
-                                arguments.try_reserve_exact(count).map_err(|_| {
+                                })?)
+                                .map_err(|()| {
                                     error(
                                         ResolveReason::TypeResourceExhausted,
                                         source_instance.span,
                                         "effect-argument storage exceeded its type-work budget",
                                     )
                                 })?;
-                                roots.try_reserve_exact(count).map_err(|_| {
-                                    error(
-                                        ResolveReason::TypeResourceExhausted,
-                                        source_instance.span,
-                                        "effect-argument provenance could not reserve storage",
-                                    )
-                                })?;
-                                for _ in source_instance.arguments.iter().rev() {
-                                    let (argument, root) =
-                                        effect_arguments.pop_owned().ok_or_else(|| {
-                                            error(
-                                                ResolveReason::InternalState,
-                                                source_instance.span,
-                                                "the resolver lost an effect-row type argument",
-                                            )
-                                            .with_context(ResolveContext::WorkState {
+                            let mut arguments = Vec::new();
+                            let mut roots = Vec::new();
+                            arguments.try_reserve_exact(count).map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    source_instance.span,
+                                    "effect-argument storage exceeded its type-work budget",
+                                )
+                            })?;
+                            roots.try_reserve_exact(count).map_err(|_| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    source_instance.span,
+                                    "effect-argument provenance could not reserve storage",
+                                )
+                            })?;
+                            for _ in source_instance.arguments.iter().rev() {
+                                let (argument, root) =
+                                    effect_arguments.pop_owned().ok_or_else(|| {
+                                        error(
+                                            ResolveReason::InternalState,
+                                            source_instance.span,
+                                            "the resolver lost an effect-row type argument",
+                                        )
+                                        .with_context(
+                                            ResolveContext::WorkState {
                                                 part: "effect-row-argument",
                                                 problem: "missing",
-                                            })
-                                        })?;
-                                    arguments.push(argument);
-                                    roots.push(root);
-                                }
-                                arguments.reverse();
-                                roots.reverse();
-                                written.push((
-                                    EffectInstance::new(
-                                        self.effect_reference(&source_instance.effect)?,
-                                        arguments
-                                            .into_iter()
-                                            .map(IterativeTypeOwner::into_inner)
-                                            .collect::<Vec<_>>()
-                                            .into_boxed_slice(),
-                                    ),
-                                    source_instance.span,
-                                    roots.into_boxed_slice(),
-                                ));
+                                            },
+                                        )
+                                    })?;
+                                arguments.push(argument);
+                                roots.push(root);
                             }
-                            written.reverse();
-                            if !effect_arguments.is_empty() {
-                                return Err(error(
-                                    ResolveReason::InternalState,
-                                    effects.span,
-                                    "the resolver retained an extra effect-row type argument",
-                                )
-                                .with_context(
-                                    ResolveContext::WorkState {
-                                        part: "effect-row-argument",
-                                        problem: "extra",
-                                    },
-                                ));
-                            }
-                            let tail = effects
-                                .tail
-                                .as_ref()
-                                .map(|tail| {
-                                    self.type_scopes
-                                        .iter()
-                                        .rev()
-                                        .find_map(|scope| scope.get(&tail.text))
-                                        .copied()
-                                        .map(EffectRowVariable::rigid)
-                                        .ok_or_else(|| {
-                                            lookup_error(
-                                                ResolveContext::EffectRowParameter,
-                                                tail.span,
-                                                &tail.text,
-                                                "this effect-row tail parameter is not declared",
-                                            )
-                                        })
-                                })
-                                .transpose()?;
-                            let (row, roots) = build_source_effect_row_with_provenance(
-                                written,
-                                tail,
+                            arguments.reverse();
+                            roots.reverse();
+                            written.push((
+                                EffectInstance::new(
+                                    self.effect_reference(&source_instance.effect)?,
+                                    arguments
+                                        .into_iter()
+                                        .map(IterativeTypeOwner::into_inner)
+                                        .collect::<Vec<_>>()
+                                        .into_boxed_slice(),
+                                ),
+                                source_instance.span,
+                                roots.into_boxed_slice(),
+                            ));
+                        }
+                        written.reverse();
+                        if !effect_arguments.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
                                 effects.span,
-                                &mut self.type_work,
-                            )?;
-                            (
-                                Type::function_computation(
-                                    domain.into_inner(),
-                                    ComputationType::new(codomain.into_inner(), row),
-                                ),
-                                roots,
+                                "the resolver retained an extra effect-row type argument",
                             )
-                        } else {
-                            if effect_argument_count != 0 || !effect_arguments.is_empty() {
-                                return Err(error(
-                                    ResolveReason::InternalState,
-                                    span,
-                                    "a pure function retained effect-argument provenance",
-                                ));
-                            }
-                            (
-                                Type::Function(
-                                    Box::new(domain.into_inner()),
-                                    Box::new(codomain.into_inner()),
-                                ),
-                                Vec::<usize>::new().into_boxed_slice(),
+                            .with_context(ResolveContext::WorkState {
+                                part: "effect-row-argument",
+                                problem: "extra",
+                            }));
+                        }
+                        let tail = effects
+                            .tail
+                            .as_ref()
+                            .map(|tail| {
+                                self.type_scopes
+                                    .iter()
+                                    .rev()
+                                    .find_map(|scope| scope.get(&tail.text))
+                                    .copied()
+                                    .map(EffectRowVariable::rigid)
+                                    .ok_or_else(|| {
+                                        lookup_error(
+                                            ResolveContext::EffectRowParameter,
+                                            tail.span,
+                                            &tail.text,
+                                            "this effect-row tail parameter is not declared",
+                                        )
+                                    })
+                            })
+                            .transpose()?;
+                        let (row, roots) = build_source_effect_row_with_provenance(
+                            written,
+                            tail,
+                            effects.span,
+                            &mut self.type_work,
+                        )?;
+                        (
+                            Type::function_computation(
+                                domain.into_inner(),
+                                ComputationType::new(codomain.into_inner(), row),
+                            ),
+                            roots,
+                        )
+                    } else {
+                        if effect_argument_count != 0 || !effect_arguments.is_empty() {
+                            return Err(error(
+                                ResolveReason::InternalState,
+                                span,
+                                "a pure function retained effect-argument provenance",
                             )
-                        };
+                            .with_context(ResolveContext::WorkState {
+                                part: "pure-effect-origin",
+                                problem: "extra",
+                            }));
+                        }
+                        (
+                            Type::Function(
+                                Box::new(domain.into_inner()),
+                                Box::new(codomain.into_inner()),
+                            ),
+                            Vec::<usize>::new().into_boxed_slice(),
+                        )
+                    };
                     provenance.push(ResolvedTypeProvenanceNode::Function {
                         span,
                         domain: domain_root,
@@ -9102,6 +9225,10 @@ impl Resolver {
                             first.span,
                             "method parameters are unavailable",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "method-parameters",
+                            problem: "missing",
+                        })
                     })?;
                 self.type_work
                     .charge(interface.methods.len())
@@ -9124,6 +9251,10 @@ impl Resolver {
                         first.span,
                         "method parameters are unavailable",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "method-parameters",
+                        problem: "missing",
+                    })
                 })?;
                 self.type_work
                     .charge(interface.methods.len())
@@ -9144,6 +9275,10 @@ impl Resolver {
                     first.span,
                     "method parameters are unavailable",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "method-parameters",
+                    problem: "missing",
+                })
             })?;
             self.type_work.charge(parameters.len()).map_err(|()| {
                 error(
@@ -9256,6 +9391,10 @@ impl Resolver {
                 span,
                 "resource builtin origin is missing",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "resource-builtin-origin",
+                problem: "missing",
+            })
         })?;
         let api = ResourceApi::for_module(builtin).ok_or_else(|| {
             error(
@@ -9263,6 +9402,10 @@ impl Resolver {
                 span,
                 "resource builtin origin is invalid",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "resource-builtin-origin",
+                problem: "wrong",
+            })
         })?;
         // Each fixed method retains its forwarding equation, pattern, operand
         // and effect argument alongside one complete provider application.
@@ -14823,6 +14966,186 @@ mod tests {
         let source = SourceFile::new("state.ash", "name").unwrap();
         let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
         for (part, problem, en, bg) in [
+            (
+                "private-constructor",
+                "missing",
+                "a private constructor",
+                "частен конструктор",
+            ),
+            (
+                "opaque-constructor",
+                "missing",
+                "an opaque constructor",
+                "непрозрачен конструктор",
+            ),
+            (
+                "public-constructor",
+                "missing",
+                "a public constructor",
+                "публичен конструктор",
+            ),
+            (
+                "export-effect-fact",
+                "missing",
+                "checked effect information for an exported module",
+                "проверена информация за ефект в експортиран модул",
+            ),
+            (
+                "effective-route-rank",
+                "missing",
+                "the ordering rank of an effective implementation route",
+                "пореден ранг на действащ път към реализация",
+            ),
+            (
+                "public-route-rank",
+                "missing",
+                "the ordering rank of a public implementation route",
+                "пореден ранг на публичен път към реализация",
+            ),
+            (
+                "route-selected-fact",
+                "missing",
+                "the selected implementation information for a route rank",
+                "избрана информация за реализация за ранг на път",
+            ),
+            (
+                "implementation-interface-fact",
+                "missing",
+                "the defining interface information for an implementation",
+                "информация за определящия интерфейс на реализация",
+            ),
+            (
+                "implementation-capture-effect",
+                "missing",
+                "effect metadata referenced by an implementation capture graph",
+                "метаданни за ефект, посочен от графа на прихващанията на реализация",
+            ),
+            (
+                "public-implementation-fact",
+                "missing",
+                "the selected public implementation information",
+                "избрана информация за публична реализация",
+            ),
+            (
+                "export-capture-effect",
+                "missing",
+                "effect metadata referenced by an exported capture graph",
+                "метаданни за ефект, посочен от експортиран граф на прихващанията",
+            ),
+            (
+                "export-scheme-effect",
+                "missing",
+                "effect metadata referenced by an exported type scheme",
+                "метаданни за ефект, посочен от експортирана типова схема",
+            ),
+            (
+                "export-scheme-nominal",
+                "missing",
+                "nominal metadata referenced by an exported type scheme",
+                "номинални метаданни, посочени от експортирана типова схема",
+            ),
+            (
+                "opaque-scheme-representation",
+                "missing",
+                "the canonical representation of an opaque newtype scheme",
+                "каноничното представяне на схема на непрозрачен newtype",
+            ),
+            (
+                "route-nominal-closure",
+                "missing",
+                "the nominal dependency closure retained for an alternate import route",
+                "номиналното затваряне на зависимостите за алтернативен път на импорт",
+            ),
+            (
+                "opaque-export-representation",
+                "missing",
+                "the canonical representation of an exported opaque newtype",
+                "каноничното представяне на експортиран непрозрачен newtype",
+            ),
+            (
+                "transparent-constructor",
+                "missing",
+                "a constructor of an exported transparent type",
+                "конструктор на експортиран прозрачен тип",
+            ),
+            (
+                "constructor-nominal-metadata",
+                "missing",
+                "nominal metadata referenced by an exported constructor",
+                "номинални метаданни, посочени от експортиран конструктор",
+            ),
+            (
+                "constructor-owner-metadata",
+                "missing",
+                "owner metadata referenced by an exported constructor",
+                "метаданни за собственика на експортиран конструктор",
+            ),
+            (
+                "nominal-identity",
+                "missing",
+                "a nominal declaration identity",
+                "идентичност на номинална декларация",
+            ),
+            (
+                "global-binder-slot",
+                "missing",
+                "a global binder slot",
+                "позиция за глобално обвързване",
+            ),
+            (
+                "implementation-plan",
+                "missing",
+                "an implementation plan",
+                "план на реализация",
+            ),
+            (
+                "global-binder",
+                "missing",
+                "a global binder",
+                "глобално обвързване",
+            ),
+            (
+                "hidden-method-binder",
+                "missing",
+                "a hidden method binder",
+                "скрито обвързване на метод",
+            ),
+            (
+                "newtype-representation",
+                "missing",
+                "the representation of a resolved newtype",
+                "представянето на разрешен newtype",
+            ),
+            (
+                "newtype-representation-origin",
+                "missing",
+                "source provenance for a resolved newtype representation",
+                "произход в източника на представянето на разрешен newtype",
+            ),
+            (
+                "pure-effect-origin",
+                "extra",
+                "effect-argument provenance on a pure function",
+                "произход на аргументи на ефекти върху чиста функция",
+            ),
+            (
+                "method-parameters",
+                "missing",
+                "method parameters",
+                "параметри на метод",
+            ),
+            (
+                "resource-builtin-origin",
+                "missing",
+                "the source origin of a resource builtin",
+                "произход в източника на вградена ресурсна операция",
+            ),
+            (
+                "resource-builtin-origin",
+                "wrong",
+                "the source origin of a resource builtin",
+                "произход в източника на вградена ресурсна операция",
+            ),
             ("hook-body", "missing", "a hook body", "тяло на кука"),
             (
                 "registration-body",

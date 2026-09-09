@@ -965,6 +965,11 @@ localization language. Color is not required for completion.
   now reuse work-state presentation. Only value names were added to the existing
   template and table; no new error category or template was needed. All 135
   resolver tests, five catalogue-contract tests and warnings-denied Clippy passed.
+- Thirty-five metadata and missing-value checks now reuse work-state messages,
+  including imported effect/nominal facts, constructor ownership, route ranks,
+  newtype representations and method parameters. The locale/JSON table retains
+  those distinctions. All 135 resolver tests, five catalogue-contract tests and
+  warnings-denied Clippy passed; no checks or original reasons changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -1181,6 +1181,35 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [lexical-method-body] a lexical method body
     [lexical-method-group] a lexical method group
     [request-operand] a request operand
+    [private-constructor] a private constructor
+    [opaque-constructor] an opaque constructor
+    [public-constructor] a public constructor
+    [export-effect-fact] checked effect information for an exported module
+    [effective-route-rank] the ordering rank of an effective implementation route
+    [public-route-rank] the ordering rank of a public implementation route
+    [route-selected-fact] the selected implementation information for a route rank
+    [implementation-interface-fact] the defining interface information for an implementation
+    [implementation-capture-effect] effect metadata referenced by an implementation capture graph
+    [public-implementation-fact] the selected public implementation information
+    [export-capture-effect] effect metadata referenced by an exported capture graph
+    [export-scheme-effect] effect metadata referenced by an exported type scheme
+    [export-scheme-nominal] nominal metadata referenced by an exported type scheme
+    [opaque-scheme-representation] the canonical representation of an opaque newtype scheme
+    [route-nominal-closure] the nominal dependency closure retained for an alternate import route
+    [opaque-export-representation] the canonical representation of an exported opaque newtype
+    [transparent-constructor] a constructor of an exported transparent type
+    [constructor-nominal-metadata] nominal metadata referenced by an exported constructor
+    [constructor-owner-metadata] owner metadata referenced by an exported constructor
+    [nominal-identity] a nominal declaration identity
+    [global-binder-slot] a global binder slot
+    [implementation-plan] an implementation plan
+    [global-binder] a global binder
+    [hidden-method-binder] a hidden method binder
+    [newtype-representation] the representation of a resolved newtype
+    [newtype-representation-origin] source provenance for a resolved newtype representation
+    [pure-effect-origin] effect-argument provenance on a pure function
+    [method-parameters] method parameters
+    [resource-builtin-origin] the source origin of a resource builtin
    *[expression] an expression
     [match-pattern] a match pattern
     [function-pattern] a function parameter pattern
