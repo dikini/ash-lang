@@ -3,6 +3,7 @@
 //! This allocating formatter is not the runtime resource-failure reporter.
 
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
+use std::{borrow::Cow, path::Path};
 
 /// Supported embedded diagnostic languages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -53,35 +54,47 @@ impl Locale {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message<'a> {
     key: &'static str,
-    arguments: Vec<(&'static str, &'a str)>,
+    arguments: Vec<(&'static str, Cow<'a, str>)>,
 }
 
 impl<'a> Message<'a> {
-    fn parts(&self) -> (&'static str, &[(&'static str, &'a str)]) {
+    fn parts(&self) -> (&'static str, &[(&'static str, Cow<'a, str>)]) {
         (self.key, &self.arguments)
     }
 }
 
 // Only retained argument types participate; catalogue values borrow compiler facts.
 trait Argument<'a> {
-    fn value(self) -> &'a str;
+    fn value(self) -> Cow<'a, str>;
 }
 
 impl<'a> Argument<'a> for &'a str {
-    fn value(self) -> &'a str {
-        self
+    fn value(self) -> Cow<'a, str> {
+        Cow::Borrowed(self)
     }
 }
 
 impl Argument<'_> for crate::parser::ExpectedForm {
-    fn value(self) -> &'static str {
-        self.diagnostic_name()
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(self.diagnostic_name())
     }
 }
 
 impl Argument<'_> for crate::parser::FoundToken {
-    fn value(self) -> &'static str {
-        self.diagnostic_name()
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(self.diagnostic_name())
+    }
+}
+
+impl<'a> Argument<'a> for &'a Path {
+    fn value(self) -> Cow<'a, str> {
+        self.to_string_lossy()
+    }
+}
+
+impl Argument<'_> for std::io::ErrorKind {
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(crate::module::io_kind_name(self))
     }
 }
 
@@ -107,6 +120,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An input read failure with its native target path and I/O category.
+    input_read => "input-read" { path: &'a Path = Path::new("input.ash"), kind: std::io::ErrorKind = std::io::ErrorKind::NotFound },
+    /// Input bytes do not encode UTF-8 source text.
+    input_invalid_utf8 => "input-invalid-utf8" { path: &'a Path = Path::new("input.ash") },
+    /// The import that selected a failed target.
+    import_target => "import-target" {},
     /// The operator needs a right operand.
     parse_operand => "parse-operand" {},
     /// This opening parenthesis has no matching ).
@@ -199,8 +218,8 @@ impl Catalogue {
     pub fn format(&self, message: &Message<'_>) -> Result<String, CatalogueError> {
         let (key, values) = message.parts();
         let mut args = FluentArgs::new();
-        for &(name, value) in values {
-            args.set(name, value);
+        for (name, value) in values {
+            args.set(*name, value.as_ref());
         }
         let message = self
             .bundle

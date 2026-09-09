@@ -563,3 +563,31 @@ fn rejected_dependency_keeps_its_source_and_the_import_location() {
     .unwrap();
     assert!(String::from_utf8(output).unwrap().contains("main () = (41"));
 }
+#[test]
+fn imported_non_utf8_input_keeps_input_responsibility_and_the_import_label() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    fs::write(tree.path("child.ash"), [0xff]).unwrap();
+    let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    assert!(!failure.is_source_rejection());
+    drop(tree);
+    let diagnostics = ash::presentation::compile_graph_diagnostics(&failure).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "input");
+    assert_eq!(json["reason"], "input.invalid-utf8");
+    assert_eq!(json["labels"][0]["relationship"], "import_target");
+    assert!(
+        json["labels"][0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("entry.ash")
+    );
+    assert!(
+        json["facts"][0]["value"]
+            .as_str()
+            .unwrap()
+            .ends_with("child.ash")
+    );
+}

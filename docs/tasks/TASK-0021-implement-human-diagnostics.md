@@ -134,6 +134,21 @@ localization language. Color is not required for completion.
   Markdown lint and relative links were checked separately. Graph/input
   presentation is next; the remaining compile-time families and later slices
   are not complete.
+- Input read and invalid-UTF-8 presentation is implemented. Entry failures
+  have no invented source labels; imported input failures retain input
+  responsibility and label the selecting import. The view now permits an
+  absent primary label and carries responsibility explicitly. Path arguments
+  borrow UTF-8 text and own display text only when native paths require it.
+- Target-path facts preserve non-UTF-8 Unix bytes or Windows code units in JSON,
+  alongside an explicitly separate display string. Existing source-label paths
+  still use display strings; equivalent native-path preservation there remains
+  outstanding. I/O categories use stable compiler-owned names and complete
+  English/Bulgarian selector cases, verified against the repository toolchain.
+- Input checkpoint verification passed the focused input/presentation/JSON/
+  catalogue/module-loading suites, all 1,227 library tests, rustdoc tests and
+  warnings-denied Clippy. Review confirmed target/importer distinction and
+  responsibility; an actual imported non-UTF-8 test exercises the import label.
+  The full slice-2 gate and remaining graph/module adapters are still open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
@@ -166,6 +181,11 @@ localization language. Color is not required for completion.
 
 ## Discoveries
 
+- `ModuleReason::InvalidPath` currently uses the source-rejection constructor,
+  but its producers detect missing projected path segments or an impossible
+  canonical parent. Resolve this owner-classification inconsistency explicitly
+  in the internal-failure work, with tests; do not infer responsibility from
+  the old boolean or invent a source correction.
 - The historical summary failure confused private access-only families with
   the retained semantic closure. A minimal unused private type reproduced the
   mismatch on the repair baseline, although the original search examples

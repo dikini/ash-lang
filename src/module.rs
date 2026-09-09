@@ -396,6 +396,52 @@ impl fmt::Display for ModuleReason {
     }
 }
 
+/// Stable I/O fact names, independent of operating-system message text.
+pub(crate) const fn io_kind_name(kind: io::ErrorKind) -> &'static str {
+    match kind {
+        io::ErrorKind::NotFound => "not-found",
+        io::ErrorKind::PermissionDenied => "permission-denied",
+        io::ErrorKind::ConnectionRefused => "connection-refused",
+        io::ErrorKind::ConnectionReset => "connection-reset",
+        io::ErrorKind::HostUnreachable => "host-unreachable",
+        io::ErrorKind::NetworkUnreachable => "network-unreachable",
+        io::ErrorKind::ConnectionAborted => "connection-aborted",
+        io::ErrorKind::NotConnected => "not-connected",
+        io::ErrorKind::AddrInUse => "addr-in-use",
+        io::ErrorKind::AddrNotAvailable => "addr-not-available",
+        io::ErrorKind::NetworkDown => "network-down",
+        io::ErrorKind::BrokenPipe => "broken-pipe",
+        io::ErrorKind::AlreadyExists => "already-exists",
+        io::ErrorKind::WouldBlock => "would-block",
+        io::ErrorKind::NotADirectory => "not-a-directory",
+        io::ErrorKind::IsADirectory => "is-a-directory",
+        io::ErrorKind::DirectoryNotEmpty => "directory-not-empty",
+        io::ErrorKind::ReadOnlyFilesystem => "read-only-filesystem",
+        io::ErrorKind::StaleNetworkFileHandle => "stale-network-file-handle",
+        io::ErrorKind::InvalidInput => "invalid-input",
+        io::ErrorKind::InvalidData => "invalid-data",
+        io::ErrorKind::TimedOut => "timed-out",
+        io::ErrorKind::WriteZero => "write-zero",
+        io::ErrorKind::StorageFull => "storage-full",
+        io::ErrorKind::NotSeekable => "not-seekable",
+        io::ErrorKind::QuotaExceeded => "quota-exceeded",
+        io::ErrorKind::FileTooLarge => "file-too-large",
+        io::ErrorKind::ResourceBusy => "resource-busy",
+        io::ErrorKind::ExecutableFileBusy => "executable-file-busy",
+        io::ErrorKind::Deadlock => "deadlock",
+        io::ErrorKind::CrossesDevices => "crosses-devices",
+        io::ErrorKind::TooManyLinks => "too-many-links",
+        io::ErrorKind::InvalidFilename => "invalid-filename",
+        io::ErrorKind::ArgumentListTooLong => "argument-list-too-long",
+        io::ErrorKind::Interrupted => "interrupted",
+        io::ErrorKind::Unsupported => "unsupported",
+        io::ErrorKind::UnexpectedEof => "unexpected-eof",
+        io::ErrorKind::OutOfMemory => "out-of-memory",
+        io::ErrorKind::Other => "other",
+        _ => "uncategorized",
+    }
+}
+
 /// The graph resource whose budget was exhausted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModuleResource {

@@ -1,12 +1,16 @@
 //! Borrowed compile-time presentation. Runtime reporting is a separate path.
 
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    path::Path,
+};
 
 use crate::{
     diagnostic::Diagnostic,
     elaborate::TypeReason,
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
+    module::{GraphDiagnostic, LoadGraphError, io_kind_name},
     parser::{FoundToken, ParseContext, ParseDiagnostic, SynchronizationBoundary},
     source::{SourceFile, Span},
 };
@@ -35,14 +39,49 @@ pub struct Label<'a> {
 struct Fact<'a> {
     name: &'static str,
     kind: &'static str,
-    value: &'a str,
+    value: FactValue<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum FactValue<'a> {
+    Text(&'a str),
+    Path(&'a Path),
+}
+
+impl serde::Serialize for FactValue<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Text(value) => value.serialize(serializer),
+            Self::Path(path) => {
+                if let Some(text) = path.to_str() {
+                    return text.serialize(serializer);
+                }
+                // A lossy display is not the native path. Preserve exact units as well.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+                    serde_json::json!({"display": path.to_string_lossy(), "encoding": "unix-bytes", "units": path.as_os_str().as_bytes()}).serialize(serializer)
+                }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStrExt;
+                    serde_json::json!({"display": path.to_string_lossy(), "encoding": "windows-wide", "units": path.as_os_str().encode_wide().collect::<Vec<_>>()}).serialize(serializer)
+                }
+                #[cfg(not(any(unix, windows)))]
+                {
+                    serde_json::json!({"display": path.to_string_lossy(), "encoding": "os-encoded-bytes", "platform": std::env::consts::OS, "units": path.as_os_str().as_encoded_bytes()}).serialize(serializer)
+                }
+            }
+        }
+    }
 }
 
 /// A compile-time view borrowing its phase diagnostic and source context.
 pub struct CompileDiagnostic<'a> {
     reason: String,
+    responsibility: &'static str,
     message: Message<'a>,
-    primary: Label<'a>,
+    primary: Option<Label<'a>>,
     related: Vec<Label<'a>>,
     facts: Vec<Fact<'a>>,
 }
@@ -75,12 +114,12 @@ pub fn compile_type_diagnostic<'a>(
     let expected_fact = Fact {
         name: "expected",
         kind: "code",
-        value: expected,
+        value: FactValue::Text(expected),
     };
     let found_fact = Fact {
         name: "found",
         kind: "code",
-        value: found,
+        value: FactValue::Text(found),
     };
     let label = |span: Span, message, relationship, fact| {
         let source = sources
@@ -101,13 +140,14 @@ pub fn compile_type_diagnostic<'a>(
     };
     Ok(CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
+        responsibility: "source",
         message: Message::binding_initializer(expected, found),
-        primary: label(
+        primary: Some(label(
             diagnostic.primary.span(),
             Message::initializer(found),
             "initializer",
             found_fact,
-        )?,
+        )?),
         related: vec![label(
             annotation.span(),
             Message::binding_annotation(expected),
@@ -142,18 +182,19 @@ pub fn compile_lex_diagnostic<'a>(
     let fact = Fact {
         name: "found",
         kind: "code",
-        value: found,
+        value: FactValue::Text(found),
     };
     Ok(CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
+        responsibility: "source",
         message: diagnostic.reason.message(),
-        primary: Label {
+        primary: Some(Label {
             source,
             span,
             message: diagnostic.reason.message(),
             relationship: "invalid_token",
             facts: vec![fact],
-        },
+        }),
         related: Vec::new(),
         facts: vec![fact],
     })
@@ -173,7 +214,7 @@ pub fn compile_parse_diagnostic<'a>(
         facts.push(Fact {
             name: "expected",
             kind: "syntax",
-            value: expected.diagnostic_name(),
+            value: FactValue::Text(expected.diagnostic_name()),
         });
     }
     if let Some(found) = diagnostic.found_token() {
@@ -184,7 +225,7 @@ pub fn compile_parse_diagnostic<'a>(
             } else {
                 "syntax"
             },
-            value: found.diagnostic_name(),
+            value: FactValue::Text(found.diagnostic_name()),
         });
     }
     let label = |span: Span, message, relationship, facts| {
@@ -234,17 +275,82 @@ pub fn compile_parse_diagnostic<'a>(
             vec![Fact {
                 name: "boundary",
                 kind: "syntax",
-                value: boundary.diagnostic_name(),
+                value: FactValue::Text(boundary.diagnostic_name()),
             }],
         )?);
     }
     Ok(CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
+        responsibility: "source",
         message,
-        primary,
+        primary: Some(primary),
         related,
         facts,
     })
+}
+
+/// Exposes input and graph failure facts. Syntax collections keep their causal order.
+///
+/// # Errors
+/// Returns an unsupported staged family or missing admitted source context.
+pub fn compile_graph_diagnostics(
+    context: &GraphDiagnostic,
+) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
+    let failure = context.failure();
+    let (reason, message, path, kind) = match failure {
+        LoadGraphError::Read { path, kind, .. } => (
+            "input.read",
+            Message::input_read(path, *kind),
+            path,
+            Some(*kind),
+        ),
+        LoadGraphError::InvalidUtf8 { path, .. } => (
+            "input.invalid-utf8",
+            Message::input_invalid_utf8(path),
+            path,
+            None,
+        ),
+        _ => return Err(PresentationError::Unsupported),
+    };
+    let mut facts = vec![Fact {
+        name: "path",
+        kind: "path",
+        value: FactValue::Path(path),
+    }];
+    if let Some(kind) = kind {
+        facts.push(Fact {
+            name: "io_kind",
+            kind: "io",
+            value: FactValue::Text(io_kind_name(kind)),
+        });
+    }
+    let primary = failure
+        .import_span()
+        .map(|span| {
+            let source = context
+                .sources()
+                .find(|source| source.id() == span.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(span)
+                .map_err(|_| PresentationError::MissingSource)?;
+            Ok(Label {
+                source,
+                span,
+                message: Message::import_target(),
+                relationship: "import_target",
+                facts: Vec::new(),
+            })
+        })
+        .transpose()?;
+    Ok(vec![CompileDiagnostic {
+        reason: reason.into(),
+        responsibility: "input",
+        message,
+        primary,
+        related: Vec::new(),
+        facts,
+    }])
 }
 
 /// A renderer failure, distinct from the diagnostic being presented.
@@ -280,7 +386,7 @@ pub fn write_human(
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
     writeln!(writer, "{}", catalogue.format(&diagnostic.message)?)?;
-    for label in std::iter::once(&diagnostic.primary).chain(&diagnostic.related) {
+    for label in diagnostic.primary.iter().chain(&diagnostic.related) {
         // Sources and spans were checked by the adapter above.
         let location = label
             .source
@@ -320,17 +426,22 @@ pub fn write_short(
     diagnostic: &CompileDiagnostic<'_>,
     catalogue: &Catalogue,
 ) -> Result<(), RenderError> {
-    let label = &diagnostic.primary;
-    let location = label
-        .source
-        .location(label.span)
-        .expect("validated diagnostic span");
+    if let Some(label) = &diagnostic.primary {
+        let location = label
+            .source
+            .location(label.span)
+            .expect("validated diagnostic span");
+        write!(
+            writer,
+            "{}:{}:{}: ",
+            label.source.display_path(),
+            location.start().line(),
+            location.start().column()
+        )?;
+    }
     writeln!(
         writer,
-        "{}:{}:{}: {} [{}]",
-        label.source.display_path(),
-        location.start().line(),
-        location.start().column(),
+        "{} [{}]",
         catalogue.format(&diagnostic.message)?,
         diagnostic.reason
     )?;
@@ -341,7 +452,7 @@ pub fn write_short(
 struct JsonFact<'a> {
     name: &'static str,
     kind: &'static str,
-    value: &'a str,
+    value: FactValue<'a>,
 }
 
 fn facts<'a>(source: &[Fact<'a>]) -> Vec<JsonFact<'a>> {
@@ -383,7 +494,10 @@ pub fn write_json(
     writer: &mut impl Write,
     diagnostic: &CompileDiagnostic<'_>,
 ) -> Result<(), RenderError> {
-    let labels = std::iter::once(("primary", &diagnostic.primary))
+    let labels = diagnostic
+        .primary
+        .iter()
+        .map(|label| ("primary", label))
         .chain(diagnostic.related.iter().map(|label| ("related", label)))
         .map(|(role, label)| JsonLabel {
             role,
@@ -397,7 +511,7 @@ pub fn write_json(
     let data = JsonDiagnostic {
         schema_version: 1,
         reason: diagnostic.reason.to_string(),
-        responsibility: "source",
+        responsibility: diagnostic.responsibility,
         facts: facts(&diagnostic.facts),
         labels,
     };
@@ -431,7 +545,7 @@ mod tests {
         let mut before = Vec::new();
         write_json(&mut before, &view).unwrap();
         view.message = Message::initializer("presentation-only");
-        view.primary.message = Message::binding_annotation("presentation-only");
+        view.primary.as_mut().unwrap().message = Message::binding_annotation("presentation-only");
         let mut after = Vec::new();
         write_json(&mut after, &view).unwrap();
         assert_eq!(before, after);

@@ -54,3 +54,48 @@ parse-semicolon = Ash does not support semicolons.
 parse-unexpected-token = This token is not allowed at this grammar position.
 parse-recovery = Parsing continues from this position.
 parse-synchronization = Parsing resumes at this boundary.
+input-invalid-utf8 = `{ $path }` is not a valid UTF-8 source file.
+import-target = This import selected the target file.
+input-read =
+    Cannot read `{ $path }`: { $kind ->
+        [not-found] the file or directory does not exist.
+        [permission-denied] access is denied.
+        [connection-refused] the connection was refused.
+        [connection-reset] the connection was reset.
+        [host-unreachable] the host is unreachable.
+        [network-unreachable] the network is unreachable.
+        [connection-aborted] the connection was aborted.
+        [not-connected] the connection is not established.
+        [addr-in-use] the address is already in use.
+        [addr-not-available] the address is unavailable.
+        [network-down] the network is down.
+        [broken-pipe] the pipe is closed.
+        [already-exists] the target already exists.
+        [would-block] the operation would block.
+        [not-a-directory] a path component is not a directory.
+        [is-a-directory] the target is a directory.
+        [directory-not-empty] the directory is not empty.
+        [read-only-filesystem] the filesystem is read-only.
+        [stale-network-file-handle] the network file handle is stale.
+        [invalid-input] an input parameter is invalid.
+        [invalid-data] the operation encountered invalid data.
+        [timed-out] the operation timed out.
+        [write-zero] the write operation made no progress.
+        [storage-full] the storage is full.
+        [not-seekable] the file does not support seeking.
+        [quota-exceeded] a resource quota was exceeded.
+        [file-too-large] the file exceeds a size limit.
+        [resource-busy] the resource is busy.
+        [executable-file-busy] the executable file is busy.
+        [deadlock] the operation would cause a deadlock.
+        [crosses-devices] the operation crosses filesystem boundaries.
+        [too-many-links] the file has too many links.
+        [invalid-filename] the file name is invalid or too long.
+        [argument-list-too-long] the argument list is too long.
+        [interrupted] the operation was interrupted.
+        [unsupported] the operation is unsupported.
+        [unexpected-eof] the file ended unexpectedly.
+        [out-of-memory] memory allocation failed.
+        [other] an uncategorized I/O error occurred.
+       *[uncategorized] an uncategorized I/O error occurred.
+    }
