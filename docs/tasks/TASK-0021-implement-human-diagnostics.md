@@ -786,6 +786,13 @@ localization language. Color is not required for completion.
   50 optional-node localized/JSON layouts. Core coverage is 18/23 reasons and
   overall coverage is 174/197. All 1,283 library tests, 86 diagnostic/catalogue
   tests and warnings-denied Clippy passed.
+- Thirty handler causes now distinguish cleanup/registration scope ownership,
+  callback forms/types, scope origins/effects, duplicate handler/continuation/
+  operation identities and clause coverage/types/effects. Tests exercise wrong
+  cleanup/registration body forms and 60 optional-node localized/JSON layouts.
+  Hook contracts, registration edges and capture-analysis internal failures remain
+  unmigrated, so Handler is not counted complete. All 1,285 library tests,
+  86 diagnostic/catalogue tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
