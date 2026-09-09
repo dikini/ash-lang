@@ -299,6 +299,18 @@ enum ValidationCause {
     MissingCaptureRequirement,
     MissingRootRequirements,
     MissingNodeRequirements,
+    MissingGeneratedTypeBinder,
+    UnresolvedCoreInference,
+    TypeScopeMissingChild,
+    MissingTypeRootRequirements,
+    UnboundCoreTypeVariables,
+    MissingTypeUseCount,
+    ExhaustedTypeUseCount,
+    MissingTypeRequirementSlot,
+    MissingTypeRequirements,
+    UnresolvedCoreRow,
+    UnknownCoreRowBinder,
+    NonRowTailKind,
 }
 
 impl ValidationError {
@@ -346,6 +358,18 @@ impl ValidationError {
             ValidationCause::MissingCaptureRequirement => "missing-capture-requirement",
             ValidationCause::MissingRootRequirements => "missing-root-requirements",
             ValidationCause::MissingNodeRequirements => "missing-node-requirements",
+            ValidationCause::MissingGeneratedTypeBinder => "missing-generated-type-binder",
+            ValidationCause::UnresolvedCoreInference => "unresolved-core-inference",
+            ValidationCause::TypeScopeMissingChild => "type-scope-missing-child",
+            ValidationCause::MissingTypeRootRequirements => "missing-type-root-requirements",
+            ValidationCause::UnboundCoreTypeVariables => "unbound-core-type-variables",
+            ValidationCause::MissingTypeUseCount => "missing-type-use-count",
+            ValidationCause::ExhaustedTypeUseCount => "exhausted-type-use-count",
+            ValidationCause::MissingTypeRequirementSlot => "missing-type-requirement-slot",
+            ValidationCause::MissingTypeRequirements => "missing-type-requirements",
+            ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
+            ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
+            ValidationCause::NonRowTailKind => "non-row-tail-kind",
         })
     }
 
@@ -609,6 +633,78 @@ impl ValidationError {
                 (ValidationCause::MissingNodeRequirements, Some(node)) => {
                     Message::core_validation_missing_node_requirements_node(node)
                 }
+                (ValidationCause::MissingGeneratedTypeBinder, None) => {
+                    Message::core_validation_missing_generated_type_binder()
+                }
+                (ValidationCause::MissingGeneratedTypeBinder, Some(node)) => {
+                    Message::core_validation_missing_generated_type_binder_node(node)
+                }
+                (ValidationCause::UnresolvedCoreInference, None) => {
+                    Message::core_validation_unresolved_core_inference()
+                }
+                (ValidationCause::UnresolvedCoreInference, Some(node)) => {
+                    Message::core_validation_unresolved_core_inference_node(node)
+                }
+                (ValidationCause::TypeScopeMissingChild, None) => {
+                    Message::core_validation_missing_child()
+                }
+                (ValidationCause::TypeScopeMissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::MissingTypeRootRequirements, None) => {
+                    Message::core_validation_missing_type_root_requirements()
+                }
+                (ValidationCause::MissingTypeRootRequirements, Some(node)) => {
+                    Message::core_validation_missing_type_root_requirements_node(node)
+                }
+                (ValidationCause::UnboundCoreTypeVariables, None) => {
+                    Message::core_validation_unbound_core_type_variables()
+                }
+                (ValidationCause::UnboundCoreTypeVariables, Some(node)) => {
+                    Message::core_validation_unbound_core_type_variables_node(node)
+                }
+                (ValidationCause::MissingTypeUseCount, None) => {
+                    Message::core_validation_missing_type_use_count()
+                }
+                (ValidationCause::MissingTypeUseCount, Some(node)) => {
+                    Message::core_validation_missing_type_use_count_node(node)
+                }
+                (ValidationCause::ExhaustedTypeUseCount, None) => {
+                    Message::core_validation_exhausted_type_use_count()
+                }
+                (ValidationCause::ExhaustedTypeUseCount, Some(node)) => {
+                    Message::core_validation_exhausted_type_use_count_node(node)
+                }
+                (ValidationCause::MissingTypeRequirementSlot, None) => {
+                    Message::core_validation_missing_type_requirement_slot()
+                }
+                (ValidationCause::MissingTypeRequirementSlot, Some(node)) => {
+                    Message::core_validation_missing_type_requirement_slot_node(node)
+                }
+                (ValidationCause::MissingTypeRequirements, None) => {
+                    Message::core_validation_missing_type_requirements()
+                }
+                (ValidationCause::MissingTypeRequirements, Some(node)) => {
+                    Message::core_validation_missing_type_requirements_node(node)
+                }
+                (ValidationCause::UnresolvedCoreRow, None) => {
+                    Message::core_validation_unresolved_core_row()
+                }
+                (ValidationCause::UnresolvedCoreRow, Some(node)) => {
+                    Message::core_validation_unresolved_core_row_node(node)
+                }
+                (ValidationCause::UnknownCoreRowBinder, None) => {
+                    Message::core_validation_unknown_core_row_binder()
+                }
+                (ValidationCause::UnknownCoreRowBinder, Some(node)) => {
+                    Message::core_validation_unknown_core_row_binder_node(node)
+                }
+                (ValidationCause::NonRowTailKind, None) => {
+                    Message::core_validation_non_row_tail_kind()
+                }
+                (ValidationCause::NonRowTailKind, Some(node)) => {
+                    Message::core_validation_non_row_tail_kind_node(node)
+                }
             });
         }
         Some(match (self.reason, node) {
@@ -720,6 +816,18 @@ impl ValidationError {
                 | ValidationCause::MissingCaptureRequirement
                 | ValidationCause::MissingRootRequirements
                 | ValidationCause::MissingNodeRequirements => ValidationReason::Scope,
+                ValidationCause::MissingGeneratedTypeBinder
+                | ValidationCause::UnresolvedCoreInference
+                | ValidationCause::TypeScopeMissingChild
+                | ValidationCause::MissingTypeRootRequirements
+                | ValidationCause::UnboundCoreTypeVariables
+                | ValidationCause::MissingTypeUseCount
+                | ValidationCause::ExhaustedTypeUseCount
+                | ValidationCause::MissingTypeRequirementSlot
+                | ValidationCause::MissingTypeRequirements
+                | ValidationCause::UnresolvedCoreRow
+                | ValidationCause::UnknownCoreRowBinder
+                | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
             },
             node,
             cause: Some(cause),
@@ -5624,8 +5732,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             crate::types::TypeVariableId::Generated(_) => {
                                 let Some((kind, _)) = type_binders.get(identity) else {
                                     self.charge_type_work(1)?;
-                                    return Err(ValidationError::new(
-                                        ValidationReason::TypeScope,
+                                    return Err(ValidationError::with_cause(
+                                        ValidationCause::MissingGeneratedTypeBinder,
                                         None,
                                     ));
                                 };
@@ -5639,13 +5747,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::Visit(Type::Inference(_)) => {
                     self.charge_type_work(1)?;
-                    return Err(ValidationError::new(
-                        match variable_kinds {
-                            MonotypeVariableKinds::Core(_) => ValidationReason::TypeScope,
-                            MonotypeVariableKinds::Registry { .. } => ValidationReason::Registry,
-                        },
-                        None,
-                    ));
+                    return Err(match variable_kinds {
+                        MonotypeVariableKinds::Core(_) => ValidationError::with_cause(
+                            ValidationCause::UnresolvedCoreInference,
+                            None,
+                        ),
+                        MonotypeVariableKinds::Registry { .. } => {
+                            ValidationError::new(ValidationReason::Registry, None)
+                        }
+                    });
                 }
                 Task::Visit(Type::Forall(_, _)) => {
                     self.charge_type_work(1)?;
@@ -5771,17 +5881,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 };
                 let Some(canonical) = canonical else {
                     self.charge_type_work(1)?;
-                    return Err(ValidationError::new(
-                        match parameter {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                ValidationReason::Registry
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                ValidationReason::TypeScope
-                            }
-                        },
-                        None,
-                    ));
+                    return Err(match parameter {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            ValidationError::new(ValidationReason::Registry, None)
+                        }
+                        crate::types::TypeVariableId::Generated(_) => ValidationError::with_cause(
+                            ValidationCause::MissingGeneratedTypeBinder,
+                            None,
+                        ),
+                    });
                 };
                 if !self.same_kind_charged(canonical, kind)? {
                     return Ok(false);
@@ -7478,8 +7586,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let id = node_id(self.program.arena, index)?;
             self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
             for child_index in 0..F::child_count(&node.kind) {
-                let child = F::child_at(&node.kind, child_index)
-                    .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(id)))?;
+                let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::TypeScopeMissingChild, Some(id))
+                })?;
                 let child_index = self.index(child)?;
                 remaining_uses[child_index] = remaining_uses[child_index]
                     .checked_add(1)
@@ -7505,7 +7614,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(ScopeAnalysisTask::Finish(id));
                     for child_index in (0..child_count).rev() {
                         let child = F::child_at(kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::TypeScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
@@ -7522,7 +7634,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for child_index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::TypeScope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::TypeScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         let mut child_free = self.take_type_scope_requirements(
                             &mut requirements,
@@ -7664,12 +7779,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let root = requirements
             .get(self.index(self.program.root)?)
             .and_then(Option::as_ref)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, None))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::MissingTypeRootRequirements, None)
+            })?;
         if root.is_empty() {
             Ok(())
         } else {
-            Err(ValidationError::new(
-                ValidationReason::TypeScope,
+            Err(ValidationError::with_cause(
+                ValidationCause::UnboundCoreTypeVariables,
                 Some(self.program.root),
             ))
         }
@@ -7683,23 +7800,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         parent: NodeId,
     ) -> Result<HashSet<crate::types::TypeVariableId>, ValidationError> {
         let child_index = self.index(child)?;
-        let remaining = remaining_uses
-            .get_mut(child_index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
-        *remaining = remaining
-            .checked_sub(1)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
-        let requirement = requirements
-            .get_mut(child_index)
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        let remaining = remaining_uses.get_mut(child_index).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeUseCount, Some(parent))
+        })?;
+        *remaining = remaining.checked_sub(1).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::ExhaustedTypeUseCount, Some(parent))
+        })?;
+        let requirement = requirements.get_mut(child_index).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeRequirementSlot, Some(parent))
+        })?;
         if *remaining == 0 {
-            return requirement
-                .take()
-                .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)));
+            return requirement.take().ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::MissingTypeRequirements, Some(parent))
+            });
         }
-        let requirement = requirement
-            .as_ref()
-            .ok_or_else(|| ValidationError::new(ValidationReason::TypeScope, Some(parent)))?;
+        let requirement = requirement.as_ref().ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::MissingTypeRequirements, Some(parent))
+        })?;
         self.charge_type_work(requirement.len())?;
         let mut cloned = HashSet::new();
         cloned
@@ -8985,8 +9102,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if let Some(tail) = row.tail() {
             self.charge_type_work(tail.lacks().len().saturating_add(1))?;
             let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeScope,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnresolvedCoreRow,
                     Some(node),
                 ));
             };
@@ -9000,9 +9117,15 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     type_binders.get(&identity).map(|(kind, _)| *kind)
                 }
             };
-            if kind.is_none_or(|kind| !matches!(kind, Kind::EffectRow)) {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeScope,
+            let Some(kind) = kind else {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnknownCoreRowBinder,
+                    Some(node),
+                ));
+            };
+            if !matches!(kind, Kind::EffectRow) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::NonRowTailKind,
                     Some(node),
                 ));
             }
@@ -10008,6 +10131,198 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn type_scope_messages_preserve_causes_and_optional_nodes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::MissingGeneratedTypeBinder,
+                "missing-generated-type-binder",
+                "The compiler retained a generated Core type variable without its declared kind.",
+            ),
+            (
+                ValidationCause::UnresolvedCoreInference,
+                "unresolved-core-inference",
+                "The compiler retained an unresolved inference variable in a Core type.",
+            ),
+            (
+                ValidationCause::TypeScopeMissingChild,
+                "type-scope-missing-child",
+                "The compiler stored a Core node whose declared child edge cannot be read.",
+            ),
+            (
+                ValidationCause::MissingTypeRootRequirements,
+                "missing-type-root-requirements",
+                "The compiler has no retained type-scope requirements for the Core root.",
+            ),
+            (
+                ValidationCause::UnboundCoreTypeVariables,
+                "unbound-core-type-variables",
+                "The compiler retained free type-variable requirements at the Core root.",
+            ),
+            (
+                ValidationCause::MissingTypeUseCount,
+                "missing-type-use-count",
+                "The compiler has no child-use count needed for Core type-scope analysis.",
+            ),
+            (
+                ValidationCause::ExhaustedTypeUseCount,
+                "exhausted-type-use-count",
+                "The compiler consumed a Core child's type-scope requirements more times than recorded.",
+            ),
+            (
+                ValidationCause::MissingTypeRequirementSlot,
+                "missing-type-requirement-slot",
+                "The compiler has no type-scope result slot for a referenced Core child.",
+            ),
+            (
+                ValidationCause::MissingTypeRequirements,
+                "missing-type-requirements",
+                "The compiler needs a Core child's type-scope requirements before they are available.",
+            ),
+            (
+                ValidationCause::UnresolvedCoreRow,
+                "unresolved-core-row",
+                "The compiler retained an unresolved inference tail in a Core effect row.",
+            ),
+            (
+                ValidationCause::UnknownCoreRowBinder,
+                "unknown-core-row-binder",
+                "The compiler retained a Core effect-row tail without a declared binder kind.",
+            ),
+            (
+                ValidationCause::NonRowTailKind,
+                "non-row-tail-kind",
+                "The compiler retained a Core effect-row tail whose binder is not of kind EffectRow.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.type-scope");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn type_scope_requirement_consumption_preserves_failures_and_last_use() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        for (mut requirements, mut counts, cause) in [
+            (
+                vec![Some(HashSet::new())],
+                vec![],
+                ValidationCause::MissingTypeUseCount,
+            ),
+            (
+                vec![Some(HashSet::new())],
+                vec![0],
+                ValidationCause::ExhaustedTypeUseCount,
+            ),
+            (vec![], vec![1], ValidationCause::MissingTypeRequirementSlot),
+            (
+                vec![None],
+                vec![1],
+                ValidationCause::MissingTypeRequirements,
+            ),
+            (
+                vec![None],
+                vec![2],
+                ValidationCause::MissingTypeRequirements,
+            ),
+        ] {
+            let error = validator
+                .take_type_scope_requirements(&mut requirements, &mut counts, root, root)
+                .unwrap_err();
+            assert_eq!(error, ValidationError::with_cause(cause, Some(root)));
+        }
+        for count in [1, 2] {
+            let expected = HashSet::from([crate::types::TypeVariableId::new(0)]);
+            let mut requirements = vec![Some(expected.clone())];
+            let mut counts = vec![count];
+            let actual = validator
+                .take_type_scope_requirements(&mut requirements, &mut counts, root, root)
+                .unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(counts, [count - 1]);
+            assert_eq!(requirements[0].is_some(), count > 1);
+        }
+    }
+
+    #[test]
+    fn unresolved_core_inference_has_a_precise_message() {
+        let file = source();
+        let mut builder =
+            crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let error = validator
+            .valid_core_type_kind(
+                &Type::Inference(crate::types::InferenceVariableId::new(0)),
+                &HashMap::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::TypeScope);
+        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert_eq!(error.cause, Some(ValidationCause::UnresolvedCoreInference));
+        let identity = crate::types::TypeVariableId::new(0);
+        let error = validator
+            .valid_core_type_kind(&Type::Variable(identity), &HashMap::new())
+            .unwrap_err();
+        assert_eq!(
+            error.cause,
+            Some(ValidationCause::MissingGeneratedTypeBinder)
+        );
+        let rigid = crate::types::EffectRowVariable::Rigid(identity);
+        let inferred =
+            crate::types::EffectRowVariable::Inference(crate::types::InferenceVariableId::new(0));
+        for (tail, kind, cause) in [
+            (inferred, None, Some(ValidationCause::UnresolvedCoreRow)),
+            (rigid, None, Some(ValidationCause::UnknownCoreRowBinder)),
+            (
+                rigid,
+                Some(Kind::Type),
+                Some(ValidationCause::NonRowTailKind),
+            ),
+            (rigid, Some(Kind::EffectRow), None),
+        ] {
+            let binders = kind
+                .as_ref()
+                .map(|kind| HashMap::from([(identity, (kind, root))]))
+                .unwrap_or_default();
+            let result =
+                validator.validate_effect_row(&EffectRow::open(tail, Box::new([])), &binders, root);
+            assert_eq!(result.err().map(|error| error.cause.unwrap()), cause);
+        }
+    }
     #[test]
     fn scope_failure_messages_keep_the_failed_relationship() {
         use crate::{

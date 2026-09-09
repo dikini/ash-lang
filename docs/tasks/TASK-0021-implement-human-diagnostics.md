@@ -720,6 +720,14 @@ localization language. Color is not required for completion.
   is 9/23 reasons, overall coverage is 165/197, and catalogues contain 503
   templates per locale. All 1,267 library tests, 86 diagnostic/catalogue tests
   and warnings-denied Clippy passed.
+- Core type-scope diagnostics retain 12 causes for missing generated binders,
+  unresolved type and row inference, unbound root requirements, row-tail kinds
+  and unavailable requirement-analysis data. Shared unreadable-child wording
+  is reused. Tests cover type/row causes, requirement consumption and last-use
+  retention, and 24 optional-node localized/JSON layouts. Core coverage is
+  10/23 reasons, overall coverage is 166/197, and catalogues contain 525
+  templates per locale. All 1,270 library tests, 86 diagnostic/catalogue tests
+  and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
