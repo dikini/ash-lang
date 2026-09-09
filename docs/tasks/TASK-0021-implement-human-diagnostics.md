@@ -397,6 +397,15 @@ localization language. Color is not required for completion.
   ownership inventory and warnings-denied Clippy passed. A medium-effort
   review found no issues. Source acceptance, failure ordering and runtime
   reporting are unchanged.
+- Equation arity retains a typed distinction between inconsistent/nonpositive
+  pattern counts and patterns exceeding the declared function arrows. JSON
+  exposes that requirement independently of wording; existing checks, spans
+  and legacy messages are unchanged. Hook API presentation explains that the
+  sole `publish` operation must have equal domain/result types before type
+  argument substitution, for both hooks and registrations. Eight source cases
+  cover these requirements. Type presentation covers 29 of 35 source reasons,
+  with 162 templates per locale. All 103 focused diagnostic, catalogue and
+  hook tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

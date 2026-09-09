@@ -337,6 +337,7 @@ impl TypeReason {
         use crate::message::Message;
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
+            Self::HookApi => (Message::hook_api(), "hook_api", None),
             Self::LocalNominalEscape => {
                 (Message::local_nominal_escape(), "escaping_dependency", None)
             }
@@ -697,6 +698,13 @@ pub struct TypeDiagnostic {
 enum TypeDiagnosticContext {
     Plain,
     FunctionNeedsContext(Option<SynthesisCause>),
+    EquationArity(EquationArityCause),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EquationArityCause {
+    PatternCount,
+    DeclaredArrows,
 }
 
 impl From<Diagnostic<TypeReason>> for TypeDiagnostic {
@@ -723,6 +731,28 @@ impl std::ops::DerefMut for TypeDiagnostic {
 
 impl TypeDiagnostic {
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason == TypeReason::EquationArity {
+            let TypeDiagnosticContext::EquationArity(cause) = self.context else {
+                return None;
+            };
+            let (message, requirement) = match cause {
+                EquationArityCause::PatternCount => (
+                    crate::message::Message::equation_pattern_count(),
+                    "pattern-count",
+                ),
+                EquationArityCause::DeclaredArrows => (
+                    crate::message::Message::equation_declared_arrows(),
+                    "declared-arrows",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "equation_group",
+                fact: Some(("arity_requirement", requirement)),
+                fact_kind: "equation-arity-requirement",
+                minimum_related: 0,
+            });
+        }
         if self.reason != TypeReason::FunctionNeedsContext {
             return self
                 .reason
@@ -15300,11 +15330,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .iter()
                 .any(|clause| clause.patterns.len() != arity)
         {
-            return Err(case_error(
-                TypeReason::EquationArity,
+            return Err(equation_arity_error(
+                EquationArityCause::PatternCount,
                 definition_span,
-                "equational clauses must have the same positive pattern count",
-                None,
             ));
         }
         let mut remainder = ProvenancedTypeOwner::new(ProvenancedType {
@@ -15321,11 +15349,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let mut expected_body_effects = EffectRow::empty();
         for _ in 0..arity {
             if remainder.ty.function_view().is_none() {
-                return Err(case_error(
-                    TypeReason::EquationArity,
+                return Err(equation_arity_error(
+                    EquationArityCause::DeclaredArrows,
                     definition_span,
-                    "the equation has more patterns than the declared arrows",
-                    None,
                 ));
             }
             expected_body_effects = match remainder
@@ -21118,6 +21144,21 @@ fn constructor_mismatch(span: Span) -> TypeError {
         TypeReason::ConstructorMismatch,
         SourceLabel::new(span, "this constructor has the wrong payload shape"),
     ))
+}
+
+fn equation_arity_error(cause: EquationArityCause, span: Span) -> TypeError {
+    let message = match cause {
+        EquationArityCause::PatternCount => {
+            "equational clauses must have the same positive pattern count"
+        }
+        EquationArityCause::DeclaredArrows => {
+            "the equation has more patterns than the declared arrows"
+        }
+    };
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(TypeReason::EquationArity, SourceLabel::new(span, message)),
+        context: TypeDiagnosticContext::EquationArity(cause),
+    }))
 }
 
 fn case_error(

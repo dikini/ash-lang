@@ -1306,6 +1306,91 @@ fn anonymous_function_presentation_uses_the_producers_retained_context() {
     }
 }
 
+#[test]
+fn equation_arity_presentation_distinguishes_pattern_count_from_declared_arrows() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, cause, explanation) in [
+        (
+            "choose : Bool -> Int -> Int\nchoose true value = value\nchoose false = fn(value) {\nvalue\n}\n",
+            "pattern-count",
+            "Every equation in this group must have the same positive number of parameter patterns.",
+        ),
+        (
+            "choose : Bool -> Int\nchoose flag value = value\n",
+            "declared-arrows",
+            "This equation has more parameter patterns than function arrows in its declared type.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("equation-arity-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source diagnostic");
+        };
+        assert_eq!(error.reason, TypeReason::EquationArity);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "arity_requirement");
+        assert_eq!(json["facts"][0]["kind"], "equation-arity-requirement");
+        assert_eq!(json["facts"][0]["value"], cause);
+        assert_eq!(json["labels"][0]["relationship"], "equation_group");
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn hook_api_messages_explain_declaration_level_equality_for_hooks_and_registration() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human},
+    };
+    for (declaration, target) in [
+        ("effect Bad {\nask : Int -> Int\n}\n", "Bad"),
+        (
+            "effect Bad {\npublish : Int -> Int\nask : Int -> Int\n}\n",
+            "Bad",
+        ),
+        (
+            "effect Convert<A, B> {\npublish : A -> B\n}\n",
+            "Convert<Int, Int>",
+        ),
+    ] {
+        for expression in [
+            format!("hook {target} {{\n42\n}}"),
+            format!("register {target} identity {{\n42\n}}"),
+        ] {
+            let text = format!(
+                "{declaration}identity : Int -> Int\nidentity value = value\nmain : Unit -> Int ! {{{target}}}\nmain () = {expression}\n"
+            );
+            let fixture = ModuleFixture::load("hook-api-message.ash", &text);
+            let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+                panic!("expected source diagnostic");
+            };
+            assert_eq!(error.reason, TypeReason::HookApi);
+            let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains("`publish`"));
+                if locale == Locale::English {
+                    assert!(output.contains("before type arguments are substituted"));
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

@@ -150,6 +150,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// All equations must consume the same positive number of patterns.
+    equation_pattern_count => "equation-pattern-count" {},
+    /// An equation consumes more arrows than its declared type provides.
+    equation_declared_arrows => "equation-declared-arrows" {},
+    /// Hooks and registrations require one declared endomorphic publish operation.
+    hook_api => "hook-api" {},
     /// An anonymous function lacks an expected function type.
     function_needs_context => "function-needs-context" {},
     /// An unannotated binding requires its initializer to infer a type.
