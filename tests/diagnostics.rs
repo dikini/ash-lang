@@ -615,6 +615,107 @@ fn resolver_name_roles_have_distinct_messages_and_machine_facts() {
     }
 }
 
+#[test]
+fn resolver_effect_restrictions_render_the_actual_operation_and_import() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, relationship, fact, english) in [
+        (
+            "effect Bad {\nop : Int\n}\n",
+            ResolveReason::EffectOperationShape,
+            "effect_operation_signature",
+            None,
+            "An effect operation needs an outer function arrow without an explicit effect row.",
+        ),
+        (
+            "effect Bad {\nop : Unit -> Int ! {}\n}\n",
+            ResolveReason::EffectOperationShape,
+            "effect_operation_signature",
+            None,
+            "An effect operation needs an outer function arrow without an explicit effect row.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resume 1\n",
+            ResolveReason::ResumeOutsideClause,
+            "continuation_use",
+            Some(("operation", "resume")),
+            "`resume` is only available inside an effect operation clause.",
+        ),
+        (
+            "main : Unit -> Unit\nmain () = discard\n",
+            ResolveReason::ResumeOutsideClause,
+            "continuation_use",
+            Some(("operation", "discard")),
+            "`discard` is only available inside an effect operation clause.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resource cell<R> c = 41 {\n42\n}\n",
+            ResolveReason::ResourceBuiltinRequired,
+            "resource_acquisition",
+            Some(("required_builtin", "@builtin.cell")),
+            "This resource acquisition requires a direct import of `@builtin.cell`.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = resource native_buffer<R> b = 4 {\n42\n}\n",
+            ResolveReason::ResourceBuiltinRequired,
+            "resource_acquisition",
+            Some(("required_builtin", "@builtin.native_buffer")),
+            "This resource acquisition requires a direct import of `@builtin.native_buffer`.",
+        ),
+        (
+            "import @builtin.cell as Cell\nimpl Cell.Provider<Int> {\nread value = 1\nwrite value = ()\n}\n",
+            ResolveReason::SealedProvider,
+            "sealed_provider_declaration",
+            None,
+            "Only resource acquisition may introduce a compiler-owned resource provider.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("effect-restriction.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+            if let Some((_, value)) = fact {
+                assert!(output.contains(&format!("`{value}`")));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["labels"][0]["relationship"], relationship);
+        if let Some((name, value)) = fact {
+            assert_eq!(json["facts"][0]["name"], name);
+            assert_eq!(json["facts"][0]["value"], value);
+            assert_eq!(
+                json["facts"][0]["kind"],
+                if name == "operation" {
+                    "keyword"
+                } else {
+                    "module-path"
+                }
+            );
+        } else {
+            assert!(json["facts"].as_array().unwrap().is_empty());
+        }
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)

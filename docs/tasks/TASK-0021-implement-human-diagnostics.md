@@ -308,6 +308,14 @@ localization language. Color is not required for completion.
   The batch passed 128 focused diagnostic, resolution, module-resolution and
   catalogue tests and warnings-denied Clippy. Both catalogues contain 118
   templates; source acceptance and CLI defaults are unchanged.
+- Effect operation shape, sealed resource providers, missing direct builtin
+  imports and continuation use outside operation clauses now have explicit
+  resolver presentation: 25 of 30 reasons. Phase facts distinguish `resume`
+  from `discard` and cell from native-buffer imports. Shape wording explicitly
+  excludes even an empty written outer effect row. Existing name facts remain
+  unchanged; reasons without a named subject do not invent one. The batch
+  passed 1,232 library tests, 125 focused integration tests and warnings-denied
+  Clippy. Both catalogues contain 122 templates. Runtime reporting is unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

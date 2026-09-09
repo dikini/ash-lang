@@ -304,10 +304,11 @@ pub fn compile_resolve_diagnostic<'a>(
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let message = error.message().ok_or(PresentationError::Unsupported)?;
-    let name = error
-        .found
-        .as_deref()
-        .ok_or(PresentationError::MissingFact)?;
+    let subject = error.subject_fact().map(|(name, kind, value)| Fact {
+        name,
+        kind,
+        value: FactValue::Text(value),
+    });
     let (primary_message, primary_relationship) = error
         .primary_message()
         .ok_or(PresentationError::Unsupported)?;
@@ -320,12 +321,7 @@ pub fn compile_resolve_diagnostic<'a>(
     source
         .location(span)
         .map_err(|_| PresentationError::MissingSource)?;
-    let name = Fact {
-        name: "name",
-        kind: "identifier",
-        value: FactValue::Text(name),
-    };
-    let mut facts = vec![name];
+    let mut facts: Vec<_> = subject.into_iter().collect();
     if let Some(usage) = error.name_use() {
         facts.push(Fact {
             name: "name_use",
@@ -377,7 +373,8 @@ pub fn compile_resolve_diagnostic<'a>(
                 .related_name()
                 .map(|value| Fact {
                     value: FactValue::Text(value),
-                    ..name
+                    name: "name",
+                    kind: "identifier",
                 })
                 .into_iter()
                 .collect(),
@@ -392,7 +389,7 @@ pub fn compile_resolve_diagnostic<'a>(
             span,
             message: primary_message,
             relationship: primary_relationship,
-            facts: vec![name],
+            facts: subject.into_iter().collect(),
         }),
         related,
         facts,

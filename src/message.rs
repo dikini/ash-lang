@@ -144,6 +144,14 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An operation signature requires a pure outer arrow, with no explicit row.
+    resolve_operation_shape => "resolve-operation-shape" {},
+    /// Source implementations/evidence cannot introduce builtin resource providers.
+    resolve_sealed_provider => "resolve-sealed-provider" {},
+    /// Acquisition requires the corresponding direct builtin import.
+    resolve_builtin_required => "resolve-builtin-required" { builtin: &'a str = "@builtin.cell" },
+    /// Resume or discard occurs outside an operation clause.
+    resolve_continuation_outside => "resolve-continuation-outside" { operation: &'a str = "resume" },
     /// An interface occupies a value-type position.
     resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
     /// An interface position contains a known non-interface name.

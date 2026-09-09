@@ -862,6 +862,18 @@ impl ResolveError {
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
         match self.reason {
+            ResolveReason::EffectOperationShape => {
+                return Some((self.message()?, "effect_operation_signature"));
+            }
+            ResolveReason::SealedProvider => {
+                return Some((self.message()?, "sealed_provider_declaration"));
+            }
+            ResolveReason::ResourceBuiltinRequired => {
+                return Some((self.message()?, "resource_acquisition"));
+            }
+            ResolveReason::ResumeOutsideClause => {
+                return Some((self.message()?, "continuation_use"));
+            }
             ResolveReason::TypeKind | ResolveReason::InterfaceKind | ResolveReason::EffectKind => {
                 return Some((
                     crate::message::Message::incompatible_name_role(),
@@ -961,6 +973,19 @@ impl ResolveError {
         }
     }
 
+    pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        match self.reason {
+            ResolveReason::ResourceBuiltinRequired => {
+                Some(("required_builtin", "module-path", self.expected.as_deref()?))
+            }
+            ResolveReason::ResumeOutsideClause => {
+                Some(("operation", "keyword", self.found.as_deref()?))
+            }
+            ResolveReason::EffectOperationShape | ResolveReason::SealedProvider => None,
+            _ => Some(("name", "identifier", self.found.as_deref()?)),
+        }
+    }
+
     pub(crate) fn name_use(&self) -> Option<&'static str> {
         match self.reason {
             ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
@@ -1004,6 +1029,25 @@ impl ResolveError {
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        match self.reason {
+            ResolveReason::EffectOperationShape => {
+                return Some(crate::message::Message::resolve_operation_shape());
+            }
+            ResolveReason::SealedProvider => {
+                return Some(crate::message::Message::resolve_sealed_provider());
+            }
+            ResolveReason::ResourceBuiltinRequired => {
+                return Some(crate::message::Message::resolve_builtin_required(
+                    self.expected.as_deref()?,
+                ));
+            }
+            ResolveReason::ResumeOutsideClause => {
+                return Some(crate::message::Message::resolve_continuation_outside(
+                    self.found.as_deref()?,
+                ));
+            }
+            _ => {}
+        }
         let name = self.found.as_deref()?;
         match self.reason {
             ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
@@ -9773,18 +9817,23 @@ impl Resolver {
                 tasks.push(ResolveTask::VisitBlock(&hook.body));
             }
             SurfaceExprKind::Resource(source) if self.resource_builtin(source.kind).is_none() => {
-                return Err(error(
+                let (builtin, message) = match source.kind {
+                    crate::surface::SurfaceResourceKind::Cell => (
+                        "@builtin.cell",
+                        "resource acquisition requires a direct import of @builtin.cell",
+                    ),
+                    crate::surface::SurfaceResourceKind::NativeBuffer => (
+                        "@builtin.native_buffer",
+                        "resource acquisition requires a direct import of @builtin.native_buffer",
+                    ),
+                };
+                let mut failure = error(
                     ResolveReason::ResourceBuiltinRequired,
                     expression.span,
-                    match source.kind {
-                        crate::surface::SurfaceResourceKind::Cell => {
-                            "resource acquisition requires a direct import of @builtin.cell"
-                        }
-                        crate::surface::SurfaceResourceKind::NativeBuffer => {
-                            "resource acquisition requires a direct import of @builtin.native_buffer"
-                        }
-                    },
-                ));
+                    message,
+                );
+                failure.0.expected = Some(builtin.to_owned());
+                return Err(failure);
             }
             SurfaceExprKind::Resource(source) => {
                 self.type_work.charge(2).map_err(|()| {
@@ -10119,13 +10168,11 @@ impl Resolver {
                 });
             }
             SurfaceExprKind::Resume(value) => {
-                let owner = self.active_resumes.last().copied().ok_or_else(|| {
-                    error(
-                        ResolveReason::ResumeOutsideClause,
-                        expression.span,
-                        "resume and discard are available only inside an operation clause",
-                    )
-                })?;
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .ok_or_else(|| continuation_outside_clause(expression.span, "resume"))?;
                 let value = self.resolve_expr(value)?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
@@ -10136,13 +10183,11 @@ impl Resolver {
                 });
             }
             SurfaceExprKind::Discard => {
-                let owner = self.active_resumes.last().copied().ok_or_else(|| {
-                    error(
-                        ResolveReason::ResumeOutsideClause,
-                        expression.span,
-                        "resume and discard are available only inside an operation clause",
-                    )
-                })?;
+                let owner = self
+                    .active_resumes
+                    .last()
+                    .copied()
+                    .ok_or_else(|| continuation_outside_clause(expression.span, "discard"))?;
                 expressions.push(ResolvedExpr {
                     kind: ResolvedExprKind::Discard(crate::resolved::ResolvedDiscardExpr {
                         owner: Some(owner),
@@ -10578,6 +10623,16 @@ fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveErr
     diagnostic.expected = Some("interface".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
+}
+
+fn continuation_outside_clause(span: crate::source::Span, operation: &str) -> ResolveError {
+    let mut failure = error(
+        ResolveReason::ResumeOutsideClause,
+        span,
+        "resume and discard are available only inside an operation clause",
+    );
+    failure.0.found = Some(operation.to_owned());
+    failure
 }
 
 fn effect_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
