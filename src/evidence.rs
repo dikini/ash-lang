@@ -40,7 +40,7 @@ pub(crate) enum SelectionFailure {
     InvalidState,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SelectionError {
     failure: SelectionFailure,
     span: Option<Span>,

@@ -290,7 +290,7 @@ pub fn compile_type_diagnostic<'a>(
 /// # Errors
 /// Returns unsupported reasons, missing facts or missing source context.
 pub fn compile_interface_diagnostic<'a>(
-    error: &'a Diagnostic<crate::interface::InterfaceReason>,
+    error: &'a crate::interface::InterfaceDiagnostic,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let (message, relationship) = error
@@ -300,7 +300,7 @@ pub fn compile_interface_diagnostic<'a>(
     if error.expected.is_some() || error.found.is_some() {
         return Err(PresentationError::Unsupported);
     }
-    if error.related.len() < error.reason.minimum_related() {
+    if error.related.len() < error.minimum_related() {
         return Err(PresentationError::MissingFact);
     }
     let label = |span: Span, message, relationship| {
@@ -323,7 +323,6 @@ pub fn compile_interface_diagnostic<'a>(
     let mut related = Vec::with_capacity(error.related.len());
     for (index, original) in error.related.iter().enumerate() {
         let (message, relationship) = error
-            .reason
             .related_message(index)
             .ok_or(PresentationError::Unsupported)?;
         related.push(label(original.span(), message, relationship)?);

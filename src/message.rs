@@ -150,6 +150,24 @@ macro_rules! messages {
 }
 
 messages! {
+    /// No available evidence satisfies this interface requirement.
+    constraint_unsatisfied => "constraint-unsatisfied" {},
+    /// The types in this interface requirement are not sufficiently determined to select evidence.
+    constraint_ambiguous => "constraint-ambiguous" {},
+    /// Selecting evidence for this requirement returns to a requirement whose selection is already in progress.
+    constraint_cycle => "constraint-cycle" {},
+    /// This declaration introduced the interface requirement.
+    selection_declaration => "selection-declaration" {},
+    /// This import made the declaration available.
+    selection_import => "selection-import" {},
+    /// This interface participates in the failing evidence selection.
+    selection_interface => "selection-interface" {},
+    /// Evidence selection followed this implementation.
+    selection_implementation => "selection-implementation" {},
+    /// This implementation method supplies the selected evidence.
+    selection_method => "selection-method" {},
+    /// This import made the selected implementation available.
+    selection_implementation_import => "selection-implementation-import" {},
     /// An implementation must be owned through its interface or selection key.
     impl_orphan => "impl-orphan" {},
     /// The interface selected by an orphan implementation is foreign.

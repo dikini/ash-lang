@@ -1694,6 +1694,72 @@ fn orphan_implementation_message_explains_selection_key_ownership() {
     );
 }
 
+#[test]
+fn unsatisfied_selection_preserves_typed_causal_labels() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    let fixture = ModuleFixture::load(
+        "selection-message.ash",
+        "interface Equal<A> {\nequal : A -> A\n}\nmain : Unit -> Int\nmain () = equal 1\n",
+    );
+    let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+        panic!("expected interface error")
+    };
+    assert_eq!(error.reason, InterfaceReason::Unsatisfied);
+    for label in &mut error.related {
+        *label = ash::diagnostic::SourceLabel::new(label.span(), "ignored legacy prose");
+    }
+    let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        assert!(
+            !String::from_utf8(output)
+                .unwrap()
+                .contains("ignored legacy prose")
+        );
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["reason"], "constraint.unsatisfied");
+    assert_eq!(json["labels"][0]["relationship"], "interface_obligation");
+}
+
+#[test]
+fn ambiguous_and_cyclic_selection_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason) in [
+        (
+            "interface Render<A> {\nrender : A -> Int\n}\nimpl Render<Int> {\nrender value = value\n}\nprobe : Unit -> Unit\nprobe () = {\nlet use = fn(value) {\nrender value\n}\n()\n}\n",
+            InterfaceReason::Ambiguous,
+        ),
+        (
+            "interface First<A> {\nfirst : A -> A\n}\ninterface Second<A> {\nsecond : A -> A\n}\nimpl First<Int> where Second<Int> {\nfirst value = value\n}\nimpl Second<Int> where First<Int> {\nsecond value = value\n}\nmain : Unit -> Int\nmain () = first(1)\n",
+            InterfaceReason::Cycle,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("selection-cause-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+        if !error.related.is_empty() {
+            error.related.pop();
+            assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

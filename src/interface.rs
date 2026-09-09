@@ -1957,6 +1957,99 @@ pub enum InterfaceReason {
     ImplExtraMethod,
 }
 
+/// An interface diagnostic retaining phase-owned selection context.
+///
+/// Retain this wrapper for localized presentation; the common diagnostic
+/// projection alone does not retain selection-label roles.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InterfaceDiagnostic {
+    diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+    selection: Option<crate::evidence::SelectionError>,
+}
+
+impl From<crate::diagnostic::Diagnostic<InterfaceReason>> for InterfaceDiagnostic {
+    fn from(diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>) -> Self {
+        Self {
+            diagnostic,
+            selection: None,
+        }
+    }
+}
+
+impl std::ops::Deref for InterfaceDiagnostic {
+    type Target = crate::diagnostic::Diagnostic<InterfaceReason>;
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostic
+    }
+}
+
+impl std::ops::DerefMut for InterfaceDiagnostic {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.diagnostic
+    }
+}
+
+impl InterfaceDiagnostic {
+    pub(crate) fn with_selection(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        selection: crate::evidence::SelectionError,
+    ) -> Self {
+        Self {
+            diagnostic,
+            selection: Some(selection),
+        }
+    }
+
+    pub(crate) fn minimum_related(&self) -> usize {
+        self.selection.as_ref().map_or_else(
+            || self.reason.minimum_related(),
+            |selection| {
+                usize::from(selection.declaration_span().is_some())
+                    + usize::from(selection.import_span().is_some())
+                    + selection.causes().len()
+            },
+        )
+    }
+
+    pub(crate) fn related_message(
+        &self,
+        mut index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        let Some(selection) = &self.selection else {
+            return self.reason.related_message(index);
+        };
+        use crate::{evidence::SelectionCauseKind, message::Message};
+        if selection.declaration_span().is_some() {
+            if index == 0 {
+                return Some((Message::selection_declaration(), "obligation_declaration"));
+            }
+            index -= 1;
+        }
+        if selection.import_span().is_some() {
+            if index == 0 {
+                return Some((Message::selection_import(), "declaration_import"));
+            }
+            index -= 1;
+        }
+        Some(match selection.causes().get(index)?.kind() {
+            SelectionCauseKind::Interface => {
+                (Message::selection_interface(), "selection_interface")
+            }
+            SelectionCauseKind::Implementation => (
+                Message::selection_implementation(),
+                "selected_implementation",
+            ),
+            SelectionCauseKind::ImplementationMethod => {
+                (Message::selection_method(), "selected_method")
+            }
+            SelectionCauseKind::ImplementationImport => (
+                Message::selection_implementation_import(),
+                "implementation_import",
+            ),
+        })
+    }
+}
+
 impl InterfaceReason {
     pub(crate) fn minimum_related(self) -> usize {
         usize::from(matches!(
@@ -1978,6 +2071,9 @@ impl InterfaceReason {
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::Unsatisfied => (Message::constraint_unsatisfied(), "interface_obligation"),
+            Self::Ambiguous => (Message::constraint_ambiguous(), "interface_obligation"),
+            Self::Cycle => (Message::constraint_cycle(), "interface_obligation"),
             Self::ImplOrphan => (Message::impl_orphan(), "implementation_key"),
             Self::ConstraintPrivateInterface => (
                 Message::constraint_private_interface(),

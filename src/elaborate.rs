@@ -1012,7 +1012,7 @@ pub enum TypeError {
     /// A categorized Ash source rejection.
     Source(Box<TypeDiagnostic>),
     /// A categorized interface or implementation source rejection.
-    Interface(Box<Diagnostic<InterfaceReason>>),
+    Interface(Box<crate::interface::InterfaceDiagnostic>),
     /// The general checking rule found structurally unequal types.
     Mismatch(TypeMismatch),
     /// Typed elaboration could not preserve its compiler invariants.
@@ -1022,6 +1022,10 @@ pub enum TypeError {
 impl TypeError {
     fn source(diagnostic: Diagnostic<TypeReason>) -> Self {
         Self::Source(Box::new(diagnostic.into()))
+    }
+
+    fn interface(diagnostic: Diagnostic<InterfaceReason>) -> Self {
+        Self::Interface(Box::new(diagnostic.into()))
     }
 }
 
@@ -4677,7 +4681,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         "the known determinant key is {}",
                         self.registry.display_source_type(&key)
                     ));
-                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                    return Err(TypeError::interface(diagnostic));
                 }
             }
         }
@@ -16225,7 +16229,7 @@ fn check_interface_declarations(
                         .primary_span(),
                     "the interface parameter is declared here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
             if method.annotation.ty.function_view().is_none() {
                 let mut diagnostic = Diagnostic::new(
@@ -16239,7 +16243,7 @@ fn check_interface_declarations(
                     method.span,
                     "the method signature is declared here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -16538,7 +16542,7 @@ fn determination_parameter_error(
     if let Some((span, message)) = related {
         retain_interface_label(&mut diagnostic, span, message, budget)?;
     }
-    Ok(TypeError::Interface(Box::new(diagnostic)))
+    Ok(TypeError::interface(diagnostic))
 }
 
 fn check_global_requirements(
@@ -16620,7 +16624,7 @@ fn check_global_requirements(
                         interface.span(),
                         "the private interface is declared here",
                     ));
-                    return Err(TypeError::Interface(Box::new(diagnostic)));
+                    return Err(TypeError::interface(diagnostic));
                 }
             }
         }
@@ -16671,7 +16675,7 @@ fn check_global_requirements(
                     first.application.span,
                     "the first identical requirement is here",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
             if let Some(first) = determination_conflict {
                 budget.charge(2).map_err(|()| constraint_resource())?;
@@ -16690,7 +16694,7 @@ fn check_global_requirements(
                     first.application.span,
                     "this earlier requirement fixes a different dependent tuple for that key",
                 ));
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
         for requirement in requirements.iter() {
@@ -16745,7 +16749,7 @@ fn check_global_requirements(
                         "this candidate parameter occurs only in a requirement",
                     ));
                 }
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -17127,7 +17131,7 @@ where
                         )?;
                     }
                 }
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -17220,7 +17224,7 @@ fn check_implementation_header(
             "this is the implemented interface",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     if let Some(parameter) = implementation.prerequisite_only_parameters.first() {
@@ -17237,7 +17241,7 @@ fn check_implementation_header(
             "the implementation head determines every prerequisite variable",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     check_implementation_determination_coverage(module, head_interface, implementation, budget)?;
@@ -17264,7 +17268,7 @@ fn check_implementation_header(
             "the foreign interface is selected here",
             budget,
         )?;
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
 
     let head_key = if implementation.prerequisites.is_empty() {
@@ -17320,7 +17324,7 @@ fn check_implementation_header(
                 "the prerequisite must decrease pointwise from this head",
                 budget,
             )?;
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
     if implementation.public {
@@ -17344,7 +17348,7 @@ fn check_implementation_header(
                 "the private interface is declared here",
                 budget,
             )?;
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
         for prerequisite in &implementation.prerequisites {
             if let Some(interface) = checked_interface(
@@ -17367,7 +17371,7 @@ fn check_implementation_header(
                     "the private interface is declared here",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -17411,7 +17415,7 @@ fn check_implementation_prerequisite_relations(
                     "the first identical prerequisite is here",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
             if let Some(determination) = interface.determination()
                 && same_resolved_application_key(
@@ -17434,7 +17438,7 @@ fn check_implementation_prerequisite_relations(
                     "this earlier prerequisite fixes a different dependent tuple for that key",
                     budget,
                 )?;
-                return Err(TypeError::Interface(Box::new(diagnostic)));
+                return Err(TypeError::interface(diagnostic));
             }
         }
     }
@@ -17655,7 +17659,7 @@ fn check_implementation_determination_coverage(
                 budget,
             )?;
         }
-        return Err(TypeError::Interface(Box::new(diagnostic)));
+        return Err(TypeError::interface(diagnostic));
     }
     if key_index != positions.len() {
         return Err(invalid_state());
@@ -17702,7 +17706,7 @@ fn check_implementation_membership(
                 interface.span(),
                 "the implemented interface is declared here",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         };
         if let Some((_, first)) = supplied.insert(method, (source_group, group)) {
             let mut diagnostic = Diagnostic::new(
@@ -17713,7 +17717,7 @@ fn check_implementation_membership(
                 first.span,
                 "the first method group is here",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
     for method_index in 0..interface.method_count() {
@@ -17731,7 +17735,7 @@ fn check_implementation_membership(
                 method.span(),
                 "this required method is missing",
             ));
-            return Err(TypeError::Interface(Box::new(diagnostic)));
+            return Err(TypeError::interface(diagnostic));
         }
     }
 
@@ -17874,7 +17878,7 @@ fn check_application_arity_parts(
         declaration_span,
         "the interface parameter list is declared here",
     ));
-    Err(TypeError::Interface(Box::new(diagnostic)))
+    Err(TypeError::interface(diagnostic))
 }
 
 fn same_resolved_application_arguments(
@@ -18004,7 +18008,7 @@ fn lexical_evidence_error(reason: InterfaceReason, span: Span, related: Span) ->
             .related
             .push(SourceLabel::new(related, "the related declaration is here"));
     }
-    TypeError::Interface(Box::new(diagnostic))
+    TypeError::interface(diagnostic)
 }
 
 fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
@@ -18013,10 +18017,10 @@ fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
             let Some(span) = span else {
                 return invalid_state();
             };
-            TypeError::Interface(Box::new(Diagnostic::new(
+            TypeError::interface(Diagnostic::new(
                 reason,
                 SourceLabel::new(span, selection_reason_message(reason)),
-            )))
+            ))
         }
         SelectionFailure::TypeResource => {
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -18068,7 +18072,9 @@ fn selected_obligation_error(error: SelectionError) -> TypeError {
             .related
             .push(SourceLabel::new(cause.span(), message));
     }
-    TypeError::Interface(Box::new(diagnostic))
+    TypeError::Interface(Box::new(
+        crate::interface::InterfaceDiagnostic::with_selection(diagnostic, error),
+    ))
 }
 
 fn is_polymorphic_recursion_error(error: &TypeError) -> bool {

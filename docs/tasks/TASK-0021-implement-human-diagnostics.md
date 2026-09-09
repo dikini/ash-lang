@@ -479,6 +479,19 @@ localization language. Color is not required for completion.
   locales. Interface/constraint coverage is 17 of 28 reasons, with 215
   templates per locale. All 156 focused tests and warnings-denied Clippy
   passed. No ownership check or producer changed.
+- `InterfaceDiagnostic` retains the selection engine's existing `SelectionError`
+  alongside the common diagnostic. Ordinary producers use the common fields
+  unchanged; selection failures preserve declaration, import and four typed
+  causal roles without parsing prose or allocating a second role list.
+  Unsatisfied, ambiguous and cyclic requirements now render in both locales.
+  Source fixtures cover all three; linked-module tests cover retained import
+  and selected-implementation chains. Missing required labels are rejected.
+  Interface/constraint coverage is 20 of 28 reasons, with 224 templates per
+  locale. The public `TypeError::Interface` payload now requires retaining the
+  wrapper for localized presentation, as with source type diagnostics.
+  All 1,240 library tests, 207 focused integration tests and warnings-denied
+  Clippy passed. A medium-effort review found no bugs; its test suggestion
+  added exact JSON relationship-sequence checks to the cross-file fixtures.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
