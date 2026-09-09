@@ -877,6 +877,14 @@ localization language. Color is not required for completion.
   the diagnostic/input/catalogue/selection/reporting batch, four file-dispatch
   tests and warnings-denied Clippy. Default switching, remaining internal
   presentation, full milestone verification and downstream closeout remain open.
+- Required excerpt tests exposed incorrect tab/Unicode caret alignment and
+  omitted continuation lines for multiline spans. Human excerpts now use
+  four-column tab stops and Unicode display widths, show the spanned lines,
+  retain empty EOF lines, and align multi-digit line gutters. Source coordinates
+  and JSON byte ranges are unchanged. The pinned `unicode-width` dependency
+  supplies width calculation rather than a local Unicode table. Two table-driven
+  regressions and the combined rendering, reporting, JSON, diagnostic, CLI and
+  runtime-reporting batch passed (117 tests), as did warnings-denied Clippy.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

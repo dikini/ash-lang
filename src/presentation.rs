@@ -1555,22 +1555,58 @@ pub fn write_human(
             "  --> {}:{line}:{column}",
             label.source.display_path()
         )?;
-        let excerpt = label
+        let mut last_line = location.end().line();
+        if last_line > line && location.end().column() == 1 {
+            last_line -= 1; // The span excludes the beginning of this line.
+        }
+        for (offset, excerpt) in label
             .source
             .text()
-            .lines()
-            .nth((line - 1) as usize)
-            .unwrap_or("");
-        writeln!(writer, "{line} | {excerpt}")?;
-        writeln!(
-            writer,
-            "  | {}^ {}",
-            " ".repeat((column - 1) as usize),
-            message
-        )?;
+            .split('\n')
+            .skip((line - 1) as usize)
+            .take((last_line - line + 1) as usize)
+            .enumerate()
+        {
+            let excerpt = excerpt.strip_suffix('\r').unwrap_or(excerpt);
+            let prefix: String = excerpt
+                .chars()
+                .take(if offset == 0 {
+                    (column - 1) as usize
+                } else {
+                    0
+                })
+                .collect();
+            let indent = unicode_width::UnicodeWidthStr::width(expand_tabs(&prefix).as_str());
+            let excerpt = expand_tabs(excerpt);
+            let displayed_line = line as usize + offset;
+            let gutter = displayed_line.to_string().len();
+            writeln!(writer, "{displayed_line} | {excerpt}")?;
+            writeln!(
+                writer,
+                "{} | {}^ {}",
+                " ".repeat(gutter),
+                " ".repeat(indent),
+                message
+            )?;
+        }
     }
     writeln!(writer, "reason: {}", diagnostic.reason)?;
     Ok(())
+}
+
+fn expand_tabs(line: &str) -> String {
+    let mut expanded = String::new();
+    let mut width = 0;
+    for (index, part) in line.split('\t').enumerate() {
+        if index != 0 {
+            let spaces = 4 - width % 4;
+            expanded.extend(std::iter::repeat_n(' ', spaces));
+            width += spaces;
+        }
+        expanded.push_str(part);
+        width += unicode_width::UnicodeWidthStr::width(part);
+    }
+    expanded
 }
 
 /// Writes one compact localized diagnostic.

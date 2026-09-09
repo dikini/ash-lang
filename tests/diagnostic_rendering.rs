@@ -8,6 +8,96 @@ use ash::{
 };
 
 #[test]
+fn human_excerpt_expands_tabs_and_aligns_unicode_without_changing_json_offsets() {
+    use ash::{
+        diagnostic::{Diagnostic, SourceLabel},
+        elaborate::TypeReason,
+        source::{ByteRange, SourceFile},
+    };
+    for (text, start, expected_excerpt, expected_indent) in [
+        ("\tЖ界e\u{301} x", 10, "    Ж界e\u{301} x", 9),
+        ("界\tx", 4, "界  x", 4),
+        ("e\u{301} x", 4, "e\u{301} x", 2),
+    ] {
+        let source = SourceFile::new("layout.ash", text).unwrap();
+        let span = source
+            .span(ByteRange::new(start, start + 1).unwrap())
+            .unwrap();
+        let mut diagnostic = Diagnostic::new(
+            TypeReason::BindingInitializer,
+            SourceLabel::new(span, "ignored"),
+        );
+        diagnostic
+            .related
+            .push(SourceLabel::new(span, "annotation"));
+        diagnostic.expected = Some("Bool".into());
+        diagnostic.found = Some("Int".into());
+        let diagnostic = diagnostic.into();
+        let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
+        let mut output = Vec::new();
+        write_human(
+            &mut output,
+            &view,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!(
+                "1 | {expected_excerpt}\n  | {}^",
+                " ".repeat(expected_indent)
+            )),
+            "{output}"
+        );
+        let mut json = Vec::new();
+        ash::presentation::write_json(&mut json, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(json["labels"][0]["byte_start"], start);
+        assert_eq!(json["labels"][0]["byte_end"], start + 1);
+    }
+}
+
+#[test]
+fn human_excerpt_handles_multiline_ranges_and_empty_end_of_file() {
+    use ash::{
+        diagnostic::{Diagnostic, SourceLabel},
+        elaborate::TypeReason,
+        source::{ByteRange, SourceFile},
+    };
+    for (text, start, end, included, excluded) in [
+        ("first\r\nsecond\nthird", 0, 14, "2 | second", "3 | third"),
+        ("first\n", 6, 6, "2 | \n  | ^", "1 | first"),
+        ("", 0, 0, "1 | \n  | ^", "2 |"),
+        ("\n\n\n\n\n\n\n\n\nx", 9, 10, "10 | x\n   | ^", "9 |"),
+    ] {
+        let source = SourceFile::new("range.ash", text).unwrap();
+        let span = source.span(ByteRange::new(start, end).unwrap()).unwrap();
+        let mut diagnostic = Diagnostic::new(
+            TypeReason::BindingInitializer,
+            SourceLabel::new(span, "ignored"),
+        );
+        diagnostic
+            .related
+            .push(SourceLabel::new(span, "annotation"));
+        diagnostic.expected = Some("Bool".into());
+        diagnostic.found = Some("Int".into());
+        let diagnostic = diagnostic.into();
+        let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
+        let mut output = Vec::new();
+        write_human(
+            &mut output,
+            &view,
+            &Catalogue::new(Locale::English).unwrap(),
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains(included), "{output}");
+        assert!(!output.contains(excluded), "{output}");
+        assert!(!output.contains('\r'));
+    }
+}
+
+#[test]
 fn driver_failure_owns_the_sources_needed_for_later_rendering() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/first-stratum/type/binding-initializer.ash");
