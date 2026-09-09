@@ -378,22 +378,62 @@ pub fn compile_interface_diagnostic<'a>(
     })
 }
 
-/// Exposes a compiler-owned elaboration failure without inventing a source span.
+/// Exposes a compiler-owned elaboration failure, retaining any known source span.
 ///
 /// # Errors
-/// Returns unsupported for elaboration failures whose precise context is not yet presented.
-pub fn compile_elaboration_failure(
+/// Returns unsupported for causes not yet presented, or missing source context.
+pub fn compile_elaboration_failure<'a>(
     error: &crate::elaborate::ElaborationFailure,
-) -> Result<CompileDiagnostic<'static>, PresentationError> {
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let (message, name, kind, value) = error
         .diagnostic_message()
         .ok_or(PresentationError::Unsupported)?;
+    let mut primary = None;
+    let mut related = Vec::new();
+    if let crate::elaborate::ElaborationFailure::Kind { context, span } = error {
+        let origin = context.span();
+        let primary_span = span.unwrap_or(origin);
+        for (location, is_primary) in [(primary_span, true), (origin, false)] {
+            if !is_primary && location == primary_span {
+                continue;
+            }
+            let source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == location.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(location)
+                .map_err(|_| PresentationError::MissingSource)?;
+            let label = Label {
+                source,
+                span: location,
+                message: if is_primary && primary_span != origin {
+                    Message::elaboration_kind_use()
+                } else {
+                    context.message()
+                },
+                relationship: if is_primary {
+                    "elaboration_site"
+                } else {
+                    "kind_failure_origin"
+                },
+                facts: Vec::new(),
+            };
+            if is_primary {
+                primary = Some(label);
+            } else {
+                related.push(label);
+            }
+        }
+    }
     Ok(CompileDiagnostic {
         reason: error.reason_code().to_owned(),
         responsibility: "compiler",
         message,
-        primary: None,
-        related: Vec::new(),
+        primary,
+        related,
         facts: vec![Fact {
             name,
             kind,

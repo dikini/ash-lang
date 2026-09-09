@@ -1922,7 +1922,7 @@ fn elaboration_failures_identify_resources_and_the_core_path() {
             "The compiler tried to lower effect syntax through its pure Core path.",
         ),
     ] {
-        let view = compile_elaboration_failure(&error).unwrap();
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
         for locale in [Locale::English, Locale::Bulgarian] {
             let mut output = Vec::new();
             write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -1938,7 +1938,7 @@ fn elaboration_failures_identify_resources_and_the_core_path() {
         assert_eq!(json["facts"][0]["name"], name);
         assert_eq!(json["facts"][0]["value"], value);
     }
-    assert!(compile_elaboration_failure(&ElaborationFailure::InvalidState).is_err());
+    assert!(compile_elaboration_failure(&ElaborationFailure::InvalidState, &[]).is_err());
 }
 
 #[test]
@@ -1963,7 +1963,7 @@ fn coverage_resource_messages_preserve_the_exhausted_limit() {
         let TypeError::Internal(error) = TypeError::from(cause) else {
             panic!("expected compiler failure")
         };
-        let view = compile_elaboration_failure(&error).unwrap();
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
         for locale in [Locale::English, Locale::Bulgarian] {
             let mut output = Vec::new();
             write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -2062,7 +2062,7 @@ fn core_construction_messages_preserve_failure_causes() {
         ),
     ] {
         let error = ElaborationFailure::Core(cause);
-        let view = compile_elaboration_failure(&error).unwrap();
+        let view = compile_elaboration_failure(&error, &[]).unwrap();
         for locale in [Locale::English, Locale::Bulgarian] {
             let mut output = Vec::new();
             write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();

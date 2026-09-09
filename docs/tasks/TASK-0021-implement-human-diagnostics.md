@@ -641,6 +641,17 @@ localization language. Color is not required for completion.
   Propagation through those routes remains outstanding; no coverage count or
   message wording changes in this refactor. The eight-case evidence-adapter
   regression test and warnings-denied Clippy passed.
+- Direct kind failures entering evidence selection now retain their typed cause
+  through elaboration and presentation. The elaboration adapter accepts admitted
+  sources and shows the original kind location, plus the use location when
+  distinct. The stable `type.internal` reason and legacy display stay unchanged;
+  constraint-resource failures retain their classification. Tests cover absent,
+  same-file and cross-file use context. Catalogues contain 414 templates per
+  locale. Matching, canonical-environment and summary routes remain outstanding;
+  reason-family coverage is unchanged. All 1,253 library tests, 86 diagnostic
+  and catalogue tests, and warnings-denied Clippy passed. The existing missing
+  canonical-binder corruption fixture now asserts its precise cause and span
+  while retaining its atomic-publication and exact-budget checks.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

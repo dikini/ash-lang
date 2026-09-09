@@ -510,3 +510,4 @@ kind-internal-lookup-implementation-index = The compiler's declaration order con
 kind-internal-lookup-interface-index = The compiler's declaration order contains an invalid interface index.
 kind-internal-lookup-nominal-index = The compiler's declaration order contains an invalid nominal-type index.
 evidence-kind-use = Kind validation failed while checking evidence at this use.
+elaboration-kind-use = Kind validation failed while checking this expression or declaration.

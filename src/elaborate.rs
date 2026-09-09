@@ -634,6 +634,13 @@ pub enum ElaborationFailure {
     Core(BuildError),
     /// The explicit elaboration work stack lost an invariant.
     InvalidState,
+    /// Kind validation failed during elaboration, retaining its original cause.
+    Kind {
+        /// Original kind-checking cause and source location.
+        context: crate::kind::KindFailureContext,
+        /// The elaboration use that exposed the failure, when available.
+        span: Option<Span>,
+    },
     /// Effect syntax reached a checkpoint that still retains only pure Core.
     EffectCoreUnavailable,
     /// Pattern coverage exceeded its deterministic compiler resource budget.
@@ -682,6 +689,12 @@ impl ElaborationFailure {
                 "effect-core-unavailable",
             ),
             Self::InvalidState => return None,
+            Self::Kind { context, .. } => (
+                context.message(),
+                "kind_cause",
+                "kind-internal-cause",
+                context.name(),
+            ),
         })
     }
 
@@ -690,7 +703,7 @@ impl ElaborationFailure {
     pub const fn reason_code(&self) -> &'static str {
         match self {
             Self::Core(_) => "internal.core-build",
-            Self::InvalidState => "type.internal",
+            Self::InvalidState | Self::Kind { .. } => "type.internal",
             Self::EffectCoreUnavailable => "effect.core-unavailable",
             Self::CoverageResourceExhausted(_) => "internal.resource.coverage",
             Self::TypeResourceExhausted => "internal.resource.type-work",
@@ -703,7 +716,9 @@ impl fmt::Display for ElaborationFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Core(error) => write!(formatter, "typed Core construction failed: {error}"),
-            Self::InvalidState => formatter.write_str("typed elaboration state is inconsistent"),
+            Self::InvalidState | Self::Kind { .. } => {
+                formatter.write_str("typed elaboration state is inconsistent")
+            }
             Self::EffectCoreUnavailable => {
                 formatter.write_str("effect syntax requires the effect Core checkpoint")
             }
@@ -18137,6 +18152,9 @@ fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
         }
         SelectionFailure::ConstraintResource => constraint_resource(),
         SelectionFailure::InvalidState => invalid_state(),
+        SelectionFailure::Kind(context) => {
+            TypeError::Internal(ElaborationFailure::Kind { context, span })
+        }
     }
 }
 
@@ -23911,6 +23929,60 @@ pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModulePr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selection_kind_context_reaches_presentation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_elaboration_failure, write_human, write_json},
+            source::{ByteRange, SourceFile},
+        };
+        let declaration = SourceFile::new("declaration.ash", "binder").unwrap();
+        let occurrence = SourceFile::new("occurrence.ash", "use").unwrap();
+        let origin = declaration.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let use_span = occurrence.span(ByteRange::new(0, 3).unwrap()).unwrap();
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        let kind = Kind::Type;
+        environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        for span in [None, Some(origin), Some(use_span)] {
+            let TypeError::Internal(error) =
+                selection_failure(SelectionFailure::Kind(context), span)
+            else {
+                panic!("kind failure must remain compiler-owned")
+            };
+            let view = compile_elaboration_failure(&error, &[&declaration, &occurrence]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        String::from_utf8(output)
+                            .unwrap()
+                            .contains("duplicate type-variable identity")
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "type.internal");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], "duplicate-binder");
+            let labels = json["labels"].as_array().unwrap();
+            assert_eq!(labels.len(), if span == Some(use_span) { 2 } else { 1 });
+            if span == Some(use_span) {
+                assert_eq!(labels[1]["relationship"], "kind_failure_origin");
+            }
+            assert!(compile_elaboration_failure(&error, &[&occurrence]).is_err());
+        }
+    }
+
     #[test]
     fn function_context_presentation_keeps_every_synthesis_cause() {
         use crate::{
