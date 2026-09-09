@@ -160,6 +160,40 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
+/// Exposes the entry module's local-main contract failure.
+///
+/// # Errors
+/// Returns missing source context.
+pub fn compile_entry_diagnostic<'a>(
+    error: &'a crate::driver::EntryFailure,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let span = error.diagnostic.primary.span();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let (message, relationship) = error.primary_message();
+    Ok(CompileDiagnostic {
+        reason: error.reason().to_string(),
+        responsibility: "source",
+        message: error.message(),
+        primary: Some(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: Vec::new(),
+        }),
+        related: Vec::new(),
+        facts: Vec::new(),
+    })
+}
+
 /// Exposes phase-owned kind facts without interpreting diagnostic prose.
 ///
 /// # Errors

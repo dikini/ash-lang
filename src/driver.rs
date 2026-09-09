@@ -81,6 +81,26 @@ pub struct EntryFailure {
 }
 
 impl EntryFailure {
+    pub(crate) fn message(&self) -> crate::message::Message<'static> {
+        use crate::message::Message;
+        match self.reason() {
+            EntryReason::MissingMain => Message::entry_missing_main(),
+            EntryReason::MainPolymorphic => Message::entry_polymorphic(),
+            EntryReason::MainDomain => Message::entry_domain(),
+            EntryReason::MainEffects => Message::entry_effects(),
+            EntryReason::MainOpenResult => Message::entry_open_result(),
+            EntryReason::MainConstrained => Message::entry_constrained(),
+        }
+    }
+
+    pub(crate) fn primary_message(&self) -> (crate::message::Message<'static>, &'static str) {
+        if self.reason() == EntryReason::MissingMain {
+            (crate::message::Message::entry_module(), "entry_module")
+        } else {
+            (crate::message::Message::entry_main(), "entry_main")
+        }
+    }
+
     fn new(reason: EntryReason, primary: Span) -> Self {
         let message = match reason {
             EntryReason::MissingMain => "this entry module declares no local main",

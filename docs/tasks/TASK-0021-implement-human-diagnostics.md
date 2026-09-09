@@ -284,6 +284,14 @@ localization language. Color is not required for completion.
   82 focused integration tests and warnings-denied Clippy. Kind-stage internal
   and resource failures remain outstanding. The catalogues now contain 94
   message templates per locale.
+- All six entry-contract reasons now have explicit English/Bulgarian messages.
+  The adapter preserves the module location for missing local `main` and the
+  declaration location for other entry failures. Existing entry tests check
+  presentation alongside source rejection and failure precedence; a retained
+  failure fixture covers the open-result reason that earlier source checks may
+  preempt. The batch passed 69 focused integration tests, warnings-denied
+  Clippy, formatting and Markdown lint. There are now 102 message templates per
+  locale. CLI defaults remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

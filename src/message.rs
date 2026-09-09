@@ -144,6 +144,22 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The entry module must supply a local entry point.
+    entry_missing_main => "entry-missing-main" {},
+    /// The entry point cannot quantify type parameters.
+    entry_polymorphic => "entry-polymorphic" {},
+    /// The entry point must accept Unit.
+    entry_domain => "entry-domain" {},
+    /// The entry invocation cannot require effects from its caller.
+    entry_effects => "entry-effects" {},
+    /// The entry result must be closed, including nested effect-row tails.
+    entry_open_result => "entry-open-result" {},
+    /// The entry caller supplies no interface evidence.
+    entry_constrained => "entry-constrained" {},
+    /// The source module where a local main is required.
+    entry_module => "entry-module" {},
+    /// The local main declaration that violates the entry contract.
+    entry_main => "entry-main" {},
     /// A value-type position contains a type constructor or effect row.
     kind_expected_type => "kind-expected-type" { found: &'a str = "Type -> Type" },
     /// A type application applies something without an arrow kind.
