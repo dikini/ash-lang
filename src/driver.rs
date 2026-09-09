@@ -25,10 +25,7 @@ use crate::{
     },
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
-    resolve::{
-        DependencyExports, ResolveError, ResolveModuleError, ResolveReason,
-        resolve_module_with_budget,
-    },
+    resolve::{DependencyExports, ResolveError, ResolveModuleError, resolve_module_with_budget},
     resolved::ResolvedModuleProgram,
     source::{SourceError, SourceFile, SourceId, Span},
     types::{IterativeTypeOwner, Type, TypeWorkBudget},
@@ -429,13 +426,7 @@ impl PipelineFailure {
                 failure.resource.is_none()
                     && (!failure.lexical.is_empty() || !failure.parser.is_empty())
             }
-            Self::Resolution(error) => !matches!(
-                error.reason,
-                ResolveReason::BinderIdExhausted
-                    | ResolveReason::TypeResourceExhausted
-                    | ResolveReason::ConstraintResourceExhausted
-                    | ResolveReason::InternalState
-            ),
+            Self::Resolution(error) => error.is_source_rejection(),
             Self::Kind(error) => error.is_source_rejection(),
             Self::Typing(
                 TypeError::Source(_) | TypeError::Interface(_) | TypeError::Mismatch(_),

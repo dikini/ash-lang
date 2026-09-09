@@ -324,6 +324,17 @@ localization language. Color is not required for completion.
   their specific causes retained, including the different identifier spaces
   currently reported as binder exhaustion. Ninety focused tests and
   warnings-denied Clippy passed. Both catalogues contain 124 templates.
+- Resolver identifier exhaustion now retains its exact identity space at all
+  eight allocation sites: value binders, type binders, local nominal types,
+  continuations and lexical evidence. English and Bulgarian messages and JSON
+  identify compiler responsibility without changing allocation order or
+  exhaustion behavior. Resolution presentation covers 27 of 30 reasons; the
+  three remaining resource/invariant categories still need their specific
+  causes retained. Both catalogues contain 125 templates. The batch passed
+  41 identity-related library tests, the type-field ownership inventory and
+  69 focused diagnostic/catalogue integration tests, warnings-denied Clippy,
+  formatting and Markdown lint. Runtime reporting and CLI defaults remain
+  unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

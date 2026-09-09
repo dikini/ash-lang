@@ -122,6 +122,12 @@ impl Argument<'_> for crate::parser::InternalReason {
     }
 }
 
+impl Argument<'_> for crate::resolve::ResolveIdentitySpace {
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(self.diagnostic_name())
+    }
+}
+
 // One declaration supplies typed constructors and exhaustive test examples.
 // The concrete carrier remains visible to the source ownership inventory.
 macro_rules! messages {
@@ -144,6 +150,8 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A finite compiler identifier space cannot represent another identity.
+    resolve_identity_exhausted => "resolve-identity-exhausted" { space: crate::resolve::ResolveIdentitySpace = crate::resolve::ResolveIdentitySpace::TermBinder },
     /// A written row repeats a canonically identical effect instance.
     resolve_duplicate_effect => "resolve-duplicate-effect" {},
     /// The first written occurrence of the same exact instance.

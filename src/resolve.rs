@@ -832,10 +832,10 @@ impl fmt::Display for ResolveReason {
 
 /// A structured name-resolution failure kept compact in pipeline results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<NameContext>);
+pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NameContext {
+enum ResolveContext {
     Term,
     EffectOperation,
     Type,
@@ -849,9 +849,54 @@ enum NameContext {
     MissingExport,
     MissingModuleAlias,
     MixedTypeRowRoles,
+    IdentityExhaustion(ResolveIdentitySpace),
+}
+
+/// The compiler identity space exhausted during resolution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolveIdentitySpace {
+    /// Value binders, including generated implementation binders.
+    TermBinder,
+    /// Type binders, including lexical method parameters.
+    TypeBinder,
+    /// Local nominal declarations.
+    LocalNominal,
+    /// Handler, hook and registration continuations.
+    Continuation,
+    /// Lexical evidence identities, including resource providers.
+    LexicalEvidence,
+}
+
+impl ResolveIdentitySpace {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::TermBinder => "term-binder",
+            Self::TypeBinder => "type-binder",
+            Self::LocalNominal => "local-nominal",
+            Self::Continuation => "continuation",
+            Self::LexicalEvidence => "lexical-evidence",
+        }
+    }
 }
 
 impl ResolveError {
+    pub(crate) const fn is_source_rejection(&self) -> bool {
+        !matches!(
+            self.0.reason,
+            ResolveReason::BinderIdExhausted
+                | ResolveReason::TypeResourceExhausted
+                | ResolveReason::ConstraintResourceExhausted
+                | ResolveReason::InternalState
+        )
+    }
+
+    fn identity_space(&self) -> Option<ResolveIdentitySpace> {
+        match self.1 {
+            Some(ResolveContext::IdentityExhaustion(space)) => Some(space),
+            _ => None,
+        }
+    }
+
     const fn is_duplicate_declaration(&self) -> bool {
         matches!(
             self.0.reason,
@@ -867,6 +912,9 @@ impl ResolveError {
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
         match self.reason {
+            ResolveReason::BinderIdExhausted => {
+                return Some((self.message()?, "identity_allocation"));
+            }
             ResolveReason::DuplicateEffect => {
                 return Some((
                     crate::message::Message::resolve_duplicate_effect(),
@@ -971,27 +1019,33 @@ impl ResolveError {
 
     pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
         match self.1 {
-            Some(NameContext::Term) => Some("term"),
-            Some(NameContext::EffectOperation) => Some("effect-operation"),
-            Some(NameContext::Type) => Some("type"),
-            Some(NameContext::EffectRowParameter) => Some("effect-row-parameter"),
-            Some(NameContext::InterfaceParameter) => Some("interface-parameter"),
-            Some(NameContext::Constructor) => Some("constructor"),
-            Some(NameContext::Interface) => Some("interface"),
-            Some(NameContext::Effect) => Some("effect"),
-            Some(NameContext::ExportedEffect) => Some("exported-effect"),
+            Some(ResolveContext::Term) => Some("term"),
+            Some(ResolveContext::EffectOperation) => Some("effect-operation"),
+            Some(ResolveContext::Type) => Some("type"),
+            Some(ResolveContext::EffectRowParameter) => Some("effect-row-parameter"),
+            Some(ResolveContext::InterfaceParameter) => Some("interface-parameter"),
+            Some(ResolveContext::Constructor) => Some("constructor"),
+            Some(ResolveContext::Interface) => Some("interface"),
+            Some(ResolveContext::Effect) => Some("effect"),
+            Some(ResolveContext::ExportedEffect) => Some("exported-effect"),
             None
             | Some(
-                NameContext::PrivateExport
-                | NameContext::MissingExport
-                | NameContext::MissingModuleAlias
-                | NameContext::MixedTypeRowRoles,
+                ResolveContext::PrivateExport
+                | ResolveContext::MissingExport
+                | ResolveContext::MissingModuleAlias
+                | ResolveContext::MixedTypeRowRoles
+                | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
         match self.reason {
+            ResolveReason::BinderIdExhausted => Some((
+                "identity_space",
+                "resolver-identity-space",
+                self.identity_space()?.diagnostic_name(),
+            )),
             ResolveReason::ResourceBuiltinRequired => {
                 Some(("required_builtin", "module-path", self.expected.as_deref()?))
             }
@@ -1007,7 +1061,7 @@ impl ResolveError {
 
     pub(crate) fn name_use(&self) -> Option<&'static str> {
         match self.reason {
-            ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
+            ResolveReason::TypeKind if self.1 == Some(ResolveContext::MixedTypeRowRoles) => {
                 Some("mixed-type-and-row-tail")
             }
             ResolveReason::TypeKind => Some("interface-as-type"),
@@ -1040,15 +1094,20 @@ impl ResolveError {
             return Some("opaque-constructor");
         }
         match self.1 {
-            Some(NameContext::PrivateExport) => Some("private"),
-            Some(NameContext::MissingExport) => Some("not-exported"),
-            Some(NameContext::MissingModuleAlias) => Some("unknown-module-alias"),
+            Some(ResolveContext::PrivateExport) => Some("private"),
+            Some(ResolveContext::MissingExport) => Some("not-exported"),
+            Some(ResolveContext::MissingModuleAlias) => Some("unknown-module-alias"),
             _ => None,
         }
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         match self.reason {
+            ResolveReason::BinderIdExhausted => {
+                return Some(crate::message::Message::resolve_identity_exhausted(
+                    self.identity_space()?,
+                ));
+            }
             ResolveReason::DuplicateEffect => {
                 return Some(crate::message::Message::resolve_duplicate_effect());
             }
@@ -1072,7 +1131,7 @@ impl ResolveError {
         }
         let name = self.found.as_deref()?;
         match self.reason {
-            ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
+            ResolveReason::TypeKind if self.1 == Some(ResolveContext::MixedTypeRowRoles) => {
                 return Some(crate::message::Message::resolve_mixed_type_row_roles(name));
             }
             ResolveReason::TypeKind => {
@@ -1134,40 +1193,45 @@ impl ResolveError {
             });
         }
         Some(match self.1? {
-            NameContext::Term => crate::message::Message::resolve_unknown_term(name),
-            NameContext::EffectOperation => {
+            ResolveContext::Term => crate::message::Message::resolve_unknown_term(name),
+            ResolveContext::EffectOperation => {
                 crate::message::Message::resolve_unknown_operation(name)
             }
-            NameContext::Type => crate::message::Message::resolve_unknown_type(name),
-            NameContext::EffectRowParameter => {
+            ResolveContext::Type => crate::message::Message::resolve_unknown_type(name),
+            ResolveContext::EffectRowParameter => {
                 crate::message::Message::resolve_unknown_row_parameter(name)
             }
-            NameContext::InterfaceParameter => {
+            ResolveContext::InterfaceParameter => {
                 crate::message::Message::resolve_unknown_interface_parameter(name)
             }
-            NameContext::Constructor => crate::message::Message::resolve_unknown_constructor(name),
-            NameContext::Interface => crate::message::Message::resolve_unknown_interface(name),
-            NameContext::Effect => crate::message::Message::resolve_unknown_effect(name),
-            NameContext::ExportedEffect => crate::message::Message::resolve_unexported_effect(name),
-            NameContext::PrivateExport => crate::message::Message::resolve_private_export(name),
-            NameContext::MissingExport => crate::message::Message::resolve_missing_export(name),
-            NameContext::MissingModuleAlias => {
+            ResolveContext::Constructor => {
+                crate::message::Message::resolve_unknown_constructor(name)
+            }
+            ResolveContext::Interface => crate::message::Message::resolve_unknown_interface(name),
+            ResolveContext::Effect => crate::message::Message::resolve_unknown_effect(name),
+            ResolveContext::ExportedEffect => {
+                crate::message::Message::resolve_unexported_effect(name)
+            }
+            ResolveContext::PrivateExport => crate::message::Message::resolve_private_export(name),
+            ResolveContext::MissingExport => crate::message::Message::resolve_missing_export(name),
+            ResolveContext::MissingModuleAlias => {
                 crate::message::Message::resolve_missing_module_alias(name)
             }
-            NameContext::MixedTypeRowRoles => {
+            ResolveContext::MixedTypeRowRoles => {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
+            ResolveContext::IdentityExhaustion(_) => return None,
         })
     }
     /// Returns the common structured diagnostic fields.
-    /// Phase-specific name context remains on this failure owner.
+    /// Phase-specific diagnostic context remains on this failure owner.
     #[must_use]
     pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
         &self.0
     }
 
     /// Consumes the failure and returns its common diagnostic fields.
-    /// This legacy conversion does not retain phase-specific name context.
+    /// This legacy conversion does not retain phase-specific diagnostic context.
     #[must_use]
     pub fn into_diagnostic(self) -> Diagnostic<ResolveReason> {
         *self.0
@@ -5638,7 +5702,7 @@ impl Resolver {
             .map(Some)
             .ok_or_else(|| {
                 lookup_error(
-                    NameContext::MissingModuleAlias,
+                    ResolveContext::MissingModuleAlias,
                     qualified.qualifier.span,
                     &qualified.qualifier.text,
                     "this module alias is not bound",
@@ -5698,7 +5762,7 @@ impl Resolver {
                 SourceLabel::new(name.span, "this nominal type is not declared"),
             );
             diagnostic.found = Some(name.text.clone());
-            ResolveError(Box::new(diagnostic), Some(NameContext::Type))
+            ResolveError(Box::new(diagnostic), Some(ResolveContext::Type))
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -5773,7 +5837,7 @@ impl Resolver {
                 return Err(effect_kind_error(member.span, &member.text));
             }
             return Err(lookup_error(
-                NameContext::ExportedEffect,
+                ResolveContext::ExportedEffect,
                 member.span,
                 &member.text,
                 "this effect is not exported by the selected module",
@@ -5788,7 +5852,7 @@ impl Resolver {
             return Err(effect_kind_error(member.span, &member.text));
         }
         Err(lookup_error(
-            NameContext::Effect,
+            ResolveContext::Effect,
             member.span,
             &member.text,
             "this effect is not declared",
@@ -5902,7 +5966,7 @@ impl Resolver {
                     .map(EffectRowVariable::rigid)
                     .ok_or_else(|| {
                         lookup_error(
-                            NameContext::EffectRowParameter,
+                            ResolveContext::EffectRowParameter,
                             tail.span,
                             &tail.text,
                             "this effect-row tail parameter is not declared",
@@ -6004,7 +6068,7 @@ impl Resolver {
             })
             .ok_or_else(|| {
                 lookup_error(
-                    NameContext::EffectOperation,
+                    ResolveContext::EffectOperation,
                     operation.span,
                     &operation.text,
                     "this operation is not declared by the selected effect",
@@ -6220,7 +6284,7 @@ impl Resolver {
         diagnostic.found = Some(reference.member().text.clone());
         Err(ResolveError(
             Box::new(diagnostic),
-            Some(NameContext::Constructor),
+            Some(ResolveContext::Constructor),
         ))
     }
 
@@ -7320,8 +7384,8 @@ impl Resolver {
         let id = NominalTypeId::lexical(self.module, self.next_lexical_nominal);
         let constructor_id = ConstructorId::new(id, 0);
         let next = self.next_lexical_nominal.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::LocalNominal,
                 declaration.span,
                 "the program contains too many lexical nominal declarations",
             )
@@ -7936,7 +8000,7 @@ impl Resolver {
                                         .map(EffectRowVariable::rigid)
                                         .ok_or_else(|| {
                                             lookup_error(
-                                                NameContext::EffectRowParameter,
+                                                ResolveContext::EffectRowParameter,
                                                 tail.span,
                                                 &tail.text,
                                                 "this effect-row tail parameter is not declared",
@@ -8149,8 +8213,8 @@ impl Resolver {
         let input = self.allocate_binder("", target_span)?;
         let resume = ResumeId::new(self.next_resume);
         self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::Continuation,
                 span,
                 "hook resume identity space is exhausted",
             )
@@ -8309,8 +8373,8 @@ impl Resolver {
         let next = self.allocate_binder("", target_span)?;
         let resume = ResumeId::new(self.next_resume);
         self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::Continuation,
                 span,
                 "registration resume identity space is exhausted",
             )
@@ -8433,8 +8497,8 @@ impl Resolver {
     ) -> Result<Binder, ResolveError> {
         let id = BinderId::resolved(self.module, self.next_binder);
         self.next_binder = self.next_binder.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::TermBinder,
                 span,
                 "the program contains too many binders",
             )
@@ -8487,8 +8551,8 @@ impl Resolver {
         )?;
         let id = TypeVariableId::resolved(self.module, self.next_type_variable);
         self.next_type_variable = self.next_type_variable.checked_add(1).ok_or_else(|| {
-            error(
-                ResolveReason::BinderIdExhausted,
+            identity_error(
+                ResolveIdentitySpace::TypeBinder,
                 name.span,
                 "the program contains too many type binders",
             )
@@ -8747,8 +8811,8 @@ impl Resolver {
                 fresh.origin = Origin::Source(first.span);
                 self.next_type_variable =
                     self.next_type_variable.checked_add(1).ok_or_else(|| {
-                        error(
-                            ResolveReason::BinderIdExhausted,
+                        identity_error(
+                            ResolveIdentitySpace::TypeBinder,
                             first.span,
                             "lexical method parameter identities exhausted",
                         )
@@ -8860,8 +8924,8 @@ impl Resolver {
             crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
         self.next_lexical_evidence =
             self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
-                error(
-                    ResolveReason::BinderIdExhausted,
+                identity_error(
+                    ResolveIdentitySpace::LexicalEvidence,
                     span,
                     "resource provider identities exhausted",
                 )
@@ -10004,10 +10068,10 @@ impl Resolver {
                                 SourceLabel::new(member.span, "this constructor is not declared"),
                             );
                             diagnostic.found = Some(member.text.clone());
-                            ResolveError(Box::new(diagnostic), Some(NameContext::Constructor))
+                            ResolveError(Box::new(diagnostic), Some(ResolveContext::Constructor))
                         } else {
                             lookup_error(
-                                NameContext::Term,
+                                ResolveContext::Term,
                                 member.span,
                                 &member.text,
                                 "this name is not in scope",
@@ -10130,8 +10194,8 @@ impl Resolver {
                         self.resolved_operation(effect.instance.effect(), &clause.operation)?;
                     let resume = ResumeId::new(self.next_resume);
                     self.next_resume = self.next_resume.checked_add(1).ok_or_else(|| {
-                        error(
-                            ResolveReason::BinderIdExhausted,
+                        identity_error(
+                            ResolveIdentitySpace::Continuation,
                             clause.span,
                             "handler resume identity space is exhausted",
                         )
@@ -10456,28 +10520,35 @@ fn take_expression_pair(
     Ok((left.into_inner(), right.into_inner()))
 }
 
+fn identity_error(space: ResolveIdentitySpace, span: Span, message: &str) -> ResolveError {
+    let mut failure = error(ResolveReason::BinderIdExhausted, span, message);
+    failure.1 = Some(ResolveContext::IdentityExhaustion(space));
+    failure
+}
+
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
 
 fn lookup_error(
-    scope: NameContext,
+    scope: ResolveContext,
     span: crate::source::Span,
     name: &str,
     message: &str,
 ) -> ResolveError {
     let reason = match scope {
-        NameContext::Term | NameContext::EffectOperation => ResolveReason::UnknownName,
-        NameContext::Type | NameContext::EffectRowParameter | NameContext::InterfaceParameter => {
-            ResolveReason::UnknownType
-        }
-        NameContext::Constructor => ResolveReason::UnknownConstructor,
-        NameContext::Interface => ResolveReason::UnknownInterface,
-        NameContext::Effect | NameContext::ExportedEffect => ResolveReason::UnknownEffect,
-        NameContext::MixedTypeRowRoles => ResolveReason::TypeKind,
-        NameContext::PrivateExport
-        | NameContext::MissingExport
-        | NameContext::MissingModuleAlias => ResolveReason::UnavailableExport,
+        ResolveContext::Term | ResolveContext::EffectOperation => ResolveReason::UnknownName,
+        ResolveContext::Type
+        | ResolveContext::EffectRowParameter
+        | ResolveContext::InterfaceParameter => ResolveReason::UnknownType,
+        ResolveContext::Constructor => ResolveReason::UnknownConstructor,
+        ResolveContext::Interface => ResolveReason::UnknownInterface,
+        ResolveContext::Effect | ResolveContext::ExportedEffect => ResolveReason::UnknownEffect,
+        ResolveContext::MixedTypeRowRoles => ResolveReason::TypeKind,
+        ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
+        ResolveContext::PrivateExport
+        | ResolveContext::MissingExport
+        | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = Some(name.to_owned());
@@ -10591,7 +10662,7 @@ fn withheld_export_error(
         Some(WithheldExportKind::Private) => (
             ResolveReason::UnavailableExport,
             "this declaration is private to its defining module",
-            Some(NameContext::PrivateExport),
+            Some(ResolveContext::PrivateExport),
         ),
         Some(WithheldExportKind::OpaqueConstructor) => (
             ResolveReason::OpaqueConstructor,
@@ -10601,7 +10672,7 @@ fn withheld_export_error(
         None => (
             ResolveReason::UnavailableExport,
             "the dependency exports no declaration with this spelling",
-            Some(NameContext::MissingExport),
+            Some(ResolveContext::MissingExport),
         ),
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
@@ -10621,7 +10692,7 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
         SourceLabel::new(span, "this interface is not declared"),
     );
     diagnostic.found = Some(spelling.to_owned());
-    ResolveError(Box::new(diagnostic), Some(NameContext::Interface))
+    ResolveError(Box::new(diagnostic), Some(ResolveContext::Interface))
 }
 
 fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
@@ -10634,7 +10705,10 @@ fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
     );
     diagnostic.expected = Some("interface parameter".to_owned());
     diagnostic.found = Some(name.text.clone());
-    ResolveError(Box::new(diagnostic), Some(NameContext::InterfaceParameter))
+    ResolveError(
+        Box::new(diagnostic),
+        Some(ResolveContext::InterfaceParameter),
+    )
 }
 
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -10970,7 +11044,7 @@ fn retain_free_type_name<'a>(
         }
         std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
             Some(existing) if reject_mixed_roles && *existing != role => Err(lookup_error(
-                NameContext::MixedTypeRowRoles,
+                ResolveContext::MixedTypeRowRoles,
                 name.span,
                 &name.text,
                 "this parameter name is used both as an ordinary type and as an effect-row tail",
@@ -13930,6 +14004,69 @@ mod tests {
     }
 
     #[test]
+    fn identity_exhaustion_preserves_each_space_in_localized_messages_and_json() {
+        use crate::message::{Catalogue, Locale};
+
+        let source = SourceFile::new("exhaustion.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        let english = Catalogue::new(Locale::English).unwrap();
+        let bulgarian = Catalogue::new(Locale::Bulgarian).unwrap();
+        for (space, fact, en, bg) in [
+            (
+                ResolveIdentitySpace::TermBinder,
+                "term-binder",
+                "value bindings",
+                "обвързвания на стойности",
+            ),
+            (
+                ResolveIdentitySpace::TypeBinder,
+                "type-binder",
+                "type parameters",
+                "типови параметри",
+            ),
+            (
+                ResolveIdentitySpace::LocalNominal,
+                "local-nominal",
+                "local nominal types",
+                "локални номинални типове",
+            ),
+            (
+                ResolveIdentitySpace::Continuation,
+                "continuation",
+                "continuations",
+                "продължения",
+            ),
+            (
+                ResolveIdentitySpace::LexicalEvidence,
+                "lexical-evidence",
+                "lexical evidence and resource providers",
+                "лексикални свидетелства и доставчици на ресурси",
+            ),
+        ] {
+            let error = identity_error(space, span, "legacy wording must not drive presentation");
+            assert!(!error.is_source_rejection());
+            let message = error.message().unwrap();
+            assert_eq!(
+                english.format(&message).unwrap(),
+                format!("Ash exhausted its identifier space for {en}.")
+            );
+            assert_eq!(
+                bulgarian.format(&message).unwrap(),
+                format!("Ash изчерпа пространството от идентификатори за {bg}.")
+            );
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["name"], "identity_space");
+            assert_eq!(json["facts"][0]["kind"], "resolver-identity-space");
+            assert_eq!(json["facts"][0]["value"], fact);
+            assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+        }
+    }
+
+    #[test]
     fn binder_identity_allocation_reports_exhaustion_without_wrapping() {
         let source =
             SourceFile::new("exhaustion.ash", "name").expect("the allocator fixture should fit");
@@ -13945,6 +14082,13 @@ mod tests {
 
         assert_eq!(error.reason, ResolveReason::BinderIdExhausted);
         assert_eq!(resolver.next_binder, u32::MAX);
+        let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+        let mut output = Vec::new();
+        crate::presentation::write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], "identity_space");
+        assert_eq!(json["facts"][0]["value"], "term-binder");
     }
 
     #[test]

@@ -382,7 +382,11 @@ pub fn compile_resolve_diagnostic<'a>(
     }
     Ok(CompileDiagnostic {
         reason: error.reason.to_string(),
-        responsibility: "source",
+        responsibility: if error.is_source_rejection() {
+            "source"
+        } else {
+            "compiler"
+        },
         message,
         primary: Some(Label {
             source,

@@ -119,6 +119,13 @@ entry-effects = Calling `main` must require no effects from its caller.
 entry-open-result = The result type of `main` must be fully determined, with no type parameters, quantified types, or open effect rows.
 entry-constrained = The entry point `main` must require no interface evidence from its caller.
 entry-module = This is the entry module.
+resolve-identity-exhausted = Ash exhausted its identifier space for { $space ->
+    [type-binder] type parameters
+    [local-nominal] local nominal types
+    [continuation] continuations
+    [lexical-evidence] lexical evidence and resource providers
+   *[term-binder] value bindings
+    }.
 resolve-duplicate-effect = This effect row contains the same effect instance more than once.
 first-effect-instance = The first occurrence of this effect instance is here.
 resolve-operation-shape = An effect operation needs an outer function arrow without an explicit effect row.
