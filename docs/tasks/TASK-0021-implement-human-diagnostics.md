@@ -93,6 +93,19 @@ localization language. Color is not required for completion.
   strings. Graph-loading failures also need the admitted importer sources
   retained at their owner. Broad phase migration, internal causes, runtime
   formats and CLI integration remain outstanding.
+- Slice 2 now has checked lexical explanations and English/Bulgarian
+  translations. The lexical view borrows offending text and spans; JSON ignores
+  legacy English descriptions. Parser diagnostics retain their expected form,
+  found-token category or fixed spelling, and immediate recovery position.
+  Legacy token descriptions derive from the same exhaustive classification.
+  No lexer acceptance, parser recovery, CLI default or runtime path changed.
+- This slice-2 checkpoint passed the focused presentation, catalogue, JSON,
+  rendering and existing diagnostic suites, all 1,227 library tests, the
+  bidirectional type-field ownership check and warnings-denied Clippy.
+  Review found no actionable defects. Parser translations are next: use typed
+  grammar arguments and Fluent selectors, testing every selector category.
+  Graph-loading source retention and the remainder of slice 2 are still open;
+  the full workspace gate has not yet been rerun for this checkpoint.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

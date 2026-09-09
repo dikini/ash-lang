@@ -81,6 +81,22 @@ messages! {
     initializer => "initializer" { found },
     /// The annotated type requirement.
     binding_annotation => "binding-annotation" { expected },
+    /// A carriage return without its required line feed.
+    lex_bare_carriage_return => "lex-bare-carriage-return" {},
+    /// An excluded byte order mark.
+    lex_byte_order_mark => "lex-byte-order-mark" {},
+    /// Non-ASCII identifier characters.
+    lex_unicode_identifier => "lex-unicode-identifier" {},
+    /// Comment syntax is excluded.
+    lex_comment => "lex-comment" {},
+    /// Negative literal syntax is excluded.
+    lex_negative_literal => "lex-negative-literal" {},
+    /// An invalid decimal spelling.
+    lex_invalid_integer_literal => "lex-invalid-integer-literal" {},
+    /// An invalid identifier spelling.
+    lex_invalid_identifier => "lex-invalid-identifier" {},
+    /// A character with no token interpretation.
+    lex_unknown_character => "lex-unknown-character" {},
 }
 
 /// A defect in an embedded catalogue or its message contract.

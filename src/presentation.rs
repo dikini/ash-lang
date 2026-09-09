@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use crate::{
     diagnostic::Diagnostic,
     elaborate::TypeReason,
+    lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
     source::{SourceFile, Span},
 };
@@ -37,7 +38,7 @@ struct Fact<'a> {
 
 /// A compile-time view borrowing its phase diagnostic and source context.
 pub struct CompileDiagnostic<'a> {
-    reason: TypeReason,
+    reason: String,
     message: Message<'a>,
     primary: Label<'a>,
     related: Vec<Label<'a>>,
@@ -95,7 +96,7 @@ pub fn compile_type_diagnostic<'a>(
         })
     };
     Ok(CompileDiagnostic {
-        reason: diagnostic.reason,
+        reason: diagnostic.reason.to_string(),
         message: Message::binding_initializer(expected, found),
         primary: label(
             diagnostic.primary.span(),
@@ -110,6 +111,46 @@ pub fn compile_type_diagnostic<'a>(
             expected_fact,
         )?],
         facts: vec![expected_fact, found_fact],
+    })
+}
+
+/// Exposes lexical facts without translating legacy expected/found descriptions.
+///
+/// # Errors
+/// Returns a missing offending-text fact or admitted source context.
+pub fn compile_lex_diagnostic<'a>(
+    diagnostic: &'a Diagnostic<LexReason>,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let found = diagnostic
+        .found
+        .as_deref()
+        .ok_or(PresentationError::MissingFact)?;
+    let span = diagnostic.primary.span();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let fact = Fact {
+        name: "found",
+        value: found,
+    };
+    Ok(CompileDiagnostic {
+        reason: diagnostic.reason.to_string(),
+        message: diagnostic.reason.message(),
+        primary: Label {
+            source,
+            span,
+            message: diagnostic.reason.message(),
+            relationship: "invalid_token",
+            facts: vec![fact],
+        },
+        related: Vec::new(),
+        facts: vec![fact],
     })
 }
 

@@ -35,6 +35,21 @@ pub enum LexReason {
 }
 
 impl LexReason {
+    /// Selects a checked explanation of the lexical restriction.
+    pub(crate) fn message(self) -> crate::message::Message<'static> {
+        use crate::message::Message;
+        match self {
+            Self::BareCarriageReturn => Message::lex_bare_carriage_return(),
+            Self::ByteOrderMark => Message::lex_byte_order_mark(),
+            Self::UnicodeIdentifier => Message::lex_unicode_identifier(),
+            Self::Comment => Message::lex_comment(),
+            Self::NegativeLiteral => Message::lex_negative_literal(),
+            Self::InvalidIntegerLiteral => Message::lex_invalid_integer_literal(),
+            Self::InvalidIdentifier => Message::lex_invalid_identifier(),
+            Self::UnknownCharacter => Message::lex_unknown_character(),
+        }
+    }
+
     const fn primary_message(self) -> &'static str {
         match self {
             Self::BareCarriageReturn => "bare carriage return is not a line break",

@@ -1,3 +1,11 @@
 binding-initializer = This binding needs a value of type `{ $expected }`, but its initializer has type `{ $found }`.
 initializer = This initializer has type `{ $found }`.
 binding-annotation = This annotation requires type `{ $expected }`.
+lex-bare-carriage-return = A carriage return must be followed by a line feed (CRLF); a line feed (LF) also starts a new line.
+lex-byte-order-mark = Ash source files must not contain a byte order mark (BOM).
+lex-unicode-identifier = Ash identifiers use only ASCII letters, digits and underscores.
+lex-comment = Ash does not support comments.
+lex-negative-literal = Ash does not support negative integer literals.
+lex-invalid-integer-literal = An integer literal must be 0 or a sequence of ASCII digits without a leading zero.
+lex-invalid-identifier = An Ash identifier must start with an ASCII letter or underscore and continue with ASCII letters, digits or underscores.
+lex-unknown-character = This character cannot begin an Ash token.
