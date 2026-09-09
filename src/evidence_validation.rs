@@ -8735,7 +8735,16 @@ mod tests {
     }
 
     fn deep_constructor_lifecycle_checked_graph() -> (Vec<CheckedModule>, ModuleId) {
-        const DEPTH: usize = 32_768;
+        // Checking and freezing cost 8D + 18 type cells; complete producer
+        // authentication adds 5D + 11 for the nominal and constructor scheme.
+        // Keep the whole publication within the production type-work limit
+        // while retaining deep ownership on the worker's small stack.
+        const DEPTH: usize = 16_384;
+        const DEFINING_TYPE_WORK: usize = 13 * DEPTH + 29;
+        const {
+            assert!(DEFINING_TYPE_WORK < crate::types::TYPE_WORK_LIMIT);
+            assert!(13 * (2 * DEPTH) + 29 > crate::types::TYPE_WORK_LIMIT);
+        }
         let fixture = ValidationFixture::create(concat!(
             "import dependency (Deep, Make)\n",
             "main : Unit -> Unit\nmain value = value\n",
@@ -8793,10 +8802,19 @@ mod tests {
                 );
                 assert_eq!(type_work.used(), 0);
             }
+            let mut type_work = TypeWorkBudget::default();
             checked.push(
-                check_module(resolved)
-                    .expect("checking should consume the imported physical scheme iteratively"),
+                crate::elaborate::check_module_with_budget(
+                    resolved,
+                    &mut type_work,
+                    &mut crate::pattern::UsefulnessBudget::default(),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("checking should consume the imported physical scheme iteratively"),
             );
+            if module.id() != graph.entry() {
+                assert_eq!(type_work.used(), DEFINING_TYPE_WORK);
+            }
         }
         (checked, graph.entry())
     }

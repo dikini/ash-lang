@@ -449,7 +449,7 @@ impl Graph {
         &mut self,
         nodes: &[StoredNode<F>],
         root: usize,
-        methods: &[super::MethodUse],
+        methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         symbols: &mut HashMap<BinderId, usize>,
         captures: &mut Vec<usize>,
@@ -458,12 +458,12 @@ impl Graph {
         let mut pending = copy_slice(&[root], budget)?;
         let mut visited = HashSet::new();
         while let Some(id) = pending.pop() {
-            charge(budget, methods.len() + 1)?;
+            charge(budget, 1)?;
             visited.try_reserve(1).map_err(|_| Failure::Resource)?;
             if !visited.insert(id) {
                 continue;
             }
-            for method in methods {
+            for method in methods.at(id, budget)? {
                 if index(method.node) == id {
                     if let super::MethodTarget::Adapter { value, .. } = method.target {
                         let mut pending = copy_slice(&[value], budget)?;
@@ -728,7 +728,7 @@ impl Graph {
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
-        methods: &[super::MethodUse],
+        methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
@@ -811,7 +811,7 @@ impl Graph {
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
-        methods: &[super::MethodUse],
+        methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
@@ -996,7 +996,7 @@ impl Graph {
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
-        methods: &[super::MethodUse],
+        methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
@@ -1101,6 +1101,7 @@ impl Graph {
         adapters: &[super::MethodAdapter],
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
+        let methods = super::MethodUses::new(methods, budget)?;
         let mut graph = Self {
             expressions: Vec::new(),
             globals: Vec::new(),
@@ -1151,14 +1152,14 @@ impl Graph {
                 &mut symbols,
                 &mut types,
                 operation,
-                methods,
+                &methods,
                 adapters,
                 budget,
             )?;
-            charge(budget, methods.len())?;
             if let Some(method) = methods
+                .at(id, budget)?
                 .iter()
-                .find(|method| index(method.node) == id && method.requirement.is_none())
+                .find(|method| method.requirement.is_none())
             {
                 let selected = graph.method_target(
                     method.target,
@@ -1193,11 +1194,8 @@ impl Graph {
                 }
             }
             let mut evidence = Vec::new();
-            for method in methods {
-                charge(budget, 1)?;
-                if index(method.node) == id
-                    && let Some(requirement) = method.requirement
-                {
+            for method in methods.at(id, budget)? {
+                if let Some(requirement) = method.requirement {
                     let argument = graph.method_target(
                         method.target,
                         method.method,
@@ -2927,6 +2925,7 @@ mod tests {
         ];
         let run = |early: bool, budget: &mut TypeWorkBudget| {
             let mut graph = graph(vec![Expr::Scalar, Expr::Scalar]);
+            let methods = super::super::MethodUses::new(&[], budget).unwrap();
             let result = graph.build_operation(
                 1,
                 &nodes,
@@ -2936,7 +2935,7 @@ mod tests {
                     EffectExprKind::Operation(operation) => Some(operation),
                     _ => None,
                 },
-                &[],
+                &methods,
                 &[],
                 budget,
             );

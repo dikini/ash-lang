@@ -278,6 +278,113 @@ fn resolve_with(
 }
 
 #[test]
+fn globals_and_implementation_methods_share_capture_scans_per_import_edge() {
+    let mut dependency = String::from("pub interface Observe<A> {\n");
+    for index in 0..96 {
+        dependency.push_str(&format!("observe{index} : A -> Int\n"));
+    }
+    dependency.push_str("}\n\npub impl Observe<Unit> {\n");
+    for index in 0..96 {
+        dependency.push_str(&format!("observe{index} () = {index}\n"));
+    }
+    dependency.push_str("}\n\n");
+    for index in 0..96 {
+        dependency.push_str(&format!(
+            "pub value{index} : Unit -> Int\nvalue{index} () = {index}\n\n"
+        ));
+    }
+    for methods_first in [false, true] {
+        let mut selected = (0..96)
+            .map(|index| format!("value{index}"))
+            .collect::<Vec<_>>();
+        if methods_first {
+            selected.insert(0, "impl Observe".to_owned());
+        } else {
+            selected.push("impl Observe".to_owned());
+        }
+        let tree = TempTree::create();
+        let graph = load(
+            &tree,
+            &format!("import dependency ({})\n", selected.join(", ")),
+            &[("dependency.ash", &dependency)],
+        );
+        let defining = module_named(&graph, "dependency.ash");
+        let checked = check_module(resolve_module(defining, &[]).unwrap()).unwrap();
+        let entry = module_named(&graph, "entry.ash");
+        let resolved = resolve_with(entry, &[checked.exports()])
+            .expect("global and method capture metadata should fit the default import budget");
+        assert_eq!(resolved.imported_facts().globals().count(), 96);
+        assert_eq!(resolved.imported_facts().implementations().count(), 1);
+
+        let imports =
+            [DependencyExports::new(&entry.dependencies()[0], checked.exports()).unwrap()];
+        let install = |limit| {
+            let mut resolver = Resolver::with_budgets(
+                entry.id(),
+                TypeWorkBudget::with_limit(limit),
+                crate::interface::InterfaceConstraintBudget::default(),
+            );
+            let result = resolver.install_imports(entry.surface(), &imports);
+            (result, resolver.type_work.used())
+        };
+        let (result, exact) = install(TYPE_WORK_LIMIT);
+        result.expect("shared scans should fit the default budget");
+        let (result, used) = install(exact - 1);
+        assert_eq!(
+            result.unwrap_err().reason,
+            ResolveReason::TypeResourceExhausted
+        );
+        assert_eq!(used, exact - 1);
+        let (result, used) = install(exact);
+        result.expect("fresh exact-budget retry should retain every selected fact");
+        assert_eq!(used, exact);
+    }
+}
+
+#[test]
+fn fresh_import_capture_scan_rejects_missing_metadata_even_after_retention() {
+    let tree = TempTree::create();
+    let graph = load(
+        &tree,
+        "import dependency (first)\nimport dependency (second)\n",
+        &[(
+            "dependency.ash",
+            concat!(
+                "type Token = Token\n\n",
+                "identity : Token -> Token\nidentity value = value\n\n",
+                "pub first : Unit -> Int\nfirst () = match identity Token {\nToken => 1\n}\n\n",
+                "pub second : Unit -> Int\nsecond () = match identity Token {\nToken => 2\n}\n",
+            ),
+        )],
+    );
+    let defining = module_named(&graph, "dependency.ash");
+    let checked = check_module(resolve_module(defining, &[]).unwrap()).unwrap();
+    let summary = checked.exports();
+    let entry = module_named(&graph, "entry.ash");
+    let missing = ExportSummary::test_fixture(defining.id(), vec![], vec![], vec![], vec![]);
+    let mut resolver = Resolver::new(entry.id());
+    resolver
+        .retain_imported_global(
+            summary.term("first").unwrap(),
+            summary,
+            entry.dependencies()[0].import_span(),
+            &mut super::CaptureGraphVisits::default(),
+        )
+        .unwrap();
+    let second_span = entry.dependencies()[1].import_span();
+    let error = resolver
+        .retain_imported_global(
+            summary.term("second").unwrap(),
+            &missing,
+            second_span,
+            &mut super::CaptureGraphVisits::default(),
+        )
+        .expect_err("a fresh route must consult its own summary's capture metadata");
+    assert_eq!(error.reason, ResolveReason::InternalState);
+    assert_eq!(error.primary.span(), second_span);
+}
+
+#[test]
 fn reordered_dependency_pairs_are_rejected_before_scope_installation() {
     let tree = TempTree::create();
     let graph = load(

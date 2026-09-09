@@ -9648,6 +9648,24 @@ impl ExportSummary {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
+        constraint_work
+            .charge(withheld_constructor_counts.len())
+            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        for (owner, kind) in withheld_constructor_counts.keys() {
+            // Access-only metadata for an unused private declaration has no
+            // public semantic root. Retained families still require exact
+            // matching above; foreign, lexical and opaque owners cannot use
+            // this exception.
+            if *kind == WithheldExportKind::Private
+                && owner.module() == self.module
+                && !owner.is_lexical()
+                && !canonical_nominals.contains_key(owner)
+            {
+                matched_withheld_counts = matched_withheld_counts
+                    .checked_add(1)
+                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
+            }
+        }
         if matched_withheld_counts != withheld_constructor_counts.len() {
             return Err(ResolvedBuildFailure::InvalidState);
         }
@@ -11545,14 +11563,20 @@ impl ExportSummary {
         }
 
         let mut referenced_nominals = HashSet::new();
+        let mut nominal_capture_visits = crate::core::capture::CaptureGraphVisits::default();
         for exported in summary.terms.values() {
-            for ty in exported
-                .capture
-                .types(type_work)
+            if nominal_capture_visits
+                .visit(&exported.capture, type_work)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?
             {
-                collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for ty in exported
+                    .capture
+                    .types(type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
             }
             collect_scheme_nominal_identities(
                 &exported.scheme,
@@ -11601,13 +11625,18 @@ impl ExportSummary {
                 }
             }
             for method in &implementation.fact.methods {
-                for ty in method
-                    .capture
-                    .types(type_work)
+                if nominal_capture_visits
+                    .visit(&method.capture, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?
                 {
-                    collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    for ty in method
+                        .capture
+                        .types(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        collect_capture_external_nominals(ty, &mut referenced_nominals, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
                 }
                 collect_scheme_nominal_identities(
                     &method.scheme,
@@ -11769,27 +11798,33 @@ impl ExportSummary {
 
         if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
             let mut referenced_effects = HashSet::new();
+            let mut effect_capture_visits = crate::core::capture::CaptureGraphVisits::default();
             for exported in summary.terms.values() {
-                for effect in exported
-                    .capture
-                    .effects(type_work)
+                if effect_capture_visits
+                    .visit(&exported.capture, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?
                 {
-                    type_work
-                        .charge(1)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                    referenced_effects
-                        .try_reserve(1)
-                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                    referenced_effects.insert(effect);
-                }
-                for ty in exported
-                    .capture
-                    .types(type_work)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                {
-                    collect_effect_identities(ty, &mut referenced_effects, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    for effect in exported
+                        .capture
+                        .effects(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects.insert(effect);
+                    }
+                    for ty in exported
+                        .capture
+                        .types(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        collect_effect_identities(ty, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
                 }
                 collect_effect_identities(
                     &exported.scheme.value_type,
@@ -11842,26 +11877,31 @@ impl ExportSummary {
                     }
                 }
                 for method in &implementation.fact.methods {
-                    for effect in method
-                        .capture
-                        .effects(type_work)
+                    if effect_capture_visits
+                        .visit(&method.capture, type_work)
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?
                     {
-                        type_work
-                            .charge(1)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                        referenced_effects
-                            .try_reserve(1)
-                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                        referenced_effects.insert(effect);
-                    }
-                    for ty in method
-                        .capture
-                        .types(type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                    {
-                        collect_effect_identities(ty, &mut referenced_effects, type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        for effect in method
+                            .capture
+                            .effects(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        {
+                            type_work
+                                .charge(1)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                            referenced_effects
+                                .try_reserve(1)
+                                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                            referenced_effects.insert(effect);
+                        }
+                        for ty in method
+                            .capture
+                            .types(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        {
+                            collect_effect_identities(ty, &mut referenced_effects, type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        }
                     }
                     collect_effect_identities(
                         &method.scheme.value_type,
@@ -11903,7 +11943,7 @@ impl ExportSummary {
             }
         }
 
-        summary.authenticate_resource_facts()?;
+        summary.authenticate(type_work, constraint_work)?;
         Ok(summary)
     }
 
@@ -21341,6 +21381,66 @@ mod tests {
     }
 
     #[test]
+    fn access_only_private_constructor_families_require_local_module_owners() {
+        let module = ModuleId::new(9_821);
+        let source = SourceFile::new("private-family.ash", "Unused")
+            .expect("the private family source should fit");
+        let span = source
+            .span(ByteRange::new(0, 6).expect("the range is ordered"))
+            .expect("the range fits");
+        for (owner, kind, expected) in [
+            (
+                NominalTypeId::new(module, 0),
+                WithheldExportKind::Private,
+                Ok(()),
+            ),
+            (
+                NominalTypeId::new(ModuleId::new(9_822), 0),
+                WithheldExportKind::Private,
+                Err(ResolvedBuildFailure::InvalidState),
+            ),
+            (
+                NominalTypeId::lexical(module, 0),
+                WithheldExportKind::Private,
+                Err(ResolvedBuildFailure::InvalidState),
+            ),
+            (
+                NominalTypeId::new(module, 0),
+                WithheldExportKind::OpaqueConstructor,
+                Err(ResolvedBuildFailure::InvalidState),
+            ),
+        ] {
+            let mut summary = ExportSummary::empty(module);
+            let constructor_index = summary
+                .withheld
+                .entry("Unused".to_owned())
+                .or_default()
+                .insert_new(
+                    WithheldNamespace::Constructor,
+                    WithheldExport {
+                        kind,
+                        owner: Some(owner),
+                        origin: Some(Origin::Source(span)),
+                    },
+                );
+            summary.withheld_order.push(WithheldOrderEntry {
+                spelling: "Unused".to_owned(),
+                namespace: WithheldNamespace::Constructor,
+                owner: Some(owner),
+                constructor_index,
+            });
+            assert_eq!(
+                summary.authenticate(
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                expected,
+                "owner {owner:?}, kind {kind:?}"
+            );
+        }
+    }
+
+    #[test]
     fn withheld_constructor_counts_have_exact_shared_authentication_storage() {
         fn summary_with_withheld_families(
             width_per_owner: usize,
@@ -21431,8 +21531,9 @@ mod tests {
         // One fused public nominal name/order cell, one hidden nominal order cell,
         // One cell per withheld spelling bucket, two per entry (bijection +
         // count index), one canonical-carrier pre-scan plus two owner cells
-        // (withheld relation + physical closure), and one public reverse index.
-        const EXACT: usize = 2 + WITHHELD_COUNT + 2 * WITHHELD_COUNT + 3 * OWNER_COUNT + 1;
+        // (withheld relation + physical closure), one access-only-family scan
+        // per withheld owner, and one public reverse index.
+        const EXACT: usize = 2 + WITHHELD_COUNT + 2 * WITHHELD_COUNT + 4 * OWNER_COUNT + 1;
         let summary = summary_with_withheld_families(WIDTH_PER_OWNER, false);
         let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT - 1);
         assert_eq!(
@@ -21453,7 +21554,7 @@ mod tests {
         // relations remain unchanged.
         const SHARED_WITHHELD_COUNT: usize = OWNER_COUNT;
         const SHARED_SPELLING_EXACT: usize =
-            2 + 1 + 2 * SHARED_WITHHELD_COUNT + 3 * OWNER_COUNT + 1;
+            2 + 1 + 2 * SHARED_WITHHELD_COUNT + 4 * OWNER_COUNT + 1;
         let shared = summary_with_withheld_families(1, true);
         let mut shared_short =
             crate::interface::InterfaceConstraintBudget::with_limit(SHARED_SPELLING_EXACT - 1);
@@ -29557,6 +29658,8 @@ mod tests {
         let defining = ModuleId::new(76);
         let facade = ModuleId::new(77);
         let interface = InterfaceId::new(defining, 0);
+        let method = MethodId::new(interface, 0);
+        let parameter = TypeVariableId::resolved(defining, 0);
         let mut imported = ImportedFacts::default();
         imported
             .reserve_interface()
@@ -29566,13 +29669,25 @@ mod tests {
                 id: interface,
                 spelling: "Render".into(),
                 parameters: Box::new([ResolvedTypeVariable {
-                    id: TypeVariableId::new(0),
+                    id: parameter,
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
                 }]),
                 determination: None,
-                methods: Box::new([]),
+                methods: Box::new([CheckedInterfaceMethodFact {
+                    id: method,
+                    spelling: "render".into(),
+                    type_parameters: Box::new([]),
+                    method_binder_authority: None,
+                    value_type: Type::Function(
+                        Box::new(Type::Variable(parameter)),
+                        Box::new(Type::Unit),
+                    ),
+                    origin: Origin::Source(interface_span),
+                    annotation_span: interface_span,
+                    span: interface_span,
+                }]),
                 origin: Origin::Source(interface_span),
                 span: interface_span,
             },
@@ -29618,21 +29733,31 @@ mod tests {
             imported
                 .reserve_public_implementation()
                 .expect("one public implementation slot should reserve");
+            let argument = || match index {
+                0 => Type::Int,
+                1 => Type::Bool,
+                2 => Type::Unit,
+                _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
+            };
             imported.insert_implementation(
                 CheckedImplementationFact {
                     id: implementation,
-                    application: InterfaceApplication::new(
-                        interface,
-                        Box::new([match index {
-                            0 => Type::Int,
-                            1 => Type::Bool,
-                            2 => Type::Unit,
-                            _ => Type::Tuple(vec![Type::Int, Type::Bool].into_boxed_slice()),
-                        }]),
-                    ),
+                    application: InterfaceApplication::new(interface, Box::new([argument()])),
                     head_parameters: Box::new([]),
                     prerequisites: Box::new([]),
-                    methods: Box::new([]),
+                    methods: Box::new([CheckedImplementationMethodFact {
+                        capture: crate::core::capture::CaptureValueSummary::default(),
+                        id: ImplMethodId::new(implementation, method),
+                        method,
+                        binder: BinderId::resolved(defining, implementation.declaration()),
+                        scheme: ConstrainedScheme::from_rank1_type(Type::Function(
+                            Box::new(argument()),
+                            Box::new(Type::Unit),
+                        )),
+                        head_type_parameter_count: 0,
+                        origin: Origin::Source(implementation_span),
+                        span: implementation_span,
+                    }]),
                     origin: Origin::Source(implementation_span),
                     span: implementation_span,
                 },
@@ -29672,23 +29797,32 @@ mod tests {
 
     #[test]
     fn public_implementation_summary_charges_storage_and_closure_inspection() {
-        // Two public-implementation storage cells, one authorization-record
-        // cell, two authorization-validity cells, three checked-fact clone
-        // cells, one route-clone cell, and six retained/reference/hidden-
-        // interface closure cells, including both transient hidden-identity
-        // indexes. Authorization validity owns the route scan; the caller does
-        // not charge those hops a second time.
-        const EXACT_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
+        // Staging: two storage cells, one authorization record, three route
+        // and method checks, twelve implementation-clone cells, one route
+        // clone, and thirteen reference/hidden-interface closure cells.
+        // Authentication adds nineteen identity, route, binder, substitution,
+        // and implementation-index cells before publication.
+        const STAGING_WORK: usize = 2 + 1 + 3 + 12 + 1 + 13;
+        const EXACT_WORK: usize = STAGING_WORK + 19;
         let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
         let empty = empty.expect("an unused imported interface should require no constraint work");
         assert_eq!(empty_used, 0);
         assert!(empty.implementations().next().is_none());
         assert!(empty.hidden_interfaces().next().is_none());
 
+        let (staging_short, staging_short_used) =
+            freeze_public_implementation_summary_with_limit(true, STAGING_WORK - 1);
+        assert_eq!(staging_short, Err(ResolvedBuildFailure::ConstraintResource));
+        assert_eq!(staging_short_used, STAGING_WORK - 1);
+
         let (short, short_used) =
             freeze_public_implementation_summary_with_limit(true, EXACT_WORK - 1);
         assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
-        assert_eq!(short_used, EXACT_WORK - 1);
+        assert_eq!(
+            short_used,
+            EXACT_WORK - 2,
+            "the final two-cell implementation index precharge is atomic",
+        );
 
         let (exact, exact_used) = freeze_public_implementation_summary_with_limit(true, EXACT_WORK);
         let summary = exact
@@ -29700,7 +29834,9 @@ mod tests {
 
     #[test]
     fn linked_public_authorization_move_has_an_exact_preflight_budget() {
-        const SUMMARY_FREEZE_WORK: usize = 2 + 1 + 2 + 4 + 1 + 6;
+        // The producer's staging (32) and authentication (19) precede this
+        // independently budgeted move preflight.
+        const SUMMARY_FREEZE_WORK: usize = 32 + 19;
         let (short_summary, _) =
             freeze_public_implementation_summary_with_limit(true, SUMMARY_FREEZE_WORK);
         let mut short_summary = short_summary.expect("the public summary should freeze");
@@ -29880,8 +30016,11 @@ mod tests {
         const FAMILY_ENTRY_WORK: usize = 3 * FAMILY_WIDTH;
         // Public physical schemes cost one cell per alias; hidden siblings
         // retain their records and schemes; the referenced defining owner then
-        // retains one complete hidden nominal family.
-        const FULL_EXACT: usize = 2 * ALIAS_COUNT + 8 * FAMILY_WIDTH + 4;
+        // retains one complete hidden nominal family. Authentication retains
+        // its nominal kind in two cells and checks each unique constructor's
+        // result identity and kind in four cells.
+        const STAGING_WORK: usize = 2 * ALIAS_COUNT + 8 * FAMILY_WIDTH + 4;
+        const FULL_EXACT: usize = STAGING_WORK + 2 + 4 * FAMILY_WIDTH;
 
         let traversal_exact = 2 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1 + FAMILY_ENTRY_WORK;
         let (traversal_short, traversal_short_used) =
@@ -29895,6 +30034,15 @@ mod tests {
             traversal_short_used,
             2 * ALIAS_COUNT + UNIQUE_OWNER_WORK + 1,
         );
+
+        let (publication_short, publication_short_used) =
+            freeze_transparent_constructor_aliases_with_limit(
+                FAMILY_WIDTH,
+                ALIAS_COUNT,
+                FULL_EXACT - 1,
+            );
+        assert_eq!(publication_short, Err(ResolvedBuildFailure::TypeResource));
+        assert_eq!(publication_short_used, FULL_EXACT - 1);
 
         let (exact, exact_used) = freeze_transparent_constructor_aliases_with_limit(
             FAMILY_WIDTH,
@@ -30011,7 +30159,11 @@ mod tests {
         const TYPE_CELLS: usize = 2 * DEPTH + 1;
         // One checked-global index and one public-order cell precede one full
         // scheme clone and one full nominal-identity traversal.
-        const DEEP_EXACT: usize = 2 + 2 * TYPE_CELLS;
+        const DEEP_STAGING: usize = 2 + 2 * TYPE_CELLS;
+        // Authentication visits and schedules each type cell (2N), then
+        // synthesizes kinds (N + one continuation and two comparisons per
+        // function + current state + final comparison).
+        const DEEP_EXACT: usize = DEEP_STAGING + 3 * TYPE_CELLS + 3 * DEPTH + 2;
         std::thread::Builder::new()
             .name("whole-freeze-nominal-collection".to_owned())
             .stack_size(256 * 1024)
@@ -30063,7 +30215,7 @@ mod tests {
                     origin: Origin::Source(value_span),
                 }];
 
-                let mut short = TypeWorkBudget::with_limit(DEEP_EXACT - 1);
+                let mut short = TypeWorkBudget::with_limit(DEEP_STAGING - 1);
                 assert_eq!(
                     ExportSummary::freeze(
                         &resolved,
@@ -30078,7 +30230,7 @@ mod tests {
                 );
                 assert_eq!(
                     short.used(),
-                    DEEP_EXACT - 2,
+                    DEEP_STAGING - 2,
                     "the final two-child scheduling charge is atomic",
                 );
                 for _ in 0..2 {
@@ -30142,6 +30294,18 @@ mod tests {
                         &mut TypeWorkBudget::default(),
                     )
                     .expect("the hidden nominal candidate should fit");
+                export_candidate
+                    .try_insert_withheld(
+                        WithheldNamespace::Constructor,
+                        "Hidden".to_owned(),
+                        WithheldExport {
+                            kind: WithheldExportKind::Private,
+                            owner: Some(nominal),
+                            origin: Some(Origin::Source(hidden_span)),
+                        },
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .expect("the hidden constructor access record should fit");
                 let resolved = ResolvedModule::new(ResolvedModuleParts {
                     module,
                     registry: Arc::new(registry),
@@ -30162,10 +30326,10 @@ mod tests {
                     scheme: ConstrainedScheme::from_rank1_type(Type::Nominal(nominal)),
                     origin: Origin::Source(value_span),
                 }];
-                // Prefix 3 = checked index + public order + one cloned nominal
-                // cell. The collector's root task is the fourth cell; the
-                // unique nominal index is the fifth and must fail atomically.
-                let mut short = TypeWorkBudget::with_limit(4);
+                // Prefix 7 = checked index + public order + four withheld
+                // storage cells + one cloned nominal cell. The collector root
+                // costs the eighth cell; the unique nominal index is ninth.
+                let mut short = TypeWorkBudget::with_limit(8);
                 assert_eq!(
                     ExportSummary::freeze(
                         &resolved,
@@ -30178,8 +30342,8 @@ mod tests {
                     ),
                     Err(ResolvedBuildFailure::TypeResource),
                 );
-                assert_eq!(short.used(), 4);
-                let mut record_short = TypeWorkBudget::with_limit(7);
+                assert_eq!(short.used(), 8);
+                let mut record_short = TypeWorkBudget::with_limit(11);
                 assert_eq!(
                     ExportSummary::freeze(
                         &resolved,
@@ -30194,10 +30358,26 @@ mod tests {
                 );
                 assert_eq!(
                     record_short.used(),
-                    6,
+                    10,
                     "the two-cell hidden-record retention charge is atomic",
                 );
-                const NOMINAL_EXACT: usize = 8;
+                // Twelve staging cells, two nominal-kind retention cells,
+                // two variable-authentication cells and three kind checks.
+                const NOMINAL_EXACT: usize = 12 + 2 + 2 + 3;
+                let mut publication_short = TypeWorkBudget::with_limit(NOMINAL_EXACT - 1);
+                assert_eq!(
+                    ExportSummary::freeze(
+                        &resolved,
+                        &checked,
+                        &[],
+                        &[],
+                        &[],
+                        &mut publication_short,
+                        &mut crate::interface::InterfaceConstraintBudget::default(),
+                    ),
+                    Err(ResolvedBuildFailure::TypeResource),
+                );
+                assert_eq!(publication_short.used(), NOMINAL_EXACT - 1);
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(NOMINAL_EXACT);
                     let summary = ExportSummary::freeze(
@@ -30224,6 +30404,56 @@ mod tests {
             .expect("accepted and rejected freeze staging must tear down iteratively");
     }
 
+    #[test]
+    fn freeze_rejects_unbacked_foreign_opaque_owner_before_publication() {
+        let source = SourceFile::new("unbacked-opaque-owner.ash", "Seal")
+            .expect("the opaque-owner source should fit");
+        let span = source
+            .span(ByteRange::new(0, 4).expect("the constructor range should be ordered"))
+            .expect("the constructor span should fit");
+        let mut export_candidate = ResolvedExportCandidate::default();
+        export_candidate
+            .try_insert_withheld(
+                WithheldNamespace::Constructor,
+                "Seal".to_owned(),
+                WithheldExport {
+                    kind: WithheldExportKind::OpaqueConstructor,
+                    owner: Some(NominalTypeId::new(ModuleId::new(74), 0)),
+                    origin: Some(Origin::Source(span)),
+                },
+                &mut TypeWorkBudget::default(),
+            )
+            .expect("the malformed owner still has coherent staging indexes");
+        let resolved = ResolvedModule::new(ResolvedModuleParts {
+            module: ModuleId::new(75),
+            registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
+            imported: ImportedFacts::default(),
+            direct_dependencies: Vec::new(),
+            declaration_order: Vec::new(),
+            interfaces: Vec::new(),
+            effects: Vec::new(),
+            implementations: Vec::new(),
+            definitions: Vec::new(),
+            export_candidate,
+            span,
+        });
+        for _ in 0..2 {
+            assert_eq!(
+                ExportSummary::freeze(
+                    &resolved,
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    &mut TypeWorkBudget::default(),
+                    &mut crate::interface::InterfaceConstraintBudget::default(),
+                ),
+                Err(ResolvedBuildFailure::InvalidState),
+                "an unbacked foreign opaque owner must never become a published summary",
+            );
+        }
+    }
+
     fn freeze_shared_spelling_withheld_owners_with_limit(
         owner_count: usize,
         limit: usize,
@@ -30233,8 +30463,9 @@ mod tests {
         let span = source
             .span(ByteRange::new(0, 4).expect("the constructor span should be ordered"))
             .expect("the constructor span should belong to the fixture");
+        // Access-only private families exercise the owner index without
+        // requiring an unrelated public semantic closure.
         let defining = ModuleId::new(74);
-        let facade = ModuleId::new(75);
         let mut export_candidate = ResolvedExportCandidate::default();
         let mut type_work = TypeWorkBudget::with_limit(limit);
         for index in 0..owner_count {
@@ -30248,7 +30479,7 @@ mod tests {
                         WithheldNamespace::Constructor,
                         "Seal".to_owned(),
                         WithheldExport {
-                            kind: WithheldExportKind::OpaqueConstructor,
+                            kind: WithheldExportKind::Private,
                             owner: Some(owner),
                             origin: Some(Origin::Source(span)),
                         },
@@ -30261,7 +30492,7 @@ mod tests {
             }
         }
         let resolved = ResolvedModule::new(ResolvedModuleParts {
-            module: facade,
+            module: defining,
             registry: Arc::new(ResolvedRegistry::new(Vec::new(), Vec::new())),
             imported: ImportedFacts::default(),
             direct_dependencies: Vec::new(),
@@ -30352,7 +30583,7 @@ mod tests {
                 id: interface,
                 spelling: "Render".into(),
                 parameters: Box::new([ResolvedTypeVariable {
-                    id: TypeVariableId::new(0),
+                    id: TypeVariableId::resolved(base, 0),
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
@@ -30363,7 +30594,10 @@ mod tests {
                     spelling: "render".into(),
                     type_parameters: Box::new([]),
                     method_binder_authority: None,
-                    value_type: Type::Function(Box::new(Type::Int), Box::new(Type::Int)),
+                    value_type: Type::Function(
+                        Box::new(Type::Variable(TypeVariableId::resolved(base, 0))),
+                        Box::new(Type::Int),
+                    ),
                     origin: Origin::Source(interface_span),
                     annotation_span: interface_span,
                     span: interface_span,
@@ -30434,13 +30668,26 @@ mod tests {
 
     #[test]
     fn hidden_interface_summary_closure_uses_its_exact_constraint_budget() {
+        // Fifteen cells construct the closure. Full authentication adds one
+        // public spelling, one hidden interface index, two global/binder
+        // entries, eight scheme/requirement type visits, two requirement-index
+        // entries, and one interface-parameter entry.
+        const EXACT_WORK: usize = 15 + 1 + 1 + 2 + 8 + 2 + 1;
         let (short, short_used) = freeze_hidden_interface_summary_with_limit(14);
         assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
         assert_eq!(short_used, 14);
 
-        let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(15);
+        let (publication_short, publication_short_used) =
+            freeze_hidden_interface_summary_with_limit(EXACT_WORK - 1);
+        assert_eq!(
+            publication_short,
+            Err(ResolvedBuildFailure::ConstraintResource)
+        );
+        assert_eq!(publication_short_used, EXACT_WORK - 1);
+
+        let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(EXACT_WORK);
         let summary = exact.expect("the exact budget should retain one hidden interface fact");
-        assert_eq!(exact_used, 15);
+        assert_eq!(exact_used, EXACT_WORK);
         assert!(summary.interface("Render").is_none());
         let hidden = summary
             .hidden_interfaces()

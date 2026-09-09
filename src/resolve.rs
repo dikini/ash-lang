@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::{
+    core::capture::CaptureGraphVisits,
     diagnostic::{Diagnostic, SourceLabel},
     interface::{
         CheckedRequirement, ConstrainedScheme, EvidenceSlot, ImplId, ImplMethodId,
@@ -2652,6 +2653,7 @@ impl Resolver {
             surface.imports.iter().zip(dependencies).enumerate()
         {
             let mut retained_constructor_owners = HashSet::new();
+            let mut capture_graph_visits = CaptureGraphVisits::default();
             self.retain_dependency_interface_facts(
                 dependency.summary,
                 dependency.edge.target(),
@@ -2662,8 +2664,11 @@ impl Resolver {
                     if self.file_name_is_bound(&alias.text) {
                         return Err(import_conflict(alias.span, &alias.text));
                     }
-                    let namespaces =
-                        self.clone_summary_namespaces(dependency.summary, import.span)?;
+                    let namespaces = self.clone_summary_namespaces(
+                        dependency.summary,
+                        import.span,
+                        &mut capture_graph_visits,
+                    )?;
                     self.module_aliases.insert(alias.text.clone(), namespaces);
                 }
                 SurfaceImportSelection::Targeted(items) => {
@@ -2684,6 +2689,7 @@ impl Resolver {
                                     public: import.public,
                                     route_rank,
                                 },
+                                &mut capture_graph_visits,
                             )?;
                             continue;
                         }
@@ -2719,7 +2725,12 @@ impl Resolver {
                                     *span,
                                 ),
                             );
-                            self.retain_imported_global(exported, dependency.summary, *span)?;
+                            self.retain_imported_global(
+                                exported,
+                                dependency.summary,
+                                *span,
+                                &mut capture_graph_visits,
+                            )?;
                             if import.public {
                                 self.public_import_candidate.try_insert_term(
                                     local.text.clone(),
@@ -2982,11 +2993,12 @@ impl Resolver {
         Ok(())
     }
 
-    fn select_imported_implementations(
+    fn select_imported_implementations<'a>(
         &mut self,
-        summary: &ExportSummary,
+        summary: &'a ExportSummary,
         interface: &crate::surface::SurfaceName,
         selection: ImplementationImportSelection,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
     ) -> Result<(), ResolveError> {
         self.constraint_work.charge(1).map_err(|()| {
             error(
@@ -3042,7 +3054,12 @@ impl Resolver {
                 )
             })?;
             if implementation.fact().interface() == selected_interface {
-                self.retain_imported_implementation_fact(implementation, summary, selection)?;
+                self.retain_imported_implementation_fact(
+                    implementation,
+                    summary,
+                    selection,
+                    capture_graph_visits,
+                )?;
             }
         }
         Ok(())
@@ -3061,10 +3078,11 @@ impl Resolver {
         })
     }
 
-    fn clone_summary_namespaces(
+    fn clone_summary_namespaces<'a>(
         &mut self,
-        summary: &ExportSummary,
+        summary: &'a ExportSummary,
         import_span: crate::source::Span,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
     ) -> Result<ImportedNamespaces, ResolveError> {
         let mut namespaces = ImportedNamespaces::default();
         let mut retained_constructor_owners = HashSet::new();
@@ -3159,7 +3177,7 @@ impl Resolver {
                     import_span,
                 ),
             );
-            self.retain_imported_global(exported, summary, import_span)?;
+            self.retain_imported_global(exported, summary, import_span, capture_graph_visits)?;
         }
 
         for (spelling, method) in summary.method_names() {
@@ -3552,11 +3570,12 @@ impl Resolver {
         Ok(())
     }
 
-    fn retain_imported_implementation_fact(
+    fn retain_imported_implementation_fact<'a>(
         &mut self,
-        exported: &AuthorizedImplementationFact,
+        exported: &'a AuthorizedImplementationFact,
         summary: &ExportSummary,
         selection: ImplementationImportSelection,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
     ) -> Result<(), ResolveError> {
         let span = selection.selector_span;
         self.constraint_work.charge(1).map_err(|()| {
@@ -3985,30 +4004,41 @@ impl Resolver {
                 }
             }
             self.retain_scheme_nominals(&method.scheme, summary, span)?;
-            for ty in method.capture.types(&mut self.type_work).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported implementation capture type scan exceeded its work budget",
-                )
-            })? {
-                self.retain_capture_type_metadata(ty, summary, span)?;
-            }
-            for effect in method.capture.effects(&mut self.type_work).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported implementation capture effect scan exceeded its work budget",
-                )
-            })? {
-                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+            if capture_graph_visits
+                .visit(&method.capture, &mut self.type_work)
+                .map_err(|()| {
                     error(
-                        ResolveReason::InternalState,
+                        ResolveReason::TypeResourceExhausted,
                         span,
-                        "an implementation capture graph references missing effect metadata",
+                        "imported implementation capture graph tracking exceeded its work budget",
                     )
-                })?;
-                self.retain_imported_effect(declaration, span)?;
+                })?
+            {
+                for ty in method.capture.types(&mut self.type_work).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported implementation capture type scan exceeded its work budget",
+                    )
+                })? {
+                    self.retain_capture_type_metadata(ty, summary, span)?;
+                }
+                for effect in method.capture.effects(&mut self.type_work).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported implementation capture effect scan exceeded its work budget",
+                    )
+                })? {
+                    let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "an implementation capture graph references missing effect metadata",
+                        )
+                    })?;
+                    self.retain_imported_effect(declaration, span)?;
+                }
             }
             methods.push(crate::resolved::CheckedImplementationMethodFact {
                 capture: method
@@ -4112,11 +4142,12 @@ impl Resolver {
         Ok(())
     }
 
-    fn retain_imported_global(
+    fn retain_imported_global<'a>(
         &mut self,
-        exported: &ExportedGlobal,
+        exported: &'a ExportedGlobal,
         summary: &ExportSummary,
         span: crate::source::Span,
+        capture_graph_visits: &mut CaptureGraphVisits<'a>,
     ) -> Result<(), ResolveError> {
         let constrained = !exported.scheme.requirements.is_empty();
         if constrained {
@@ -4225,34 +4256,45 @@ impl Resolver {
         self.global_requirement_counts
             .insert(exported.binder, exported.scheme.requirements.len());
         self.retain_scheme_nominals(&exported.scheme, summary, span)?;
-        for ty in exported.capture.types(&mut self.type_work).map_err(|()| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "imported capture type scan exceeded its work budget",
-            )
-        })? {
-            self.retain_capture_type_metadata(ty, summary, span)?;
-        }
-        for effect in exported
-            .capture
-            .effects(&mut self.type_work)
+        if capture_graph_visits
+            .visit(&exported.capture, &mut self.type_work)
             .map_err(|()| {
                 error(
                     ResolveReason::TypeResourceExhausted,
                     span,
-                    "imported capture effect scan exceeded its work budget",
+                    "imported capture graph tracking exceeded its work budget",
                 )
             })?
         {
-            let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+            for ty in exported.capture.types(&mut self.type_work).map_err(|()| {
                 error(
-                    ResolveReason::InternalState,
+                    ResolveReason::TypeResourceExhausted,
                     span,
-                    "an exported capture graph references missing effect metadata",
+                    "imported capture type scan exceeded its work budget",
                 )
-            })?;
-            self.retain_imported_effect(declaration, span)?;
+            })? {
+                self.retain_capture_type_metadata(ty, summary, span)?;
+            }
+            for effect in exported
+                .capture
+                .effects(&mut self.type_work)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        span,
+                        "imported capture effect scan exceeded its work budget",
+                    )
+                })?
+            {
+                let declaration = summary.effect_by_id(effect).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "an exported capture graph references missing effect metadata",
+                    )
+                })?;
+                self.retain_imported_effect(declaration, span)?;
+            }
         }
         Ok(())
     }
@@ -12515,7 +12557,7 @@ mod tests {
 
         let mut resolver = Resolver::new(entry.id());
         resolver
-            .retain_imported_global(exported, summary, span)
+            .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect("the first route should retain the canonical global and its closure");
         let baseline = snapshot(&resolver);
         assert_eq!(
@@ -12526,7 +12568,7 @@ mod tests {
         resolver.type_work = TypeWorkBudget::with_limit(capture_work - 1);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
         let error = resolver
-            .retain_imported_global(exported, summary, span)
+            .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect_err("one missing data-summary comparison unit should reject the route");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(snapshot(&resolver), baseline);
@@ -12535,7 +12577,7 @@ mod tests {
         resolver.constraint_work =
             InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK - 1);
         let error = resolver
-            .retain_imported_global(exported, summary, span)
+            .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect_err("one missing comparison unit should reject the alternate route");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(
@@ -12548,7 +12590,7 @@ mod tests {
         resolver.type_work = TypeWorkBudget::with_limit(capture_work);
         resolver.constraint_work = InterfaceConstraintBudget::with_limit(DUPLICATE_CONSTRAINT_WORK);
         resolver
-            .retain_imported_global(exported, summary, span)
+            .retain_imported_global(exported, summary, span, &mut CaptureGraphVisits::default())
             .expect("the exact duplicate comparison should retain no second closure");
         assert_eq!(resolver.constraint_work.used(), DUPLICATE_CONSTRAINT_WORK,);
         assert_eq!(resolver.type_work.used(), capture_work);
@@ -12667,7 +12709,12 @@ mod tests {
 
         let mut duplicate = Resolver::new(entry.id());
         duplicate
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect("the first public route should retain the fact and nominal closure");
         let public_baseline = snapshot(&duplicate);
         assert_eq!(
@@ -12678,7 +12725,12 @@ mod tests {
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         let error = duplicate
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect_err("one missing method-summary comparison unit should reject the route");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(snapshot(&duplicate), public_baseline);
@@ -12687,7 +12739,12 @@ mod tests {
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK - 1);
         let error = duplicate
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect_err("one missing public-hop comparison cell should reject the duplicate");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(
@@ -12701,7 +12758,12 @@ mod tests {
         duplicate.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_DUPLICATE_CONSTRAINT_WORK);
         duplicate
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect("the exact duplicate route should retain no second fact or closure");
         assert_eq!(
             duplicate.constraint_work.used(),
@@ -12712,7 +12774,12 @@ mod tests {
 
         let mut promotion = Resolver::new(entry.id());
         promotion
-            .retain_imported_implementation_fact(exported, summary, private_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                private_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect("the first private route should retain the fact and closure");
         let private_baseline = snapshot(&promotion);
         assert!(private_baseline.0[0].2.is_none());
@@ -12721,7 +12788,12 @@ mod tests {
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK - 1);
         let error = promotion
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect_err("one missing effective-hop cell should reject public promotion");
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(
@@ -12735,7 +12807,12 @@ mod tests {
         promotion.constraint_work =
             InterfaceConstraintBudget::with_limit(PUBLIC_PROMOTION_CONSTRAINT_WORK);
         promotion
-            .retain_imported_implementation_fact(exported, summary, public_selection)
+            .retain_imported_implementation_fact(
+                exported,
+                summary,
+                public_selection,
+                &mut CaptureGraphVisits::default(),
+            )
             .expect("the exact promotion should append one public route without recloning");
         assert_eq!(
             promotion.constraint_work.used(),
@@ -13361,6 +13438,7 @@ mod tests {
                 dependency.exports(),
                 interface,
                 selection,
+                &mut CaptureGraphVisits::default(),
             );
             let heads = resolver
                 .imported
@@ -14585,6 +14663,7 @@ mod tests {
                         &exported,
                         checked_dependency.exports(),
                         selection,
+                        &mut CaptureGraphVisits::default(),
                     );
                     let retained_kind = resolver
                         .imported

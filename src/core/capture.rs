@@ -66,6 +66,34 @@ impl PartialEq for CaptureValueSummary {
 }
 impl Eq for CaptureValueSummary {}
 
+/// Operation-local visits to immutable graph metadata, not callable values.
+/// Borrowed graph owners prevent address reuse while the index is live.
+#[derive(Default)]
+pub(crate) struct CaptureGraphVisits<'a> {
+    seen: HashMap<*const SummaryGraph, &'a SummaryGraph>,
+}
+
+impl<'a> CaptureGraphVisits<'a> {
+    pub(crate) fn visit(
+        &mut self,
+        summary: &'a CaptureValueSummary,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        let Some(graph) = &summary.graph else {
+            return Ok(false);
+        };
+        budget.charge(1)?;
+        let identity = Arc::as_ptr(graph);
+        if self.seen.contains_key(&identity) {
+            return Ok(false);
+        }
+        budget.charge(1)?;
+        self.seen.try_reserve(1).map_err(|_| ())?;
+        self.seen.insert(identity, graph.as_ref());
+        Ok(true)
+    }
+}
+
 impl CaptureValueSummary {
     pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
         if self.graph.is_none() {
@@ -130,7 +158,7 @@ impl CaptureValueSummary {
         }))
     }
 
-    // Each alias scans its shared graph again, so each scan is charged here.
+    // Charge each explicit scan, including repeated scans of a shared graph.
     pub(crate) fn effects<'a>(
         &'a self,
         budget: &mut TypeWorkBudget,
@@ -449,6 +477,40 @@ pub(crate) struct MethodUse {
     pub(crate) arguments: usize,
 }
 
+/// Analysis-local ordered method records indexed by their exact Core node.
+struct MethodUses<'a> {
+    by_node: HashMap<usize, Vec<&'a MethodUse>>,
+}
+
+impl<'a> MethodUses<'a> {
+    fn new(methods: &'a [MethodUse], budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        // One input visit, at most one hash entry, and one retained reference
+        // per record. Repeated-node records retain their original order.
+        let work = methods.len().checked_mul(3).ok_or(Failure::Resource)?;
+        charge(budget, work)?;
+        let mut by_node = HashMap::<usize, Vec<&MethodUse>>::new();
+        by_node
+            .try_reserve(methods.len())
+            .map_err(|_| Failure::Resource)?;
+        for method in methods {
+            let records = by_node.entry(index(method.node)).or_default();
+            records.try_reserve(1).map_err(|_| Failure::Resource)?;
+            records.push(method);
+        }
+        Ok(Self { by_node })
+    }
+
+    fn at(&self, node: usize, budget: &mut TypeWorkBudget) -> Result<&[&'a MethodUse], Failure> {
+        if self.by_node.is_empty() {
+            return Ok(&[]);
+        }
+        charge(budget, 1)?;
+        let records = self.by_node.get(&node).map_or(&[][..], Vec::as_slice);
+        charge(budget, records.len())?;
+        Ok(records)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MethodTarget {
     Binder(BinderId),
@@ -510,7 +572,7 @@ fn free_values_with_methods<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     root: usize,
     parameters: &[BinderId],
-    methods: &[MethodUse],
+    methods: &MethodUses<'_>,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<BinderId>, Failure> {
     let mut pending = copy_slice(&[root], budget)?;
@@ -529,10 +591,8 @@ fn free_values_with_methods<F: CoreOperationFamily>(
             continue;
         }
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
-        charge(budget, methods.len())?;
-        for method in methods {
-            if index(method.node) == id
-                && method.requirement.is_none()
+        for method in methods.at(id, budget)? {
+            if method.requirement.is_none()
                 && let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
                     method.target
             {
@@ -2064,6 +2124,138 @@ mod tests {
         assert!(
             !matches(&imported),
             "the authenticated summary cannot disappear"
+        );
+    }
+
+    #[test]
+    fn method_use_index_preserves_same_node_order_and_exact_work() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+
+        let source = SourceFile::new("method-index", "x").unwrap();
+        let origin =
+            crate::source::Origin::Source(source.span(ByteRange::new(0, 1).unwrap()).unwrap());
+        let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(
+            crate::resolved::ResolvedRegistry::new(Vec::new(), Vec::new()),
+        ));
+        let first = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let second = builder.unit(Type::Unit, origin).unwrap();
+        let module = crate::module::ModuleId::new(44_210);
+        let binder = BinderId::resolved(module, 0);
+        let interface = InterfaceId::new(module, 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(binder), 0);
+        let methods = [
+            MethodUse {
+                node: first,
+                target: MethodTarget::Binder(binder),
+                method: MethodId::new(interface, 0),
+                requirement: None,
+                arguments: 0,
+            },
+            MethodUse {
+                node: second,
+                target: MethodTarget::Abstract(requirement),
+                method: MethodId::new(interface, 1),
+                requirement: Some(requirement),
+                arguments: 1,
+            },
+            MethodUse {
+                node: first,
+                target: MethodTarget::Abstract(requirement),
+                method: MethodId::new(interface, 2),
+                requirement: Some(requirement),
+                arguments: 2,
+            },
+            MethodUse {
+                node: first,
+                target: MethodTarget::Abstract(requirement),
+                method: MethodId::new(interface, 3),
+                requirement: Some(RequirementId::new(RequirementOwner::Global(binder), 1)),
+                arguments: 3,
+            },
+        ];
+        let mut construction_short = TypeWorkBudget::with_limit(3 * methods.len() - 1);
+        assert!(matches!(
+            MethodUses::new(&methods, &mut construction_short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(construction_short.used(), 0);
+        let run = |budget: &mut TypeWorkBudget| {
+            let indexed = MethodUses::new(&methods, budget)?;
+            let same_node = indexed.at(index(first), budget)?;
+            assert_eq!(same_node.len(), 3);
+            assert!(std::ptr::eq(same_node[0], &methods[0]));
+            assert!(std::ptr::eq(same_node[1], &methods[2]));
+            assert!(std::ptr::eq(same_node[2], &methods[3]));
+            assert!(std::ptr::eq(
+                indexed.at(index(second), budget)?[0],
+                &methods[1]
+            ));
+            assert!(indexed.at(usize::MAX, budget)?.is_empty());
+            Ok::<(), Failure>(())
+        };
+        // Three construction cells per record, then lookup + matching records.
+        const EXACT: usize = 3 * 4 + (1 + 3) + (1 + 1) + 1;
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(EXACT - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            let mut budget = TypeWorkBudget::with_limit(EXACT);
+            run(&mut budget).unwrap();
+            assert_eq!(budget.used(), EXACT);
+        }
+        let mut zero = TypeWorkBudget::with_limit(0);
+        assert!(
+            MethodUses::new(&[], &mut zero)
+                .unwrap()
+                .at(0, &mut zero)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn capture_graph_visits_charge_aliases_and_distinct_graphs_with_fresh_retries() {
+        let make_summary = || CaptureValueSummary {
+            graph: Some(Arc::new(SummaryGraph {
+                effects: false,
+                data: None,
+                callables: Vec::new(),
+                types: TypeArguments(vec![Type::Int]),
+                code: (0..16).map(|_| Control::Return).collect(),
+            })),
+            value: Value::default(),
+        };
+        let first = make_summary();
+        let alias = first.clone();
+        let distinct = make_summary();
+        let scan = |budget: &mut TypeWorkBudget| {
+            let mut visits = CaptureGraphVisits::default();
+            let mut count = 0;
+            for summary in [&first, &alias, &distinct] {
+                if visits.visit(summary, budget)? {
+                    for ty in summary.types(budget)? {
+                        budget.charge(1)?;
+                        assert_eq!(*ty, Type::Int);
+                        count += 1;
+                    }
+                }
+            }
+            Ok::<_, ()>(count)
+        };
+        // Each distinct graph: lookup + retained key + 17 carrier positions
+        // + one yielded type. The alias adds only one lookup.
+        const EXACT: usize = 2 * (2 + 17 + 1) + 1;
+        assert!(scan(&mut TypeWorkBudget::with_limit(EXACT - 1)).is_err());
+        for _ in 0..2 {
+            let mut budget = TypeWorkBudget::with_limit(EXACT);
+            assert_eq!(scan(&mut budget), Ok(2));
+            assert_eq!(budget.used(), EXACT);
+        }
+        let absent = CaptureValueSummary::default();
+        assert_eq!(
+            CaptureGraphVisits::default().visit(&absent, &mut TypeWorkBudget::with_limit(0)),
+            Ok(false),
         );
     }
 

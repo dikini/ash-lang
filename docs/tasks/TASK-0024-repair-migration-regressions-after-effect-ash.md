@@ -1,7 +1,7 @@
 # TASK-0024: Repair Migration Regressions After Effect Ash
 
 - ID: `TASK-0024`
-- Status: ready; implementation not started
+- Status: active
 - Related:
   [AD-0010](../decisions/AD-0010-human-diagnostic-presentation-and-localization.md),
   [TASK-0021](TASK-0021-implement-human-diagnostics.md),
@@ -96,8 +96,51 @@ automation and publication are outside this task and do not gate completion.
 
 ## Progress
 
+- [Repair evidence](../design/migration-repair-evidence.md) records the causes,
+  regression coverage and original-source outcome matrix.
 - Scope clarified: current-main compiler repair only; no backports.
-- Current-main reproduction and implementation have not started.
+- Baseline `274bdbe` is isolated in `.worktree/migration-repair`. Fresh tests:
+  1,214 library and 14 CLI tests pass.
+- Current-main reproduction: both search-frontier entries succeed with their
+  historical output hashes. The other six entries and both dictionary
+  dependency controls fail with `internal.resource.type-work`, before the
+  historical imported-summary failure. The search dependency control reaches
+  `entry.missing-main` as expected. No ash-doc files were changed.
+- A minimal unused-private-type regression reproduced the historical summary
+  mismatch. The local fix admits only access-only private module identities;
+  source acceptance and foreign/lexical/opaque-owner rejection tests pass.
+- Repeated full scans of shared capture graphs exhausted the dictionary's
+  export-summary budget. Collector-local graph visits now avoid repeated
+  nominal/effect scans without changing limits. Exact/one-short/fresh-retry
+  tests pass. Tree iterator's dependency now reaches `entry.missing-main` and
+  its opaque-pattern entry reports the specified source rejection.
+- Import retention now shares capture scans per import edge. The 192-export
+  regression passes, with no increase to resource limits.
+- Red-black's earlier capture-analysis exhaustion came from repeated all-method
+  searches. A charged node index preserves same-node record order and avoids
+  unrelated searches. The method-rich regression and exact-work tests pass.
+  Temporary profiling instrumentation was removed.
+- Producer publication now runs full summary authentication on the existing
+  cumulative ledgers. All 121 focused summary tests pass, including malformed
+  publication and exact-budget controls.
+- All eight unchanged original entries now reach their expected success or
+  ordinary source rejection; the evidence report records the outcomes.
+- Full workspace verification, final review and main integration remain
+  outstanding. This is an implementation checkpoint, not task completion.
+- Checkpoint formatting passes. After correcting five accounting fixtures for
+  producer authentication and shared scans, all 1,220 library tests pass.
+  Production limits are unchanged. The workspace gate also exposed a missing
+  borrowed-carrier inventory entry, now corrected, and two interface-resource
+  failures. Shared counting/clone preflights now charge both ledgers in one
+  walk. The unchanged capacity and exhaustion fixtures pass, along with all
+  1,221 library and 61 resource-scope typing tests. The complete workspace
+  gate passed the long architecture checks, then found stale formula strings
+  in the method-resource manifest. Those expectations now match the verified
+  probes, and all four method-resource tests pass. The full verification result
+  is recorded below.
+- The unfiltered `cargo xtask verify` passed, including all workspace tests,
+  Clippy and rustdoc with warnings denied. Independent semantic and quality
+  reviews found no blocking issues. Main integration remains outstanding.
 
 ## Discoveries
 
