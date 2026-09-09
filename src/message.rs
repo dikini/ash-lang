@@ -116,6 +116,12 @@ impl Argument<'_> for crate::module::ModuleResource {
     }
 }
 
+impl Argument<'_> for crate::parser::InternalReason {
+    fn value(self) -> Cow<'static, str> {
+        Cow::Borrowed(self.diagnostic_name())
+    }
+}
+
 // One declaration supplies typed constructors and exhaustive test examples.
 // The concrete carrier remains visible to the source ownership inventory.
 macro_rules! messages {
@@ -138,6 +144,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Syntax-recovery information crossed the checked projection boundary.
+    projection_recovery => "projection-recovery" { path: &'a str = "source.ash" },
+    /// A retained concrete-syntax invariant failed.
+    projection_malformed => "projection-malformed" { path: &'a str = "source.ash", cause: crate::parser::InternalReason = crate::parser::InternalReason::UnexpectedShape },
     /// Span construction failed after source admission.
     source_unrepresentable_span => "source-unrepresentable-span" { path: &'a Path = Path::new("source.ash") },
     /// Source identity allocation is exhausted.

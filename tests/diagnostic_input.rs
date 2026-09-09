@@ -5,6 +5,93 @@ use ash::{
 };
 
 #[test]
+fn projection_failures_retain_their_specific_compiler_cause() {
+    use ash::{
+        parser::{InternalReason, ProjectionError, ResourceFailure},
+        source::SourceFile,
+    };
+    let mut cases = vec![
+        (
+            ProjectionError::RecoveryNodesPresent,
+            "internal.projection.recovery-nodes",
+            "recovery-nodes",
+        ),
+        (
+            ProjectionError::ResourceLimit(ResourceFailure::StructuralDepth { limit: 128 }),
+            "internal.resource.structural-depth",
+            "",
+        ),
+        (
+            ProjectionError::ResourceLimit(ResourceFailure::SyntaxWork { limit: 1234 }),
+            "internal.resource.syntax-work",
+            "",
+        ),
+    ];
+    for (cause, name) in [
+        (InternalReason::UnexpectedFinish, "unexpected-finish"),
+        (InternalReason::UnclosedNode, "unclosed-node"),
+        (InternalReason::InvalidRootCount, "invalid-root-count"),
+        (InternalReason::TokenOutOfRange, "token-out-of-range"),
+        (InternalReason::DuplicateToken, "duplicate-token"),
+        (InternalReason::MissingToken, "missing-token"),
+        (InternalReason::TokenOutOfOrder, "token-out-of-order"),
+        (InternalReason::UnexpectedShape, "unexpected-shape"),
+        (InternalReason::ForeignSpan, "foreign-span"),
+        (InternalReason::InvalidSpan, "invalid-span"),
+    ] {
+        cases.push((
+            ProjectionError::MalformedTree(cause),
+            "internal.projection.malformed-tree",
+            name,
+        ));
+    }
+    for (error, reason, cause) in cases {
+        let failure = GraphDiagnostic::from(LoadGraphError::Projection {
+            source: SourceFile::new("source.ash", "").unwrap(),
+            error,
+            import_span: None,
+        });
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["reason"], reason);
+        assert_eq!(json["labels"], serde_json::json!([]));
+        match error {
+            ProjectionError::ResourceLimit(
+                ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit },
+            ) => assert_eq!(json["facts"][1]["value"], limit),
+            _ => assert_eq!(json["facts"][1]["value"], cause),
+        }
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("source.ash"));
+            if cause == "invalid-span" {
+                assert!(text.contains(match locale {
+                    Locale::English => "source spans or end-of-input markers are inconsistent",
+                    Locale::Bulgarian => "диапазони или маркери за край на входа са несъгласувани",
+                }));
+            }
+            if cause == "invalid-root-count" {
+                assert!(text.contains(match locale {
+                    Locale::English => "syntax events do not form one complete rooted tree",
+                    Locale::Bulgarian =>
+                        "синтактичните събития не образуват едно завършено дърво с корен",
+                }));
+            }
+        }
+    }
+}
+
+#[test]
 fn graph_source_model_errors_preserve_causes_and_internal_quantities() {
     use ash::source::{ByteRange, SourceError, SourceFile};
     let first = SourceFile::new("first.ash", "").unwrap();

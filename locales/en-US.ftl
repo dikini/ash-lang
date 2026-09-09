@@ -111,6 +111,19 @@ module-not-found = The imported source file `{ $path }` does not exist.
 module-import-cycle = This import creates a dependency cycle through `{ $path }`.
 module-path-escape = The imported source file `{ $path }` is outside a root that must contain it.
 source-ids = Ash cannot allocate another source identity for `{ $path }`.
+projection-recovery = Ash encountered syntax-recovery markers while converting `{ $path }` to its internal form.
+projection-malformed = Ash found inconsistent internal syntax for `{ $path }`: { $cause ->
+    [unexpected-finish] a closing event has no opening event.
+    [unclosed-node] a syntax node was not closed.
+    [invalid-root-count] syntax events do not form one complete rooted tree.
+    [token-out-of-range] a token index is outside the retained token stream.
+    [duplicate-token] a token was retained more than once.
+    [missing-token] a token is missing from the syntax tree.
+    [token-out-of-order] tokens are not in source order.
+    [foreign-span] a span belongs to another source file.
+    [invalid-span] source spans or end-of-input markers are inconsistent.
+   *[unexpected-shape] a syntax node has an unexpected structure.
+    }
 source-unrepresentable-span = Ash encountered an unrepresentable source length or token offset while constructing a span for `{ $path }`.
 source-path-limit = The display path for `{ $path }` exceeds Ash's source-model limit.
 source-text-limit = The text in `{ $path }` exceeds Ash's source-model size limit.

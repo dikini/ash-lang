@@ -299,6 +299,41 @@ pub fn compile_graph_diagnostics(
     context: &GraphDiagnostic,
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
     let failure = context.failure();
+    if let LoadGraphError::Projection { source, error, .. } = failure {
+        let path = source.display_path();
+        let mut facts = vec![Fact {
+            name: "source_path",
+            kind: "path-display",
+            value: FactValue::Text(path),
+        }];
+        match error {
+            crate::parser::ProjectionError::ResourceLimit(
+                ResourceFailure::StructuralDepth { limit } | ResourceFailure::SyntaxWork { limit },
+            ) => facts.push(Fact {
+                name: "limit",
+                kind: "integer",
+                value: FactValue::Integer(*limit),
+            }),
+            crate::parser::ProjectionError::RecoveryNodesPresent => facts.push(Fact {
+                name: "cause",
+                kind: "projection",
+                value: FactValue::Text("recovery-nodes"),
+            }),
+            crate::parser::ProjectionError::MalformedTree(cause) => facts.push(Fact {
+                name: "cause",
+                kind: "projection",
+                value: FactValue::Text(cause.diagnostic_name()),
+            }),
+        }
+        return Ok(vec![CompileDiagnostic {
+            reason: error.reason_code().into(),
+            responsibility: "compiler",
+            message: error.message(path),
+            primary: import_label(context, "import_context")?,
+            related: Vec::new(),
+            facts,
+        }]);
+    }
     if let LoadGraphError::SourceModel {
         path,
         error,

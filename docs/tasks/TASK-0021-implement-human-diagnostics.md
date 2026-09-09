@@ -174,7 +174,7 @@ localization language. Color is not required for completion.
   or allocation cause. Presentation now obtains responsibility explicitly from
   the module owner rather than treating every non-source failure as invocation.
   Legacy source-rejection classification and CLI exits are unchanged.
-- Invalid-internal-path and projection messages remain outstanding.
+- Invalid-internal-path messages remain outstanding.
   Review found no actionable defects
   in the path-escape and module-resource presentation changes.
 - This checkpoint passed all 1,228 library tests, the focused module-loading,
@@ -205,6 +205,20 @@ localization language. Color is not required for completion.
   diagnostic/source/module suites, warnings-denied Clippy and the bidirectional
   type-field ownership check. Markdown lint and diff whitespace checks passed;
   broad compile-time migration and the full slice-2 gate remain outstanding.
+- Projection presentation preserves recovery-boundary failure, all ten internal
+  syntax causes and both syntax resource limits. The parser owner selects reasons
+  and typed messages; JSON retains the cause or exact limit independently of
+  wording. Producer inspection showed that `InvalidSpan` also covers missing or
+  invalid end-of-input markers; wording and the Rust documentation now cover
+  those cases, with a regression in both locales. No projection acceptance or
+  CLI behavior changed.
+- Projection review caught `InvalidRootCount` also covering content outside a
+  root. Both translations and its Rust documentation now describe failure to
+  form one complete rooted tree; exact wording assertions failed before the
+  correction.
+- Projection verification passed all 1,230 library tests, four focused suites,
+  warnings-denied Clippy, Markdown lint and diff whitespace checks. Followup
+  review confirmed the wording correction. The full slice-2 gate remains open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
