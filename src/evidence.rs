@@ -38,7 +38,10 @@ pub(crate) enum SelectionFailure {
     TypeResource,
     ConstraintResource,
     InvalidState,
-    Kind(crate::kind::KindFailureContext),
+    Kind {
+        context: crate::kind::KindFailureContext,
+        span: Option<Span>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3714,7 +3717,10 @@ impl EvidenceSelector {
 fn map_head_failure(failure: HeadMatchFailure) -> SelectionFailure {
     match failure {
         HeadMatchFailure::InvalidState => SelectionFailure::InvalidState,
-        HeadMatchFailure::Kind(context) => SelectionFailure::Kind(context),
+        HeadMatchFailure::Kind(context) => SelectionFailure::Kind {
+            context,
+            span: None,
+        },
         HeadMatchFailure::ConstraintResource => SelectionFailure::ConstraintResource,
         HeadMatchFailure::TypeResource => SelectionFailure::TypeResource,
     }
@@ -3725,7 +3731,10 @@ fn map_ingress_environment_failure(failure: CanonicalEnvironmentFailure) -> Sele
         CanonicalEnvironmentFailure::ConstraintResource => SelectionFailure::ConstraintResource,
         CanonicalEnvironmentFailure::TypeResource => SelectionFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => SelectionFailure::InvalidState,
-        CanonicalEnvironmentFailure::Kind(context) => SelectionFailure::Kind(context),
+        CanonicalEnvironmentFailure::Kind(context) => SelectionFailure::Kind {
+            context,
+            span: None,
+        },
     }
 }
 
@@ -3734,7 +3743,12 @@ fn map_ingress_kind_failure(failure: KindFailure) -> SelectionFailure {
         KindFailure::Resource(_) => SelectionFailure::ConstraintResource,
         failure => failure
             .internal_context()
-            .map_or(SelectionFailure::InvalidState, SelectionFailure::Kind),
+            .map_or(SelectionFailure::InvalidState, |context| {
+                SelectionFailure::Kind {
+                    context,
+                    span: None,
+                }
+            }),
     }
 }
 
@@ -4482,15 +4496,24 @@ mod tests {
         let context = error.internal_context().unwrap();
         assert_eq!(
             map_head_failure(HeadMatchFailure::Kind(context)),
-            SelectionFailure::Kind(context)
+            SelectionFailure::Kind {
+                context,
+                span: None
+            }
         );
         assert_eq!(
             map_ingress_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
-            SelectionFailure::Kind(context)
+            SelectionFailure::Kind {
+                context,
+                span: None
+            }
         );
         assert_eq!(
             map_ingress_kind_failure(error),
-            SelectionFailure::Kind(context)
+            SelectionFailure::Kind {
+                context,
+                span: None
+            }
         );
         let resource = crate::kind::KindEnvironments::new()
             .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(0))
@@ -7399,7 +7422,7 @@ mod tests {
                 &mut TypeWorkBudget::default(),
             )
             .unwrap_err();
-        let SelectionFailure::Kind(context) = failure else {
+        let SelectionFailure::Kind { context, .. } = failure else {
             panic!("missing canonical binder must retain its kind cause")
         };
         assert_eq!(context.name(), "missing-canonical-binder");

@@ -4631,6 +4631,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                         .map_err(
                                             |failure| match failure {
+                                                UnificationFailure::Kind { context, span } => {
+                                                    SelectionFailure::Kind { context, span }
+                                                }
                                                 UnificationFailure::Resource => {
                                                     SelectionFailure::TypeResource
                                                 }
@@ -4677,6 +4680,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -4716,6 +4722,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let actual = IterativeTypeOwner::new(Type::Tuple(actual));
             match self.unify(&expected, &actual) {
                 Ok(()) => {}
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -4792,6 +4804,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                         )
                                         .map_err(
                                             |failure| match failure {
+                                                UnificationFailure::Kind { context, span } => {
+                                                    SelectionFailure::Kind { context, span }
+                                                }
                                                 UnificationFailure::Resource => {
                                                     SelectionFailure::TypeResource
                                                 }
@@ -4840,6 +4855,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -4886,6 +4904,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             match self.unify(method_argument, rigid_argument) {
                 Ok(()) => {}
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -5240,6 +5264,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             type_work,
                         )
                         .map_err(|failure| match failure {
+                            UnificationFailure::Kind { context, span } => {
+                                SelectionFailure::Kind { context, span }
+                            }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
                             | UnificationFailure::Infinite
@@ -6147,6 +6174,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ) => {
                     return Err(invalid_state());
                 }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
+                }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
                         ElaborationFailure::TypeResourceExhausted,
@@ -6172,6 +6205,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Ok(()) => {}
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
                 }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
@@ -6270,6 +6309,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Ok(()) => {}
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
+                }
+                Err(UnificationFailure::Kind { context, span }) => {
+                    return Err(TypeError::Internal(ElaborationFailure::Kind {
+                        context,
+                        span,
+                    }));
                 }
                 Err(UnificationFailure::Resource) => {
                     return Err(TypeError::Internal(
@@ -7018,6 +7063,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     type_work,
                 )
                 .map_err(|failure| match failure {
+                    UnificationFailure::Kind { context, span } => {
+                        TypeError::Internal(ElaborationFailure::Kind { context, span })
+                    }
                     UnificationFailure::Resource => {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     }
@@ -7294,6 +7342,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             match error {
                 TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                     UnificationFailure::Resource
+                }
+                TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                    UnificationFailure::Kind { context, span }
                 }
                 TypeError::Source(_)
                 | TypeError::Interface(_)
@@ -7797,6 +7848,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                                 UnificationFailure::Resource
                             }
+                            TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                                UnificationFailure::Kind { context, span }
+                            }
                             TypeError::Source(_)
                             | TypeError::Interface(_)
                             | TypeError::Mismatch(_)
@@ -7813,6 +7867,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         return Err(match error {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
                                 UnificationFailure::Resource
+                            }
+                            TypeError::Internal(ElaborationFailure::Kind { context, span }) => {
+                                UnificationFailure::Kind { context, span }
                             }
                             TypeError::Source(_)
                             | TypeError::Interface(_)
@@ -8006,6 +8063,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             "this function context would require an infinite type",
                         ),
                         UnificationFailure::Mismatch => function_needs_context(span, None),
+                        UnificationFailure::Kind { context, span } => {
+                            TypeError::Internal(ElaborationFailure::Kind { context, span })
+                        }
                         UnificationFailure::Resource => {
                             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                         }
@@ -8048,6 +8108,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 operand_span,
                 "this primitive operand would require an infinite type",
             )),
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
@@ -8072,6 +8138,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 span,
                 "this pattern would require an infinite type",
             )),
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(TypeError::Internal(
                 ElaborationFailure::TypeResourceExhausted,
             )),
@@ -9739,6 +9811,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     &self.registry,
                 ))
             }
+            Err(UnificationFailure::Kind { context, span }) => {
+                Err(TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span,
+                }))
+            }
             Err(UnificationFailure::Resource) => Err(type_resource()),
             Err(UnificationFailure::Invariant) => Err(invalid_state()),
         }
@@ -11256,6 +11334,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     if expected_is_inference {
                         self.unify_effect_rows(&expected_effects, &body.effects)
                             .map_err(|failure| match failure {
+                                UnificationFailure::Kind { context, span } => {
+                                    TypeError::Internal(ElaborationFailure::Kind { context, span })
+                                }
                                 UnificationFailure::Resource => {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 }
@@ -11469,6 +11550,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             {
                 self.unify_effect_rows(&expected, &inferred)
                     .map_err(|failure| match failure {
+                        UnificationFailure::Kind { context, span } => {
+                            TypeError::Internal(ElaborationFailure::Kind { context, span })
+                        }
                         UnificationFailure::Resource => type_resource(),
                         UnificationFailure::Invariant => invalid_state(),
                         UnificationFailure::Infinite | UnificationFailure::Mismatch => {
@@ -12219,6 +12303,12 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             expected.provenance.span(),
                             &self.registry,
                         ));
+                    }
+                    Err(UnificationFailure::Kind { context, span }) => {
+                        return Err(TypeError::Internal(ElaborationFailure::Kind {
+                            context,
+                            span,
+                        }));
                     }
                     Err(UnificationFailure::Resource) => {
                         return Err(TypeError::Internal(
@@ -13149,6 +13239,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ),
                     UnificationFailure::Mismatch => {
                         not_applicable(function_span, whole_span, &function_ty, &self.registry)
+                    }
+                    UnificationFailure::Kind { context, span } => {
+                        TypeError::Internal(ElaborationFailure::Kind { context, span })
                     }
                     UnificationFailure::Resource => {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
@@ -18156,9 +18249,13 @@ fn selection_failure(error: SelectionFailure, span: Option<Span>) -> TypeError {
         }
         SelectionFailure::ConstraintResource => constraint_resource(),
         SelectionFailure::InvalidState => invalid_state(),
-        SelectionFailure::Kind(context) => {
-            TypeError::Internal(ElaborationFailure::Kind { context, span })
-        }
+        SelectionFailure::Kind {
+            context,
+            span: retained_span,
+        } => TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: retained_span.or(span),
+        }),
     }
 }
 
@@ -21163,7 +21260,14 @@ fn allocate_row_inference_variable(
 fn kind_failure_for_unification(failure: KindFailure) -> UnificationFailure {
     match failure {
         KindFailure::Resource(_) => UnificationFailure::Resource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => UnificationFailure::Invariant,
+        failure => failure
+            .internal_context()
+            .map_or(UnificationFailure::Invariant, |context| {
+                UnificationFailure::Kind {
+                    context,
+                    span: None,
+                }
+            }),
     }
 }
 
@@ -22230,6 +22334,10 @@ enum UnificationFailure {
     Infinite,
     Resource,
     Invariant,
+    Kind {
+        context: crate::kind::KindFailureContext,
+        span: Option<Span>,
+    },
 }
 
 #[cfg(test)]
@@ -23944,6 +24052,43 @@ pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModulePr
 #[cfg(test)]
 mod tests {
     #[test]
+    fn unification_retains_kind_cause() {
+        let source = SourceFile::new("unification.ash", "binder").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let kind = Kind::Type;
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        let mapped = kind_failure_for_unification(failure);
+        assert_eq!(
+            mapped,
+            UnificationFailure::Kind {
+                context,
+                span: None
+            }
+        );
+
+        let mut elaborator = Elaborator::new();
+        let expected = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+        let invalid = Type::Application(Box::new(Type::Int), Box::new(Type::Bool));
+        let failure = elaborator
+            .refine_pattern_expected(&expected, &invalid, span)
+            .unwrap_err();
+        let TypeError::Internal(ElaborationFailure::Kind { context, .. }) = failure else {
+            panic!("invalid retained kind must remain a compiler failure")
+        };
+        assert_eq!(context.name(), "body-free-non-function-kind");
+        assert_eq!(context.span(), span);
+        assert!(elaborator.inference_solutions.is_empty());
+        assert!(elaborator.authenticated_inference_solutions.is_empty());
+    }
+    #[test]
     fn selection_kind_context_reaches_presentation() {
         use crate::{
             message::{Catalogue, Locale},
@@ -23977,11 +24122,19 @@ mod tests {
             );
         }
         for span in [None, Some(origin), Some(use_span)] {
-            let TypeError::Internal(error) =
-                selection_failure(SelectionFailure::Kind(context), span)
-            else {
+            let TypeError::Internal(error) = selection_failure(
+                SelectionFailure::Kind {
+                    context,
+                    span: None,
+                },
+                span,
+            ) else {
                 panic!("kind failure must remain compiler-owned")
             };
+            assert_eq!(
+                selection_failure(SelectionFailure::Kind { context, span }, None),
+                TypeError::Internal(error.clone())
+            );
             let view = compile_elaboration_failure(&error, &[&declaration, &occurrence]).unwrap();
             for locale in [Locale::English, Locale::Bulgarian] {
                 let mut output = Vec::new();

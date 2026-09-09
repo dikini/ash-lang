@@ -665,6 +665,15 @@ localization language. Color is not required for completion.
   passed. Five existing corruption fixtures now assert the precise kind cause
   and span while retaining their small-stack, exact-budget and publication
   checks. Markdown lint and `git diff --check` passed.
+- Unification now carries retained kind causes through inference, row checking,
+  pattern refinement and selection adapters. Its copyable payload also retains
+  an attached use span when a failure passes back from elaboration through
+  unification and selection. A real invalid type application checks that pattern
+  refinement reports a compiler-owned kind cause without publishing a solution.
+  Existing generic registry/invariant failures remain unmapped. No catalogue or
+  reason-family count changed. All 1,258 library tests and 86 diagnostic/catalogue
+  tests passed. Warnings-denied Clippy passed after removing three unnecessary
+  returns from the new match arms.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
