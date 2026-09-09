@@ -264,6 +264,11 @@ enum ValidationCause {
     EmptyMatch,
     RedundantArm { arm: usize },
     NonExhaustiveMatch,
+    MissingOrigin,
+    OriginDepth,
+    RelatedOriginSource,
+    UnadmittedOriginSource,
+    InvalidOriginSpan(crate::source::SourceError),
 }
 
 impl ValidationError {
@@ -276,12 +281,24 @@ impl ValidationError {
             ValidationCause::EmptyMatch => "empty-match",
             ValidationCause::RedundantArm { .. } => "redundant-arm",
             ValidationCause::NonExhaustiveMatch => "non-exhaustive-match",
+            ValidationCause::MissingOrigin => "missing-origin",
+            ValidationCause::OriginDepth => "origin-depth",
+            ValidationCause::RelatedOriginSource => "related-origin-source",
+            ValidationCause::UnadmittedOriginSource => "unadmitted-origin-source",
+            ValidationCause::InvalidOriginSpan(_) => "invalid-origin-span",
         })
     }
 
     pub(crate) fn arm_number(&self) -> Option<usize> {
         match self.cause {
             Some(ValidationCause::RedundantArm { arm }) => Some(arm),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn origin_span_failure(&self) -> Option<crate::source::SourceError> {
+        match self.cause {
+            Some(ValidationCause::InvalidOriginSpan(error)) => Some(error),
             _ => None,
         }
     }
@@ -329,6 +346,29 @@ impl ValidationError {
                 (ValidationCause::NonExhaustiveMatch, Some(node)) => {
                     Message::core_validation_non_exhaustive_node(node)
                 }
+                (ValidationCause::MissingOrigin, None) => Message::core_validation_missing_origin(),
+                (ValidationCause::MissingOrigin, Some(node)) => {
+                    Message::core_validation_missing_origin_node(node)
+                }
+                (ValidationCause::OriginDepth, None) => Message::core_validation_origin_depth(),
+                (ValidationCause::OriginDepth, Some(node)) => {
+                    Message::core_validation_origin_depth_node(node)
+                }
+                (ValidationCause::RelatedOriginSource, None) => {
+                    Message::core_validation_related_origin_source()
+                }
+                (ValidationCause::RelatedOriginSource, Some(node)) => {
+                    Message::core_validation_related_origin_source_node(node)
+                }
+                (ValidationCause::UnadmittedOriginSource, None) => {
+                    Message::core_validation_unadmitted_origin_source()
+                }
+                (ValidationCause::UnadmittedOriginSource, Some(node)) => {
+                    Message::core_validation_unadmitted_origin_source_node(node)
+                }
+                (ValidationCause::InvalidOriginSpan(error), _) => {
+                    return Self::origin_span_message(error, node);
+                }
             });
         }
         Some(match (self.reason, node) {
@@ -356,6 +396,45 @@ impl ValidationError {
         }
     }
 
+    fn origin_span_message(
+        error: crate::source::SourceError,
+        node: Option<usize>,
+    ) -> Option<crate::message::Message<'static>> {
+        use crate::{message::Message, source::SourceError};
+        Some(match (error, node) {
+            (SourceError::RangeOutsideSource { range, source_len }, None) => {
+                Message::core_validation_origin_range(
+                    range.start() as usize,
+                    range.end() as usize,
+                    source_len as usize,
+                )
+            }
+            (SourceError::RangeOutsideSource { range, source_len }, Some(node)) => {
+                Message::core_validation_origin_range_node(
+                    range.start() as usize,
+                    range.end() as usize,
+                    source_len as usize,
+                    node,
+                )
+            }
+            (SourceError::OffsetSplitsCodePoint { offset }, None) => {
+                Message::core_validation_origin_code_point(offset as usize)
+            }
+            (SourceError::OffsetSplitsCodePoint { offset }, Some(node)) => {
+                Message::core_validation_origin_code_point_node(offset as usize, node)
+            }
+            (SourceError::TextTooLarge, None) => Message::core_validation_origin_text_limit(),
+            (SourceError::TextTooLarge, Some(node)) => {
+                Message::core_validation_origin_text_limit_node(node)
+            }
+            (SourceError::InvalidLineState, None) => Message::core_validation_origin_index(),
+            (SourceError::InvalidLineState, Some(node)) => {
+                Message::core_validation_origin_index_node(node)
+            }
+            _ => return None,
+        })
+    }
+
     const fn with_cause(cause: ValidationCause, node: Option<NodeId>) -> Self {
         Self {
             reason: match cause {
@@ -366,6 +445,11 @@ impl ValidationError {
                 ValidationCause::EmptyMatch
                 | ValidationCause::RedundantArm { .. }
                 | ValidationCause::NonExhaustiveMatch => ValidationReason::Coverage,
+                ValidationCause::MissingOrigin
+                | ValidationCause::OriginDepth
+                | ValidationCause::RelatedOriginSource
+                | ValidationCause::UnadmittedOriginSource
+                | ValidationCause::InvalidOriginSpan(_) => ValidationReason::Provenance,
             },
             node,
             cause: Some(cause),
@@ -472,8 +556,8 @@ pub(super) fn validate_family<F: CoreOperationFamily + ScopeFamily>(
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
                 Some(node),
             ));
         };
@@ -509,7 +593,10 @@ pub(super) fn validate_effect_family(
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
+                Some(id),
+            ));
         };
         nodes.push(CoreTypedExpr {
             ty: stored.ty,
@@ -549,7 +636,10 @@ pub(super) fn validate_effect_modules_family(
     for (index, stored) in stored.into_iter().enumerate() {
         let id = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
+                Some(id),
+            ));
         };
         nodes.push(CoreTypedExpr {
             ty: stored.ty,
@@ -603,8 +693,8 @@ pub fn validate_modules(
     for (index, stored) in stored_nodes.into_iter().enumerate() {
         let node = node_id(arena, index)?;
         let Some(origin) = stored.origin else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingOrigin,
                 Some(node),
             ));
         };
@@ -5558,7 +5648,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 ));
             }
             let Some(origin) = node.origin.as_ref() else {
-                return Err(ValidationError::new(ValidationReason::Provenance, Some(id)));
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MissingOrigin,
+                    Some(id),
+                ));
             };
             self.validate_origin(origin, id)?;
         }
@@ -5567,8 +5660,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_origin(&self, origin: &Origin, node: NodeId) -> Result<(), ValidationError> {
         if !origin_depth_within_limit(origin) {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::OriginDepth,
                 Some(node),
             ));
         }
@@ -5581,8 +5674,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     let primary_source = primary.primary_span().source();
                     for span in related {
                         if span.source() != primary_source {
-                            return Err(ValidationError::new(
-                                ValidationReason::Provenance,
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::RelatedOriginSource,
                                 Some(node),
                             ));
                         }
@@ -5597,14 +5690,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn validate_span(&self, span: Span, node: NodeId) -> Result<(), ValidationError> {
         let Some(source) = self.sources.get(&span.source()) else {
-            return Err(ValidationError::new(
-                ValidationReason::Provenance,
+            return Err(ValidationError::with_cause(
+                ValidationCause::UnadmittedOriginSource,
                 Some(node),
             ));
         };
-        source
-            .span(span.range())
-            .map_err(|_| ValidationError::new(ValidationReason::Provenance, Some(node)))?;
+        source.span(span.range()).map_err(|error| {
+            ValidationError::with_cause(ValidationCause::InvalidOriginSpan(error), Some(node))
+        })?;
         Ok(())
     }
 
@@ -9577,6 +9670,102 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provenance_checks_retain_precise_causes() {
+        let file = source();
+        let foreign = SourceFile::new("foreign.ash", "xx").unwrap();
+        let mut deep = origin(&file);
+        for _ in 0..=super::super::dialect::CORE_PAYLOAD_DEPTH_LIMIT {
+            deep = Origin::Related {
+                primary: Box::new(deep),
+                related: Vec::new(),
+            };
+        }
+        let related = Origin::Related {
+            primary: Box::new(origin(&file)),
+            related: vec![foreign.span(ByteRange::new(0, 1).unwrap()).unwrap()],
+        };
+        for (origin_override, cause) in [
+            (None, "missing-origin"),
+            (Some(deep), "origin-depth"),
+            (Some(related), "related-origin-source"),
+            (Some(origin(&foreign)), "unadmitted-origin-source"),
+        ] {
+            let mut builder = CoreBuilder::new();
+            let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+            let mut program = builder.finish(root).unwrap();
+            program.nodes[0].origin = origin_override;
+            let error = validate(program, &[&file]).unwrap_err();
+            assert_eq!(error.reason(), ValidationReason::Provenance);
+            assert_eq!(error.cause_name(), Some(cause));
+            assert_eq!(error.node(), Some(root));
+        }
+    }
+
+    #[test]
+    fn provenance_messages_preserve_source_failures() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+            source::SourceError,
+        };
+        let file = SourceFile::new("unicode.ash", "я").unwrap();
+        let range_failure = file.span(ByteRange::new(0, 5).unwrap()).unwrap_err();
+        let unicode_failure = file.span(ByteRange::new(0, 1).unwrap()).unwrap_err();
+        let arena = super::super::dialect::ArenaId::new(101);
+        for cause in [
+            ValidationCause::MissingOrigin,
+            ValidationCause::OriginDepth,
+            ValidationCause::RelatedOriginSource,
+            ValidationCause::UnadmittedOriginSource,
+            ValidationCause::InvalidOriginSpan(range_failure),
+            ValidationCause::InvalidOriginSpan(unicode_failure),
+            ValidationCause::InvalidOriginSpan(SourceError::TextTooLarge),
+            ValidationCause::InvalidOriginSpan(SourceError::InvalidLineState),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 0))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.provenance");
+                assert_eq!(json["responsibility"], "compiler");
+                let facts = json["facts"].as_array().unwrap();
+                assert!(
+                    facts.iter().any(|fact| fact["name"] == "cause"
+                        && fact["value"] == error.cause_name().unwrap())
+                );
+                if let Some(source_error) = error.origin_span_failure() {
+                    assert!(facts.iter().any(|fact| fact["name"] == "source_failure"
+                        && fact["value"] == source_error.diagnostic_name()));
+                    if source_error == range_failure {
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "end" && fact["value"] == 5)
+                        );
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "source_length" && fact["value"] == 2)
+                        );
+                    } else if source_error == unicode_failure {
+                        assert!(
+                            facts
+                                .iter()
+                                .any(|fact| fact["name"] == "offset" && fact["value"] == 1)
+                        );
+                    }
+                }
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
     #[test]
     fn coverage_messages_retain_failure_and_arm_number() {
         use crate::{
@@ -17208,8 +17397,8 @@ mod tests {
             };
             let Some(origin) = stored.origin else {
                 return ConsumingModuleValidationAttempt {
-                    result: Err(ValidationError::new(
-                        ValidationReason::Provenance,
+                    result: Err(ValidationError::with_cause(
+                        ValidationCause::MissingOrigin,
                         Some(node),
                     )),
                     type_work,
@@ -24109,6 +24298,7 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("missing origin");
         assert_eq!(error.reason(), ValidationReason::Provenance);
+        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
     }
 
     #[test]

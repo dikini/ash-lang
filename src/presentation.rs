@@ -552,6 +552,36 @@ pub fn compile_core_validation_failure(
             value: FactValue::Integer(arm),
         });
     }
+    if let Some(error) = error.origin_span_failure() {
+        facts.push(Fact {
+            name: "source_failure",
+            kind: "source-model-failure",
+            value: FactValue::Text(error.diagnostic_name()),
+        });
+        match error {
+            crate::source::SourceError::RangeOutsideSource { range, source_len } => {
+                for (name, kind, value) in [
+                    ("start", "byte-offset", range.start()),
+                    ("end", "byte-offset", range.end()),
+                    ("source_length", "byte-count", source_len),
+                ] {
+                    facts.push(Fact {
+                        name,
+                        kind,
+                        value: FactValue::Integer(value as usize),
+                    });
+                }
+            }
+            crate::source::SourceError::OffsetSplitsCodePoint { offset } => {
+                facts.push(Fact {
+                    name: "offset",
+                    kind: "byte-offset",
+                    value: FactValue::Integer(offset as usize),
+                });
+            }
+            _ => {}
+        }
+    }
     Ok(CompileDiagnostic {
         reason: error.reason().to_string(),
         responsibility: "compiler",

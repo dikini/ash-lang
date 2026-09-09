@@ -692,6 +692,15 @@ localization language. Color is not required for completion.
   overall coverage is 162/197, and catalogues contain 429 templates per locale.
   All 1,260 library tests, 86 diagnostic/catalogue tests and warnings-denied
   Clippy passed. Markdown lint and `git diff --check` passed.
+- Core provenance diagnostics distinguish missing origins, excessive origin
+  depth, cross-source related origins and unadmitted sources. Span validation
+  retains the original source-model failure, including range/UTF-8 offsets and
+  source length; unrepresentable source lengths and indices remain distinct.
+  Invalid spans are not rendered as source excerpts. Tests exercise four real
+  origin mutations and 16 optional-node message layouts, with real range and
+  UTF-8 source failures. Core coverage is 7/23 reasons, overall coverage is
+  163/197, and catalogues contain 445 templates per locale. All 1,262 library
+  tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
