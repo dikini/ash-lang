@@ -1126,3 +1126,16 @@ resolve-missing-file-scope = Компилаторът загуби обхват�
 resolve-missing-lexical-scope = Компилаторът загуби текущия лексикален обхват при разрешаване на обвързване.
 resolve-missing-nominal-scope = Компилаторът загуби обхвата за локалните номинални типове.
 resolve-missing-constructor-scope = Компилаторът загуби обхвата за локалните конструктори.
+resolve-declaration-order = Вътрешният ред на декларациите на компилатора е невалиден за { $kind ->
+    [nominal] номиналните типове
+    [interface] интерфейсите
+    [effect] ефектите
+    [global] глобалните стойности
+   *[implementation] реализациите
+    }: { $problem ->
+    [invalid-index] индекс на декларация е извън допустимия диапазон.
+    [repeated-or-reordered] декларация се повтаря или е извън реда си.
+    [skipped-or-reordered] декларация е пропусната или е извън реда си.
+    [omitted] липсва декларация.
+   *[repeated-skipped-or-reordered] декларация се повтаря, пропусната е или е извън реда си.
+    }

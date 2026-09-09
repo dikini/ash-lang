@@ -1125,3 +1125,16 @@ resolve-missing-file-scope = The compiler lost the file's name-resolution scope.
 resolve-missing-lexical-scope = The compiler lost the current lexical scope while resolving a binding.
 resolve-missing-nominal-scope = The compiler lost the scope for local nominal types.
 resolve-missing-constructor-scope = The compiler lost the scope for local constructors.
+resolve-declaration-order = The compiler's declaration order is invalid for { $kind ->
+    [nominal] nominal types
+    [interface] interfaces
+    [effect] effects
+    [global] global values
+   *[implementation] implementations
+    }: { $problem ->
+    [invalid-index] a declaration index is out of range.
+    [repeated-or-reordered] a declaration is repeated or out of order.
+    [skipped-or-reordered] a declaration is skipped or out of order.
+    [omitted] a declaration is missing.
+   *[repeated-skipped-or-reordered] a declaration is repeated, skipped, or out of order.
+    }

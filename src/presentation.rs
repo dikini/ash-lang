@@ -833,6 +833,18 @@ pub fn compile_resolve_diagnostic<'a>(
         .location(span)
         .map_err(|_| PresentationError::MissingSource)?;
     let mut facts: Vec<_> = subject.into_iter().collect();
+    if let Some((kind, problem)) = error.declaration_order_context() {
+        facts.push(Fact {
+            name: "declaration_kind",
+            kind: "declaration-kind",
+            value: FactValue::Text(kind),
+        });
+        facts.push(Fact {
+            name: "ordering_problem",
+            kind: "declaration-order-problem",
+            value: FactValue::Text(problem),
+        });
+    }
     if error.resource_name().is_some() || error.kind_context().is_some() {
         facts.push(Fact {
             name: "stage",

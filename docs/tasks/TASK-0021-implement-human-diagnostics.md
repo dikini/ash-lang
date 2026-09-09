@@ -947,6 +947,11 @@ localization language. Color is not required for completion.
   covers each message in both locales and preserves its cause in JSON. All
   132 resolver tests, five catalogue-contract tests and warnings-denied Clippy
   passed. Other unconverted internal explanations remain open.
+- Converted 26 declaration-order checks using one template per locale, retaining
+  declaration kind and ordering problem as separate JSON facts. The checks,
+  original reasons and spans are unchanged. A table covers all five kinds and
+  five retained problems. All 133 resolver tests, five catalogue-contract tests
+  and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

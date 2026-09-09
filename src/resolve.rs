@@ -836,6 +836,10 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
+    DeclarationOrder {
+        kind: &'static str,
+        problem: &'static str,
+    },
     MissingFileScope,
     MissingLexicalScope,
     MissingNominalScope,
@@ -895,6 +899,10 @@ impl ResolveError {
     fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         match self.1 {
+            Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((
+                Message::resolve_declaration_order(kind, problem),
+                "declaration-order",
+            )),
             Some(ResolveContext::MissingFileScope) => {
                 Some((Message::resolve_missing_file_scope(), "missing-file-scope"))
             }
@@ -924,6 +932,13 @@ impl ResolveError {
     pub(crate) fn kind_context(&self) -> Option<crate::kind::KindFailureContext> {
         match self.1 {
             Some(ResolveContext::Kind(context)) => Some(context),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn declaration_order_context(&self) -> Option<(&'static str, &'static str)> {
+        match self.1 {
+            Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((kind, problem)),
             _ => None,
         }
     }
@@ -1109,6 +1124,7 @@ impl ResolveError {
                 | ResolveContext::Kind(_)
                 | ResolveContext::DependencySummaryMismatch
                 | ResolveContext::DependencySummaryInvalid
+                | ResolveContext::DeclarationOrder { .. }
                 | ResolveContext::MissingFileScope
                 | ResolveContext::MissingLexicalScope
                 | ResolveContext::MissingNominalScope
@@ -1324,6 +1340,7 @@ impl ResolveError {
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
             | ResolveContext::DependencySummaryInvalid
+            | ResolveContext::DeclarationOrder { .. }
             | ResolveContext::MissingFileScope
             | ResolveContext::MissingLexicalScope
             | ResolveContext::MissingNominalScope
@@ -2389,6 +2406,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid type index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -2403,6 +2424,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid interface index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "interface",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -2420,6 +2445,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid effect index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "effect",
+                            problem: "invalid-index",
+                        })
                     })?;
                     self.validate_local_type_name(
                         &declaration.name,
@@ -2453,6 +2482,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let name = surface_definition_name(definition);
                     self.validate_local_term_name(name, Some(definition.span), &mut term_names)?;
@@ -2463,7 +2496,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        }));
                     }
                 }
             }
@@ -6574,20 +6611,28 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid type index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < nominal_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders a nominal declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "nominal", problem: "repeated-or-reordered" }));
                     }
                     if index > nominal_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders a nominal declaration",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "nominal",
+                            problem: "skipped-or-reordered",
+                        }));
                     }
                     let identity = nominal_identities.get(index).ok_or_else(|| {
                         error(
@@ -6606,20 +6651,24 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid interface index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "interface",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < interface_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders an interface declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "interface", problem: "repeated-or-reordered" }));
                     }
                     if index > interface_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders an interface declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "interface", problem: "skipped-or-reordered" }));
                     }
                     interface_type_parameters.push(self.prepare_interface_type_parameters(source)?);
                 }
@@ -6630,13 +6679,17 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid effect index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "effect",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index != effect_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats, skips, or reorders an effect declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "effect", problem: "repeated-skipped-or-reordered" }));
                     }
                     effect_type_parameters.push(self.allocate_effect_type_parameters(source)?);
                 }
@@ -6647,20 +6700,28 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < global_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders a global declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "global", problem: "repeated-or-reordered" }));
                     }
                     if index > global_type_parameters.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders a global declaration",
-                        ));
+                        )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "skipped-or-reordered",
+                        }));
                     }
                     global_type_parameters.push(self.allocate_global_type_parameters(source)?);
                 }
@@ -6671,20 +6732,24 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        })
                     })?;
                     if index < pending_implementations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order repeats or reorders an implementation declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "implementation", problem: "repeated-or-reordered" }));
                     }
                     if index > pending_implementations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             source.span,
                             "the surface declaration order skips or reorders an implementation declaration",
-                        ));
+                        ).with_context(ResolveContext::DeclarationOrder { kind: "implementation", problem: "skipped-or-reordered" }));
                     }
                     pending_implementations.push(self.prepare_implementation(index, source)?);
                 }
@@ -6699,7 +6764,11 @@ impl Resolver {
                     .get(nominal_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits a nominal declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "nominal",
+                problem: "omitted",
+            }));
         }
         if interface_type_parameters.len() != surface.interfaces.len() {
             return Err(error(
@@ -6709,7 +6778,11 @@ impl Resolver {
                     .get(interface_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits an interface declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "interface",
+                problem: "omitted",
+            }));
         }
         if global_type_parameters.len() != surface.definitions.len() {
             return Err(error(
@@ -6719,14 +6792,22 @@ impl Resolver {
                     .get(global_type_parameters.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits a global declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "global",
+                problem: "omitted",
+            }));
         }
         if effect_type_parameters.len() != surface.effects.len() {
             return Err(error(
                 ResolveReason::InternalState,
                 surface.span,
                 "the surface declaration order omits an effect declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "effect",
+                problem: "omitted",
+            }));
         }
         if pending_implementations.len() != surface.implementations.len() {
             return Err(error(
@@ -6736,7 +6817,11 @@ impl Resolver {
                     .get(pending_implementations.len())
                     .map_or(surface.span, |declaration| declaration.span),
                 "the surface declaration order omits an implementation declaration",
-            ));
+            )
+            .with_context(ResolveContext::DeclarationOrder {
+                kind: "implementation",
+                problem: "omitted",
+            }));
         }
 
         let (registry, constructor_payload_provenance) = self.resolve_registry_with_prepared(
@@ -6816,6 +6901,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid global index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "global",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let binder = self.allocate_global_binder(definition)?;
                     let slot = global_binders.get_mut(index).ok_or_else(|| {
@@ -6834,6 +6923,10 @@ impl Resolver {
                             surface.span,
                             "the surface declaration order contains an invalid impl index",
                         )
+                        .with_context(ResolveContext::DeclarationOrder {
+                            kind: "implementation",
+                            problem: "invalid-index",
+                        })
                     })?;
                     let pending = pending_implementations.get_mut(index).ok_or_else(|| {
                         error(
@@ -10689,6 +10782,7 @@ fn lookup_error(
         ResolveContext::Kind(_)
         | ResolveContext::DependencySummaryMismatch
         | ResolveContext::DependencySummaryInvalid
+        | ResolveContext::DeclarationOrder { .. }
         | ResolveContext::MissingFileScope
         | ResolveContext::MissingLexicalScope
         | ResolveContext::MissingNominalScope
@@ -14388,6 +14482,66 @@ mod tests {
             assert_eq!(json["responsibility"], "compiler");
             assert_eq!(json["facts"][0]["value"], cause);
             assert_eq!(json["labels"][0]["byte_end"], 17);
+        }
+    }
+
+    #[test]
+    fn declaration_order_messages_preserve_kind_and_problem() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("order.ash", "type T = T").unwrap();
+        let span = source.span(ByteRange::new(0, 10).unwrap()).unwrap();
+        for (kind, en, bg) in [
+            ("nominal", "nominal types", "номиналните типове"),
+            ("interface", "interfaces", "интерфейсите"),
+            ("effect", "effects", "ефектите"),
+            ("global", "global values", "глобалните стойности"),
+            ("implementation", "implementations", "реализациите"),
+        ] {
+            for (problem, explanation) in [
+                ("invalid-index", "a declaration index is out of range"),
+                (
+                    "repeated-or-reordered",
+                    "a declaration is repeated or out of order",
+                ),
+                (
+                    "skipped-or-reordered",
+                    "a declaration is skipped or out of order",
+                ),
+                ("omitted", "a declaration is missing"),
+                (
+                    "repeated-skipped-or-reordered",
+                    "a declaration is repeated, skipped, or out of order",
+                ),
+            ] {
+                let error = error(ResolveReason::InternalState, span, "unused legacy prose")
+                    .with_context(ResolveContext::DeclarationOrder { kind, problem });
+                let view =
+                    crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+                for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                    let mut output = Vec::new();
+                    crate::presentation::write_human(
+                        &mut output,
+                        &view,
+                        &Catalogue::new(locale).unwrap(),
+                    )
+                    .unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(output.contains(subject));
+                    assert!(!output.contains("legacy prose"));
+                    if locale == Locale::English {
+                        assert!(output.contains(explanation));
+                    }
+                }
+                let mut output = Vec::new();
+                crate::presentation::write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "resolve.internal-state");
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["facts"][0]["value"], "declaration-order");
+                assert_eq!(json["facts"][1]["value"], kind);
+                assert_eq!(json["facts"][2]["value"], problem);
+                assert_eq!(json["labels"][0]["byte_end"], 10);
+            }
         }
     }
 
