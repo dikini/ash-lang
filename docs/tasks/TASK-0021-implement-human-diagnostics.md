@@ -250,6 +250,18 @@ localization language. Color is not required for completion.
   library tests, 49 diagnostic tests, catalogue and module-resolution suites,
   warnings-denied Clippy, Markdown lint and diff whitespace checks. No subagent
   runs or repeated full-workspace gates were needed for this mechanical batch.
+- Duplicate declaration presentation now covers globals and operations, the
+  shared type namespace, constructors, module aliases, type parameters, pattern
+  binders and recursive members. Producers retain missing conflict names; the
+  adapter preserves the original label order and distinguishes the first name
+  declaration from the complete earlier definition. English and Bulgarian
+  messages share those facts with JSON without interpreting legacy prose.
+- The duplicate batch passed 1,231 library tests, 50 diagnostic tests, 60
+  resolution tests, nine module-resolution tests, three catalogue tests and
+  warnings-denied Clippy. Fixtures include mixed namespace conflicts in both
+  declaration orders and method parameters conflicting with owner parameters.
+  The broader run also found and corrected a stale unknown-name assertion from
+  the earlier lookup batch. No subagents or full-workspace gate were needed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

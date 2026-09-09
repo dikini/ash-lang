@@ -843,6 +843,52 @@ enum LookupScope {
 }
 
 impl ResolveError {
+    const fn is_duplicate_declaration(&self) -> bool {
+        matches!(
+            self.0.reason,
+            ResolveReason::DuplicateGlobal
+                | ResolveReason::DuplicateType
+                | ResolveReason::DuplicateConstructor
+                | ResolveReason::DuplicateModuleAlias
+                | ResolveReason::DuplicateTypeParameter
+                | ResolveReason::DuplicatePatternBinder
+                | ResolveReason::DuplicateRecursiveMember
+        )
+    }
+
+    pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if self.is_duplicate_declaration() {
+            Some((crate::message::Message::duplicate_name(), "duplicate_name"))
+        } else if self.1.is_some() {
+            Some((
+                crate::message::Message::unresolved_name(),
+                "unresolved_name",
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn related_message(
+        &self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if !self.is_duplicate_declaration() {
+            return None;
+        }
+        match index {
+            0 => Some((
+                crate::message::Message::first_declaration(),
+                "first_declaration",
+            )),
+            1 if self.reason == ResolveReason::DuplicateGlobal => Some((
+                crate::message::Message::first_definition(),
+                "first_definition",
+            )),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
         match self.1 {
             Some(LookupScope::Term) => Some("term"),
@@ -860,6 +906,32 @@ impl ResolveError {
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         let name = self.found.as_deref()?;
+        if self.is_duplicate_declaration() {
+            return Some(match self.reason {
+                ResolveReason::DuplicateGlobal => {
+                    crate::message::Message::resolve_duplicate_global(name)
+                }
+                ResolveReason::DuplicateType => {
+                    crate::message::Message::resolve_duplicate_type(name)
+                }
+                ResolveReason::DuplicateConstructor => {
+                    crate::message::Message::resolve_duplicate_constructor(name)
+                }
+                ResolveReason::DuplicateModuleAlias => {
+                    crate::message::Message::resolve_duplicate_alias(name)
+                }
+                ResolveReason::DuplicateTypeParameter => {
+                    crate::message::Message::resolve_duplicate_parameter(name)
+                }
+                ResolveReason::DuplicatePatternBinder => {
+                    crate::message::Message::resolve_duplicate_binder(name)
+                }
+                ResolveReason::DuplicateRecursiveMember => {
+                    crate::message::Message::resolve_duplicate_recursive_member(name)
+                }
+                _ => return None,
+            });
+        }
         Some(match self.1? {
             LookupScope::Term => crate::message::Message::resolve_unknown_term(name),
             LookupScope::EffectOperation => {
@@ -1975,6 +2047,7 @@ impl Resolver {
                             diagnostic
                                 .related
                                 .push(SourceLabel::new(first, "the first operation is here"));
+                            diagnostic.found = Some(operation.name.text.clone());
                             return Err(diagnostic.into());
                         }
                     }
@@ -2028,6 +2101,7 @@ impl Resolver {
                 diagnostic
                     .related
                     .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
@@ -2074,6 +2148,7 @@ impl Resolver {
                     first_definition,
                     "the first complete definition is here",
                 ));
+                diagnostic.found = Some(name.text.clone());
                 return Err(diagnostic.into());
             }
             let mut diagnostic = Diagnostic::new(
@@ -5999,6 +6074,7 @@ impl Resolver {
                 first.definition_span,
                 "the first complete definition is here",
             ));
+            diagnostic.found = Some(global_name.to_owned());
             return Err(diagnostic.into());
         }
         if self.expression_name_is_bound(global_name) {
@@ -6820,6 +6896,7 @@ impl Resolver {
                 diagnostic
                     .related
                     .push(SourceLabel::new(first, "the first nominal type is here"));
+                diagnostic.found = Some(declaration.name.text.clone());
                 return Err(diagnostic.into());
             }
             if self.module_aliases.contains_key(&declaration.name.text)
@@ -6864,6 +6941,7 @@ impl Resolver {
                     diagnostic
                         .related
                         .push(SourceLabel::new(first, "the first constructor is here"));
+                    diagnostic.found = Some(constructor.name.text.clone());
                     return Err(diagnostic.into());
                 }
                 if self.module_aliases.contains_key(&constructor.name.text)
@@ -7788,6 +7866,7 @@ impl Resolver {
                     diagnostic
                         .related
                         .push(SourceLabel::new(first, "the first pattern binder is here"));
+                    diagnostic.found = Some(surface.name.text.clone());
                     return Err(diagnostic.into());
                 }
                 let binder = self.allocate_binder(&surface.name.text, surface.name.span)?;
@@ -10426,6 +10505,7 @@ fn validate_interface_type_parameters(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
     }
@@ -10453,6 +10533,7 @@ fn validate_explicit_type_parameters(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
         declared.insert(parameter.name.text.as_str());
@@ -10541,6 +10622,7 @@ fn validate_method_type_parameters<'a>(
                 first_span,
                 "the first type parameter is here",
             ));
+            diagnostic.found = Some(parameter.name.text.clone());
             return Err(diagnostic.into());
         }
         declared.insert(parameter.name.text.as_str());

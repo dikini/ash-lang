@@ -164,6 +164,26 @@ messages! {
     resolve_unknown_operation => "resolve-unknown-operation" { name: &'a str = "missing" },
     /// A checked name occurrence carrying an unresolved lookup.
     unresolved_name => "unresolved-name" {},
+    /// A term or operation name conflicts in its declaration scope.
+    resolve_duplicate_global => "resolve-duplicate-global" { name: &'a str = "value" },
+    /// Nominal types, interfaces and effects share a declaration namespace.
+    resolve_duplicate_type => "resolve-duplicate-type" { name: &'a str = "Thing" },
+    /// Two constructors have the same name.
+    resolve_duplicate_constructor => "resolve-duplicate-constructor" { name: &'a str = "Same" },
+    /// Two qualified imports bind the same alias.
+    resolve_duplicate_alias => "resolve-duplicate-alias" { name: &'a str = "Cell" },
+    /// A type parameter conflicts with an earlier parameter in scope.
+    resolve_duplicate_parameter => "resolve-duplicate-parameter" { name: &'a str = "A" },
+    /// A pattern binds one name twice.
+    resolve_duplicate_binder => "resolve-duplicate-binder" { name: &'a str = "value" },
+    /// A recursive group contains two members with the same name.
+    resolve_duplicate_recursive_member => "resolve-duplicate-recursive-member" { name: &'a str = "same" },
+    /// The conflicting occurrence of a declaration name.
+    duplicate_name => "duplicate-name" {},
+    /// The earlier declaration causing the conflict.
+    first_declaration => "first-declaration" {},
+    /// The complete earlier global definition, distinct from its name site.
+    first_definition => "first-definition" {},
     /// A retained canonical module path has no parent directory.
     module_missing_parent => "module-missing-parent" {},
     /// A projected import has no module-name segments.

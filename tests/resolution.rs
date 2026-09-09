@@ -1633,7 +1633,7 @@ fn unknown_name_has_r001_reason_and_only_the_causal_occurrence() {
     assert_eq!(error.primary.span().range().end(), 37);
     assert!(error.related.is_empty());
     assert!(error.expected.is_none());
-    assert!(error.found.is_none());
+    assert_eq!(error.found.as_deref(), Some("missing"));
     assert!(error.help.is_none());
 }
 

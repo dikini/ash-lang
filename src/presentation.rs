@@ -160,10 +160,10 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
-/// Exposes phase-owned name lookup facts without interpreting diagnostic prose.
+/// Exposes phase-owned resolution facts without interpreting diagnostic prose.
 ///
 /// # Errors
-/// Returns an unsupported staged family, missing lookup facts or source context.
+/// Returns an unsupported staged family, missing facts or source context.
 pub fn compile_resolve_diagnostic<'a>(
     error: &'a crate::resolve::ResolveError,
     sources: &[&'a SourceFile],
@@ -173,9 +173,9 @@ pub fn compile_resolve_diagnostic<'a>(
         .found
         .as_deref()
         .ok_or(PresentationError::MissingFact)?;
-    let scope = error
-        .lookup_scope_name()
-        .ok_or(PresentationError::MissingFact)?;
+    let (primary_message, primary_relationship) = error
+        .primary_message()
+        .ok_or(PresentationError::Unsupported)?;
     let span = error.primary.span();
     let source = sources
         .iter()
@@ -190,6 +190,36 @@ pub fn compile_resolve_diagnostic<'a>(
         kind: "identifier",
         value: FactValue::Text(name),
     };
+    let mut facts = vec![name];
+    if let Some(scope) = error.lookup_scope_name() {
+        facts.push(Fact {
+            name: "lookup_scope",
+            kind: "lookup-scope",
+            value: FactValue::Text(scope),
+        });
+    }
+    let mut related = Vec::with_capacity(error.related.len());
+    for (index, label) in error.related.iter().enumerate() {
+        let (message, relationship) = error
+            .related_message(index)
+            .ok_or(PresentationError::Unsupported)?;
+        let span = label.span();
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        related.push(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: vec![name],
+        });
+    }
     Ok(CompileDiagnostic {
         reason: error.reason.to_string(),
         responsibility: "source",
@@ -197,19 +227,12 @@ pub fn compile_resolve_diagnostic<'a>(
         primary: Some(Label {
             source,
             span,
-            message: Message::unresolved_name(),
-            relationship: "unresolved_name",
+            message: primary_message,
+            relationship: primary_relationship,
             facts: vec![name],
         }),
-        related: Vec::new(),
-        facts: vec![
-            name,
-            Fact {
-                name: "lookup_scope",
-                kind: "lookup-scope",
-                value: FactValue::Text(scope),
-            },
-        ],
+        related,
+        facts,
     })
 }
 

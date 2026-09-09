@@ -325,6 +325,146 @@ fn remaining_lookup_scopes_render_from_driver_retained_facts() {
     }
 }
 
+#[test]
+fn duplicate_declarations_render_names_and_original_locations() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    for (text, reason, name, english) in [
+        (
+            R002,
+            ResolveReason::DuplicateGlobal,
+            "value",
+            "The name `value` is already declared in this scope.",
+        ),
+        (
+            "effect Read {\nread : Unit -> Int\nread : Unit -> Int\n}\n",
+            ResolveReason::DuplicateGlobal,
+            "read",
+            "The name `read` is already declared in this scope.",
+        ),
+        (
+            "type Thing = First\ntype Thing = Second\n",
+            ResolveReason::DuplicateType,
+            "Thing",
+            "The name `Thing` is already used by a type, interface, or effect.",
+        ),
+        (
+            "type Equal = Equal\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            ResolveReason::DuplicateType,
+            "Equal",
+            "The name `Equal` is already used by a type, interface, or effect.",
+        ),
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\nequal : Unit -> Bool\nequal () = true\n",
+            ResolveReason::DuplicateGlobal,
+            "equal",
+            "The name `equal` is already declared in this scope.",
+        ),
+        (
+            "equal : Unit -> Bool\nequal () = true\ninterface Equal<A> {\nequal : (A, A) -> Bool\n}\n",
+            ResolveReason::DuplicateGlobal,
+            "equal",
+            "The name `equal` is already declared in this scope.",
+        ),
+        (
+            "type One = Same\ntype Two = Same\n",
+            ResolveReason::DuplicateConstructor,
+            "Same",
+            "The constructor `Same` is already declared.",
+        ),
+        (
+            "import @builtin.cell as Cell\nimport @builtin.cell as Cell\n",
+            ResolveReason::DuplicateModuleAlias,
+            "Cell",
+            "The module alias `Cell` is already bound.",
+        ),
+        (
+            "type Pair<A, A> = Pair(Int, Int)\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A, A> {\nbad : A -> A\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A> {\nbad<A> : A -> A\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "A",
+            "The type parameter `A` is already declared in this scope.",
+        ),
+        (
+            "interface Bad<A> {\nbad<B, B> : (A, B) -> B\n}\n",
+            ResolveReason::DuplicateTypeParameter,
+            "B",
+            "The type parameter `B` is already declared in this scope.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n",
+            ResolveReason::DuplicatePatternBinder,
+            "value",
+            "The pattern binds `value` more than once.",
+        ),
+        (
+            "main : Unit -> Int\nmain () = {\nlet rec same : Unit -> Int = fn(value) {\n1\n}\nand same : Unit -> Int = fn(value) {\n2\n}\nsame ()\n}\n",
+            ResolveReason::DuplicateRecursiveMember,
+            "same",
+            "The recursive group defines `same` more than once.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("duplicate.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("expected resolution failure: {failure:?}");
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+                assert!(output.contains("First declaration of this name."));
+            } else {
+                assert!(output.contains("Първа декларация на това име."));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), error.related.len() + 1);
+        assert_eq!(labels[0]["relationship"], "duplicate_name");
+        assert_eq!(labels[1]["relationship"], "first_declaration");
+        for (rendered, original) in labels
+            .iter()
+            .zip(std::iter::once(&error.primary).chain(&error.related))
+        {
+            assert_eq!(rendered["byte_start"], original.span().range().start());
+            assert_eq!(rendered["byte_end"], original.span().range().end());
+            assert_eq!(rendered["facts"][0]["value"], name);
+        }
+        if labels.len() == 3 {
+            assert_eq!(labels[2]["relationship"], "first_definition");
+        }
+        assert!(compile_resolve_diagnostic(error, &[]).is_err());
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)
@@ -683,7 +823,8 @@ fn data_resolution_diagnostics_retain_names_and_binder_sites() {
     assert_eq!(error.primary.span().range().start(), offset(second));
     assert_eq!(error.related.len(), 1);
     assert_eq!(error.related[0].span().range().start(), offset(first));
-    assert!(error.expected.is_none() && error.found.is_none() && error.help.is_none());
+    assert!(error.expected.is_none() && error.help.is_none());
+    assert_eq!(error.found.as_deref(), Some("Thing"));
 
     let binder_text = "main : Unit -> Int\nmain () = {\nlet (value, value) = (1, 2)\nvalue\n}\n";
     let binder_fixture = ModuleFixture::load("duplicate-pattern-binder.ash", binder_text);
@@ -885,7 +1026,7 @@ fn r002_relates_the_second_global_to_the_first_name_and_definition() {
     assert!(error.related.iter().any(|label| label.span() == first.span));
     assert_ne!(error.primary.span(), second.span);
     assert!(error.expected.is_none());
-    assert!(error.found.is_none());
+    assert_eq!(error.found.as_deref(), Some("value"));
 }
 
 #[test]
