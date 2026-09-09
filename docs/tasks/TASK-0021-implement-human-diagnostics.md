@@ -508,6 +508,15 @@ localization language. Color is not required for completion.
   rejection of missing/extra labels. Interface/constraint coverage is 24 of 28
   reasons, with 234 templates per locale. Checks, work charges and legacy labels
   are unchanged. All 229 focused tests and warnings-denied Clippy passed.
+- Method-parameter diagnostics retain whether the signature has implicit
+  binders, omits an interface parameter or omits a determinant. JSON retains
+  that cause. Implementation determination-coverage diagnostics retain the
+  optional variable label separately from determinant-argument labels. Four
+  source cases and four label-layout cases exercise the messages and missing
+  label rejection. All 206 focused tests and warnings-denied Clippy passed.
+  Interface/constraint coverage is 26 of 28 reasons, with 242 templates per
+  locale. Existing checks, precedence, work charges and legacy labels remain
+  unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

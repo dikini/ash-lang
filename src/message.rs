@@ -150,6 +150,22 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Method type parameters must be explicitly declared in the method's parameter list.
+    method_implicit_parameters => "method-implicit-parameters" {},
+    /// This method type must mention every interface parameter.
+    method_missing_interface_parameter => "method-missing-interface-parameter" {},
+    /// This method type must mention every determining interface parameter.
+    method_missing_determinant => "method-missing-determinant" {},
+    /// An interface parameter is declared here.
+    interface_parameter_declaration => "interface-parameter-declaration" {},
+    /// This required interface parameter is absent from the method type.
+    missing_method_parameter => "missing-method-parameter" {},
+    /// This dependent argument uses a type variable that does not occur in the implementation's determining arguments.
+    impl_determination_coverage => "impl-determination-coverage" {},
+    /// This dependent type variable is declared here.
+    dependent_variable => "dependent-variable" {},
+    /// This determining argument does not contain the dependent type variable.
+    determinant_missing_variable => "determinant-missing-variable" {},
     /// A type variable in this requirement's selection key is absent from the definition's value type. It cannot be determined from that type.
     undetermined_parameter => "undetermined-parameter" {},
     /// This type parameter does not occur in the definition's value type.

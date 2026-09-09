@@ -16245,7 +16245,17 @@ fn check_interface_declarations(
                         .primary_span(),
                     "the interface parameter is declared here",
                 ));
-                return Err(TypeError::interface(diagnostic));
+                use crate::interface::{InterfaceDiagnostic, MethodParameterCause};
+                let cause = if invalid_binder_state {
+                    MethodParameterCause::ImplicitBinders
+                } else if determinant_positions.is_some() {
+                    MethodParameterCause::MissingDeterminant
+                } else {
+                    MethodParameterCause::MissingInterface
+                };
+                return Err(TypeError::Interface(Box::new(
+                    InterfaceDiagnostic::with_method_parameter(diagnostic, cause),
+                )));
             }
             if method.annotation.ty.function_view().is_none() {
                 let mut diagnostic = Diagnostic::new(
@@ -17663,7 +17673,8 @@ fn check_implementation_determination_coverage(
                 "this dependent argument contains a variable absent from the determinant key",
             ),
         );
-        if let Some(parameter) = module.registry().type_variable(variable) {
+        let parameter = module.registry().type_variable(variable);
+        if let Some(parameter) = parameter {
             retain_interface_label(
                 &mut diagnostic,
                 parameter.origin.primary_span(),
@@ -17681,7 +17692,13 @@ fn check_implementation_determination_coverage(
                 budget,
             )?;
         }
-        return Err(TypeError::interface(diagnostic));
+        return Err(TypeError::Interface(Box::new(
+            crate::interface::InterfaceDiagnostic::with_determination_coverage(
+                diagnostic,
+                parameter.is_some(),
+                positions.len(),
+            ),
+        )));
     }
     if key_index != positions.len() {
         return Err(invalid_state());
@@ -23961,6 +23978,54 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn determination_coverage_messages_preserve_optional_variable_label() {
+        use crate::{
+            interface::InterfaceDiagnostic,
+            presentation::{compile_interface_diagnostic, write_json},
+        };
+        let source = SourceFile::new("coverage.ash", "type").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for variable_label in [false, true] {
+            for key_count in 1..3 {
+                let mut diagnostic = Diagnostic::new(
+                    InterfaceReason::ImplDeterminationCoverage,
+                    SourceLabel::new(span, "ignored"),
+                );
+                for _ in 0..usize::from(variable_label) + key_count {
+                    diagnostic.related.push(SourceLabel::new(span, "ignored"));
+                }
+                let mut error = InterfaceDiagnostic::with_determination_coverage(
+                    diagnostic,
+                    variable_label,
+                    key_count,
+                );
+                let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                for (index, label) in json["labels"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                {
+                    assert_eq!(
+                        label["relationship"],
+                        if variable_label && index == 0 {
+                            "dependent_variable"
+                        } else {
+                            "determinant_argument"
+                        }
+                    );
+                }
+                error.related.pop();
+                assert!(compile_interface_diagnostic(&error, &[&source]).is_err());
+            }
+        }
     }
 
     #[test]

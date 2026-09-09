@@ -300,7 +300,7 @@ pub fn compile_interface_diagnostic<'a>(
     if error.related.len() < error.minimum_related() {
         return Err(PresentationError::MissingFact);
     }
-    let facts = error
+    let mut facts = error
         .argument_counts()
         .map_or_else(Vec::new, |(expected, found)| {
             vec![
@@ -316,6 +316,13 @@ pub fn compile_interface_diagnostic<'a>(
                 },
             ]
         });
+    if let Some(cause) = error.parameter_failure() {
+        facts.push(Fact {
+            name: "parameter_failure",
+            kind: "method-parameter-failure",
+            value: FactValue::Text(cause),
+        });
+    }
     let label = |span: Span, message, relationship| {
         let source = sources
             .iter()

@@ -1970,6 +1970,11 @@ pub struct InterfaceDiagnostic {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum InterfaceDiagnosticContext {
     Plain,
+    MethodParameter(MethodParameterCause),
+    DeterminationCoverage {
+        variable_label: bool,
+        key_count: usize,
+    },
     Selection(crate::evidence::SelectionError),
     ArgumentCount {
         expected: usize,
@@ -1979,6 +1984,13 @@ enum InterfaceDiagnosticContext {
         earlier_imports: usize,
         later_imports: usize,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MethodParameterCause {
+    ImplicitBinders,
+    MissingInterface,
+    MissingDeterminant,
 }
 
 impl From<crate::diagnostic::Diagnostic<InterfaceReason>> for InterfaceDiagnostic {
@@ -2004,6 +2016,40 @@ impl std::ops::DerefMut for InterfaceDiagnostic {
 }
 
 impl InterfaceDiagnostic {
+    pub(crate) fn with_method_parameter(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        cause: MethodParameterCause,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::MethodParameter(cause),
+        }
+    }
+
+    pub(crate) fn with_determination_coverage(
+        diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
+        variable_label: bool,
+        key_count: usize,
+    ) -> Self {
+        Self {
+            diagnostic,
+            context: InterfaceDiagnosticContext::DeterminationCoverage {
+                variable_label,
+                key_count,
+            },
+        }
+    }
+
+    pub(crate) fn parameter_failure(&self) -> Option<&'static str> {
+        let InterfaceDiagnosticContext::MethodParameter(cause) = self.context else {
+            return None;
+        };
+        Some(match cause {
+            MethodParameterCause::ImplicitBinders => "implicit-binders",
+            MethodParameterCause::MissingInterface => "missing-interface-parameter",
+            MethodParameterCause::MissingDeterminant => "missing-determinant",
+        })
+    }
     pub(crate) fn with_selection(
         diagnostic: crate::diagnostic::Diagnostic<InterfaceReason>,
         selection: crate::evidence::SelectionError,
@@ -2016,6 +2062,11 @@ impl InterfaceDiagnostic {
 
     pub(crate) fn minimum_related(&self) -> usize {
         match &self.context {
+            InterfaceDiagnosticContext::MethodParameter(_) => 1,
+            InterfaceDiagnosticContext::DeterminationCoverage {
+                variable_label,
+                key_count,
+            } => usize::from(*variable_label) + key_count,
             InterfaceDiagnosticContext::ImplementationPair {
                 earlier_imports,
                 later_imports,
@@ -2066,6 +2117,21 @@ impl InterfaceDiagnostic {
     }
 
     pub(crate) fn message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
+            use crate::message::Message;
+            return Some((
+                match cause {
+                    MethodParameterCause::ImplicitBinders => Message::method_implicit_parameters(),
+                    MethodParameterCause::MissingInterface => {
+                        Message::method_missing_interface_parameter()
+                    }
+                    MethodParameterCause::MissingDeterminant => {
+                        Message::method_missing_determinant()
+                    }
+                },
+                "method_type",
+            ));
+        }
         if self.reason == InterfaceReason::ArgumentCount {
             let (expected, found) = self.argument_counts()?;
             return Some((
@@ -2080,6 +2146,41 @@ impl InterfaceDiagnostic {
         &self,
         mut index: usize,
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if let InterfaceDiagnosticContext::MethodParameter(cause) = self.context {
+            if index != 0 {
+                return None;
+            }
+            use crate::message::Message;
+            return Some(match cause {
+                MethodParameterCause::ImplicitBinders => (
+                    Message::interface_parameter_declaration(),
+                    "interface_parameter",
+                ),
+                _ => (
+                    Message::missing_method_parameter(),
+                    "required_interface_parameter",
+                ),
+            });
+        }
+        if let InterfaceDiagnosticContext::DeterminationCoverage {
+            variable_label,
+            key_count,
+        } = self.context
+        {
+            use crate::message::Message;
+            if variable_label {
+                if index == 0 {
+                    return Some((Message::dependent_variable(), "dependent_variable"));
+                }
+                index -= 1;
+            }
+            return (index < key_count).then(|| {
+                (
+                    Message::determinant_missing_variable(),
+                    "determinant_argument",
+                )
+            });
+        }
         if let InterfaceDiagnosticContext::ImplementationPair {
             earlier_imports,
             later_imports,
@@ -2160,6 +2261,9 @@ impl InterfaceReason {
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::ImplDeterminationCoverage => {
+                (Message::impl_determination_coverage(), "dependent_argument")
+            }
             Self::UndeterminedParameter => (Message::undetermined_parameter(), "requirement_key"),
             Self::ImplOverlap => (Message::impl_overlap(), "implementation_head"),
             Self::ImplDeterminationConflict => {

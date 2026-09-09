@@ -1851,6 +1851,50 @@ fn implementation_pair_and_undetermined_parameter_messages() {
     }
 }
 
+#[test]
+fn interface_parameter_causes_are_precise() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Bad<A> {\nbad : G<Int> -> A\n}\n",
+            InterfaceReason::MethodParameter,
+            "Method type parameters must be explicitly declared in the method's parameter list.",
+        ),
+        (
+            "interface Test<A> {\nmethod : Int -> Int\n}\n",
+            InterfaceReason::MethodParameter,
+            "This method type must mention every interface parameter.",
+        ),
+        (
+            "interface Test<A, B> where A -> B {\nmethod : B -> B\n}\n",
+            InterfaceReason::MethodParameter,
+            "This method type must mention every determining interface parameter.",
+        ),
+        (
+            "interface Relation<A, B> where A -> B {\nrelate : A -> Int\n}\nimpl<B> Relation<Int, B> {\nrelate value = 0\n}\n",
+            InterfaceReason::ImplDeterminationCoverage,
+            "This dependent argument uses a type variable that does not occur in the implementation's determining arguments.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("parameter-cause-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,
