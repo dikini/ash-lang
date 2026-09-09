@@ -574,6 +574,15 @@ localization language. Color is not required for completion.
   of two. The catalogues contain 289 templates each. All 1,249 library tests
   and 86 diagnostic/catalogue tests passed, along with warnings-denied Clippy.
   No checks or resource limits changed.
+- Kind internal-state presentation is partially migrated: six typed causes cover
+  15 effect-registry and binder-owner failure sites. The stage failure retains
+  an optional private cause alongside its unchanged legacy explanation; the
+  renderer never parses that text. Both locales and JSON preserve the cause
+  even when a test replaces the legacy wording. Checks, work charges and spans
+  remain unchanged. Other kind internal-state causes are still unsupported,
+  so the reason-family coverage count does not advance. The catalogues contain
+  295 templates each. All 28 kind-checker tests, three catalogue tests and
+  warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

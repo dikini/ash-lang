@@ -525,9 +525,29 @@ pub fn compile_kind_failure<'a>(
     if let crate::kind::KindFailure::Source(error) = error {
         return compile_kind_diagnostic(error, sources);
     }
-    let (span, message) = error
-        .resource_presentation()
-        .ok_or(PresentationError::Unsupported)?;
+    let (span, message, fact) = if let Some((span, message)) = error.resource_presentation() {
+        (
+            span,
+            message,
+            Fact {
+                name: "resource",
+                kind: "resource",
+                value: FactValue::Text("type-work"),
+            },
+        )
+    } else if let Some((span, message, cause)) = error.internal_presentation() {
+        (
+            span,
+            message,
+            Fact {
+                name: "cause",
+                kind: "kind-internal-cause",
+                value: FactValue::Text(cause),
+            },
+        )
+    } else {
+        return Err(PresentationError::Unsupported);
+    };
     let source = sources
         .iter()
         .copied()
@@ -554,11 +574,7 @@ pub fn compile_kind_failure<'a>(
                 kind: "compiler-stage",
                 value: FactValue::Text("kind-checking"),
             },
-            Fact {
-                name: "resource",
-                kind: "resource",
-                value: FactValue::Text("type-work"),
-            },
+            fact,
         ],
     })
 }

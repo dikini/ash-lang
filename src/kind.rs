@@ -223,7 +223,70 @@ pub enum KindFailure {
     Internal(KindStageFailure),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KindInternalCause {
+    MissingEffect,
+    DuplicateEffect,
+    NestedEffectRow,
+    DuplicateBinder,
+    OwnerEffectRow,
+    MissingOwnerBinder,
+}
+
+impl KindInternalCause {
+    fn name(self) -> &'static str {
+        match self {
+            Self::MissingEffect => "missing-effect",
+            Self::DuplicateEffect => "duplicate-effect",
+            Self::NestedEffectRow => "nested-effect-row",
+            Self::DuplicateBinder => "duplicate-binder",
+            Self::OwnerEffectRow => "owner-effect-row",
+            Self::MissingOwnerBinder => "missing-owner-binder",
+        }
+    }
+    fn legacy(self) -> &'static str {
+        match self {
+            Self::MissingEffect => "a local effect has no canonical registry fact",
+            Self::DuplicateEffect => "the checked effect registry repeats a canonical identity",
+            Self::NestedEffectRow => "EffectRow cannot occur beneath a kind arrow",
+            Self::DuplicateBinder => "an owner binder list repeats a type-variable identity",
+            Self::OwnerEffectRow => "this owner cannot bind an EffectRow parameter",
+            Self::MissingOwnerBinder => "a linked owner binder has no canonical registry fact",
+        }
+    }
+    fn message(self) -> crate::message::Message<'static> {
+        match self {
+            Self::MissingEffect => crate::message::Message::kind_internal_missing_effect(),
+            Self::DuplicateEffect => crate::message::Message::kind_internal_duplicate_effect(),
+            Self::NestedEffectRow => crate::message::Message::kind_internal_nested_effect_row(),
+            Self::DuplicateBinder => crate::message::Message::kind_internal_duplicate_binder(),
+            Self::OwnerEffectRow => crate::message::Message::kind_internal_owner_effect_row(),
+            Self::MissingOwnerBinder => {
+                crate::message::Message::kind_internal_missing_owner_binder()
+            }
+        }
+    }
+}
+
 impl KindFailure {
+    fn internal_cause(span: Span, cause: KindInternalCause) -> Self {
+        Self::Internal(KindStageFailure {
+            span,
+            message: cause.legacy().to_owned(),
+            cause: Some(cause),
+        })
+    }
+
+    pub(crate) fn internal_presentation(
+        &self,
+    ) -> Option<(Span, crate::message::Message<'static>, &'static str)> {
+        let Self::Internal(detail) = self else {
+            return None;
+        };
+        let cause = detail.cause?;
+        Some((detail.span, cause.message(), cause.name()))
+    }
+
     pub(crate) fn resource_presentation(&self) -> Option<(Span, crate::message::Message<'static>)> {
         let Self::Resource(failure) = self else {
             return None;
@@ -235,6 +298,7 @@ impl KindFailure {
         Self::Resource(KindStageFailure {
             span,
             message: message.into(),
+            cause: None,
         })
     }
 
@@ -242,6 +306,7 @@ impl KindFailure {
         Self::Internal(KindStageFailure {
             span,
             message: message.into(),
+            cause: None,
         })
     }
 
@@ -276,6 +341,7 @@ impl std::error::Error for KindFailure {}
 /// Causal data for a non-source failure in the resolved kind stage.
 #[derive(Debug, Eq, PartialEq)]
 pub struct KindStageFailure {
+    cause: Option<KindInternalCause>,
     /// Source span whose resolved fact was being processed.
     pub span: Span,
     /// Stable stage-owned explanation.
@@ -362,15 +428,15 @@ impl<'a> KindEnvironments<'a> {
                 KindFailure::resource(span, "effect-kind registry could not reserve storage")
             })?;
             let effect = registry.effect(source.id).ok_or_else(|| {
-                KindFailure::internal(span, "a local effect has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingEffect)
             })?;
             if effects
                 .insert(effect.id, effect.parameters.as_ref())
                 .is_some()
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "the checked effect registry repeats a canonical identity",
+                    KindInternalCause::DuplicateEffect,
                 ));
             }
         }
@@ -388,9 +454,9 @@ impl<'a> KindEnvironments<'a> {
                 .insert(effect.id, effect.parameters.as_ref())
                 .is_some()
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "the checked effect registry repeats a canonical identity",
+                    KindInternalCause::DuplicateEffect,
                 ));
             }
         }
@@ -418,9 +484,9 @@ impl<'a> KindEnvironments<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), KindFailure> {
         if !binder_kind_is_admitted(kind, true) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "EffectRow cannot occur beneath a kind arrow",
+                KindInternalCause::NestedEffectRow,
             ));
         }
         budget.charge(1).map_err(|()| {
@@ -430,9 +496,9 @@ impl<'a> KindEnvironments<'a> {
             )
         })?;
         if self.delta.contains_key(&identity) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 origin,
-                "an owner binder list repeats a type-variable identity",
+                KindInternalCause::DuplicateBinder,
             ));
         }
         self.delta.try_reserve(1).map_err(|_| {
@@ -465,9 +531,9 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for parameter in parameters {
             if !binder_kind_is_admitted(&parameter.kind, false) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "this owner cannot bind an EffectRow parameter",
+                    KindInternalCause::OwnerEffectRow,
                 ));
             }
             self.insert_declared(
@@ -488,9 +554,9 @@ impl<'a> KindEnvironments<'a> {
         for (installed, parameter) in parameters.iter().enumerate() {
             if !binder_kind_is_admitted(&parameter.kind, false) {
                 self.remove_owner_parameter_extension(&parameters[..installed]);
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "this owner cannot bind an EffectRow parameter",
+                    KindInternalCause::OwnerEffectRow,
                 ));
             }
             if let Err(failure) = self.insert_declared(
@@ -523,9 +589,9 @@ impl<'a> KindEnvironments<'a> {
         self.clear_declared();
         for parameter in parameters {
             if !binder_kind_is_admitted(&parameter.kind, true) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     parameter.origin.primary_span(),
-                    "EffectRow cannot occur beneath a kind arrow",
+                    KindInternalCause::NestedEffectRow,
                 ));
             }
             self.insert_declared(
@@ -581,7 +647,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             self.insert_declared(
                 *identity,
@@ -631,7 +697,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
@@ -640,9 +706,9 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             if self.delta.contains_key(&parameter.id) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an owner binder list repeats a type-variable identity",
+                    KindInternalCause::DuplicateBinder,
                 ));
             }
             self.delta.try_reserve(1).map_err(|_| {
@@ -696,7 +762,7 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameter = registry.type_variable(*identity).ok_or_else(|| {
-                KindFailure::internal(span, "a linked owner binder has no canonical registry fact")
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
             })?;
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
@@ -705,9 +771,9 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             if self.delta.contains_key(identity) {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an owner binder list repeats a type-variable identity",
+                    KindInternalCause::DuplicateBinder,
                 ));
             }
             self.delta.try_reserve(1).map_err(|_| {
@@ -3950,9 +4016,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                 check(&implementation.head, environments, budget)?;
                 for parameter in &implementation.prerequisite_only_parameters {
                     if !binder_kind_is_admitted(&parameter.kind, false) {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             parameter.origin.primary_span(),
-                            "this owner cannot bind an EffectRow parameter",
+                            KindInternalCause::OwnerEffectRow,
                         ));
                     }
                     environments.insert_declared(
@@ -4460,9 +4526,9 @@ fn authenticate_unique_parameter_ids(
     })?;
     for parameter in parameters {
         if !identities.insert(parameter.id) {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 parameter.origin.primary_span(),
-                "an owner binder list repeats a type-variable identity",
+                KindInternalCause::DuplicateBinder,
             ));
         }
     }
@@ -5161,6 +5227,49 @@ fn require_fact_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kind_internal_causes_are_retained_without_parsing_legacy_text() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_kind_failure, write_human, write_json},
+        };
+        let source = crate::source::SourceFile::new("kind-internal.ash", "owner").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 5).unwrap())
+            .unwrap();
+        for cause in [
+            KindInternalCause::MissingEffect,
+            KindInternalCause::DuplicateEffect,
+            KindInternalCause::NestedEffectRow,
+            KindInternalCause::DuplicateBinder,
+            KindInternalCause::OwnerEffectRow,
+            KindInternalCause::MissingOwnerBinder,
+        ] {
+            let mut error = KindFailure::internal_cause(span, cause);
+            let KindFailure::Internal(ref mut detail) = error else {
+                unreachable!()
+            };
+            detail.message = "ignored".to_owned();
+            let view = compile_kind_failure(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(!output.contains("ignored"));
+                if locale == Locale::English {
+                    assert!(output.contains("The compiler"));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "kind.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][1]["name"], "cause");
+            assert_eq!(json["facts"][1]["value"], cause.name());
+        }
+    }
+
     #[test]
     fn kind_resource_presentation_retains_stage_and_span() {
         use crate::{

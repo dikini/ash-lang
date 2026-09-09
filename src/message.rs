@@ -150,6 +150,18 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler has no canonical registry entry for a local effect.
+    kind_internal_missing_effect => "kind-internal-missing-effect" {},
+    /// The compiler retained a duplicate identity in the checked effect registry.
+    kind_internal_duplicate_effect => "kind-internal-duplicate-effect" {},
+    /// The compiler retained EffectRow beneath a kind arrow, where it is not admitted.
+    kind_internal_nested_effect_row => "kind-internal-nested-effect-row" {},
+    /// The compiler retained a duplicate type-variable identity in an owner's binder list.
+    kind_internal_duplicate_binder => "kind-internal-duplicate-binder" {},
+    /// The compiler retained an EffectRow parameter for an owner that cannot bind one.
+    kind_internal_owner_effect_row => "kind-internal-owner-effect-row" {},
+    /// The compiler has no canonical registry entry for a linked owner binder.
+    kind_internal_missing_owner_binder => "kind-internal-missing-owner-binder" {},
     /// The compiler ran out of resources while checking type kinds.
     kind_resources => "kind-resources" {},
     /// The compiler ran out of resources while resolving types.
