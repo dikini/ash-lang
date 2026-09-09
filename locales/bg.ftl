@@ -1079,3 +1079,5 @@ runtime-label-requested = Заявени допълнителни единици
 runtime-label-available = Налични допълнителни единици
 runtime-label-teardown = Първа грешка при освобождаване
 runtime-label-cleanup = Състояние на почистването
+invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл; форматът и локалът могат да бъдат зададени само по веднъж.
+output-write = Ash не можа да запише резултата от програмата на стандартния изход.

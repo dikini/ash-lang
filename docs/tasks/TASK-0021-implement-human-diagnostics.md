@@ -862,6 +862,21 @@ localization language. Color is not required for completion.
   reporting tests, nine runtime-reporting tests and warnings-denied Clippy
   passed. These APIs are ready for executable dispatch; the CLI itself is not
   wired yet and the remaining compiler-internal presentation gaps stay open.
+- Explicit `--message-format` and `--locale` options now reach the executable's
+  compile-time and runtime reporting interfaces. File dispatch reuses existing
+  graph and phase adapters and their retained sources. Runtime and stdout-error
+  text is prepared before execution. Tests cover source rejection, invocation
+  option ordering, input failure, runtime failure, unchanged success output and
+  exit statuses, and no retry on a failed diagnostic channel. Known adapter gaps
+  emit explicitly marked JSON with the original reason and retained legacy
+  details; they are not counted as completed human presentation. Bare source
+  failures without an owning path also remain marked context gaps. Tool docs
+  describe the staged options: invocation without either option still uses the
+  existing default until complete coverage and downstream verification.
+  Verification passed 1,287 library tests, 18 executable tests, 16 CLI tests,
+  the diagnostic/input/catalogue/selection/reporting batch, four file-dispatch
+  tests and warnings-denied Clippy. Default switching, remaining internal
+  presentation, full milestone verification and downstream closeout remain open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

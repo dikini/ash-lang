@@ -37,7 +37,20 @@ where
     E: Write,
     R: FnOnce(RunConfiguration) -> Result<Observation, FileFailure>,
 {
-    let configuration = match configuration(arguments) {
+    let selected = ash::diagnostic_options::DiagnosticOptions::parse(
+        arguments,
+        [
+            env::var_os("LC_ALL"),
+            env::var_os("LC_MESSAGES"),
+            env::var_os("LANG"),
+        ],
+    );
+    // Keep the existing no-option behavior until the coordinated default-output
+    // checkpoint. Explicit options exercise the retained reporting interfaces.
+    if selected.requested {
+        return execute_with_diagnostics(selected, stdout, stderr, runner);
+    }
+    let configuration = match configuration(selected.program_arguments) {
         Ok(configuration) => configuration,
         Err(ConfigurationFailure::Usage) => {
             let _ = write_output(stderr, USAGE);
@@ -77,6 +90,122 @@ where
             }
         }
     }
+}
+
+fn execute_with_diagnostics<O: Write, E: Write, R>(
+    selected: ash::diagnostic_options::DiagnosticOptions,
+    stdout: &mut O,
+    stderr: &mut E,
+    runner: R,
+) -> u8
+where
+    R: FnOnce(RunConfiguration) -> Result<Observation, FileFailure>,
+{
+    use ash::{diagnostic_options::MessageFormat, message::Catalogue, presentation};
+    let format = selected.format;
+    let catalogue = if format == MessageFormat::Json {
+        None
+    } else {
+        Catalogue::new(selected.locale).ok()
+    };
+    if selected.invalid_options {
+        let _ = presentation::write_compile_diagnostic(
+            stderr,
+            &presentation::compile_usage_diagnostic(),
+            format,
+            catalogue.as_ref(),
+        );
+        return 2;
+    }
+    let configuration = match configuration(selected.program_arguments) {
+        Ok(configuration) => configuration,
+        Err(ConfigurationFailure::Usage) => {
+            let _ = presentation::write_compile_diagnostic(
+                stderr,
+                &presentation::compile_usage_diagnostic(),
+                format,
+                catalogue.as_ref(),
+            );
+            return 2;
+        }
+        Err(ConfigurationFailure::Roots(failure)) => {
+            let failure = FileFailure::Graph(LoadGraphError::Module(failure).into());
+            let _ = report_selected_failure(stderr, &failure, format, catalogue.as_ref(), None);
+            return 2;
+        }
+    };
+    let runtime_messages = catalogue
+        .as_ref()
+        .and_then(|catalogue| render::PreparedRuntimeMessages::new(catalogue).ok());
+    // Prepare the stdout-write diagnostic before execution too. Reporting that
+    // failure must not depend on allocating or formatting another message.
+    let mut output_failure = Vec::new();
+    let _ = presentation::write_compile_diagnostic(
+        &mut output_failure,
+        &presentation::compile_output_write_diagnostic(),
+        format,
+        catalogue.as_ref(),
+    );
+    match runner(configuration) {
+        Ok(observation) => {
+            if write_output(stdout, render::observation(&observation).as_bytes()).is_ok() {
+                0
+            } else {
+                let _ = write_output_no_retry(stderr, &output_failure);
+                2
+            }
+        }
+        Err(failure) => {
+            let status = if failure.is_source_rejection() { 1 } else { 2 };
+            if report_selected_failure(
+                stderr,
+                &failure,
+                format,
+                catalogue.as_ref(),
+                runtime_messages.as_ref(),
+            )
+            .is_ok()
+            {
+                status
+            } else {
+                2
+            }
+        }
+    }
+}
+
+fn report_selected_failure(
+    writer: &mut impl Write,
+    failure: &FileFailure,
+    format: ash::diagnostic_options::MessageFormat,
+    catalogue: Option<&ash::message::Catalogue>,
+    runtime_messages: Option<&render::PreparedRuntimeMessages>,
+) -> Result<(), ash::presentation::RenderError> {
+    use ash::presentation;
+    if let Some(PipelineFailure::Runtime(error)) = failure.pipeline_failure() {
+        return render::write_runtime_diagnostic(writer, *error, format, runtime_messages)
+            .map_err(presentation::RenderError::Write);
+    }
+    match presentation::compile_file_diagnostics(failure) {
+        Ok(diagnostics) => {
+            for diagnostic in &diagnostics {
+                presentation::write_compile_diagnostic(writer, diagnostic, format, catalogue)?;
+            }
+            Ok(())
+        }
+        Err(error) => presentation::write_unadapted_file_diagnostic(writer, failure, error),
+    }
+}
+
+fn write_output_no_retry(writer: &mut impl Write, mut output: &[u8]) -> io::Result<()> {
+    while !output.is_empty() {
+        let count = writer.write(output)?;
+        if count == 0 || count > output.len() {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        output = &output[count..];
+    }
+    writer.flush()
 }
 
 fn write_output(writer: &mut impl Write, output: &[u8]) -> io::Result<()> {
@@ -157,6 +286,120 @@ fn parse_root_specification(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_runtime_formats_use_the_separate_reporter() {
+        for format in ["human", "short", "json"] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let status = execute_with_runner(
+                ["--message-format", format, "--locale", "en", "injected.ash"].map(OsString::from),
+                &mut stdout,
+                &mut stderr,
+                |_| {
+                    Err(FileFailure::from(PipelineFailure::Runtime(
+                        RuntimeFailure::MissingBinding,
+                    )))
+                },
+            );
+            assert_eq!(status, 2);
+            assert!(stdout.is_empty());
+            if format == "json" {
+                let json: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+                assert_eq!(json["reason"], "runtime.missing-binding");
+                assert_eq!(json["responsibility"], "runtime");
+            } else {
+                assert!(
+                    std::str::from_utf8(&stderr)
+                        .unwrap()
+                        .starts_with("The runtime could not find a variable's lexical binding.")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_internal_gap_remains_visible_in_json_without_changing_the_reason() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = execute_with_runner(
+            ["--message-format", "json", "injected.ash"].map(OsString::from),
+            &mut stdout,
+            &mut stderr,
+            |_| {
+                Err(FileFailure::from(PipelineFailure::Typing(
+                    ash::elaborate::TypeError::Internal(
+                        ash::elaborate::ElaborationFailure::InvalidState,
+                    ),
+                )))
+            },
+        );
+        assert_eq!(status, 2);
+        let json: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(json["reason"], "type.internal");
+        assert_eq!(
+            json["developer_details"]["presentation_error"],
+            "unsupported"
+        );
+        assert!(
+            json["developer_details"]["retained_diagnostic"]
+                .as_str()
+                .unwrap()
+                .contains("typed elaboration state")
+        );
+    }
+
+    #[test]
+    fn explicit_diagnostics_never_retry_a_failed_stderr_write() {
+        struct Refuses {
+            calls: usize,
+        }
+        impl Write for Refuses {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                self.calls += 1;
+                assert_eq!(self.calls, 1);
+                Err(io::ErrorKind::Interrupted.into())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                panic!("must not flush after failure")
+            }
+        }
+        for format in ["human", "short", "json"] {
+            let mut stdout = Vec::new();
+            let mut stderr = Refuses { calls: 0 };
+            assert_eq!(
+                execute_with_runner(
+                    ["--message-format", format, "injected.ash"].map(OsString::from),
+                    &mut stdout,
+                    &mut stderr,
+                    |_| Err(FileFailure::from(PipelineFailure::Runtime(
+                        RuntimeFailure::MissingBinding
+                    ))),
+                ),
+                2
+            );
+            assert_eq!(stderr.calls, 1);
+        }
+    }
+
+    #[test]
+    fn explicit_stdout_failure_uses_the_prepared_json_report() {
+        let source = TempSource::valid();
+        let mut stdout = AlwaysFails;
+        let mut stderr = Vec::new();
+        let status = execute(
+            [
+                OsString::from("--message-format"),
+                OsString::from("json"),
+                source.0.clone().into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(status, 2);
+        let json: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
+        assert_eq!(json["reason"], "internal.output-write");
+    }
+
     use std::{
         fs::{self, OpenOptions},
         io::{self, Write},

@@ -151,6 +151,8 @@ macro_rules! messages {
 }
 
 messages! {
+    invocation_usage => "invocation-usage" {},
+    output_write => "output-write" {},
     runtime_missing_node => "runtime-missing-node" {},
     runtime_unexpected_primitive_value => "runtime-unexpected-primitive-value" {},
     runtime_unexpected_function_value => "runtime-unexpected-function-value" {},

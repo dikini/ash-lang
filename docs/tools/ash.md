@@ -3,12 +3,42 @@
 `ash` loads and runs one modular Ash program:
 
 ```text
-ash [--root name=path]... <entry-file>
+ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>
 ```
 
 The invocation requires exactly one entry path. Every `--root` option must
 precede that path. The executable reads UTF-8 Ash source files and does not read
 a program from standard input.
+
+## Diagnostic formats and locales
+
+Explicit diagnostic options select the new reporting path:
+
+```text
+ash --message-format human --locale bg entry.ash
+ash --message-format json entry.ash
+```
+
+`human` gives localized explanations and source context; `short` gives compact
+localized text. `json` writes one locale-independent JSON object per diagnostic,
+with `schema_version: 1`, the original reason, responsibility, named facts and
+causal labels. Runtime records retain resource details, the first teardown
+failure and cleanup status. Output remains on standard error; selecting a format
+does not change success output or exit status.
+
+Diagnostic options must precede the entry path and may each occur only once.
+An explicit locale overrides the first nonempty `LC_ALL`, `LC_MESSAGES` or
+`LANG`. English and Bulgarian are supported. POSIX locale spelling and parent
+fallback are accepted; unsupported, malformed, `C`, `POSIX` and absent locales
+select English. Supplying only `--locale` selects human output.
+
+This is a staged integration: without either diagnostic option, the existing
+reason-first output remains unchanged. Some compiler-internal adapters remain
+incomplete. They emit JSON with the original reason and a marked
+`developer_details.presentation_error`, retaining existing diagnostic details;
+this fallback does not imply complete human-message coverage. An unavailable
+catalogue also falls back to JSON, preserving the available structured facts.
+Neither path recursively reports a diagnostic-write failure.
 
 The entry file's containing directory is the implicit root for its relative
 imports. A relative import maps dotted segments to child directories and adds
@@ -549,6 +579,9 @@ Next(1, <cycle>) : Stream
 ```
 
 ## Failures
+
+The reason-first examples below describe invocation without diagnostic options.
+Explicit options use the formats described above with the same classifications.
 
 A source rejection writes structured diagnostics to standard error, writes no
 success value to standard output, and exits with status `1`. The first line is

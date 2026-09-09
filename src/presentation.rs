@@ -1069,6 +1069,143 @@ pub fn compile_parse_diagnostic<'a>(
     })
 }
 
+/// Dispatches a file failure to its existing compile-time phase adapter.
+///
+/// Source files remain borrowed from the failure owner. Runtime failures are
+/// deliberately excluded and must use the separate runtime reporting interface.
+///
+/// # Errors
+/// Returns an unsupported staged cause or missing source context. Legacy bare
+/// source-model, syntax and projection failures do not identify their owning
+/// source; graph-loading failures retain that context and use the graph adapter.
+pub fn compile_file_diagnostics(
+    failure: &crate::driver::FileFailure,
+) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
+    use crate::{
+        driver::{FileFailure, PipelineFailure},
+        elaborate::TypeError,
+    };
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let diagnostic = match failure {
+        FileFailure::Graph(context) => return compile_graph_diagnostics(context),
+        FileFailure::Read { path, kind } => compile_input_diagnostic(path, Some(*kind)),
+        FileFailure::InvalidUtf8 { path } => compile_input_diagnostic(path, None),
+        FileFailure::Source(_) => return Err(PresentationError::MissingSource),
+        FileFailure::Pipeline(context) => match context.failure() {
+            PipelineFailure::Resolution(error) => compile_resolve_diagnostic(error, &sources)?,
+            PipelineFailure::Kind(error) => compile_kind_failure(error, &sources)?,
+            PipelineFailure::Typing(TypeError::Source(error)) => {
+                compile_type_diagnostic(error, &sources)?
+            }
+            PipelineFailure::Typing(TypeError::Interface(error)) => {
+                compile_interface_diagnostic(error, &sources)?
+            }
+            PipelineFailure::Typing(TypeError::Mismatch(error)) => {
+                compile_type_mismatch_diagnostic(error, &sources)?
+            }
+            PipelineFailure::Typing(TypeError::Internal(error)) => {
+                compile_elaboration_failure(error, &sources)?
+            }
+            PipelineFailure::Entry(error) => compile_entry_diagnostic(error, &sources)?,
+            PipelineFailure::EvidenceValidation(error) => {
+                compile_evidence_failure(error, &sources)?
+            }
+            PipelineFailure::Validation(error) => compile_core_validation_failure(error, &sources)?,
+            PipelineFailure::Runtime(_) => return Err(PresentationError::Unsupported),
+            PipelineFailure::SourceModel(_)
+            | PipelineFailure::Syntax(_)
+            | PipelineFailure::Projection(_) => {
+                return Err(PresentationError::MissingSource);
+            }
+        },
+    };
+    Ok(vec![diagnostic])
+}
+
+/// Presents the executable's invocation grammar without inventing source labels.
+#[must_use]
+pub fn compile_usage_diagnostic() -> CompileDiagnostic<'static> {
+    CompileDiagnostic {
+        reason: "invocation.usage".into(),
+        responsibility: "invocation",
+        message: Message::invocation_usage(),
+        primary: None,
+        related: Vec::new(),
+        facts: Vec::new(),
+    }
+}
+
+/// Presents the executable's failed standard-output write.
+#[must_use]
+pub fn compile_output_write_diagnostic() -> CompileDiagnostic<'static> {
+    CompileDiagnostic {
+        reason: "internal.output-write".into(),
+        responsibility: "compiler",
+        message: Message::output_write(),
+        primary: None,
+        related: Vec::new(),
+        facts: Vec::new(),
+    }
+}
+
+/// Writes retained legacy details when a staged adapter cannot construct a view.
+///
+/// This explicitly marked fallback is not presentation coverage. It emits JSON
+/// in every format and retains the original reason and existing diagnostic
+/// details without parsing them. Runtime failures must not use this allocating path.
+///
+/// # Errors
+/// Stops at the first serialization, write or flush failure without retry.
+pub fn write_unadapted_file_diagnostic(
+    writer: &mut impl Write,
+    failure: &crate::driver::FileFailure,
+    error: PresentationError,
+) -> Result<(), RenderError> {
+    if matches!(
+        failure.pipeline_failure(),
+        Some(crate::driver::PipelineFailure::Runtime(_))
+    ) {
+        return Err(RenderError::Write(io::ErrorKind::InvalidInput.into()));
+    }
+    let writer = &mut crate::render::DiagnosticWriter(writer);
+    let responsibility = match failure {
+        crate::driver::FileFailure::Source(error) => {
+            error.responsibility(crate::source::SourceOperation::Admission)
+        }
+        crate::driver::FileFailure::Read { .. }
+        | crate::driver::FileFailure::InvalidUtf8 { .. } => "input",
+        crate::driver::FileFailure::Graph(context) => match context.failure() {
+            LoadGraphError::Module(error) => error.responsibility(),
+            LoadGraphError::Read { .. } | LoadGraphError::InvalidUtf8 { .. } => "input",
+            LoadGraphError::SourceModel {
+                error, operation, ..
+            } => error.responsibility(*operation),
+            _ if failure.is_source_rejection() => "source",
+            _ => "compiler",
+        },
+        _ if failure.is_source_rejection() => "source",
+        _ => "compiler",
+    };
+    let data = serde_json::json!({
+        "schema_version": 1,
+        "reason": failure.reason_code(),
+        "responsibility": responsibility,
+        "facts": [],
+        "labels": [],
+        "developer_details": {
+            "presentation_error": match error {
+                PresentationError::Unsupported => "unsupported",
+                PresentationError::MissingFact => "missing-fact",
+                PresentationError::MissingSource => "missing-source",
+            },
+            "retained_diagnostic": crate::render::file_failure(failure),
+        },
+    });
+    serde_json::to_writer(&mut *writer, &data).map_err(RenderError::Json)?;
+    writer.write_all(b"\n")?;
+    writer.flush().map_err(RenderError::Write)
+}
+
 /// Exposes input and graph failure facts. Syntax collections keep their causal order.
 ///
 /// # Errors
@@ -1229,20 +1366,19 @@ pub fn compile_graph_diagnostics(
     if let LoadGraphError::Syntax(failure) = failure {
         return compile_graph_syntax(context, failure);
     }
-    let (reason, message, path, kind) = match failure {
-        LoadGraphError::Read { path, kind, .. } => (
-            "input.read",
-            Message::input_read(path, *kind),
-            path,
-            Some(*kind),
-        ),
-        LoadGraphError::InvalidUtf8 { path, .. } => (
-            "input.invalid-utf8",
-            Message::input_invalid_utf8(path),
-            path,
-            None,
-        ),
+    let mut diagnostic = match failure {
+        LoadGraphError::Read { path, kind, .. } => compile_input_diagnostic(path, Some(*kind)),
+        LoadGraphError::InvalidUtf8 { path, .. } => compile_input_diagnostic(path, None),
         _ => return Err(PresentationError::Unsupported),
+    };
+    diagnostic.primary = import_label(context, "import_target")?;
+    Ok(vec![diagnostic])
+}
+
+fn compile_input_diagnostic(path: &Path, kind: Option<io::ErrorKind>) -> CompileDiagnostic<'_> {
+    let (reason, message) = match kind {
+        Some(kind) => ("input.read", Message::input_read(path, kind)),
+        None => ("input.invalid-utf8", Message::input_invalid_utf8(path)),
     };
     let mut facts = vec![Fact {
         name: "path",
@@ -1256,15 +1392,14 @@ pub fn compile_graph_diagnostics(
             value: FactValue::Text(io_kind_name(kind)),
         });
     }
-    let primary = import_label(context, "import_target")?;
-    Ok(vec![CompileDiagnostic {
+    CompileDiagnostic {
         reason: reason.into(),
         responsibility: "input",
         message,
-        primary,
+        primary: None,
         related: Vec::new(),
         facts,
-    }])
+    }
 }
 
 fn import_label<'a>(

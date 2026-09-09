@@ -28,6 +28,9 @@ pub enum MessageFormat {
 /// separate and must run before execution.
 #[derive(Debug)]
 pub struct DiagnosticOptions {
+    /// Whether any diagnostic option was supplied, including an invalid placement.
+    /// Used during staged CLI integration before the default-output checkpoint.
+    pub requested: bool,
     /// Exactly one valid format before the entry path, or human output.
     pub format: MessageFormat,
     /// Explicit locale or process locale, with supported-language fallback.
@@ -54,6 +57,7 @@ impl DiagnosticOptions {
         let mut arguments = arguments.into_iter().peekable();
         let mut program_arguments = Vec::new();
         let mut entry_seen = false;
+        let mut requested = false;
         let mut invalid_options = false;
         let mut format_count = 0_usize;
         let mut locale_count = 0_usize;
@@ -61,6 +65,7 @@ impl DiagnosticOptions {
         let mut explicit_locale = None;
         while let Some(argument) = arguments.next() {
             if argument == "--message-format" || argument == "--locale" {
+                requested = true;
                 if entry_seen {
                     invalid_options = true;
                     program_arguments.push(argument);
@@ -116,6 +121,7 @@ impl DiagnosticOptions {
             environment_locale
         };
         Self {
+            requested,
             format: if format_count == 1 {
                 format.unwrap_or_default()
             } else {

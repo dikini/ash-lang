@@ -14,6 +14,76 @@ use ash::{
 
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn explicit_diagnostic_formats_reach_source_reporting_and_preserve_exit_status() {
+    let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/first-stratum/type/binding-initializer.ash");
+    for format in ["human", "short", "json"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+            .args(["--message-format", format, "--locale", "bg"])
+            .arg(&entry)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        if format == "json" {
+            let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(json["reason"], "type.binding-initializer");
+            assert_eq!(json["responsibility"], "source");
+            assert!(!json["labels"].as_array().unwrap().is_empty());
+        } else {
+            let text = String::from_utf8(output.stderr).unwrap();
+            assert!(text.contains("Тази променлива изисква"));
+            assert!(text.contains("type.binding-initializer"));
+        }
+    }
+}
+
+#[test]
+fn explicit_json_usage_errors_honor_format_despite_earlier_invalid_arguments() {
+    for args in [
+        vec!["--bad", "--message-format", "json", "entry.ash"],
+        vec!["--message-format", "json", "--bad", "entry.ash"],
+        vec!["--locale", "--message-format", "json", "entry.ash"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(json["reason"], "invocation.usage");
+    }
+}
+
+#[test]
+fn explicit_options_preserve_success_stdout_and_select_input_json() {
+    let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/first-stratum/valid/v001-precedence.ash");
+    let original = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .arg(&entry)
+        .output()
+        .unwrap();
+    let selected = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["--message-format", "json"])
+        .arg(&entry)
+        .output()
+        .unwrap();
+    assert_eq!(selected.status.code(), Some(0));
+    assert_eq!(selected.stdout, original.stdout);
+    assert!(selected.stderr.is_empty());
+    let missing = TempDirectory::create().0.join("missing.ash");
+    let output = Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["--message-format", "json"])
+        .arg(missing)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let json: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(json["reason"], "input.read");
+}
+
 struct TempDirectory(PathBuf);
 
 impl TempDirectory {
