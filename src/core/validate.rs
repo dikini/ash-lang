@@ -323,6 +323,21 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    HookMissingEffect,
+    HookDuplicateBinders,
+    HookPreviousBindingShape,
+    HookNextBindingShape,
+    HookForwardRequestShape,
+    HookCallbackApplicationShape,
+    HookRegistrationResumeShape,
+    HookForwardEffect,
+    HookPreviousBinder,
+    HookNextBinder,
+    HookForwardOperation,
+    HookForwardInput,
+    HookCallbackUse,
+    HookPreviousUse,
+    HookNextUse,
     CallbackScopeMissingParent,
     CallbackScopeBindingShape,
     CallbackScopeParentCount,
@@ -590,6 +605,21 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::HookMissingEffect => "hook-missing-effect",
+            ValidationCause::HookDuplicateBinders => "hook-duplicate-binders",
+            ValidationCause::HookPreviousBindingShape => "hook-previous-binding-shape",
+            ValidationCause::HookNextBindingShape => "hook-next-binding-shape",
+            ValidationCause::HookForwardRequestShape => "hook-forward-request-shape",
+            ValidationCause::HookCallbackApplicationShape => "hook-callback-application-shape",
+            ValidationCause::HookRegistrationResumeShape => "hook-registration-resume-shape",
+            ValidationCause::HookForwardEffect => "hook-forward-effect",
+            ValidationCause::HookPreviousBinder => "hook-previous-binder",
+            ValidationCause::HookNextBinder => "hook-next-binder",
+            ValidationCause::HookForwardOperation => "hook-forward-operation",
+            ValidationCause::HookForwardInput => "hook-forward-input",
+            ValidationCause::HookCallbackUse => "hook-callback-use",
+            ValidationCause::HookPreviousUse => "hook-previous-use",
+            ValidationCause::HookNextUse => "hook-next-use",
             ValidationCause::CallbackScopeMissingParent => "callback-scope-missing-parent",
             ValidationCause::CallbackScopeBindingShape => "callback-scope-binding-shape",
             ValidationCause::CallbackScopeParentCount => "callback-scope-parent-count",
@@ -2273,6 +2303,94 @@ impl ValidationError {
                 (ValidationCause::HookGeneratedOrigins, Some(node)) => {
                     Message::core_validation_hook_generated_origins_node(node)
                 }
+                (ValidationCause::HookMissingEffect, None) => {
+                    Message::core_validation_hook_missing_effect()
+                }
+                (ValidationCause::HookMissingEffect, Some(node)) => {
+                    Message::core_validation_hook_missing_effect_node(node)
+                }
+                (ValidationCause::HookDuplicateBinders, None) => {
+                    Message::core_validation_hook_duplicate_binders()
+                }
+                (ValidationCause::HookDuplicateBinders, Some(node)) => {
+                    Message::core_validation_hook_duplicate_binders_node(node)
+                }
+                (ValidationCause::HookPreviousBindingShape, None) => {
+                    Message::core_validation_hook_previous_binding_shape()
+                }
+                (ValidationCause::HookPreviousBindingShape, Some(node)) => {
+                    Message::core_validation_hook_previous_binding_shape_node(node)
+                }
+                (ValidationCause::HookNextBindingShape, None) => {
+                    Message::core_validation_hook_next_binding_shape()
+                }
+                (ValidationCause::HookNextBindingShape, Some(node)) => {
+                    Message::core_validation_hook_next_binding_shape_node(node)
+                }
+                (ValidationCause::HookForwardRequestShape, None) => {
+                    Message::core_validation_hook_forward_request_shape()
+                }
+                (ValidationCause::HookForwardRequestShape, Some(node)) => {
+                    Message::core_validation_hook_forward_request_shape_node(node)
+                }
+                (ValidationCause::HookCallbackApplicationShape, None) => {
+                    Message::core_validation_hook_callback_application_shape()
+                }
+                (ValidationCause::HookCallbackApplicationShape, Some(node)) => {
+                    Message::core_validation_hook_callback_application_shape_node(node)
+                }
+                (ValidationCause::HookRegistrationResumeShape, None) => {
+                    Message::core_validation_hook_registration_resume_shape()
+                }
+                (ValidationCause::HookRegistrationResumeShape, Some(node)) => {
+                    Message::core_validation_hook_registration_resume_shape_node(node)
+                }
+                (ValidationCause::HookForwardEffect, None) => {
+                    Message::core_validation_hook_forward_effect()
+                }
+                (ValidationCause::HookForwardEffect, Some(node)) => {
+                    Message::core_validation_hook_forward_effect_node(node)
+                }
+                (ValidationCause::HookPreviousBinder, None) => {
+                    Message::core_validation_hook_previous_binder()
+                }
+                (ValidationCause::HookPreviousBinder, Some(node)) => {
+                    Message::core_validation_hook_previous_binder_node(node)
+                }
+                (ValidationCause::HookNextBinder, None) => {
+                    Message::core_validation_hook_next_binder()
+                }
+                (ValidationCause::HookNextBinder, Some(node)) => {
+                    Message::core_validation_hook_next_binder_node(node)
+                }
+                (ValidationCause::HookForwardOperation, None) => {
+                    Message::core_validation_hook_forward_operation()
+                }
+                (ValidationCause::HookForwardOperation, Some(node)) => {
+                    Message::core_validation_hook_forward_operation_node(node)
+                }
+                (ValidationCause::HookForwardInput, None) => {
+                    Message::core_validation_hook_forward_input()
+                }
+                (ValidationCause::HookForwardInput, Some(node)) => {
+                    Message::core_validation_hook_forward_input_node(node)
+                }
+                (ValidationCause::HookCallbackUse, None) => {
+                    Message::core_validation_hook_callback_use()
+                }
+                (ValidationCause::HookCallbackUse, Some(node)) => {
+                    Message::core_validation_hook_callback_use_node(node)
+                }
+                (ValidationCause::HookPreviousUse, None) => {
+                    Message::core_validation_hook_previous_use()
+                }
+                (ValidationCause::HookPreviousUse, Some(node)) => {
+                    Message::core_validation_hook_previous_use_node(node)
+                }
+                (ValidationCause::HookNextUse, None) => Message::core_validation_hook_next_use(),
+                (ValidationCause::HookNextUse, Some(node)) => {
+                    Message::core_validation_hook_next_use_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -2405,6 +2523,21 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::HookMissingEffect
+                | ValidationCause::HookDuplicateBinders
+                | ValidationCause::HookPreviousBindingShape
+                | ValidationCause::HookNextBindingShape
+                | ValidationCause::HookForwardRequestShape
+                | ValidationCause::HookCallbackApplicationShape
+                | ValidationCause::HookRegistrationResumeShape
+                | ValidationCause::HookForwardEffect
+                | ValidationCause::HookPreviousBinder
+                | ValidationCause::HookNextBinder
+                | ValidationCause::HookForwardOperation
+                | ValidationCause::HookForwardInput
+                | ValidationCause::HookCallbackUse
+                | ValidationCause::HookPreviousUse
+                | ValidationCause::HookNextUse => ValidationReason::Handler,
                 ValidationCause::CallbackScopeMissingParent
                 | ValidationCause::CallbackScopeBindingShape
                 | ValidationCause::CallbackScopeParentCount
@@ -10577,26 +10710,26 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         contract: &crate::resolved::HookRegistrationContract,
     ) -> Result<(), ValidationError> {
         use super::effect::{EffectExprKind, EffectOperation};
-        let invalid = || ValidationError::new(ValidationReason::Handler, Some(id));
+        let invalid = |cause| ValidationError::with_cause(cause, Some(id));
         self.charge_type_work(18)?;
         let declaration = self
             .program
             .registry
             .effect(handler.effect.effect())
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid(ValidationCause::HookMissingEffect))?;
         let [operation] = &*declaration.operations else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookOperationCount));
         };
         let signature = operation
             .annotation
             .ty
             .function_view()
-            .ok_or_else(invalid)?;
+            .ok_or_else(|| invalid(ValidationCause::HookOperationType))?;
         let [clause] = &*handler.clauses else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookClauseCount));
         };
         let CorePatternKind::Binder(input) = &clause.pattern().kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookInputPattern));
         };
         let mut budget = TypeWorkBudget::with_limit(
             CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
@@ -10607,25 +10740,42 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &mut budget,
         );
         self.charge_type_work(budget.used())?;
-        if target_matches
+        let cause = if target_matches
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
             != std::cmp::Ordering::Equal
-            || handler.hook_root.is_some()
-            || operation.spelling != "publish"
-            || !self.same_type_charged(signature.domain(), signature.value())?
-            || contract.operation != operation.id
-            || clause.operation() != contract.operation
-            || input.id() != contract.input
-            || clause.resume() != contract.resume
-            || node.origin.as_ref().map(Origin::primary_span) != Some(contract.span)
-            || contract.target_span.source() != contract.span.source()
+        {
+            Some(ValidationCause::HookTargetInstance)
+        } else if handler.hook_root.is_some() {
+            Some(ValidationCause::RegistrationHasRoot)
+        } else if operation.spelling != "publish" {
+            Some(ValidationCause::HookOperationSpelling)
+        } else if !self.same_type_charged(signature.domain(), signature.value())? {
+            Some(ValidationCause::HookOperationEndomorphism)
+        } else if contract.operation != operation.id {
+            Some(ValidationCause::HookContractOperation)
+        } else if clause.operation() != contract.operation {
+            Some(ValidationCause::HookClauseOperation)
+        } else if input.id() != contract.input {
+            Some(ValidationCause::HookInputIdentity)
+        } else if clause.resume() != contract.resume {
+            Some(ValidationCause::HookClauseContinuation)
+        } else if node.origin.as_ref().map(Origin::primary_span) != Some(contract.span) {
+            Some(ValidationCause::HookScopeOrigin)
+        } else if contract.target_span.source() != contract.span.source()
             || contract.target_span.range().start() < contract.span.range().start()
             || contract.target_span.range().end() > contract.span.range().end()
-            || clause.origin().primary_span() != contract.target_span
+        {
+            Some(ValidationCause::HookTargetSpan)
+        } else if clause.origin().primary_span() != contract.target_span
             || clause.pattern().origin.primary_span() != contract.target_span
             || input.origin().primary_span() != contract.target_span
         {
-            return Err(invalid());
+            Some(ValidationCause::HookGeneratedOrigins)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         let binders = [
             contract.callback,
@@ -10635,35 +10785,35 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         ];
         for (index, binder) in binders.iter().enumerate() {
             if binders[..index].contains(binder) {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookDuplicateBinders));
             }
         }
         let previous_node = self.node(clause.body())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(previous))) =
             &previous_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookPreviousBindingShape));
         };
         let next_node = self.node(previous.body())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(next))) =
             &next_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookNextBindingShape));
         };
         let request_node = self.node(previous.initializer())?;
         let EffectExprKind::Operation(EffectOperation::Request(request)) = &request_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookForwardRequestShape));
         };
         let application_node = self.node(next.initializer())?;
         let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Apply(application))) =
             &application_node.kind
         else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookCallbackApplicationShape));
         };
         let resume_node = self.node(next.body())?;
         let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &resume_node.kind else {
-            return Err(invalid());
+            return Err(invalid(ValidationCause::HookRegistrationResumeShape));
         };
         let variable = |node, binder| -> Result<bool, ValidationError> {
             let node = self.node(node)?;
@@ -10681,21 +10831,36 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             &mut budget,
         );
         self.charge_type_work(budget.used())?;
-        if forwarding_matches
+        let cause = if forwarding_matches
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(id)))?
             != std::cmp::Ordering::Equal
-            || previous.binder().id() != contract.previous
-            || next.binder().id() != contract.next
-            || request.operation() != contract.operation
-            || resume.handler() != handler.id()
-            || resume.owner() != contract.resume
-            || resume.use_state() != super::effect::ResumeUse::Consumed
-            || !variable(request.operand(), contract.input)?
-            || !variable(application.function(), contract.callback)?
-            || !variable(application.argument(), contract.previous)?
-            || !variable(resume.value(), contract.next)?
         {
-            return Err(invalid());
+            Some(ValidationCause::HookForwardEffect)
+        } else if previous.binder().id() != contract.previous {
+            Some(ValidationCause::HookPreviousBinder)
+        } else if next.binder().id() != contract.next {
+            Some(ValidationCause::HookNextBinder)
+        } else if request.operation() != contract.operation {
+            Some(ValidationCause::HookForwardOperation)
+        } else if resume.handler() != handler.id() {
+            Some(ValidationCause::HookResumeHandler)
+        } else if resume.owner() != contract.resume {
+            Some(ValidationCause::HookResumeOwner)
+        } else if resume.use_state() != super::effect::ResumeUse::Consumed {
+            Some(ValidationCause::HookResumeUseState)
+        } else if !variable(request.operand(), contract.input)? {
+            Some(ValidationCause::HookForwardInput)
+        } else if !variable(application.function(), contract.callback)? {
+            Some(ValidationCause::HookCallbackUse)
+        } else if !variable(application.argument(), contract.previous)? {
+            Some(ValidationCause::HookPreviousUse)
+        } else if !variable(resume.value(), contract.next)? {
+            Some(ValidationCause::HookNextUse)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(invalid(cause));
         }
         for stored in [
             previous_node,
@@ -10705,12 +10870,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             resume_node,
         ] {
             if stored.origin.as_ref().map(Origin::primary_span) != Some(contract.target_span) {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookGeneratedOrigins));
             }
         }
         for binder in [previous.binder(), next.binder()] {
             if binder.origin().primary_span() != contract.target_span {
-                return Err(invalid());
+                return Err(invalid(ValidationCause::HookGeneratedOrigins));
             }
         }
         Ok(())
@@ -12292,6 +12457,81 @@ mod tests {
         };
         let arena = super::super::dialect::ArenaId::new(101);
         for (cause, name, english) in [
+            (
+                ValidationCause::HookMissingEffect,
+                "hook-missing-effect",
+                "The compiler has no effect declaration for a Core hook registration contract.",
+            ),
+            (
+                ValidationCause::HookDuplicateBinders,
+                "hook-duplicate-binders",
+                "A Core hook registration contract reuses an identity among its callback, input, previous and next binders.",
+            ),
+            (
+                ValidationCause::HookPreviousBindingShape,
+                "hook-previous-binding-shape",
+                "A Core hook registration clause does not begin with its previous-result binding.",
+            ),
+            (
+                ValidationCause::HookNextBindingShape,
+                "hook-next-binding-shape",
+                "A Core hook registration does not bind the next result after the previous result.",
+            ),
+            (
+                ValidationCause::HookForwardRequestShape,
+                "hook-forward-request-shape",
+                "A Core hook registration's previous-result initializer is not an effect request.",
+            ),
+            (
+                ValidationCause::HookCallbackApplicationShape,
+                "hook-callback-application-shape",
+                "A Core hook registration's next-result initializer is not a callback application.",
+            ),
+            (
+                ValidationCause::HookRegistrationResumeShape,
+                "hook-registration-resume-shape",
+                "A Core hook registration does not resume after binding the callback result.",
+            ),
+            (
+                ValidationCause::HookForwardEffect,
+                "hook-forward-effect",
+                "A Core hook registration forwards a different effect instance from its contract target.",
+            ),
+            (
+                ValidationCause::HookPreviousBinder,
+                "hook-previous-binder",
+                "A Core hook registration binds the previous result with an identity different from its contract.",
+            ),
+            (
+                ValidationCause::HookNextBinder,
+                "hook-next-binder",
+                "A Core hook registration binds the next result with an identity different from its contract.",
+            ),
+            (
+                ValidationCause::HookForwardOperation,
+                "hook-forward-operation",
+                "A Core hook registration forwards a different operation from its contract.",
+            ),
+            (
+                ValidationCause::HookForwardInput,
+                "hook-forward-input",
+                "A Core hook registration's forwarded request does not use its recorded input at the target span.",
+            ),
+            (
+                ValidationCause::HookCallbackUse,
+                "hook-callback-use",
+                "A Core hook registration does not call its recorded callback at the target span.",
+            ),
+            (
+                ValidationCause::HookPreviousUse,
+                "hook-previous-use",
+                "A Core hook registration does not pass its recorded previous result to the callback at the target span.",
+            ),
+            (
+                ValidationCause::HookNextUse,
+                "hook-next-use",
+                "A Core hook registration does not resume with its recorded next result at the target span.",
+            ),
             (
                 ValidationCause::CallbackScopeMissingParent,
                 "callback-scope-missing-parent",
@@ -15525,13 +15765,31 @@ mod tests {
                     }
                     _ => node.effects = EffectRow::empty(),
                 }
-                assert!(
-                    super::Validator::new_modules(&core, &borrowed, &relations)
-                        .unwrap()
-                        .run_effect()
-                        .is_err(),
-                    "pass {pass}, forgery {corruption} reached proof success"
-                );
+                let error = super::Validator::new_modules(&core, &borrowed, &relations)
+                    .unwrap()
+                    .run_effect()
+                    .expect_err("forged registration must reject");
+                let expected = match corruption {
+                    0 => Some(ValidationCause::HookTargetInstance),
+                    1 => Some(ValidationCause::HookDuplicateBinders),
+                    2 => Some(ValidationCause::HookInputIdentity),
+                    5 => Some(ValidationCause::HookClauseContinuation),
+                    _ => None,
+                };
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        error.cause,
+                        Some(expected),
+                        "pass {pass}, forgery {corruption}"
+                    );
+                }
+                if error.reason() == ValidationReason::Handler {
+                    assert!(
+                        crate::presentation::compile_core_validation_failure(&error, &borrowed)
+                            .is_ok(),
+                        "pass {pass}, forgery {corruption} has no message"
+                    );
+                }
                 core.discard_iteratively();
             }
         }

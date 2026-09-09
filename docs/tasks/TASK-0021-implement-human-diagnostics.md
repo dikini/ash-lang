@@ -801,6 +801,15 @@ localization language. Color is not required for completion.
   forwarding contracts and capture-analysis internal causes remain; Handler is
   still not counted complete. All 1,286 library tests, 86 diagnostic/catalogue
   tests and warnings-denied Clippy passed.
+- Registration forwarding contracts now reuse the common hook messages and
+  retain 15 further causes for declaration lookup, generated binding/request/
+  application/resume forms and the forwarding value chain. The handler table
+  covers 75 causes in 150 optional-node localized/JSON layouts. Existing
+  nine-mutation fixtures across three transformation states require presentation
+  and assert specific causes for target, duplicate-binder, input and continuation
+  corruption. Only capture-analysis internal failures remain in Handler's generic
+  path; it is not yet counted complete. All 1,286 library tests, 86
+  diagnostic/catalogue tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
