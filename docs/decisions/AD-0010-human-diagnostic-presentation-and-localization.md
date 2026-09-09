@@ -5,8 +5,7 @@
 - Related:
   [DN-0029](../design/DN-0029-human-diagnostic-presentation.md),
   [AD-0005](AD-0005-parser-architecture.md),
-  [AD-0006](AD-0006-front-end-semantic-boundaries.md),
-  [TASK-0021](../tasks/TASK-0021-implement-human-diagnostics.md)
+  [AD-0006](AD-0006-front-end-semantic-boundaries.md)
 
 ## Decision
 
@@ -152,7 +151,7 @@ The implementation must provide:
   current-language outcomes for all eight migration triggers at the separate
   post-`effect-ash` repair checkpoint, now verified on `main` in the
   [repair evidence](../design/migration-repair-evidence.md);
-  this separate repair does not complete TASK-0021 presentation work;
+  this repair is separate from diagnostic presentation;
 - English and Bulgarian catalogue completeness and typed-argument validation;
 - representative human snapshots across syntax, resolution, kind, type,
   interface, constraint, pattern, coverage, entry, input, and internal failure
@@ -166,3 +165,24 @@ The implementation must provide:
 - tests for defaults, invalid invocations and nonrecursive reporting fallback;
 - unchanged stdout and exit-status behavior; and
 - updated tool documentation and downstream checks at the same checkpoint.
+
+## Implementation evidence
+
+Unsigned merge `9952c8b` integrates the implementation on `main`. Its tree
+matches verified commit `166e805`: `cargo xtask verify` passed formatting,
+metadata, build, warnings-denied Clippy, all workspace tests and rustdoc.
+CLI and diagnostic-reporting tests also passed from the merged main checkout.
+Focused review covered presentation, structured causes and the separate runtime
+reporter; its retained-fact fallback finding was fixed and regression-tested.
+
+All eight unchanged migration entries at ash-doc commit
+`492a3abec1324c3c0c0e8f0376d380092e883561` passed the explicit-JSON canary:
+success stdout hashes, rejection reasons, causal labels and ranges, opacity
+facts and output channels matched, without presentation fallback. This verifies
+compatibility, not downstream adoption. Ash-doc owns migration of its automation
+to JSON and its edition pin; neither was changed here.
+
+The [executable guide](../tools/ash.md) documents defaults, formats, runtime
+guarantees and the message/translation maintenance workflow. TASK-0021 and its
+execution plan are complete and retained in Git history. No language semantics,
+historical pins or milestone tags changed.

@@ -115,9 +115,11 @@ Lib Ash checkpoint. The compiler repairs are now verified on `main`, with no
 backports; the [repair evidence](design/migration-repair-evidence.md) records
 the causes and original-source outcomes. The ash-doc project owns its separate
 documentation migration.
-[TASK-0021](tasks/TASK-0021-implement-human-diagnostics.md) retains the separate
-human-diagnostic feature. Historical migration evidence and published tags
-remain unchanged.
+Human-first diagnostics, localized short output and structured JSON are
+implemented on `main` under
+[AD-0010](decisions/AD-0010-human-diagnostic-presentation-and-localization.md).
+Historical migration evidence and published tags remain unchanged. Ash-doc's
+automation adoption remains that project's responsibility.
 
 | Work | Maturity | Dependencies | Next evidence |
 | --- | --- | --- | --- |

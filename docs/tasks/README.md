@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0021: Implement Human Diagnostics](TASK-0021-implement-human-diagnostics.md)
+No active tasks.
