@@ -451,6 +451,14 @@ localization language. Color is not required for completion.
   producer or admission behavior changed. Interface/constraint coverage is
   6 of 28 reasons, with 196 templates per locale. All 59 focused tests and
   warnings-denied Clippy passed.
+- Interface method signatures and implementation method membership now have
+  precise messages: non-function signature, missing method, duplicate method
+  and extra method. The phase supplies primary and related relationships;
+  required causal labels cannot be silently omitted. Four source fixtures
+  verify English, Bulgarian and JSON output, plus missing-label rejection.
+  Interface/constraint coverage is 10 of 28 reasons, with 202 templates per
+  locale. All 162 focused tests and warnings-denied Clippy passed. No producer,
+  language check or runtime behavior changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

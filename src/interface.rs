@@ -1958,6 +1958,16 @@ pub enum InterfaceReason {
 }
 
 impl InterfaceReason {
+    pub(crate) fn minimum_related(self) -> usize {
+        usize::from(matches!(
+            self,
+            Self::MethodNotFunction
+                | Self::ImplMissingMethod
+                | Self::ImplDuplicateMethod
+                | Self::ImplExtraMethod
+        ))
+    }
+
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
@@ -1973,6 +1983,12 @@ impl InterfaceReason {
                 (Message::evidence_duplicate_method(), "evidence_method")
             }
             Self::EvidenceExtraMethod => (Message::evidence_extra_method(), "evidence_method"),
+            Self::MethodNotFunction => (Message::interface_method_function(), "method_type"),
+            Self::ImplMissingMethod => (Message::impl_missing_method(), "implementation"),
+            Self::ImplDuplicateMethod => {
+                (Message::impl_duplicate_method(), "implementation_method")
+            }
+            Self::ImplExtraMethod => (Message::impl_extra_method(), "implementation_method"),
             _ => return None,
         })
     }
@@ -1992,6 +2008,13 @@ impl InterfaceReason {
             Self::EvidenceMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::EvidenceDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::EvidenceExtraMethod => (Message::evidence_interface(), "interface_declaration"),
+            Self::MethodNotFunction => (
+                Message::interface_method_declaration(),
+                "method_declaration",
+            ),
+            Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
+            Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
+            Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
             _ => return None,
         })
     }

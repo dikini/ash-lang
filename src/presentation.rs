@@ -300,6 +300,9 @@ pub fn compile_interface_diagnostic<'a>(
     if error.expected.is_some() || error.found.is_some() {
         return Err(PresentationError::Unsupported);
     }
+    if error.related.len() < error.reason.minimum_related() {
+        return Err(PresentationError::MissingFact);
+    }
     let label = |span: Span, message, relationship| {
         let source = sources
             .iter()

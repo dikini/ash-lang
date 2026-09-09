@@ -1520,6 +1520,57 @@ fn polymorphic_recursion_presentation_retains_types_and_causes() {
     assert_eq!(json["facts"][1]["value"], "(A, A)");
 }
 
+#[test]
+fn interface_method_messages_explain_declaration_and_implementation_failures() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    for (text, reason, explanation) in [
+        (
+            "interface Read<A> {\nread : A\n}\n",
+            InterfaceReason::MethodNotFunction,
+            "An interface method must have a function type with a top-level arrow.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Int> {\n}\n",
+            InterfaceReason::ImplMissingMethod,
+            "This implementation does not supply a required interface method.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\n}\nimpl Read<Int> {\nother x = 1\n}\n",
+            InterfaceReason::ImplExtraMethod,
+            "This method is not declared by the implemented interface.",
+        ),
+        (
+            "interface Read<A> {\nread : A -> Int\nwrite : A -> Int\n}\nimpl Read<Int> {\nread x = 1\nwrite x = 2\nread x = 3\n}\n",
+            InterfaceReason::ImplDuplicateMethod,
+            "This implementation supplies the same interface method more than once.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-method-message.ash", text);
+        let TypeError::Interface(mut error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason.to_string());
+        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        error.related.clear();
+        assert!(compile_interface_diagnostic(&error, &[fixture.loaded().source()]).is_err());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

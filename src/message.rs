@@ -150,6 +150,18 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An interface method must have a function type with a top-level arrow.
+    interface_method_function => "interface-method-function" {},
+    /// This method signature is declared here.
+    interface_method_declaration => "interface-method-declaration" {},
+    /// This implementation does not supply a required interface method.
+    impl_missing_method => "impl-missing-method" {},
+    /// This implementation supplies the same interface method more than once.
+    impl_duplicate_method => "impl-duplicate-method" {},
+    /// This method is not declared by the implemented interface.
+    impl_extra_method => "impl-extra-method" {},
+    /// The implemented interface is declared here.
+    impl_interface => "impl-interface" {},
     /// This evidence declaration needs an active local nominal type in its selection key: the determinant arguments, or all arguments when there is no determination edge.
     evidence_local_key => "evidence-local-key" {},
     /// An active evidence declaration already supplies this exact interface application.
