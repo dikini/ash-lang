@@ -311,6 +311,16 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    ConversionUnknownOwner,
+    ConversionOrdinaryOwner,
+    ConversionMissingRepresentation,
+    ConversionMissingParameters,
+    ConversionExcessArguments,
+    ConversionNominalOwner,
+    ConversionMissingArguments,
+    ConversionInvalidArgument,
+    ConversionArgumentKind,
+    ConversionRepresentationMismatch,
 }
 
 impl ValidationError {
@@ -370,6 +380,18 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::ConversionUnknownOwner => "conversion-unknown-owner",
+            ValidationCause::ConversionOrdinaryOwner => "conversion-ordinary-owner",
+            ValidationCause::ConversionMissingRepresentation => "conversion-missing-representation",
+            ValidationCause::ConversionMissingParameters => "conversion-missing-parameters",
+            ValidationCause::ConversionExcessArguments => "conversion-excess-arguments",
+            ValidationCause::ConversionNominalOwner => "conversion-nominal-owner",
+            ValidationCause::ConversionMissingArguments => "conversion-missing-arguments",
+            ValidationCause::ConversionInvalidArgument => "conversion-invalid-argument",
+            ValidationCause::ConversionArgumentKind => "conversion-argument-kind",
+            ValidationCause::ConversionRepresentationMismatch => {
+                "conversion-representation-mismatch"
+            }
         })
     }
 
@@ -699,6 +721,66 @@ impl ValidationError {
                 (ValidationCause::UnknownCoreRowBinder, Some(node)) => {
                     Message::core_validation_unknown_core_row_binder_node(node)
                 }
+                (ValidationCause::ConversionUnknownOwner, None) => {
+                    Message::core_validation_conversion_unknown_owner()
+                }
+                (ValidationCause::ConversionUnknownOwner, Some(node)) => {
+                    Message::core_validation_conversion_unknown_owner_node(node)
+                }
+                (ValidationCause::ConversionOrdinaryOwner, None) => {
+                    Message::core_validation_conversion_ordinary_owner()
+                }
+                (ValidationCause::ConversionOrdinaryOwner, Some(node)) => {
+                    Message::core_validation_conversion_ordinary_owner_node(node)
+                }
+                (ValidationCause::ConversionMissingRepresentation, None) => {
+                    Message::core_validation_conversion_missing_representation()
+                }
+                (ValidationCause::ConversionMissingRepresentation, Some(node)) => {
+                    Message::core_validation_conversion_missing_representation_node(node)
+                }
+                (ValidationCause::ConversionMissingParameters, None) => {
+                    Message::core_validation_conversion_missing_parameters()
+                }
+                (ValidationCause::ConversionMissingParameters, Some(node)) => {
+                    Message::core_validation_conversion_missing_parameters_node(node)
+                }
+                (ValidationCause::ConversionExcessArguments, None) => {
+                    Message::core_validation_conversion_excess_arguments()
+                }
+                (ValidationCause::ConversionExcessArguments, Some(node)) => {
+                    Message::core_validation_conversion_excess_arguments_node(node)
+                }
+                (ValidationCause::ConversionNominalOwner, None) => {
+                    Message::core_validation_conversion_nominal_owner()
+                }
+                (ValidationCause::ConversionNominalOwner, Some(node)) => {
+                    Message::core_validation_conversion_nominal_owner_node(node)
+                }
+                (ValidationCause::ConversionMissingArguments, None) => {
+                    Message::core_validation_conversion_missing_arguments()
+                }
+                (ValidationCause::ConversionMissingArguments, Some(node)) => {
+                    Message::core_validation_conversion_missing_arguments_node(node)
+                }
+                (ValidationCause::ConversionInvalidArgument, None) => {
+                    Message::core_validation_conversion_invalid_argument()
+                }
+                (ValidationCause::ConversionInvalidArgument, Some(node)) => {
+                    Message::core_validation_conversion_invalid_argument_node(node)
+                }
+                (ValidationCause::ConversionArgumentKind, None) => {
+                    Message::core_validation_conversion_argument_kind()
+                }
+                (ValidationCause::ConversionArgumentKind, Some(node)) => {
+                    Message::core_validation_conversion_argument_kind_node(node)
+                }
+                (ValidationCause::ConversionRepresentationMismatch, None) => {
+                    Message::core_validation_conversion_representation_mismatch()
+                }
+                (ValidationCause::ConversionRepresentationMismatch, Some(node)) => {
+                    Message::core_validation_conversion_representation_mismatch_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -828,6 +910,18 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::ConversionUnknownOwner
+                | ValidationCause::ConversionOrdinaryOwner
+                | ValidationCause::ConversionMissingRepresentation
+                | ValidationCause::ConversionMissingParameters
+                | ValidationCause::ConversionExcessArguments
+                | ValidationCause::ConversionNominalOwner
+                | ValidationCause::ConversionMissingArguments
+                | ValidationCause::ConversionInvalidArgument
+                | ValidationCause::ConversionArgumentKind
+                | ValidationCause::ConversionRepresentationMismatch => {
+                    ValidationReason::NewtypeConversion
+                }
             },
             node,
             cause: Some(cause),
@@ -6793,11 +6887,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
             }
             PureComputation::NewtypeConversion(conversion) => {
-                if !self.valid_newtype_conversion(node, *conversion, type_binders)? {
-                    return Err(ValidationError::new(
-                        ValidationReason::NewtypeConversion,
-                        Some(id),
-                    ));
+                if let Some(cause) =
+                    self.valid_newtype_conversion(node, *conversion, type_binders)?
+                {
+                    return Err(ValidationError::with_cause(cause, Some(id)));
                 }
             }
             PureComputation::LocalNominalScope(scope) => {
@@ -7041,18 +7134,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         node: &StoredNode<F>,
         conversion: super::NewtypeConversionNode,
         type_binders: &CoreTypeBinders<'program>,
-    ) -> Result<bool, ValidationError> {
+    ) -> Result<Option<ValidationCause>, ValidationError> {
         let Some(owner) = self.program.registry.nominal(conversion.owner()) else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionUnknownOwner));
         };
         if owner.declaration_kind != ResolvedNominalDeclarationKind::Newtype {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionOrdinaryOwner));
         }
         let Some(representation) = owner.representation.as_ref() else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionMissingRepresentation));
         };
         let Some(parameters) = self.program.registry.nominal_parameters(owner.id) else {
-            return Ok(false);
+            return Ok(Some(ValidationCause::ConversionMissingParameters));
         };
         let child = self.node(conversion.child())?;
         let (nominal, actual_representation) = match conversion.direction() {
@@ -7079,13 +7172,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut head = nominal;
         while let Type::Application(function, argument) = head {
             if arguments.len() == parameters.len() {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionExcessArguments));
             }
             arguments.push(argument.as_ref());
             head = function;
         }
-        if head != &Type::Nominal(owner.id) || arguments.len() != parameters.len() {
-            return Ok(false);
+        if head != &Type::Nominal(owner.id) {
+            return Ok(Some(ValidationCause::ConversionNominalOwner));
+        }
+        if arguments.len() != parameters.len() {
+            return Ok(Some(ValidationCause::ConversionMissingArguments));
         }
 
         let mut replacements = TypeReplacementMap::new();
@@ -7104,10 +7200,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let Some(argument_kind) =
                 self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
             else {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionInvalidArgument));
             };
             if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
-                return Ok(false);
+                return Ok(Some(ValidationCause::ConversionArgumentKind));
             }
             replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
         }
@@ -7124,7 +7220,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, None),
         )?);
-        self.same_type_charged(&expected, actual_representation)
+        Ok((!self.same_type_charged(&expected, actual_representation)?)
+            .then_some(ValidationCause::ConversionRepresentationMismatch))
     }
 
     fn guarded_data_root(
@@ -10131,6 +10228,92 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn newtype_conversion_messages_preserve_the_failed_relation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::ConversionUnknownOwner,
+                "conversion-unknown-owner",
+                "The compiler retained a newtype conversion whose owner is absent from the registry.",
+            ),
+            (
+                ValidationCause::ConversionOrdinaryOwner,
+                "conversion-ordinary-owner",
+                "The compiler used an ordinary nominal type as the owner of a newtype conversion.",
+            ),
+            (
+                ValidationCause::ConversionMissingRepresentation,
+                "conversion-missing-representation",
+                "The compiler retained a newtype conversion whose owner has no representation type.",
+            ),
+            (
+                ValidationCause::ConversionMissingParameters,
+                "conversion-missing-parameters",
+                "The compiler retained a newtype conversion without its owner's parameter declaration.",
+            ),
+            (
+                ValidationCause::ConversionExcessArguments,
+                "conversion-excess-arguments",
+                "The compiler applied more type arguments than the newtype conversion's owner declares.",
+            ),
+            (
+                ValidationCause::ConversionNominalOwner,
+                "conversion-nominal-owner",
+                "The nominal side of a compiler-retained newtype conversion does not name its declared owner.",
+            ),
+            (
+                ValidationCause::ConversionMissingArguments,
+                "conversion-missing-arguments",
+                "The compiler applied fewer type arguments than the newtype conversion's owner declares.",
+            ),
+            (
+                ValidationCause::ConversionInvalidArgument,
+                "conversion-invalid-argument",
+                "The compiler retained a newtype conversion with a type argument that has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::ConversionArgumentKind,
+                "conversion-argument-kind",
+                "A newtype conversion's type argument has a different kind from its declared parameter.",
+            ),
+            (
+                ValidationCause::ConversionRepresentationMismatch,
+                "conversion-representation-mismatch",
+                "The representation side of a compiler-retained newtype conversion differs from its instantiated representation type.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.newtype-conversion");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
 
     #[test]
     fn type_scope_messages_preserve_causes_and_optional_nodes() {
@@ -24858,7 +25041,9 @@ mod tests {
         )
         .expect_err("a conversion without a registry relation must not validate");
         assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
+        assert_eq!(error.cause, Some(ValidationCause::ConversionUnknownOwner));
         assert_eq!(error.node(), Some(root));
+        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
     }
 
     #[test]
@@ -25083,6 +25268,18 @@ mod tests {
             };
             assert_eq!(error.reason(), reason, "{case:?}");
             assert_eq!(error.node(), Some(node), "{case:?}");
+            let cause = match case {
+                Case::Direction | Case::ResultType => Some(ValidationCause::ConversionNominalOwner),
+                Case::OrdinaryOwner => Some(ValidationCause::ConversionOrdinaryOwner),
+                Case::ParameterOrder | Case::FreshBinderSubstitution => {
+                    Some(ValidationCause::ConversionRepresentationMismatch)
+                }
+                _ => None,
+            };
+            if let Some(cause) = cause {
+                assert_eq!(error.cause, Some(cause), "{case:?}");
+                assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+            }
         }
     }
 

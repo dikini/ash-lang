@@ -728,6 +728,13 @@ localization language. Color is not required for completion.
   10/23 reasons, overall coverage is 166/197, and catalogues contain 525
   templates per locale. All 1,270 library tests, 86 diagnostic/catalogue tests
   and warnings-denied Clippy passed.
+- Core newtype-conversion diagnostics retain ten causes for registry relations,
+  nominal ownership, argument counts and kinds, and representation agreement.
+  Check order and resource charges are unchanged. Existing corruption tests
+  assert precise causes; 20 optional-node layouts cover localized text and
+  JSON facts. Core coverage is 11/23 reasons and overall coverage is 167/197.
+  All 1,271 library tests, 86 diagnostic/catalogue tests and warnings-denied
+  Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
