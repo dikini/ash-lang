@@ -119,6 +119,15 @@ entry-effects = Calling `main` must require no effects from its caller.
 entry-open-result = The result type of `main` must be fully determined, with no type parameters, quantified types, or open effect rows.
 entry-constrained = The entry point `main` must require no interface evidence from its caller.
 entry-module = This is the entry module.
+pattern-type-mismatch = This pattern cannot match a value of type `{ $expected }`.
+pattern-constructor-payload = This constructor has the wrong payload shape.
+pattern-constructor-owner = This constructor belongs to a different nominal type than the value being matched.
+pattern-refutable-binding = This binding pattern can fail; for example, it does not match `{ $witness }`.
+pattern-refutable-function = This function parameter pattern can fail; for example, it does not match `{ $witness }`.
+pattern-refutable-handler = This handler operation pattern can fail; for example, it does not match `{ $witness }`.
+coverage-non-exhaustive = These cases do not cover every possible input; for example, `{ $witness }` is not covered.
+coverage-empty-match = A match requires at least one arm.
+coverage-redundant-case = This case can never be selected because earlier cases already cover its inputs.
 resolve-identity-exhausted = Ash exhausted its identifier space for { $space ->
     [type-binder] type parameters
     [local-nominal] local nominal types

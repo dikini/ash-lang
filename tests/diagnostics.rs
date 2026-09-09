@@ -881,6 +881,200 @@ fn common_type_failures_render_expected_and_found_types() {
     }
 }
 
+#[test]
+fn pattern_and_coverage_messages_render_only_retained_semantic_facts() {
+    use ash::{
+        diagnostic::{Diagnostic, SourceLabel},
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+        source::ByteRange,
+    };
+    let source = source("patterns.ash", "pattern");
+    let span = source.span(ByteRange::new(0, 7).unwrap()).unwrap();
+    for (reason, expected, witness, relationship, lead) in [
+        (
+            TypeReason::PatternMismatch,
+            Some("Bool"),
+            None,
+            "pattern",
+            "This pattern cannot match a value of type `Bool`.",
+        ),
+        (
+            TypeReason::ConstructorMismatch,
+            None,
+            None,
+            "constructor",
+            "This constructor has the wrong payload shape.",
+        ),
+        (
+            TypeReason::ConstructorOwner,
+            None,
+            None,
+            "pattern",
+            "This constructor belongs to a different nominal type than the value being matched.",
+        ),
+        (
+            TypeReason::RefutableBinding,
+            None,
+            Some("false"),
+            "binding_pattern",
+            "This binding pattern can fail",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            None,
+            Some("false"),
+            "function_pattern",
+            "This function parameter pattern can fail",
+        ),
+        (
+            TypeReason::RefutableHandlerPattern,
+            None,
+            Some("false"),
+            "handler_pattern",
+            "This handler operation pattern can fail",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            None,
+            Some("false"),
+            "coverage",
+            "These cases do not cover every possible input",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            None,
+            None,
+            "coverage",
+            "A match requires at least one arm.",
+        ),
+        (
+            TypeReason::RedundantCase,
+            None,
+            None,
+            "case",
+            "This case can never be selected",
+        ),
+    ] {
+        let mut diagnostic =
+            Diagnostic::new(reason, SourceLabel::new(span, "not presentation text"));
+        diagnostic.expected = expected.map(str::to_owned);
+        diagnostic.found = witness.map(str::to_owned);
+        let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(!output.contains("not presentation text"));
+            if locale == Locale::English {
+                assert!(output.contains(lead), "{output}");
+            }
+            if let Some(value) = expected.or(witness) {
+                assert!(output.contains(value), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["labels"][0]["relationship"], relationship);
+        let facts = json["facts"].as_array().unwrap();
+        if let Some(value) = expected.or(witness) {
+            assert_eq!(facts.len(), 1);
+            assert_eq!(
+                facts[0]["name"],
+                if expected.is_some() {
+                    "expected_type"
+                } else {
+                    "uncovered_value"
+                }
+            );
+            assert_eq!(facts[0]["value"], value);
+        } else {
+            assert!(facts.is_empty());
+        }
+    }
+}
+
+#[test]
+fn source_pattern_failures_reach_human_and_json_presentation() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (reason, text) in [
+        (
+            TypeReason::PatternMismatch,
+            "main : Unit -> Int\nmain () = match true {\n() => 1\n}\n",
+        ),
+        (
+            TypeReason::ConstructorMismatch,
+            "type Maybe =\nNone\n| Some(Int)\nmain : Unit -> Int\nmain () = match Some(1) {\nSome => 1\nNone => 0\n}\n",
+        ),
+        (
+            TypeReason::ConstructorOwner,
+            "newtype UserId = UserId(Int)\nnewtype OrderId = OrderId(Int)\nread : UserId -> Int\nread value = match value {\nOrderId(number) => number\n}\n",
+        ),
+        (
+            TypeReason::RefutableBinding,
+            "main : Unit -> Int\nmain () = {\nlet true = false\n1\n}\n",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            "fn unsafe(true : Bool) -> Int {\n1\n}\nmain : Unit -> Int\nmain () = unsafe false\n",
+        ),
+        (
+            TypeReason::RefutableFunctionDomain,
+            "main : Unit -> Int\nmain () = {\nlet unsafe : Bool -> Int = fn(true) {\n1\n}\nunsafe false\n}\n",
+        ),
+        (
+            TypeReason::RefutableHandlerPattern,
+            "effect Gate {\nchoose : Bool -> Int\n}\nmain : Unit -> Int\nmain () = handle (perform Gate.choose true) with Gate {\nchoose true => resume 1\n}\n",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            "main : Unit -> Int\nmain () = match true {\ntrue => 1\n}\n",
+        ),
+        (
+            TypeReason::NonExhaustive,
+            "read : Bool -> Int\nread true = 1\n",
+        ),
+        (
+            TypeReason::RedundantCase,
+            "main : Unit -> Int\nmain () = match true {\n_ => 1\nfalse => 2\n}\n",
+        ),
+        (
+            TypeReason::RedundantCase,
+            "read : Bool -> Int\nread _ = 1\nread false = 2\n",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("pattern-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected a source failure: {text}");
+        };
+        assert_eq!(error.reason, reason, "{text}");
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(!output.is_empty());
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason.to_string());
+        assert_eq!(
+            json["labels"][0]["byte_start"],
+            error.primary.span().range().start()
+        );
+        assert_eq!(
+            json["labels"][0]["byte_end"],
+            error.primary.span().range().end()
+        );
+        assert_eq!(json["labels"][0]["facts"], json["facts"]);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

@@ -335,6 +335,18 @@ localization language. Color is not required for completion.
   69 focused diagnostic/catalogue integration tests, warnings-denied Clippy,
   formatting and Markdown lint. Runtime reporting and CLI defaults remain
   unchanged.
+- Pattern and coverage presentation now covers constructor payload/owner
+  mismatches, pattern type mismatches, refutable binding/function/handler
+  patterns, uncovered inputs and redundant cases. It borrows the phase's
+  existing expected type or uncovered-value witness without inventing a
+  found type. Match and equation cases share wording; an empty match has a
+  separate explanation. Type presentation covers 14 of 35 source reasons,
+  with 134 templates in each catalogue. The new tests cover all eight reasons
+  and eleven source programs. The batch passed 125 diagnostic, catalogue,
+  data/pattern and effect tests, including the 10,000-member recursive-data
+  stress test. After replacing the presentation tuple with a named record,
+  all 71 diagnostic/catalogue tests and warnings-denied Clippy passed again.
+  Source acceptance, CLI defaults and runtime reporting remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

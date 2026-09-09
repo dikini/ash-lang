@@ -150,6 +150,24 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A pattern disagrees with the type of the value being matched.
+    pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
+    /// A constructor occurrence has the wrong payload shape.
+    pattern_constructor_payload => "pattern-constructor-payload" {},
+    /// A constructor pattern names another nominal type.
+    pattern_constructor_owner => "pattern-constructor-owner" {},
+    /// An uncovered value proves that a binding pattern can fail.
+    pattern_refutable_binding => "pattern-refutable-binding" { witness: &'a str = "false" },
+    /// An uncovered value proves that a function domain pattern can fail.
+    pattern_refutable_function => "pattern-refutable-function" { witness: &'a str = "false" },
+    /// An uncovered value proves that an operation clause pattern can fail.
+    pattern_refutable_handler => "pattern-refutable-handler" { witness: &'a str = "false" },
+    /// A match or equation group leaves a value uncovered.
+    coverage_non_exhaustive => "coverage-non-exhaustive" { witness: &'a str = "false" },
+    /// A match contains no arms.
+    coverage_empty_match => "coverage-empty-match" {},
+    /// A case has no input not already covered by preceding cases.
+    coverage_redundant_case => "coverage-redundant-case" {},
     /// A finite compiler identifier space cannot represent another identity.
     resolve_identity_exhausted => "resolve-identity-exhausted" { space: crate::resolve::ResolveIdentitySpace = crate::resolve::ResolveIdentitySpace::TermBinder },
     /// A written row repeats a canonically identical effect instance.

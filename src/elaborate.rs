@@ -320,7 +320,63 @@ fn requires_pure_core_projection(
     Ok(false)
 }
 
+pub(crate) struct PatternMessage<'a> {
+    pub(crate) message: crate::message::Message<'a>,
+    pub(crate) relationship: &'static str,
+    pub(crate) fact: Option<(&'static str, &'a str)>,
+}
+
 impl TypeReason {
+    pub(crate) fn pattern_message<'a>(
+        self,
+        expected: Option<&'a str>,
+        witness: Option<&'a str>,
+    ) -> Option<PatternMessage<'a>> {
+        use crate::message::Message;
+        let uncovered = witness.map(|value| ("uncovered_value", value));
+        let (message, relationship, fact) = match self {
+            Self::PatternMismatch => (
+                Message::pattern_type_mismatch(expected?),
+                "pattern",
+                Some(("expected_type", expected?)),
+            ),
+            Self::ConstructorMismatch => {
+                (Message::pattern_constructor_payload(), "constructor", None)
+            }
+            Self::ConstructorOwner => (Message::pattern_constructor_owner(), "pattern", None),
+            Self::RefutableBinding => (
+                Message::pattern_refutable_binding(witness?),
+                "binding_pattern",
+                uncovered,
+            ),
+            Self::RefutableFunctionDomain => (
+                Message::pattern_refutable_function(witness?),
+                "function_pattern",
+                uncovered,
+            ),
+            Self::RefutableHandlerPattern => (
+                Message::pattern_refutable_handler(witness?),
+                "handler_pattern",
+                uncovered,
+            ),
+            Self::NonExhaustive => match witness {
+                Some(value) => (
+                    Message::coverage_non_exhaustive(value),
+                    "coverage",
+                    uncovered,
+                ),
+                None => (Message::coverage_empty_match(), "coverage", None),
+            },
+            Self::RedundantCase => (Message::coverage_redundant_case(), "case", None),
+            _ => return None,
+        };
+        Some(PatternMessage {
+            message,
+            relationship,
+            fact,
+        })
+    }
+
     pub(crate) fn message<'a>(
         self,
         expected: &'a str,
