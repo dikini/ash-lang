@@ -3824,6 +3824,7 @@ pub(crate) enum CanonicalEnvironmentFailure {
     ConstraintResource,
     TypeResource,
     InvalidState,
+    Kind(KindFailureContext),
 }
 
 pub(crate) fn canonical_body_free_environments<'a>(
@@ -3976,9 +3977,10 @@ fn map_canonical_environment_retention_failure(
 ) -> CanonicalEnvironmentFailure {
     match failure {
         KindFailure::Resource(_) => CanonicalEnvironmentFailure::TypeResource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => {
-            CanonicalEnvironmentFailure::InvalidState
-        }
+        failure => failure.internal_context().map_or(
+            CanonicalEnvironmentFailure::InvalidState,
+            CanonicalEnvironmentFailure::Kind,
+        ),
     }
 }
 
@@ -6014,6 +6016,17 @@ fn require_fact_node(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canonical_retention_preserves_kind_cause() {
+        let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let failure = KindFailure::internal_cause(span, KindInternalCause::DuplicateBinder);
+        let context = failure.internal_context().unwrap();
+        let mapped = map_canonical_environment_retention_failure(failure);
+        assert_eq!(mapped, CanonicalEnvironmentFailure::Kind(context));
+    }
     use super::*;
     #[test]
     fn kind_internal_causes_are_retained_without_parsing_legacy_text() {

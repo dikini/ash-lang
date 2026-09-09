@@ -762,7 +762,7 @@ pub fn compile_resolve_diagnostic<'a>(
         .location(span)
         .map_err(|_| PresentationError::MissingSource)?;
     let mut facts: Vec<_> = subject.into_iter().collect();
-    if error.resource_name().is_some() {
+    if error.resource_name().is_some() || error.kind_context().is_some() {
         facts.push(Fact {
             name: "stage",
             kind: "compiler-stage",
@@ -798,6 +798,26 @@ pub fn compile_resolve_diagnostic<'a>(
         });
     }
     let mut related = Vec::with_capacity(error.related.len());
+    if let Some(context) = error.kind_context() {
+        let origin = context.span();
+        if origin != span {
+            let source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == origin.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(origin)
+                .map_err(|_| PresentationError::MissingSource)?;
+            related.push(Label {
+                source,
+                span: origin,
+                message: context.message(),
+                relationship: "kind_failure_origin",
+                facts: Vec::new(),
+            });
+        }
+    }
     for (index, label) in error.related.iter().enumerate() {
         let (message, relationship) = error
             .related_message(index)

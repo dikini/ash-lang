@@ -511,3 +511,4 @@ kind-internal-lookup-interface-index = The compiler's declaration order contains
 kind-internal-lookup-nominal-index = The compiler's declaration order contains an invalid nominal-type index.
 evidence-kind-use = Kind validation failed while checking evidence at this use.
 elaboration-kind-use = Kind validation failed while checking this expression or declaration.
+resolve-kind-use = Kind validation failed while checking imported information at this location.

@@ -652,6 +652,19 @@ localization language. Color is not required for completion.
   and catalogue tests, and warnings-denied Clippy passed. The existing missing
   canonical-binder corruption fixture now asserts its precise cause and span
   while retaining its atomic-publication and exact-budget checks.
+- Kind context now crosses canonical-environment retention, head matching,
+  overlap, selection, checked-summary results and their elaboration/resolution
+  adapters. Imported nominal comparison adapters also forward retained context.
+  Resolution preserves the import/use span and original kind span in human
+  output and JSON. Existing resource categories and legacy displays remain
+  unchanged. Two regression tests first demonstrated cause loss; adapter tests
+  cover the connected routes and English/Bulgarian rendering. Catalogues contain
+  415 templates per locale. Other summary invariants and unification still need
+  cause retention; reason-family coverage is unchanged. All 1,257 library tests,
+  97 diagnostic/catalogue/module-resolution tests and warnings-denied Clippy
+  passed. Five existing corruption fixtures now assert the precise kind cause
+  and span while retaining their small-stack, exact-budget and publication
+  checks. Markdown lint and `git diff --check` passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

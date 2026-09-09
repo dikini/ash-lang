@@ -702,6 +702,7 @@ fn same_type_with_constraint_budget_inner(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OverlapFailure {
     InvalidState,
+    Kind(crate::kind::KindFailureContext),
     Resource,
     TypeResource,
 }
@@ -711,6 +712,8 @@ pub(crate) enum OverlapFailure {
 pub(crate) enum HeadMatchFailure {
     /// A checked head contains a forbidden type or an unbound candidate variable.
     InvalidState,
+    /// Kind validation retained a specific compiler failure and its location.
+    Kind(crate::kind::KindFailureContext),
     /// Matching or constraint-side retention exceeded the graph constraint bound.
     ConstraintResource,
     /// Retaining a matched substitution exceeded the structural type bound.
@@ -912,13 +915,16 @@ fn map_match_environment_failure(failure: CanonicalEnvironmentFailure) -> HeadMa
         CanonicalEnvironmentFailure::ConstraintResource => HeadMatchFailure::ConstraintResource,
         CanonicalEnvironmentFailure::TypeResource => HeadMatchFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => HeadMatchFailure::InvalidState,
+        CanonicalEnvironmentFailure::Kind(context) => HeadMatchFailure::Kind(context),
     }
 }
 
 fn map_match_kind_failure(failure: KindFailure) -> HeadMatchFailure {
     match failure {
         KindFailure::Resource(_) => HeadMatchFailure::ConstraintResource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => HeadMatchFailure::InvalidState,
+        failure => failure
+            .internal_context()
+            .map_or(HeadMatchFailure::InvalidState, HeadMatchFailure::Kind),
     }
 }
 
@@ -1433,13 +1439,16 @@ fn map_overlap_environment_failure(failure: CanonicalEnvironmentFailure) -> Over
         CanonicalEnvironmentFailure::ConstraintResource => OverlapFailure::Resource,
         CanonicalEnvironmentFailure::TypeResource => OverlapFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => OverlapFailure::InvalidState,
+        CanonicalEnvironmentFailure::Kind(context) => OverlapFailure::Kind(context),
     }
 }
 
 fn map_overlap_kind_failure(failure: KindFailure) -> OverlapFailure {
     match failure {
         KindFailure::Resource(_) => OverlapFailure::Resource,
-        KindFailure::Internal(_) | KindFailure::Source(_) => OverlapFailure::InvalidState,
+        failure => failure
+            .internal_context()
+            .map_or(OverlapFailure::InvalidState, OverlapFailure::Kind),
     }
 }
 
@@ -3652,6 +3661,58 @@ impl Drop for ConstrainedScheme {
 
 #[cfg(test)]
 mod tests {
+    fn matching_kind_cause(failure: HeadMatchFailure) -> (&'static str, Span) {
+        let HeadMatchFailure::Kind(context) = failure else {
+            panic!("expected a retained kind failure, got {failure:?}")
+        };
+        (context.name(), context.span())
+    }
+
+    fn overlap_kind_cause(failure: OverlapFailure) -> (&'static str, Span) {
+        let OverlapFailure::Kind(context) = failure else {
+            panic!("expected a retained kind failure, got {failure:?}")
+        };
+        (context.name(), context.span())
+    }
+
+    #[test]
+    fn matching_adapters_preserve_kind_cause() {
+        let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let kind = Kind::Type;
+        for overlap in [false, true] {
+            let mut environments = crate::kind::KindEnvironments::new();
+            let identity = TypeVariableId::new(0);
+            environments
+                .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+                .unwrap();
+            let failure = environments
+                .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+                .unwrap_err();
+            let context = failure.internal_context().unwrap();
+            if overlap {
+                assert_eq!(
+                    map_overlap_kind_failure(failure),
+                    OverlapFailure::Kind(context)
+                );
+                assert_eq!(
+                    map_overlap_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
+                    OverlapFailure::Kind(context)
+                );
+            } else {
+                assert_eq!(
+                    map_match_kind_failure(failure),
+                    HeadMatchFailure::Kind(context)
+                );
+                assert_eq!(
+                    map_match_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
+                    HeadMatchFailure::Kind(context)
+                );
+            }
+        }
+    }
     #[test]
     fn paired_effectful_type_equality_checks_rows_at_exact_work_boundaries() {
         use crate::types::{ComputationType, EffectId, EffectInstance, EffectRow};
@@ -4313,8 +4374,9 @@ mod tests {
                 span,
                 &mut InterfaceConstraintBudget::default(),
                 &mut TypeWorkBudget::default(),
-            ),
-            Err(HeadMatchFailure::InvalidState),
+            )
+            .map_err(matching_kind_cause),
+            Err(("body-free-monotype-kind", span)),
             "a Type-kinded goal must fail before a higher-kinded binding is retained"
         );
     }
@@ -4517,8 +4579,9 @@ mod tests {
                         span,
                         &mut InterfaceConstraintBudget::default(),
                         &mut TypeWorkBudget::default(),
-                    ),
-                    Err(HeadMatchFailure::InvalidState),
+                    )
+                    .map_err(matching_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "the second binding must fail before the authenticated first binding is cloned"
                 );
             })
@@ -5741,8 +5804,9 @@ mod tests {
                         span,
                         &mut InterfaceConstraintBudget::default(),
                         &mut TypeWorkBudget::default(),
-                    ),
-                    Err(HeadMatchFailure::InvalidState),
+                    )
+                    .map_err(matching_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "a mismatch at the deep Kind result must fail before substitution publication"
                 );
             })
@@ -5869,8 +5933,8 @@ mod tests {
                         &left,
                         &[rejected_right],
                         &rejected,
-                    ),
-                    Err(OverlapFailure::InvalidState),
+                    ).map_err(overlap_kind_cause),
+                    Err(("body-free-monotype-kind", span)),
                     "a mismatch at the deep Kind result must fail before solution caching"
                 );
             })
@@ -5979,8 +6043,9 @@ mod tests {
                 &left,
                 &[right_first, right_second],
                 &right,
-            ),
-            Err(OverlapFailure::InvalidState),
+            )
+            .map_err(overlap_kind_cause),
+            Err(("body-free-monotype-kind", span)),
             "the second solution mismatch must discard the first authenticated cache entry"
         );
     }

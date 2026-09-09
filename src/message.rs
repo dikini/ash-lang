@@ -153,6 +153,7 @@ messages! {
     /// Kind validation failed while checking evidence at this use.
     evidence_kind_use => "evidence-kind-use" {},
     elaboration_kind_use => "elaboration-kind-use" {},
+    resolve_kind_use => "resolve-kind-use" {},
     /// The compiler retained a constructor scheme referring to a variable outside its owner parameters.
     kind_internal_body_free_constructor_owner => "kind-internal-body-free-constructor-owner" {},
     /// The compiler has no canonical parameter kinds for an interface occurrence checked without a body.

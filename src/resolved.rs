@@ -4474,6 +4474,7 @@ impl ImportedFacts {
             ResolvedBuildFailure::TypeResource | ResolvedBuildFailure::InvalidState => {
                 ImportedNominalMergeFailure::Conflict
             }
+            ResolvedBuildFailure::Kind(context) => ImportedNominalMergeFailure::Kind(context),
         })?;
         if !parameters_match {
             return Err(ImportedNominalMergeFailure::Conflict);
@@ -4509,6 +4510,9 @@ impl ImportedFacts {
                     }
                     ResolvedBuildFailure::TypeResource | ResolvedBuildFailure::InvalidState => {
                         ImportedNominalMergeFailure::Conflict
+                    }
+                    ResolvedBuildFailure::Kind(context) => {
+                        ImportedNominalMergeFailure::Kind(context)
                     }
                 })?;
         let defining_display_conflict = existing.display_is_private
@@ -5724,6 +5728,7 @@ impl ImportedNominalFact {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImportedNominalMergeFailure {
+    Kind(crate::kind::KindFailureContext),
     Conflict,
     TypeResource,
     ConstraintResource,
@@ -6770,6 +6775,7 @@ pub(crate) enum SummaryHiddenDiamondMutationForTest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ResolvedBuildFailure {
     InvalidState,
+    Kind(crate::kind::KindFailureContext),
     TypeResource,
     ConstraintResource,
 }
@@ -8892,6 +8898,7 @@ fn map_summary_overlap_result(
 ) -> Result<bool, ResolvedBuildFailure> {
     result.map_err(|failure| match failure {
         OverlapFailure::InvalidState => ResolvedBuildFailure::InvalidState,
+        OverlapFailure::Kind(context) => ResolvedBuildFailure::Kind(context),
         OverlapFailure::Resource => ResolvedBuildFailure::ConstraintResource,
         OverlapFailure::TypeResource => ResolvedBuildFailure::TypeResource,
     })
@@ -19492,6 +19499,43 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn summary_overlap_retains_kind_context() {
+        let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let kind = Kind::Type;
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        assert_eq!(
+            map_summary_overlap_result(Err(OverlapFailure::Kind(context))),
+            Err(ResolvedBuildFailure::Kind(context))
+        );
+        for (overlap, summary) in [
+            (
+                OverlapFailure::Resource,
+                ResolvedBuildFailure::ConstraintResource,
+            ),
+            (
+                OverlapFailure::TypeResource,
+                ResolvedBuildFailure::TypeResource,
+            ),
+            (
+                OverlapFailure::InvalidState,
+                ResolvedBuildFailure::InvalidState,
+            ),
+        ] {
+            assert_eq!(map_summary_overlap_result(Err(overlap)), Err(summary));
+        }
+    }
     use super::*;
 
     fn capture_method_fixture() -> ResolvedImplementationMethodGroup {

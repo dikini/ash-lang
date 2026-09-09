@@ -17251,6 +17251,10 @@ fn map_overlap_result(result: Result<bool, OverlapFailure>) -> Result<bool, Type
             ElaborationFailure::TypeResourceExhausted,
         )),
         Err(OverlapFailure::InvalidState) => Err(invalid_state()),
+        Err(OverlapFailure::Kind(context)) => Err(TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: None,
+        })),
     }
 }
 
@@ -18978,6 +18982,12 @@ fn checked_interface_facts(
                     }
                     ResolvedBuildFailure::ConstraintResource => constraint_resource(),
                     ResolvedBuildFailure::InvalidState => invalid_state(),
+                    ResolvedBuildFailure::Kind(context) => {
+                        TypeError::Internal(ElaborationFailure::Kind {
+                            context,
+                            span: None,
+                        })
+                    }
                 })?,
             );
         }
@@ -21466,6 +21476,10 @@ fn zonk_core_effect_row(
 fn resolved_build_error(error: ResolvedBuildFailure) -> TypeError {
     match error {
         ResolvedBuildFailure::InvalidState => invalid_state(),
+        ResolvedBuildFailure::Kind(context) => TypeError::Internal(ElaborationFailure::Kind {
+            context,
+            span: None,
+        }),
         ResolvedBuildFailure::TypeResource => {
             TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
         }
@@ -23950,6 +23964,18 @@ mod tests {
             .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
             .unwrap_err();
         let context = failure.internal_context().unwrap();
+        for failure in [
+            map_overlap_result(Err(OverlapFailure::Kind(context))).unwrap_err(),
+            resolved_build_error(ResolvedBuildFailure::Kind(context)),
+        ] {
+            assert_eq!(
+                failure,
+                TypeError::Internal(ElaborationFailure::Kind {
+                    context,
+                    span: None
+                })
+            );
+        }
         for span in [None, Some(origin), Some(use_span)] {
             let TypeError::Internal(error) =
                 selection_failure(SelectionFailure::Kind(context), span)

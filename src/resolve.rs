@@ -836,6 +836,7 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
+    Kind(crate::kind::KindFailureContext),
     Term,
     EffectOperation,
     Type,
@@ -880,6 +881,13 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
+    pub(crate) fn kind_context(&self) -> Option<crate::kind::KindFailureContext> {
+        match self.1 {
+            Some(ResolveContext::Kind(context)) => Some(context),
+            _ => None,
+        }
+    }
+
     pub(crate) fn resource_name(&self) -> Option<&'static str> {
         match self.reason {
             ResolveReason::TypeResourceExhausted => Some("type-work"),
@@ -919,6 +927,16 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if let Some(context) = self.kind_context() {
+            return Some((
+                if context.span() == self.primary.span() {
+                    context.message()
+                } else {
+                    crate::message::Message::resolve_kind_use()
+                },
+                "resolution_site",
+            ));
+        }
         if self.resource_name().is_some() {
             return Some((self.message()?, "resolution_site"));
         }
@@ -1045,12 +1063,16 @@ impl ResolveError {
                 | ResolveContext::MissingExport
                 | ResolveContext::MissingModuleAlias
                 | ResolveContext::MixedTypeRowRoles
+                | ResolveContext::Kind(_)
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        if let Some(context) = self.kind_context() {
+            return Some(("kind_cause", "kind-internal-cause", context.name()));
+        }
         if let Some(resource) = self.resource_name() {
             return Some(("resource", "resource", resource));
         }
@@ -1116,6 +1138,9 @@ impl ResolveError {
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        if let Some(context) = self.kind_context() {
+            return Some(context.message());
+        }
         match self.reason {
             ResolveReason::TypeResourceExhausted => {
                 return Some(crate::message::Message::resolve_type_resources());
@@ -1240,7 +1265,7 @@ impl ResolveError {
             ResolveContext::MixedTypeRowRoles => {
                 crate::message::Message::resolve_mixed_type_row_roles(name)
             }
-            ResolveContext::IdentityExhaustion(_) => return None,
+            ResolveContext::IdentityExhaustion(_) | ResolveContext::Kind(_) => return None,
         })
     }
     /// Returns the common structured diagnostic fields.
@@ -1411,6 +1436,13 @@ fn resolve_module_names_with_budget(
             .authenticate(type_work, constraint_work)
             .map_err(|failure| {
                 let (reason, message) = match failure {
+                    ResolvedBuildFailure::Kind(context) => {
+                        return kind_context_error(
+                            context,
+                            dependency.edge.import_span(),
+                            "a dependency summary failed body-free authentication",
+                        );
+                    }
                     ResolvedBuildFailure::TypeResource => (
                         ResolveReason::TypeResourceExhausted,
                         "dependency-summary authentication exceeded its type-work budget",
@@ -3922,6 +3954,11 @@ impl Resolver {
                     &mut self.constraint_work,
                 )
                 .map_err(|failure| match failure {
+                    ResolvedBuildFailure::Kind(context) => kind_context_error(
+                        context,
+                        span,
+                        "an imported method authority disagrees with its checked mirror",
+                    ),
                     ResolvedBuildFailure::TypeResource => error(
                         ResolveReason::TypeResourceExhausted,
                         span,
@@ -10546,6 +10583,16 @@ fn identity_error(space: ResolveIdentitySpace, span: Span, message: &str) -> Res
     failure
 }
 
+fn kind_context_error(
+    context: crate::kind::KindFailureContext,
+    span: crate::source::Span,
+    message: &str,
+) -> ResolveError {
+    let mut failure = error(ResolveReason::InternalState, span, message);
+    failure.1 = Some(ResolveContext::Kind(context));
+    failure
+}
+
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
 }
@@ -10566,6 +10613,7 @@ fn lookup_error(
         ResolveContext::Effect | ResolveContext::ExportedEffect => ResolveReason::UnknownEffect,
         ResolveContext::MixedTypeRowRoles => ResolveReason::TypeKind,
         ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
+        ResolveContext::Kind(_) => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -10580,6 +10628,11 @@ fn imported_nominal_merge_error(
     span: crate::source::Span,
 ) -> ResolveError {
     match failure {
+        ImportedNominalMergeFailure::Kind(context) => kind_context_error(
+            context,
+            span,
+            "imported routes disagree about nominal metadata",
+        ),
         ImportedNominalMergeFailure::Conflict => error(
             ResolveReason::InternalState,
             span,
@@ -10603,6 +10656,11 @@ fn imported_fact_comparison_error(
     span: crate::source::Span,
 ) -> ResolveError {
     match failure {
+        ResolvedBuildFailure::Kind(context) => kind_context_error(
+            context,
+            span,
+            "alternate imported-fact comparison encountered invalid retained state",
+        ),
         ResolvedBuildFailure::TypeResource => error(
             ResolveReason::TypeResourceExhausted,
             span,
@@ -11190,6 +11248,66 @@ mod module_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn imported_kind_context_reaches_presentation() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_resolve_diagnostic, write_human, write_json},
+        };
+        let declaration = crate::source::SourceFile::new("declaration.ash", "binder").unwrap();
+        let importer = crate::source::SourceFile::new("importer.ash", "import").unwrap();
+        let origin = declaration
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let import = importer
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let kind = Kind::Type;
+        let mut environments = crate::kind::KindEnvironments::new();
+        let identity = TypeVariableId::new(0);
+        environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap();
+        let failure = environments
+            .insert_declared(identity, &kind, origin, &mut TypeWorkBudget::with_limit(1))
+            .unwrap_err();
+        let context = failure.internal_context().unwrap();
+        for span in [origin, import] {
+            for failure in [
+                imported_fact_comparison_error(ResolvedBuildFailure::Kind(context), span),
+                imported_nominal_merge_error(ImportedNominalMergeFailure::Kind(context), span),
+                kind_context_error(context, span, "ignored legacy description"),
+            ] {
+                assert_eq!(failure.reason, ResolveReason::InternalState);
+                assert_eq!(failure.kind_context(), Some(context));
+                let view =
+                    compile_resolve_diagnostic(&failure, &[&declaration, &importer]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(
+                            String::from_utf8(output)
+                                .unwrap()
+                                .contains("duplicate type-variable identity")
+                        );
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["responsibility"], "compiler");
+                assert_eq!(json["facts"][0]["name"], "kind_cause");
+                assert_eq!(json["facts"][0]["value"], "duplicate-binder");
+                let labels = json["labels"].as_array().unwrap();
+                assert_eq!(labels.len(), if span == origin { 1 } else { 2 });
+                if span != origin {
+                    assert_eq!(labels[1]["relationship"], "kind_failure_origin");
+                }
+                assert!(compile_resolve_diagnostic(&failure, &[&importer]).is_err());
+            }
+        }
+    }
     use std::{
         fs,
         path::{Path, PathBuf},

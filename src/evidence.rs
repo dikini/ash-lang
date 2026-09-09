@@ -3714,6 +3714,7 @@ impl EvidenceSelector {
 fn map_head_failure(failure: HeadMatchFailure) -> SelectionFailure {
     match failure {
         HeadMatchFailure::InvalidState => SelectionFailure::InvalidState,
+        HeadMatchFailure::Kind(context) => SelectionFailure::Kind(context),
         HeadMatchFailure::ConstraintResource => SelectionFailure::ConstraintResource,
         HeadMatchFailure::TypeResource => SelectionFailure::TypeResource,
     }
@@ -3724,6 +3725,7 @@ fn map_ingress_environment_failure(failure: CanonicalEnvironmentFailure) -> Sele
         CanonicalEnvironmentFailure::ConstraintResource => SelectionFailure::ConstraintResource,
         CanonicalEnvironmentFailure::TypeResource => SelectionFailure::TypeResource,
         CanonicalEnvironmentFailure::InvalidState => SelectionFailure::InvalidState,
+        CanonicalEnvironmentFailure::Kind(context) => SelectionFailure::Kind(context),
     }
 }
 
@@ -4478,6 +4480,14 @@ mod tests {
             .insert_declared(identity, &kind, span, &mut TypeWorkBudget::with_limit(1))
             .unwrap_err();
         let context = error.internal_context().unwrap();
+        assert_eq!(
+            map_head_failure(HeadMatchFailure::Kind(context)),
+            SelectionFailure::Kind(context)
+        );
+        assert_eq!(
+            map_ingress_environment_failure(CanonicalEnvironmentFailure::Kind(context)),
+            SelectionFailure::Kind(context)
+        );
         assert_eq!(
             map_ingress_kind_failure(error),
             SelectionFailure::Kind(context)
