@@ -150,6 +150,16 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An effect instance has the wrong number of type arguments.
+    handler_argument_count => "handler-argument-count" {},
+    /// An operation identity belongs to another effect declaration.
+    handler_operation_owner => "handler-operation-owner" {},
+    /// A handler has the wrong number of clauses.
+    handler_clause_count => "handler-clause-count" {},
+    /// An operation identity is outside its effect declaration.
+    handler_operation_index => "handler-operation-index" {},
+    /// A handler repeats an operation clause.
+    handler_duplicate_operation => "handler-duplicate-operation" {},
     /// All equations must consume the same positive number of patterns.
     equation_pattern_count => "equation-pattern-count" {},
     /// An equation consumes more arrows than its declared type provides.

@@ -699,6 +699,23 @@ enum TypeDiagnosticContext {
     Plain,
     FunctionNeedsContext(Option<SynthesisCause>),
     EquationArity(EquationArityCause),
+    HandlerCoverage(HandlerCoverageCause),
+    CompletionOutside(CompletionOperation),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HandlerCoverageCause {
+    ArgumentCount,
+    OperationOwner,
+    ClauseCount,
+    OperationIndex,
+    DuplicateOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionOperation {
+    Resume,
+    Discard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -731,6 +748,53 @@ impl std::ops::DerefMut for TypeDiagnostic {
 
 impl TypeDiagnostic {
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason == TypeReason::HandlerCoverage {
+            let TypeDiagnosticContext::HandlerCoverage(cause) = self.context else {
+                return None;
+            };
+            use crate::message::Message;
+            let (message, failure) = match cause {
+                HandlerCoverageCause::ArgumentCount => {
+                    (Message::handler_argument_count(), "argument-count")
+                }
+                HandlerCoverageCause::OperationOwner => {
+                    (Message::handler_operation_owner(), "operation-owner")
+                }
+                HandlerCoverageCause::ClauseCount => {
+                    (Message::handler_clause_count(), "clause-count")
+                }
+                HandlerCoverageCause::OperationIndex => {
+                    (Message::handler_operation_index(), "operation-index")
+                }
+                HandlerCoverageCause::DuplicateOperation => (
+                    Message::handler_duplicate_operation(),
+                    "duplicate-operation",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "handler_coverage",
+                fact: Some(("coverage_failure", failure)),
+                fact_kind: "handler-coverage-failure",
+                minimum_related: 0,
+            });
+        }
+        if self.reason == TypeReason::ResumeOutsideClause {
+            let TypeDiagnosticContext::CompletionOutside(operation) = self.context else {
+                return None;
+            };
+            let keyword = match operation {
+                CompletionOperation::Resume => "resume",
+                CompletionOperation::Discard => "discard",
+            };
+            return Some(TypeSourceMessage {
+                message: crate::message::Message::resolve_continuation_outside(keyword),
+                relationship: "continuation_use",
+                fact: Some(("operation", keyword)),
+                fact_kind: "keyword",
+                minimum_related: 0,
+            });
+        }
         if self.reason == TypeReason::EquationArity {
             let TypeDiagnosticContext::EquationArity(cause) = self.context else {
                 return None;
@@ -8998,11 +9062,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .registry
             .effect(instance.effect())
             .ok_or_else(invalid_state)?;
-        if declaration.parameters.len() != instance.arguments().len()
-            || operation.owner() != declaration.id
-        {
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+        if declaration.parameters.len() != instance.arguments().len() {
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::ArgumentCount,
+                span,
+                "this effect instance does not match its declaration",
+            ));
+        }
+        if operation.owner() != declaration.id {
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::OperationOwner,
                 span,
                 "this effect instance does not match its declaration",
             ));
@@ -9118,13 +9187,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         discard: &crate::resolved::ResolvedDiscardExpr,
         span: Span,
     ) -> Result<TypedNode, TypeError> {
-        let owner = discard.owner.ok_or_else(|| {
-            inference_failure(
-                TypeReason::ResumeOutsideClause,
-                span,
-                "resume and discard are available only inside an operation clause",
-            )
-        })?;
+        let owner = discard
+            .owner
+            .ok_or_else(|| completion_outside_error(CompletionOperation::Discard, span))?;
         let active = self
             .active_resumes
             .iter()
@@ -9161,13 +9226,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         span: Span,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
-        let owner = resume.owner.ok_or_else(|| {
-            inference_failure(
-                TypeReason::ResumeOutsideClause,
-                span,
-                "resume and discard are available only inside an operation clause",
-            )
-        })?;
+        let owner = resume
+            .owner
+            .ok_or_else(|| completion_outside_error(CompletionOperation::Resume, span))?;
         let active_position = self
             .active_resumes
             .iter()
@@ -9601,8 +9662,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .effect(handler.effect.instance.effect())
                 .ok_or_else(invalid_state)?;
             if declaration.parameters.len() != handler.effect.instance.arguments().len() {
-                return Err(inference_failure(
-                    TypeReason::HandlerCoverage,
+                return Err(handler_coverage_error(
+                    HandlerCoverageCause::ArgumentCount,
                     handler.effect.span,
                     "this effect instance does not match its declaration",
                 ));
@@ -9654,8 +9715,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .effect(handler.effect.instance.effect())
             .ok_or_else(invalid_state)?;
         if handler.clauses.len() != declaration.operations.len() {
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+            return Err(handler_coverage_error(
+                HandlerCoverageCause::ClauseCount,
                 span,
                 "a handler must contain one clause for every operation",
             ));
@@ -9667,13 +9728,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             &mut self.type_work,
         )
         .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-        if let Some(index) = invalid_clause {
+        if let Some((index, cause)) = invalid_clause {
             let diagnostic_span = handler
                 .clauses
                 .get(index)
                 .map_or(span, |clause| clause.span);
-            return Err(inference_failure(
-                TypeReason::HandlerCoverage,
+            return Err(handler_coverage_error(
+                cause,
                 diagnostic_span,
                 "a handler operation clause is duplicate or does not belong to this effect",
             ));
@@ -21146,6 +21207,26 @@ fn constructor_mismatch(span: Span) -> TypeError {
     ))
 }
 
+fn handler_coverage_error(cause: HandlerCoverageCause, span: Span, message: &str) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(TypeReason::HandlerCoverage, SourceLabel::new(span, message)),
+        context: TypeDiagnosticContext::HandlerCoverage(cause),
+    }))
+}
+
+fn completion_outside_error(operation: CompletionOperation, span: Span) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(
+            TypeReason::ResumeOutsideClause,
+            SourceLabel::new(
+                span,
+                "resume and discard are available only inside an operation clause",
+            ),
+        ),
+        context: TypeDiagnosticContext::CompletionOutside(operation),
+    }))
+}
+
 fn equation_arity_error(cause: EquationArityCause, span: Span) -> TypeError {
     let message = match cause {
         EquationArityCause::PatternCount => {
@@ -23330,7 +23411,7 @@ fn first_invalid_handler_operation_with_budget(
     operation_count: usize,
     operations: impl ExactSizeIterator<Item = crate::types::OperationId>,
     budget: &mut TypeWorkBudget,
-) -> Result<Option<usize>, ()> {
+) -> Result<Option<(usize, HandlerCoverageCause)>, ()> {
     budget.charge(operation_count)?;
     let mut seen = Vec::new();
     seen.try_reserve(operation_count).map_err(|_| ())?;
@@ -23339,13 +23420,19 @@ fn first_invalid_handler_operation_with_budget(
     budget.charge(operations.len())?;
     for (clause_index, operation) in operations.enumerate() {
         let Ok(index) = usize::try_from(operation.operation()) else {
-            return Ok(Some(clause_index));
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationIndex)));
         };
         let Some(slot) = seen.get_mut(index) else {
-            return Ok(Some(clause_index));
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationIndex)));
         };
-        if operation.owner() != owner || std::mem::replace(slot, true) {
-            return Ok(Some(clause_index));
+        if operation.owner() != owner {
+            return Ok(Some((clause_index, HandlerCoverageCause::OperationOwner)));
+        }
+        if std::mem::replace(slot, true) {
+            return Ok(Some((
+                clause_index,
+                HandlerCoverageCause::DuplicateOperation,
+            )));
         }
     }
     Ok(None)
@@ -23677,6 +23764,94 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn handler_operation_validation_retains_exact_causes_and_work() {
+        use crate::types::{EffectId, OperationId};
+        let owner = EffectId::new(ModuleId::new(7), 3);
+        let foreign = EffectId::new(ModuleId::new(7), 4);
+        for (operations, expected) in [
+            (
+                [OperationId::new(owner, 0), OperationId::new(owner, 0)],
+                HandlerCoverageCause::DuplicateOperation,
+            ),
+            (
+                [OperationId::new(owner, 0), OperationId::new(foreign, 1)],
+                HandlerCoverageCause::OperationOwner,
+            ),
+            (
+                [OperationId::new(owner, 0), OperationId::new(owner, 2)],
+                HandlerCoverageCause::OperationIndex,
+            ),
+        ] {
+            let mut budget = TypeWorkBudget::with_limit(4);
+            assert_eq!(
+                first_invalid_handler_operation_with_budget(
+                    owner,
+                    2,
+                    operations.into_iter(),
+                    &mut budget
+                ),
+                Ok(Some((1, expected)))
+            );
+            assert_eq!(budget.used(), 4);
+        }
+    }
+
+    #[test]
+    fn handler_and_completion_causes_render_without_legacy_prose() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("handler.ash", "resume").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let mut cases = vec![
+            (
+                completion_outside_error(CompletionOperation::Resume, span),
+                "resume",
+            ),
+            (
+                completion_outside_error(CompletionOperation::Discard, span),
+                "discard",
+            ),
+        ];
+        for (cause, name) in [
+            (HandlerCoverageCause::ArgumentCount, "argument-count"),
+            (HandlerCoverageCause::OperationOwner, "operation-owner"),
+            (HandlerCoverageCause::ClauseCount, "clause-count"),
+            (HandlerCoverageCause::OperationIndex, "operation-index"),
+            (
+                HandlerCoverageCause::DuplicateOperation,
+                "duplicate-operation",
+            ),
+        ] {
+            cases.push((
+                handler_coverage_error(cause, span, "ignored legacy prose"),
+                name,
+            ));
+        }
+        for (error, fact) in cases {
+            let TypeError::Source(error) = error else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("ignored legacy prose")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["value"], fact);
+            assert_eq!(json["responsibility"], "source");
+        }
     }
 
     #[test]

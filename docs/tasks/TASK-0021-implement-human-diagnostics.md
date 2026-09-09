@@ -406,6 +406,14 @@ localization language. Color is not required for completion.
   cover these requirements. Type presentation covers 29 of 35 source reasons,
   with 162 templates per locale. All 103 focused diagnostic, catalogue and
   hook tests and warnings-denied Clippy passed.
+- Handler coverage retains five distinct causes: argument count, operation
+  owner, clause count, operation index and duplicate operation. Type-phase
+  continuation errors retain whether the operation was `resume` or `discard`.
+  Both locales and JSON use those facts without interpreting legacy prose.
+  Existing checks, failure order, spans, legacy text and work charges remain
+  unchanged. Type presentation covers 31 of 35 source reasons, with 167
+  templates per locale. All 12 handler-related library tests, 116 focused
+  integration tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

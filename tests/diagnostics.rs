@@ -1391,6 +1391,48 @@ fn hook_api_messages_explain_declaration_level_equality_for_hooks_and_registrati
     }
 }
 
+#[test]
+fn handler_coverage_presentation_distinguishes_missing_and_duplicate_clauses() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (clauses, cause, explanation) in [
+        (
+            "read ignored => resume 1\n",
+            "clause-count",
+            "This handler must contain exactly one clause for every operation of the handled effect.",
+        ),
+        (
+            "read ignored => resume 1\nread ignored => resume 2\n",
+            "duplicate-operation",
+            "This handler repeats a clause for the same operation.",
+        ),
+    ] {
+        let text = format!(
+            "effect Cell {{\nread : Unit -> Int\nwrite : Int -> Unit\n}}\nmain : Unit -> Int\nmain () = handle (perform Cell.read ()) with Cell {{\n{clauses}}}\n"
+        );
+        let fixture = ModuleFixture::load("handler-coverage-message.ash", &text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source error");
+        };
+        assert_eq!(error.reason, TypeReason::HandlerCoverage);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(explanation));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "coverage_failure");
+        assert_eq!(json["facts"][0]["value"], cause);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,
