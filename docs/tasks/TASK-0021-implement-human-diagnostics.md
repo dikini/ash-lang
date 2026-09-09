@@ -793,6 +793,14 @@ localization language. Color is not required for completion.
   Hook contracts, registration edges and capture-analysis internal failures remain
   unmigrated, so Handler is not counted complete. All 1,285 library tests,
   86 diagnostic/catalogue tests and warnings-denied Clippy passed.
+- Thirty further handler causes cover callback-scope ownership edges and
+  hook-root operation/input/continuation/provenance contracts. Shared checks use
+  the same messages. The handler table now covers 60 causes in 120 optional-node
+  localized/JSON layouts. Corruption tests cover shared cleanup owners across
+  transformations and hook-root operation/input identities. Registration
+  forwarding contracts and capture-analysis internal causes remain; Handler is
+  still not counted complete. All 1,286 library tests, 86 diagnostic/catalogue
+  tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
