@@ -836,6 +836,10 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
+    MissingFileScope,
+    MissingLexicalScope,
+    MissingNominalScope,
+    MissingConstructorScope,
     DependencySummaryMismatch,
     DependencySummaryInvalid,
     Kind(crate::kind::KindFailureContext),
@@ -888,11 +892,24 @@ impl ResolveError {
         self
     }
 
-    fn dependency_summary_message(
-        &self,
-    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+    fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         match self.1 {
+            Some(ResolveContext::MissingFileScope) => {
+                Some((Message::resolve_missing_file_scope(), "missing-file-scope"))
+            }
+            Some(ResolveContext::MissingLexicalScope) => Some((
+                Message::resolve_missing_lexical_scope(),
+                "missing-lexical-scope",
+            )),
+            Some(ResolveContext::MissingNominalScope) => Some((
+                Message::resolve_missing_nominal_scope(),
+                "missing-nominal-scope",
+            )),
+            Some(ResolveContext::MissingConstructorScope) => Some((
+                Message::resolve_missing_constructor_scope(),
+                "missing-constructor-scope",
+            )),
             Some(ResolveContext::DependencySummaryMismatch) => Some((
                 Message::resolve_dependency_summary_mismatch(),
                 "dependency-summary-mismatch",
@@ -950,7 +967,7 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
-        if let Some((message, _)) = self.dependency_summary_message() {
+        if let Some((message, _)) = self.internal_message() {
             return Some((message, "resolution_site"));
         }
         if let Some(context) = self.kind_context() {
@@ -1092,13 +1109,17 @@ impl ResolveError {
                 | ResolveContext::Kind(_)
                 | ResolveContext::DependencySummaryMismatch
                 | ResolveContext::DependencySummaryInvalid
+                | ResolveContext::MissingFileScope
+                | ResolveContext::MissingLexicalScope
+                | ResolveContext::MissingNominalScope
+                | ResolveContext::MissingConstructorScope
                 | ResolveContext::IdentityExhaustion(_),
             ) => None,
         }
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
-        if let Some((_, cause)) = self.dependency_summary_message() {
+        if let Some((_, cause)) = self.internal_message() {
             return Some(("cause", "resolver-internal-cause", cause));
         }
         if let Some(context) = self.kind_context() {
@@ -1169,7 +1190,7 @@ impl ResolveError {
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
-        if let Some((message, _)) = self.dependency_summary_message() {
+        if let Some((message, _)) = self.internal_message() {
             return Some(message);
         }
         if let Some(context) = self.kind_context() {
@@ -1302,7 +1323,11 @@ impl ResolveError {
             ResolveContext::IdentityExhaustion(_)
             | ResolveContext::Kind(_)
             | ResolveContext::DependencySummaryMismatch
-            | ResolveContext::DependencySummaryInvalid => return None,
+            | ResolveContext::DependencySummaryInvalid
+            | ResolveContext::MissingFileScope
+            | ResolveContext::MissingLexicalScope
+            | ResolveContext::MissingNominalScope
+            | ResolveContext::MissingConstructorScope => return None,
         })
     }
     /// Returns the common structured diagnostic fields.
@@ -3208,6 +3233,7 @@ impl Resolver {
                                     *span,
                                     "the resolver lost the file scope",
                                 )
+                                .with_context(ResolveContext::MissingFileScope)
                             })?;
                             if scope.contains_key(&local.text) {
                                 return Err(import_conflict(local.span, &local.text));
@@ -6463,7 +6489,8 @@ impl Resolver {
                 ResolveReason::InternalState,
                 definition.span,
                 "the resolver lost the file scope",
-            ));
+            )
+            .with_context(ResolveContext::MissingFileScope));
         };
         file_scope.insert(
             global.spelling.clone(),
@@ -7447,6 +7474,7 @@ impl Resolver {
                 declaration.span,
                 "the resolver lost the local nominal scope",
             )
+            .with_context(ResolveContext::MissingNominalScope)
         })?;
         nominal_scope.try_reserve(1).map_err(|_| {
             error(
@@ -7461,6 +7489,7 @@ impl Resolver {
                 declaration.span,
                 "the resolver lost the local constructor scope",
             )
+            .with_context(ResolveContext::MissingConstructorScope)
         })?;
         constructor_scope.try_reserve(1).map_err(|_| {
             error(
@@ -9446,7 +9475,8 @@ impl Resolver {
                             ResolveReason::InternalState,
                             group.span,
                             "the resolver lost the current lexical scope",
-                        ));
+                        )
+                        .with_context(ResolveContext::MissingLexicalScope));
                     };
                     for binder in binders.iter() {
                         scope.insert(
@@ -9515,7 +9545,8 @@ impl Resolver {
                             ResolveReason::InternalState,
                             binding.span,
                             "the resolver lost the current lexical scope",
-                        ));
+                        )
+                        .with_context(ResolveContext::MissingLexicalScope));
                     };
                     for binder in binders {
                         scope.insert(
@@ -10657,7 +10688,11 @@ fn lookup_error(
         ResolveContext::IdentityExhaustion(_) => ResolveReason::BinderIdExhausted,
         ResolveContext::Kind(_)
         | ResolveContext::DependencySummaryMismatch
-        | ResolveContext::DependencySummaryInvalid => ResolveReason::InternalState,
+        | ResolveContext::DependencySummaryInvalid
+        | ResolveContext::MissingFileScope
+        | ResolveContext::MissingLexicalScope
+        | ResolveContext::MissingNominalScope
+        | ResolveContext::MissingConstructorScope => ResolveReason::InternalState,
         ResolveContext::PrivateExport
         | ResolveContext::MissingExport
         | ResolveContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -14289,7 +14324,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_summary_messages_do_not_depend_on_legacy_prose() {
+    fn internal_messages_do_not_depend_on_legacy_prose() {
         use crate::message::{Catalogue, Locale};
         let source = SourceFile::new("import.ash", "import dep as Dep").unwrap();
         let span = source.span(ByteRange::new(0, 17).unwrap()).unwrap();
@@ -14303,6 +14338,26 @@ mod tests {
                 ResolveContext::DependencySummaryInvalid,
                 "dependency-summary-invalid",
                 "The compiler could not validate the checked information for this imported module.",
+            ),
+            (
+                ResolveContext::MissingFileScope,
+                "missing-file-scope",
+                "The compiler lost the file's name-resolution scope.",
+            ),
+            (
+                ResolveContext::MissingLexicalScope,
+                "missing-lexical-scope",
+                "The compiler lost the current lexical scope while resolving a binding.",
+            ),
+            (
+                ResolveContext::MissingNominalScope,
+                "missing-nominal-scope",
+                "The compiler lost the scope for local nominal types.",
+            ),
+            (
+                ResolveContext::MissingConstructorScope,
+                "missing-constructor-scope",
+                "The compiler lost the scope for local constructors.",
             ),
         ] {
             let error = error(

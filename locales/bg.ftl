@@ -1122,3 +1122,7 @@ source-code-point-unlocated = Ash използва байтово отместв
 source-line-state-unlocated = Вътрешният индекс на редовете на източника в Ash е несъгласуван.
 resolve-dependency-summary-mismatch = Компилаторът получи непълна или несъответстваща проверена информация за импортите на този модул.
 resolve-dependency-summary-invalid = Компилаторът не успя да валидира проверената информация за този импортиран модул.
+resolve-missing-file-scope = Компилаторът загуби обхвата за разрешаване на имената във файла.
+resolve-missing-lexical-scope = Компилаторът загуби текущия лексикален обхват при разрешаване на обвързване.
+resolve-missing-nominal-scope = Компилаторът загуби обхвата за локалните номинални типове.
+resolve-missing-constructor-scope = Компилаторът загуби обхвата за локалните конструктори.

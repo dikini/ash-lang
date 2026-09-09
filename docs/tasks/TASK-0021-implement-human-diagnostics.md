@@ -941,6 +941,12 @@ localization language. Color is not required for completion.
   diagnostic and module-resolution tests and warnings-denied Clippy passed;
   the additional prose-independence table passed separately. Other resolver
   internal labels remain open; this does not complete that reason family.
+- Converted all six existing missing-scope checks to four shared resolver
+  presentation contexts: file, lexical, local nominal and local constructor.
+  The reason, checks and spans are unchanged. The prose-independence table
+  covers each message in both locales and preserves its cause in JSON. All
+  132 resolver tests, five catalogue-contract tests and warnings-denied Clippy
+  passed. Other unconverted internal explanations remain open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

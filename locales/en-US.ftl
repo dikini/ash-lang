@@ -1121,3 +1121,7 @@ invocation-usage = Expected: ash [--message-format human|short|json] [--locale N
 output-write = Ash could not write the program result to standard output.
 resolve-dependency-summary-mismatch = The compiler received incomplete or mismatched checked information for this module's imports.
 resolve-dependency-summary-invalid = The compiler could not validate the checked information for this imported module.
+resolve-missing-file-scope = The compiler lost the file's name-resolution scope.
+resolve-missing-lexical-scope = The compiler lost the current lexical scope while resolving a binding.
+resolve-missing-nominal-scope = The compiler lost the scope for local nominal types.
+resolve-missing-constructor-scope = The compiler lost the scope for local constructors.
