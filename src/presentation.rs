@@ -514,6 +514,55 @@ pub fn compile_entry_diagnostic<'a>(
     })
 }
 
+/// Presents source kind errors or compiler resource failures through distinct classifications.
+///
+/// # Errors
+/// Returns missing source context or unsupported internal-state causes.
+pub fn compile_kind_failure<'a>(
+    error: &'a crate::kind::KindFailure,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    if let crate::kind::KindFailure::Source(error) = error {
+        return compile_kind_diagnostic(error, sources);
+    }
+    let (span, message) = error
+        .resource_presentation()
+        .ok_or(PresentationError::Unsupported)?;
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    Ok(CompileDiagnostic {
+        reason: error.reason_code(),
+        responsibility: "compiler",
+        primary: Some(Label {
+            source,
+            span,
+            message: message.clone(),
+            relationship: "kind_checking_site",
+            facts: Vec::new(),
+        }),
+        message,
+        related: Vec::new(),
+        facts: vec![
+            Fact {
+                name: "stage",
+                kind: "compiler-stage",
+                value: FactValue::Text("kind-checking"),
+            },
+            Fact {
+                name: "resource",
+                kind: "resource",
+                value: FactValue::Text("type-work"),
+            },
+        ],
+    })
+}
+
 /// Exposes phase-owned kind facts without interpreting diagnostic prose.
 ///
 /// # Errors
@@ -629,6 +678,13 @@ pub fn compile_resolve_diagnostic<'a>(
         .location(span)
         .map_err(|_| PresentationError::MissingSource)?;
     let mut facts: Vec<_> = subject.into_iter().collect();
+    if error.resource_name().is_some() {
+        facts.push(Fact {
+            name: "stage",
+            kind: "compiler-stage",
+            value: FactValue::Text("resolution"),
+        });
+    }
     if let Some(usage) = error.name_use() {
         facts.push(Fact {
             name: "name_use",

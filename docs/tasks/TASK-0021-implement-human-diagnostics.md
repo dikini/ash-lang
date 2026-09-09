@@ -565,6 +565,15 @@ localization language. Color is not required for completion.
   locale. All 1,247 library tests, three catalogue tests and warnings-denied
   Clippy passed. Validation behavior is unchanged; broader invariant categories
   remain unsupported pending precise cause retention.
+- Resolver type/constraint resource failures and kind-checker resource failures
+  now retain stage-specific human explanations, structured stage/resource facts
+  and their existing source spans. The kind-failure adapter delegates source
+  rejections to the established source-kind adapter and keeps internal-state
+  failures unsupported. Both locales and JSON cover the three resource reasons.
+  Resolver coverage is 29 of 30 reasons; kind internal/resource coverage is one
+  of two. The catalogues contain 289 templates each. All 1,249 library tests
+  and 86 diagnostic/catalogue tests passed, along with warnings-denied Clippy.
+  No checks or resource limits changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

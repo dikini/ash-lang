@@ -880,6 +880,14 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
+    pub(crate) fn resource_name(&self) -> Option<&'static str> {
+        match self.reason {
+            ResolveReason::TypeResourceExhausted => Some("type-work"),
+            ResolveReason::ConstraintResourceExhausted => Some("constraint-work"),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn is_source_rejection(&self) -> bool {
         !matches!(
             self.0.reason,
@@ -911,6 +919,9 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if self.resource_name().is_some() {
+            return Some((self.message()?, "resolution_site"));
+        }
         match self.reason {
             ResolveReason::BinderIdExhausted => {
                 return Some((self.message()?, "identity_allocation"));
@@ -1040,6 +1051,9 @@ impl ResolveError {
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        if let Some(resource) = self.resource_name() {
+            return Some(("resource", "resource", resource));
+        }
         match self.reason {
             ResolveReason::BinderIdExhausted => Some((
                 "identity_space",
@@ -1103,6 +1117,12 @@ impl ResolveError {
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         match self.reason {
+            ResolveReason::TypeResourceExhausted => {
+                return Some(crate::message::Message::resolve_type_resources());
+            }
+            ResolveReason::ConstraintResourceExhausted => {
+                return Some(crate::message::Message::resolve_constraint_resources());
+            }
             ResolveReason::BinderIdExhausted => {
                 return Some(crate::message::Message::resolve_identity_exhausted(
                     self.identity_space()?,
@@ -14001,6 +14021,46 @@ mod tests {
         assert_eq!(direct_dependency, exact.middle);
         assert_ne!(retained_interface.module(), direct_dependency);
         assert_eq!(available_at, exact.import_span);
+    }
+
+    #[test]
+    fn resolver_resources_preserve_the_resource_and_resolution_stage() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_resolve_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("resolve-resource.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (reason, resource, explanation) in [
+            (
+                ResolveReason::TypeResourceExhausted,
+                "type-work",
+                "The compiler ran out of resources while resolving types.",
+            ),
+            (
+                ResolveReason::ConstraintResourceExhausted,
+                "constraint-work",
+                "The compiler ran out of resources while resolving interfaces and constraints.",
+            ),
+        ] {
+            let error = error(reason, span, "ignored");
+            let view = compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    assert!(String::from_utf8(output).unwrap().contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], reason.to_string());
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], resource);
+            assert_eq!(json["facts"][1]["value"], "resolution");
+            assert_eq!(json["labels"][0]["relationship"], "resolution_site");
+        }
     }
 
     #[test]

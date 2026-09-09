@@ -384,3 +384,6 @@ core-validation-dialect-node = { core-validation-dialect } Core възел: { $n
 core-validation-root-node = { core-validation-root } Core възел: { $node }.
 core-validation-cycle-node = { core-validation-cycle } Core възел: { $node }.
 core-validation-unreachable-node = { core-validation-unreachable } Core възел: { $node }.
+kind-resources = Компилаторът изчерпа ресурсите при проверка на родовете на типовете.
+resolve-type-resources = Компилаторът изчерпа ресурсите при разрешаване на типове.
+resolve-constraint-resources = Компилаторът изчерпа ресурсите при разрешаване на интерфейси и ограничения.

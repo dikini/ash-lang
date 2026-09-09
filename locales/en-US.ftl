@@ -383,3 +383,6 @@ core-validation-dialect-node = { core-validation-dialect } Core node: { $node }.
 core-validation-root-node = { core-validation-root } Core node: { $node }.
 core-validation-cycle-node = { core-validation-cycle } Core node: { $node }.
 core-validation-unreachable-node = { core-validation-unreachable } Core node: { $node }.
+kind-resources = The compiler ran out of resources while checking type kinds.
+resolve-type-resources = The compiler ran out of resources while resolving types.
+resolve-constraint-resources = The compiler ran out of resources while resolving interfaces and constraints.

@@ -150,6 +150,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler ran out of resources while checking type kinds.
+    kind_resources => "kind-resources" {},
+    /// The compiler ran out of resources while resolving types.
+    resolve_type_resources => "resolve-type-resources" {},
+    /// The compiler ran out of resources while resolving interfaces and constraints.
+    resolve_constraint_resources => "resolve-constraint-resources" {},
     /// Wrong Core dialect, retaining the arena-local node number.
     core_validation_dialect_node => "core-validation-dialect-node" { node: usize = 42 },
     /// Invalid Core root, retaining the arena-local node number.

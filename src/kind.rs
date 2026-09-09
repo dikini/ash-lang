@@ -224,6 +224,13 @@ pub enum KindFailure {
 }
 
 impl KindFailure {
+    pub(crate) fn resource_presentation(&self) -> Option<(Span, crate::message::Message<'static>)> {
+        let Self::Resource(failure) = self else {
+            return None;
+        };
+        Some((failure.span, crate::message::Message::kind_resources()))
+    }
+
     fn resource(span: Span, message: impl Into<String>) -> Self {
         Self::Resource(KindStageFailure {
             span,
@@ -5154,6 +5161,40 @@ fn require_fact_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn kind_resource_presentation_retains_stage_and_span() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_kind_failure, write_human, write_json},
+        };
+        let source = crate::source::SourceFile::new("kind-resource.ash", "Int").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 3).unwrap())
+            .unwrap();
+        let error = KindFailure::resource(span, "ignored legacy wording");
+        let view = compile_kind_failure(&error, &[&source]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(!output.contains("ignored"));
+            if locale == Locale::English {
+                assert!(
+                    output.contains("The compiler ran out of resources while checking type kinds.")
+                );
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["value"], "kind-checking");
+        assert_eq!(json["facts"][1]["value"], "type-work");
+        assert_eq!(json["labels"][0]["relationship"], "kind_checking_site");
+        assert!(compile_kind_failure(&error, &[]).is_err());
+        assert!(compile_kind_failure(&KindFailure::internal(span, "ignored"), &[&source]).is_err());
+    }
+
     #[test]
     fn kind_presentation_does_not_invent_an_absent_declaration() {
         let source = crate::source::SourceFile::new("kind.ash", "Int").unwrap();
