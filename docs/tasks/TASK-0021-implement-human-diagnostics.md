@@ -755,6 +755,14 @@ localization language. Color is not required for completion.
   bodies. This reason remains partially presented and is not counted complete.
   The combined batch passed 1,275 library tests, 86 diagnostic/catalogue tests
   and warnings-denied Clippy.
+- Core type-operation presentation now covers its remaining 29 causes: recorded
+  abstraction/application forms, parameter ownership, method instantiation,
+  quantified types, argument partitioning/kinds and row-substitution failures.
+  Compound checks retain their existing precedence and resource charges.
+  The shared table covers all 37 causes in 74 optional-node localized/JSON
+  layouts. Existing type-application mutation tests also require presentation.
+  Core coverage is 15/23 reasons and overall coverage is 171/197. All 1,275
+  library tests, 86 diagnostic/catalogue tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

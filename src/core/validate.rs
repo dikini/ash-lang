@@ -323,6 +323,35 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    ExpectedTypeAbstraction,
+    ExpectedTypeApplication,
+    AdapterParameterIdentity,
+    AbstractionBinderOwner,
+    MethodInstantiationIdentity,
+    MethodTypeArgumentCount,
+    MethodTypeArgument,
+    MethodInstantiationResult,
+    MethodInstantiationRole,
+    MissingMethodProducer,
+    MethodInstantiationProducer,
+    TypeAbstractionScheme,
+    EmptyTypeAbstraction,
+    AbstractionNominalParameter,
+    AbstractionParameters,
+    AbstractionBodyType,
+    NestedTypeAbstraction,
+    AbstractionTypeKind,
+    TypeApplicationScheme,
+    TypeApplicationArity,
+    TypeApplicationRows,
+    MissingRowArgument,
+    MissingTypeArgument,
+    TypeArgumentInvalid,
+    TypeArgumentKind,
+    TypeSubstitutionAmbiguous,
+    TypeSubstitutionMissing,
+    TypeSubstitutionInfinite,
+    TypeApplicationResult,
     MissingTupleKinds,
     MissingArgumentKind,
     MissingFunctionKind,
@@ -416,6 +445,35 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::ExpectedTypeAbstraction => "expected-type-abstraction",
+            ValidationCause::ExpectedTypeApplication => "expected-type-application",
+            ValidationCause::AdapterParameterIdentity => "adapter-parameter-identity",
+            ValidationCause::AbstractionBinderOwner => "abstraction-binder-owner",
+            ValidationCause::MethodInstantiationIdentity => "method-instantiation-identity",
+            ValidationCause::MethodTypeArgumentCount => "method-type-argument-count",
+            ValidationCause::MethodTypeArgument => "method-type-argument",
+            ValidationCause::MethodInstantiationResult => "method-instantiation-result",
+            ValidationCause::MethodInstantiationRole => "method-instantiation-role",
+            ValidationCause::MissingMethodProducer => "missing-method-producer",
+            ValidationCause::MethodInstantiationProducer => "method-instantiation-producer",
+            ValidationCause::TypeAbstractionScheme => "type-abstraction-scheme",
+            ValidationCause::EmptyTypeAbstraction => "empty-type-abstraction",
+            ValidationCause::AbstractionNominalParameter => "abstraction-nominal-parameter",
+            ValidationCause::AbstractionParameters => "abstraction-parameters",
+            ValidationCause::AbstractionBodyType => "abstraction-body-type",
+            ValidationCause::NestedTypeAbstraction => "nested-type-abstraction",
+            ValidationCause::AbstractionTypeKind => "abstraction-type-kind",
+            ValidationCause::TypeApplicationScheme => "type-application-scheme",
+            ValidationCause::TypeApplicationArity => "type-application-arity",
+            ValidationCause::TypeApplicationRows => "type-application-rows",
+            ValidationCause::MissingRowArgument => "missing-row-argument",
+            ValidationCause::MissingTypeArgument => "missing-type-argument",
+            ValidationCause::TypeArgumentInvalid => "type-argument-invalid",
+            ValidationCause::TypeArgumentKind => "type-argument-kind",
+            ValidationCause::TypeSubstitutionAmbiguous => "type-substitution-ambiguous",
+            ValidationCause::TypeSubstitutionMissing => "type-substitution-missing",
+            ValidationCause::TypeSubstitutionInfinite => "type-substitution-infinite",
+            ValidationCause::TypeApplicationResult => "type-application-result",
             ValidationCause::MissingTupleKinds => "missing-tuple-kinds",
             ValidationCause::MissingArgumentKind => "missing-argument-kind",
             ValidationCause::MissingFunctionKind => "missing-function-kind",
@@ -1029,6 +1087,180 @@ impl ValidationError {
                 (ValidationCause::EffectAbstractionBody, Some(node)) => {
                     Message::core_validation_effect_abstraction_body_node(node)
                 }
+                (ValidationCause::ExpectedTypeAbstraction, None) => {
+                    Message::core_validation_expected_type_abstraction()
+                }
+                (ValidationCause::ExpectedTypeAbstraction, Some(node)) => {
+                    Message::core_validation_expected_type_abstraction_node(node)
+                }
+                (ValidationCause::ExpectedTypeApplication, None) => {
+                    Message::core_validation_expected_type_application()
+                }
+                (ValidationCause::ExpectedTypeApplication, Some(node)) => {
+                    Message::core_validation_expected_type_application_node(node)
+                }
+                (ValidationCause::AdapterParameterIdentity, None) => {
+                    Message::core_validation_adapter_parameter_identity()
+                }
+                (ValidationCause::AdapterParameterIdentity, Some(node)) => {
+                    Message::core_validation_adapter_parameter_identity_node(node)
+                }
+                (ValidationCause::AbstractionBinderOwner, None) => {
+                    Message::core_validation_abstraction_binder_owner()
+                }
+                (ValidationCause::AbstractionBinderOwner, Some(node)) => {
+                    Message::core_validation_abstraction_binder_owner_node(node)
+                }
+                (ValidationCause::MethodInstantiationIdentity, None) => {
+                    Message::core_validation_method_instantiation_identity()
+                }
+                (ValidationCause::MethodInstantiationIdentity, Some(node)) => {
+                    Message::core_validation_method_instantiation_identity_node(node)
+                }
+                (ValidationCause::MethodTypeArgumentCount, None) => {
+                    Message::core_validation_method_type_argument_count()
+                }
+                (ValidationCause::MethodTypeArgumentCount, Some(node)) => {
+                    Message::core_validation_method_type_argument_count_node(node)
+                }
+                (ValidationCause::MethodTypeArgument, None) => {
+                    Message::core_validation_method_type_argument()
+                }
+                (ValidationCause::MethodTypeArgument, Some(node)) => {
+                    Message::core_validation_method_type_argument_node(node)
+                }
+                (ValidationCause::MethodInstantiationResult, None) => {
+                    Message::core_validation_method_instantiation_result()
+                }
+                (ValidationCause::MethodInstantiationResult, Some(node)) => {
+                    Message::core_validation_method_instantiation_result_node(node)
+                }
+                (ValidationCause::MethodInstantiationRole, None) => {
+                    Message::core_validation_method_instantiation_role()
+                }
+                (ValidationCause::MethodInstantiationRole, Some(node)) => {
+                    Message::core_validation_method_instantiation_role_node(node)
+                }
+                (ValidationCause::MissingMethodProducer, None) => {
+                    Message::core_validation_missing_method_producer()
+                }
+                (ValidationCause::MissingMethodProducer, Some(node)) => {
+                    Message::core_validation_missing_method_producer_node(node)
+                }
+                (ValidationCause::MethodInstantiationProducer, None) => {
+                    Message::core_validation_method_instantiation_producer()
+                }
+                (ValidationCause::MethodInstantiationProducer, Some(node)) => {
+                    Message::core_validation_method_instantiation_producer_node(node)
+                }
+                (ValidationCause::TypeAbstractionScheme, None) => {
+                    Message::core_validation_type_abstraction_scheme()
+                }
+                (ValidationCause::TypeAbstractionScheme, Some(node)) => {
+                    Message::core_validation_type_abstraction_scheme_node(node)
+                }
+                (ValidationCause::EmptyTypeAbstraction, None) => {
+                    Message::core_validation_empty_type_abstraction()
+                }
+                (ValidationCause::EmptyTypeAbstraction, Some(node)) => {
+                    Message::core_validation_empty_type_abstraction_node(node)
+                }
+                (ValidationCause::AbstractionNominalParameter, None) => {
+                    Message::core_validation_abstraction_nominal_parameter()
+                }
+                (ValidationCause::AbstractionNominalParameter, Some(node)) => {
+                    Message::core_validation_abstraction_nominal_parameter_node(node)
+                }
+                (ValidationCause::AbstractionParameters, None) => {
+                    Message::core_validation_abstraction_parameters()
+                }
+                (ValidationCause::AbstractionParameters, Some(node)) => {
+                    Message::core_validation_abstraction_parameters_node(node)
+                }
+                (ValidationCause::AbstractionBodyType, None) => {
+                    Message::core_validation_abstraction_body_type()
+                }
+                (ValidationCause::AbstractionBodyType, Some(node)) => {
+                    Message::core_validation_abstraction_body_type_node(node)
+                }
+                (ValidationCause::NestedTypeAbstraction, None) => {
+                    Message::core_validation_nested_type_abstraction()
+                }
+                (ValidationCause::NestedTypeAbstraction, Some(node)) => {
+                    Message::core_validation_nested_type_abstraction_node(node)
+                }
+                (ValidationCause::AbstractionTypeKind, None) => {
+                    Message::core_validation_abstraction_type_kind()
+                }
+                (ValidationCause::AbstractionTypeKind, Some(node)) => {
+                    Message::core_validation_abstraction_type_kind_node(node)
+                }
+                (ValidationCause::TypeApplicationScheme, None) => {
+                    Message::core_validation_type_application_scheme()
+                }
+                (ValidationCause::TypeApplicationScheme, Some(node)) => {
+                    Message::core_validation_type_application_scheme_node(node)
+                }
+                (ValidationCause::TypeApplicationArity, None) => {
+                    Message::core_validation_type_application_arity()
+                }
+                (ValidationCause::TypeApplicationArity, Some(node)) => {
+                    Message::core_validation_type_application_arity_node(node)
+                }
+                (ValidationCause::TypeApplicationRows, None) => {
+                    Message::core_validation_type_application_rows()
+                }
+                (ValidationCause::TypeApplicationRows, Some(node)) => {
+                    Message::core_validation_type_application_rows_node(node)
+                }
+                (ValidationCause::MissingRowArgument, None) => {
+                    Message::core_validation_missing_row_argument()
+                }
+                (ValidationCause::MissingRowArgument, Some(node)) => {
+                    Message::core_validation_missing_row_argument_node(node)
+                }
+                (ValidationCause::MissingTypeArgument, None) => {
+                    Message::core_validation_missing_type_argument()
+                }
+                (ValidationCause::MissingTypeArgument, Some(node)) => {
+                    Message::core_validation_missing_type_argument_node(node)
+                }
+                (ValidationCause::TypeArgumentInvalid, None) => {
+                    Message::core_validation_type_argument_invalid()
+                }
+                (ValidationCause::TypeArgumentInvalid, Some(node)) => {
+                    Message::core_validation_type_argument_invalid_node(node)
+                }
+                (ValidationCause::TypeArgumentKind, None) => {
+                    Message::core_validation_type_argument_kind()
+                }
+                (ValidationCause::TypeArgumentKind, Some(node)) => {
+                    Message::core_validation_type_argument_kind_node(node)
+                }
+                (ValidationCause::TypeSubstitutionAmbiguous, None) => {
+                    Message::core_validation_type_substitution_ambiguous()
+                }
+                (ValidationCause::TypeSubstitutionAmbiguous, Some(node)) => {
+                    Message::core_validation_type_substitution_ambiguous_node(node)
+                }
+                (ValidationCause::TypeSubstitutionMissing, None) => {
+                    Message::core_validation_type_substitution_missing()
+                }
+                (ValidationCause::TypeSubstitutionMissing, Some(node)) => {
+                    Message::core_validation_type_substitution_missing_node(node)
+                }
+                (ValidationCause::TypeSubstitutionInfinite, None) => {
+                    Message::core_validation_type_substitution_infinite()
+                }
+                (ValidationCause::TypeSubstitutionInfinite, Some(node)) => {
+                    Message::core_validation_type_substitution_infinite_node(node)
+                }
+                (ValidationCause::TypeApplicationResult, None) => {
+                    Message::core_validation_type_application_result()
+                }
+                (ValidationCause::TypeApplicationResult, Some(node)) => {
+                    Message::core_validation_type_application_result_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -1161,6 +1393,35 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::ExpectedTypeAbstraction
+                | ValidationCause::ExpectedTypeApplication
+                | ValidationCause::AdapterParameterIdentity
+                | ValidationCause::AbstractionBinderOwner
+                | ValidationCause::MethodInstantiationIdentity
+                | ValidationCause::MethodTypeArgumentCount
+                | ValidationCause::MethodTypeArgument
+                | ValidationCause::MethodInstantiationResult
+                | ValidationCause::MethodInstantiationRole
+                | ValidationCause::MissingMethodProducer
+                | ValidationCause::MethodInstantiationProducer
+                | ValidationCause::TypeAbstractionScheme
+                | ValidationCause::EmptyTypeAbstraction
+                | ValidationCause::AbstractionNominalParameter
+                | ValidationCause::AbstractionParameters
+                | ValidationCause::AbstractionBodyType
+                | ValidationCause::NestedTypeAbstraction
+                | ValidationCause::AbstractionTypeKind
+                | ValidationCause::TypeApplicationScheme
+                | ValidationCause::TypeApplicationArity
+                | ValidationCause::TypeApplicationRows
+                | ValidationCause::MissingRowArgument
+                | ValidationCause::MissingTypeArgument
+                | ValidationCause::TypeArgumentInvalid
+                | ValidationCause::TypeArgumentKind
+                | ValidationCause::TypeSubstitutionAmbiguous
+                | ValidationCause::TypeSubstitutionMissing
+                | ValidationCause::TypeSubstitutionInfinite
+                | ValidationCause::TypeApplicationResult => ValidationReason::TypeOperation,
                 ValidationCause::MissingTupleKinds
                 | ValidationCause::MissingArgumentKind
                 | ValidationCause::MissingFunctionKind
@@ -1672,20 +1933,25 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction)) =
                 self.pure_kind(anchor.node)?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::ExpectedTypeAbstraction,
                     Some(anchor.node),
                 ));
             };
             for (parameter, _) in abstraction.parameters() {
                 self.charge_type_work(1)?;
-                if !matches!(parameter, crate::types::TypeVariableId::Generated(_))
-                    || type_binders
-                        .get(parameter)
-                        .is_none_or(|(_, owner)| *owner != anchor.node)
+                if !matches!(parameter, crate::types::TypeVariableId::Generated(_)) {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::AdapterParameterIdentity,
+                        Some(anchor.node),
+                    ));
+                }
+                if type_binders
+                    .get(parameter)
+                    .is_none_or(|(_, owner)| *owner != anchor.node)
                 {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::AbstractionBinderOwner,
                         Some(anchor.node),
                     ));
                 }
@@ -2180,8 +2446,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let PureExprKind::Computation(PureComputation::TypeApplication(application)) =
                 self.pure_kind(current)?
             else {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::ExpectedTypeApplication,
                     Some(current),
                 ));
             };
@@ -3669,16 +3935,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
             F::pure(&stored.kind)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::ExpectedTypeApplication,
                 Some(anchor.node),
             ));
         };
-        if occurrence.checked_method != Some(anchor.method)
-            || occurrence.method_arguments.len() != application.arguments().len()
-        {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+        if occurrence.checked_method != Some(anchor.method) {
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationIdentity,
+                Some(anchor.node),
+            ));
+        }
+        if occurrence.method_arguments.len() != application.arguments().len() {
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodTypeArgumentCount,
                 Some(anchor.node),
             ));
         }
@@ -3709,8 +3979,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, actual)? {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MethodTypeArgument,
                     Some(anchor.node),
                 ));
             }
@@ -3723,8 +3993,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 || ValidationError::new(ValidationReason::Resource, None),
             )?);
             if !self.same_type_charged(&expected, &stored.ty)? {
-                return Err(ValidationError::new(
-                    ValidationReason::TypeOperation,
+                return Err(ValidationError::with_cause(
+                    ValidationCause::MethodInstantiationResult,
                     Some(anchor.node),
                 ));
             }
@@ -3736,8 +4006,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .get(anchor.expectation)
             .map(|expected| expected.role)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationRole,
                 Some(anchor.node),
             ));
         };
@@ -3746,7 +4016,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .find(|source| source.expectation == producer)
             .copied()
             .ok_or_else(|| {
-                ValidationError::new(ValidationReason::TypeOperation, Some(anchor.node))
+                ValidationError::with_cause(
+                    ValidationCause::MissingMethodProducer,
+                    Some(anchor.node),
+                )
             })?;
         let function = self.node(application.function())?;
         let producer_matches = match binder {
@@ -3762,8 +4035,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if producer_matches {
             Ok(())
         } else {
-            Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            Err(ValidationError::with_cause(
+                ValidationCause::MethodInstantiationProducer,
                 Some(anchor.node),
             ))
         }
@@ -4526,8 +4799,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
             F::pure(&stored.kind)
         else {
-            return Err(ValidationError::new(
-                ValidationReason::TypeOperation,
+            return Err(ValidationError::with_cause(
+                ValidationCause::ExpectedTypeAbstraction,
                 Some(adapter.node),
             ));
         };
@@ -7211,8 +7484,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             PureComputation::TypeAbstraction(abstraction) => {
                 let body = self.node(abstraction.body())?;
                 let Type::Forall(parameters, scheme_body) = &node.ty else {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::TypeAbstractionScheme,
                         Some(id),
                     ));
                 };
@@ -7233,40 +7506,54 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
                     }
                 }
-                if abstraction.parameters().is_empty()
-                    || abstraction.parameters().iter().any(|(parameter, _)| {
-                        type_binders
-                            .get(parameter)
-                            .is_none_or(|(_, owner)| *owner != id)
-                    })
-                    || abstraction
-                        .parameters()
-                        .iter()
-                        .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
-                    || !self
-                        .same_kinded_parameters(abstraction.parameters(), parameters.as_ref())?
-                    || !self.same_type_charged(&body.ty, scheme_body)?
-                    || (!authenticated_method_evidence
-                        && (matches!(scheme_body.as_ref(), Type::Forall(_, _))
-                            || !self.valid_core_type_kind(&node.ty, type_binders)?))
+                let cause = if abstraction.parameters().is_empty() {
+                    Some(ValidationCause::EmptyTypeAbstraction)
+                } else if abstraction.parameters().iter().any(|(parameter, _)| {
+                    type_binders
+                        .get(parameter)
+                        .is_none_or(|(_, owner)| *owner != id)
+                }) {
+                    Some(ValidationCause::AbstractionBinderOwner)
+                } else if abstraction
+                    .parameters()
+                    .iter()
+                    .any(|(parameter, _)| nominal_parameter_owners.contains_key(parameter))
                 {
-                    return Err(ValidationError::new(
-                        ValidationReason::TypeOperation,
-                        Some(id),
-                    ));
+                    Some(ValidationCause::AbstractionNominalParameter)
+                } else if !self
+                    .same_kinded_parameters(abstraction.parameters(), parameters.as_ref())?
+                {
+                    Some(ValidationCause::AbstractionParameters)
+                } else if !self.same_type_charged(&body.ty, scheme_body)? {
+                    Some(ValidationCause::AbstractionBodyType)
+                } else if !authenticated_method_evidence
+                    && matches!(scheme_body.as_ref(), Type::Forall(_, _))
+                {
+                    Some(ValidationCause::NestedTypeAbstraction)
+                } else if !authenticated_method_evidence
+                    && !self.valid_core_type_kind(&node.ty, type_binders)?
+                {
+                    Some(ValidationCause::AbstractionTypeKind)
+                } else {
+                    None
+                };
+                if let Some(cause) = cause {
+                    return Err(ValidationError::with_cause(cause, Some(id)));
                 }
             }
             PureComputation::TypeApplication(application) => {
-                let invalid = || ValidationError::new(ValidationReason::TypeOperation, Some(id));
+                let invalid = |cause| ValidationError::with_cause(cause, Some(id));
                 let function = self.node(application.function())?;
                 let Type::Forall(parameters, body) = &function.ty else {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationScheme));
                 };
                 if parameters.len()
                     != application.arguments().len() + application.row_arguments().len()
-                    || (!F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty())
                 {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationArity));
+                }
+                if !F::ALLOWS_EFFECTFUL_TYPES && !application.row_arguments().is_empty() {
+                    return Err(invalid(ValidationCause::TypeApplicationRows));
                 }
                 self.charge_type_work(parameters.len())?;
                 let mut replacements = TypeReplacementMap::new();
@@ -7281,18 +7568,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 let mut rows = application.row_arguments().iter();
                 for (parameter, kind) in parameters.iter() {
                     if matches!(kind, Kind::EffectRow) {
-                        let row = rows.next().ok_or_else(invalid)?;
+                        let row = rows
+                            .next()
+                            .ok_or_else(|| invalid(ValidationCause::MissingRowArgument))?;
                         row_replacements.insert(*parameter, self.clone_effect_row_charged(row)?);
                     } else {
-                        let argument = ordinary.next().ok_or_else(invalid)?;
+                        let argument = ordinary
+                            .next()
+                            .ok_or_else(|| invalid(ValidationCause::MissingTypeArgument))?;
                         let argument_kind = self
                             .synthesize_monotype_kind(
                                 argument,
                                 MonotypeVariableKinds::Core(type_binders),
                             )?
-                            .ok_or_else(invalid)?;
+                            .ok_or_else(|| invalid(ValidationCause::TypeArgumentInvalid))?;
                         if !self.same_kind_charged(kind, &argument_kind)? {
-                            return Err(invalid());
+                            return Err(invalid(ValidationCause::TypeArgumentKind));
                         }
                         replacements
                             .insert_replacing(*parameter, self.clone_type_charged(argument)?);
@@ -7305,10 +7596,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     |cells| self.charge_type_work(cells),
                     || ValidationError::new(ValidationReason::Resource, None),
                 )?
-                .map_err(|_| invalid())?;
+                .map_err(|cause| {
+                    invalid(match cause {
+                        crate::types::EffectRowError::Ambiguous => {
+                            ValidationCause::TypeSubstitutionAmbiguous
+                        }
+                        crate::types::EffectRowError::Missing => {
+                            ValidationCause::TypeSubstitutionMissing
+                        }
+                        crate::types::EffectRowError::Infinite => {
+                            ValidationCause::TypeSubstitutionInfinite
+                        }
+                    })
+                })?;
                 let instantiated = IterativeTypeOwner::new(instantiated);
                 if !self.same_type_charged(&node.ty, &instantiated)? {
-                    return Err(invalid());
+                    return Err(invalid(ValidationCause::TypeApplicationResult));
                 }
             }
         }
@@ -10554,13 +10857,158 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 mod tests {
 
     #[test]
-    fn core_type_bookkeeping_messages_preserve_the_failed_check() {
+    fn core_type_operation_messages_preserve_the_failed_check() {
         use crate::{
             message::{Catalogue, Locale},
             presentation::{compile_core_validation_failure, write_human, write_json},
         };
         let arena = super::super::dialect::ArenaId::new(101);
         for (cause, name, english) in [
+            (
+                ValidationCause::ExpectedTypeAbstraction,
+                "expected-type-abstraction",
+                "The compiler recorded a Core type abstraction at a node of a different form.",
+            ),
+            (
+                ValidationCause::ExpectedTypeApplication,
+                "expected-type-application",
+                "The compiler recorded a Core type application at a node of a different form.",
+            ),
+            (
+                ValidationCause::AdapterParameterIdentity,
+                "adapter-parameter-identity",
+                "The compiler used a non-generated type parameter in a method adapter.",
+            ),
+            (
+                ValidationCause::AbstractionBinderOwner,
+                "abstraction-binder-owner",
+                "A Core type abstraction does not own one of its recorded type parameters.",
+            ),
+            (
+                ValidationCause::MethodInstantiationIdentity,
+                "method-instantiation-identity",
+                "The compiler instantiated a different method from the checked method occurrence.",
+            ),
+            (
+                ValidationCause::MethodTypeArgumentCount,
+                "method-type-argument-count",
+                "The compiler retained a method instantiation with a different type-argument count from the checked occurrence.",
+            ),
+            (
+                ValidationCause::MethodTypeArgument,
+                "method-type-argument",
+                "A Core method type argument differs from its checked argument after scope substitution.",
+            ),
+            (
+                ValidationCause::MethodInstantiationResult,
+                "method-instantiation-result",
+                "A Core method instantiation's result type differs from its checked result after scope substitution.",
+            ),
+            (
+                ValidationCause::MethodInstantiationRole,
+                "method-instantiation-role",
+                "The compiler has no instantiation-role expectation for this Core method use.",
+            ),
+            (
+                ValidationCause::MissingMethodProducer,
+                "missing-method-producer",
+                "The compiler has no retained producer anchor for this Core method instantiation.",
+            ),
+            (
+                ValidationCause::MethodInstantiationProducer,
+                "method-instantiation-producer",
+                "A Core method instantiation does not use its recorded producer or binder.",
+            ),
+            (
+                ValidationCause::TypeAbstractionScheme,
+                "type-abstraction-scheme",
+                "A Core type abstraction does not carry a universally quantified type.",
+            ),
+            (
+                ValidationCause::EmptyTypeAbstraction,
+                "empty-type-abstraction",
+                "The compiler retained a Core type abstraction without type parameters.",
+            ),
+            (
+                ValidationCause::AbstractionNominalParameter,
+                "abstraction-nominal-parameter",
+                "A Core type abstraction reuses a type parameter owned by a nominal declaration.",
+            ),
+            (
+                ValidationCause::AbstractionParameters,
+                "abstraction-parameters",
+                "A Core type abstraction's parameters differ in identity, order or kind from its quantified type.",
+            ),
+            (
+                ValidationCause::AbstractionBodyType,
+                "abstraction-body-type",
+                "A Core type abstraction's body type differs from the body of its quantified type.",
+            ),
+            (
+                ValidationCause::NestedTypeAbstraction,
+                "nested-type-abstraction",
+                "The compiler retained nested type quantification without method-evidence authentication.",
+            ),
+            (
+                ValidationCause::AbstractionTypeKind,
+                "abstraction-type-kind",
+                "A Core type abstraction's quantified type is not well-kinded.",
+            ),
+            (
+                ValidationCause::TypeApplicationScheme,
+                "type-application-scheme",
+                "The compiler applied type arguments to a Core expression without a quantified type.",
+            ),
+            (
+                ValidationCause::TypeApplicationArity,
+                "type-application-arity",
+                "A Core type application supplies a different number of arguments from its quantified parameters.",
+            ),
+            (
+                ValidationCause::TypeApplicationRows,
+                "type-application-rows",
+                "The compiler retained effect-row arguments in a Core dialect that does not permit them.",
+            ),
+            (
+                ValidationCause::MissingRowArgument,
+                "missing-row-argument",
+                "A Core type application has no row argument for an EffectRow parameter.",
+            ),
+            (
+                ValidationCause::MissingTypeArgument,
+                "missing-type-argument",
+                "A Core type application has no ordinary type argument for its next parameter.",
+            ),
+            (
+                ValidationCause::TypeArgumentInvalid,
+                "type-argument-invalid",
+                "A Core type application's argument has no valid monotype kind.",
+            ),
+            (
+                ValidationCause::TypeArgumentKind,
+                "type-argument-kind",
+                "A Core type application's argument kind differs from its parameter kind.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionAmbiguous,
+                "type-substitution-ambiguous",
+                "Core type application would strengthen or equate unrelated open effect-row tails.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionMissing,
+                "type-substitution-missing",
+                "Core type application tried to remove an effect instance absent from the substituted row.",
+            ),
+            (
+                ValidationCause::TypeSubstitutionInfinite,
+                "type-substitution-infinite",
+                "Core type application would make an effect-row tail contain itself.",
+            ),
+            (
+                ValidationCause::TypeApplicationResult,
+                "type-application-result",
+                "A Core type application's recorded result differs from the instantiated type.",
+            ),
             (
                 ValidationCause::MissingTupleKinds,
                 "missing-tuple-kinds",
@@ -20522,6 +20970,7 @@ mod tests {
                 "{mutation:?}"
             );
             assert_eq!(error.node(), Some(application), "{mutation:?}");
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
         }
     }
 
