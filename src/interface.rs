@@ -1971,12 +1971,14 @@ impl InterfaceReason {
                 | Self::ConstraintPrivateInterface
                 | Self::ImplPrivateInterface
                 | Self::DuplicateRequirement
+                | Self::ImplOrphan
         ))
     }
 
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::ImplOrphan => (Message::impl_orphan(), "implementation_key"),
             Self::ConstraintPrivateInterface => (
                 Message::constraint_private_interface(),
                 "public_requirement",
@@ -2038,6 +2040,10 @@ impl InterfaceReason {
             Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::ImplOrphan => (
+                Message::impl_foreign_interface(),
+                "selected_foreign_interface",
+            ),
             Self::ConstraintPrivateInterface | Self::ImplPrivateInterface => (
                 Message::private_interface_declaration(),
                 "private_interface",

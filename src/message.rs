@@ -150,6 +150,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An implementation must be owned through its interface or selection key.
+    impl_orphan => "impl-orphan" {},
+    /// The interface selected by an orphan implementation is foreign.
+    impl_foreign_interface => "impl-foreign-interface" {},
     /// This public definition exposes a private interface in its requirements.
     constraint_private_interface => "constraint-private-interface" {},
     /// A public implementation must use public interfaces both for its head and for its prerequisites.

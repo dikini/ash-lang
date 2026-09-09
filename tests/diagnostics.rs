@@ -1650,6 +1650,50 @@ fn interface_privacy_and_duplicate_requirement_messages() {
     }
 }
 
+#[test]
+fn orphan_implementation_message_explains_selection_key_ownership() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human, write_json},
+    };
+    let fixture = ModuleFixture::load(
+        "provider.ash",
+        "pub interface Equal<A> {\nequal : A -> A\n}\n",
+    );
+    let entry = fixture.directory.join("client.ash");
+    fs::write(
+        &entry,
+        "import provider (Equal)\nimpl Equal<Int> {\nequal value = value\n}\n",
+    )
+    .unwrap();
+    let failure = run_path(RunConfiguration {
+        entry,
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Typing(TypeError::Interface(error))) = failure.pipeline_failure()
+    else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, InterfaceReason::ImplOrphan);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_interface_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        if locale == Locale::English {
+            assert!(String::from_utf8(output).unwrap().contains("This module owns neither the interface nor an outer nominal type in the implementation's selection key."));
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["labels"][1]["relationship"],
+        "selected_foreign_interface"
+    );
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

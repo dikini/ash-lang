@@ -473,6 +473,12 @@ localization language. Color is not required for completion.
   prerequisites in both locales. No new metadata or producer changes were
   needed. Interface/constraint coverage is 16 of 28 reasons, with 213 templates
   per locale. All 208 focused tests and warnings-denied Clippy passed.
+- Implementation ownership presentation explains that neither dependent
+  arguments nor nested nominals establish ownership. A linked-module source
+  test retains the selected foreign-interface label in JSON and formats both
+  locales. Interface/constraint coverage is 17 of 28 reasons, with 215
+  templates per locale. All 156 focused tests and warnings-denied Clippy
+  passed. No ownership check or producer changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
