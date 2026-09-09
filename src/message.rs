@@ -144,6 +144,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Ordinary term lookup found no binding.
+    resolve_unknown_term => "resolve-unknown-term" { name: &'a str = "missing" },
+    /// The selected effect declares no operation with this spelling.
+    resolve_unknown_operation => "resolve-unknown-operation" { name: &'a str = "missing" },
+    /// A checked name occurrence carrying an unresolved lookup.
+    unresolved_name => "unresolved-name" {},
     /// A retained canonical module path has no parent directory.
     module_missing_parent => "module-missing-parent" {},
     /// A projected import has no module-name segments.

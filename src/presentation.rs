@@ -160,6 +160,59 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
+/// Exposes phase-owned name lookup facts without interpreting diagnostic prose.
+///
+/// # Errors
+/// Returns an unsupported staged family, missing lookup facts or source context.
+pub fn compile_resolve_diagnostic<'a>(
+    error: &'a crate::resolve::ResolveError,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let message = error.message().ok_or(PresentationError::Unsupported)?;
+    let name = error
+        .found
+        .as_deref()
+        .ok_or(PresentationError::MissingFact)?;
+    let scope = error
+        .lookup_scope_name()
+        .ok_or(PresentationError::MissingFact)?;
+    let span = error.primary.span();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let name = Fact {
+        name: "name",
+        kind: "identifier",
+        value: FactValue::Text(name),
+    };
+    Ok(CompileDiagnostic {
+        reason: error.reason.to_string(),
+        responsibility: "source",
+        message,
+        primary: Some(Label {
+            source,
+            span,
+            message: Message::unresolved_name(),
+            relationship: "unresolved_name",
+            facts: vec![name],
+        }),
+        related: Vec::new(),
+        facts: vec![
+            name,
+            Fact {
+                name: "lookup_scope",
+                kind: "lookup-scope",
+                value: FactValue::Text(scope),
+            },
+        ],
+    })
+}
+
 /// Exposes lexical facts without translating legacy expected/found descriptions.
 ///
 /// # Errors

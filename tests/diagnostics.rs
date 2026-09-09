@@ -148,6 +148,63 @@ fn failure(name: &str, text: &str) -> PipelineFailure {
     run_module(name, text).expect_err("diagnostic fixture should be rejected")
 }
 
+#[test]
+fn unresolved_term_retains_its_spelling_independently_of_legacy_prose() {
+    let PipelineFailure::Resolution(error) = failure("unknown-term.ash", R001) else {
+        panic!("the missing term must fail during resolution");
+    };
+    assert_eq!(error.reason, ResolveReason::UnknownName);
+    assert_eq!(error.found.as_deref(), Some("missing"));
+}
+
+#[test]
+fn unknown_name_presentation_distinguishes_terms_from_effect_operations() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, scope, english, bulgarian) in [
+        (
+            R001,
+            "term",
+            "No term named `missing` is in scope.",
+            "Няма име `missing` за стойност в текущия обхват.",
+        ),
+        (
+            "effect E {\nrun : Unit -> Unit\n}\nprobe : Unit -> Unit ! {E}\nprobe () = perform E.missing ()\n",
+            "effect-operation",
+            "The selected effect declares no operation named `missing`.",
+            "Избраният ефект не декларира операция с име `missing`.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("unknown.ash", text);
+        let ResolveModuleError::Resolution(error) =
+            resolve_module(fixture.loaded(), &[]).unwrap_err()
+        else {
+            panic!("expected resolution failure");
+        };
+        assert_eq!(error.found.as_deref(), Some("missing"));
+        let diagnostic = compile_resolve_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for (locale, expected) in [(Locale::English, english), (Locale::Bulgarian, bulgarian)] {
+            let mut output = Vec::new();
+            write_short(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "resolve.unknown-name");
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([
+                {"name":"name", "kind":"identifier", "value":"missing"},
+                {"name":"lookup_scope", "kind":"lookup-scope", "value":scope},
+            ])
+        );
+        assert_eq!(json["labels"][0]["relationship"], "unresolved_name");
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)
@@ -485,7 +542,7 @@ fn r001_reports_only_the_unknown_occurrence_without_an_unjustified_suggestion() 
     );
     assert!(error.related.is_empty());
     assert!(error.expected.is_none());
-    assert!(error.found.is_none());
+    assert_eq!(error.found.as_deref(), Some("missing"));
     assert!(error.help.is_none());
 }
 

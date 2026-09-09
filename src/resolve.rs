@@ -827,16 +827,41 @@ impl fmt::Display for ResolveReason {
 
 /// A structured name-resolution failure kept compact in pipeline results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolveError(Box<Diagnostic<ResolveReason>>);
+pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<LookupScope>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LookupScope {
+    Term,
+    EffectOperation,
+}
 
 impl ResolveError {
-    /// Returns the phase-owned structured diagnostic.
+    pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
+        match self.1 {
+            Some(LookupScope::Term) => Some("term"),
+            Some(LookupScope::EffectOperation) => Some("effect-operation"),
+            None => None,
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        let name = self.found.as_deref()?;
+        Some(match self.1? {
+            LookupScope::Term => crate::message::Message::resolve_unknown_term(name),
+            LookupScope::EffectOperation => {
+                crate::message::Message::resolve_unknown_operation(name)
+            }
+        })
+    }
+    /// Returns the common structured diagnostic fields.
+    /// Phase-specific lookup context remains on this failure owner.
     #[must_use]
     pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
         &self.0
     }
 
-    /// Consumes the failure and returns its structured diagnostic.
+    /// Consumes the failure and returns its common diagnostic fields.
+    /// This legacy conversion does not retain phase-specific lookup context.
     #[must_use]
     pub fn into_diagnostic(self) -> Diagnostic<ResolveReason> {
         *self.0
@@ -845,7 +870,7 @@ impl ResolveError {
 
 impl From<Diagnostic<ResolveReason>> for ResolveError {
     fn from(diagnostic: Diagnostic<ResolveReason>) -> Self {
-        Self(Box::new(diagnostic))
+        Self(Box::new(diagnostic), None)
     }
 }
 
@@ -5667,9 +5692,10 @@ impl Resolver {
                 })
             })
             .ok_or_else(|| {
-                error(
-                    ResolveReason::UnknownName,
+                unknown_name_error(
+                    LookupScope::EffectOperation,
                     operation.span,
+                    &operation.text,
                     "this operation is not declared by the selected effect",
                 )
             })
@@ -9656,9 +9682,10 @@ impl Resolver {
                             diagnostic.found = Some(member.text.clone());
                             ResolveError::from(diagnostic)
                         } else {
-                            error(
-                                ResolveReason::UnknownName,
+                            unknown_name_error(
+                                LookupScope::Term,
                                 member.span,
+                                &member.text,
                                 "this name is not in scope",
                             )
                         },
@@ -10111,6 +10138,18 @@ fn take_expression_pair(
 
 fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> ResolveError {
     Diagnostic::new(reason, SourceLabel::new(span, message)).into()
+}
+
+fn unknown_name_error(
+    scope: LookupScope,
+    span: crate::source::Span,
+    name: &str,
+    message: &str,
+) -> ResolveError {
+    let mut diagnostic =
+        Diagnostic::new(ResolveReason::UnknownName, SourceLabel::new(span, message));
+    diagnostic.found = Some(name.to_owned());
+    ResolveError(Box::new(diagnostic), Some(scope))
 }
 
 fn imported_nominal_merge_error(

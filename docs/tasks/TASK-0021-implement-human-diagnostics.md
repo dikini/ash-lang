@@ -228,6 +228,21 @@ localization language. Color is not required for completion.
   suites, the bidirectional type-field ownership check and warnings-denied
   Clippy. Markdown lint and diff whitespace checks passed. Broader compile-time
   presentation and the full slice-2 gate remain outstanding.
+- Resolver presentation has started with both `UnknownName` producers. They
+  retain the missing spelling and distinguish ordinary term scope from an
+  operation belonging to the selected effect. Typed messages and JSON borrow
+  those facts; the renderer does not inspect legacy English labels. Real
+  resolver fixtures exercise both contexts. Other resolver families remain
+  explicitly unsupported by the staged presentation adapter.
+- Lookup inspection identified separate type/nominal, effect-row parameter,
+  owning-interface determination parameter, constructor, interface, unqualified
+  effect and selected-module effect contexts for the next migration. Qualified
+  unavailable exports retain their existing separate reason family.
+- Initial resolver verification passed all 1,231 library tests, five focused
+  suites, the bidirectional type-field ownership check and warnings-denied
+  Clippy. The existing unknown-term test now requires the retained spelling,
+  while still rejecting unjustified help or unrelated labels. Review found no
+  actionable defects; Markdown lint and diff whitespace checks passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
