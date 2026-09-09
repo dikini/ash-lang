@@ -1147,3 +1147,34 @@ resolve-declaration-order = Вътрешният ред на деклараци�
     [omitted] липсва декларация.
    *[repeated-skipped-or-reordered] декларация се повтаря, пропусната е или е извън реда си.
     }
+resolve-work-state = Вътрешното състояние на компилатора при разрешаване на имена { $problem ->
+    [missing] не съдържа
+    [extra] неочаквано съдържа
+    [wrong] съдържа неправилна стойност за
+   *[incomplete] е непълно за
+    } { $part ->
+    [equation] уравнение
+    [operational-pattern] шаблон на операционен параметър
+    [operational-parameter] операционен параметър
+    [operational-body] операционно тяло
+    [tuple-type-element] елемент на кортежен тип
+    [effect-row-argument] типов аргумент на ред от ефекти
+    [function-codomain] тип на резултата на функция
+    [function-domain] тип на аргумента на функция
+    [type-argument] типов аргумент
+    [type] тип
+    [block] блок
+    [binding-pattern] шаблон на обвързване
+    [binding-initializer] начален израз на обвързване
+    [recursive-member] член на рекурсивна група
+    [block-result] резултат на блок
+    [block-binding] обвързване в блок
+    [function-body] тяло на функция
+    [tuple-element] елемент на кортеж
+   *[expression] израз
+    [match-pattern] шаблон на съпоставяне
+    [function-pattern] шаблон на параметър на функция
+    [handler-pattern] шаблон на параметър на обработчик
+    [right-operand] десен операнд
+    [left-operand] ляв операнд
+    }.

@@ -956,6 +956,11 @@ localization language. Color is not required for completion.
   with their actual identity space. Their existing internal-state reason and
   source span remain unchanged. The eight-case locale/JSON table, all 134
   resolver tests, five catalogue-contract tests and warnings-denied Clippy passed.
+- Thirty resolver work-state checks now share one template per locale while
+  retaining the affected part and missing/extra/wrong/incomplete distinction in
+  JSON. All existing distinctions are covered by the locale/JSON table. The
+  checks, reasons and spans are unchanged. All 135 resolver tests, five
+  catalogue-contract tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

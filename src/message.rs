@@ -984,6 +984,7 @@ messages! {
     core_validation_non_row_tail_kind => "core-validation-non-row-tail-kind" {},
     core_validation_non_row_tail_kind_node => "core-validation-non-row-tail-kind-node" { node: usize = 42 },
     core_validation_resource => "core-validation-resource" {},
+    resolve_work_state => "resolve-work-state" { part: &'a str = "expression", problem: &'a str = "missing" },
     resolve_declaration_order => "resolve-declaration-order" { kind: &'a str = "nominal", problem: &'a str = "invalid-index" },
     resolve_missing_file_scope => "resolve-missing-file-scope" {},
     resolve_missing_lexical_scope => "resolve-missing-lexical-scope" {},

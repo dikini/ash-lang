@@ -1146,3 +1146,34 @@ resolve-declaration-order = The compiler's declaration order is invalid for { $k
     [omitted] a declaration is missing.
    *[repeated-skipped-or-reordered] a declaration is repeated, skipped, or out of order.
     }
+resolve-work-state = The compiler's name-resolution state { $problem ->
+    [missing] is missing
+    [extra] unexpectedly retains
+    [wrong] has the wrong value for
+   *[incomplete] is incomplete for
+    } { $part ->
+    [equation] an equation
+    [operational-pattern] an operational parameter pattern
+    [operational-parameter] an operational parameter
+    [operational-body] an operational body
+    [tuple-type-element] a tuple type element
+    [effect-row-argument] an effect-row type argument
+    [function-codomain] a function result type
+    [function-domain] a function argument type
+    [type-argument] a type argument
+    [type] a type
+    [block] a block
+    [binding-pattern] a binding pattern
+    [binding-initializer] a binding initializer
+    [recursive-member] a recursive group member
+    [block-result] a block result
+    [block-binding] a block binding
+    [function-body] a function body
+    [tuple-element] a tuple element
+   *[expression] an expression
+    [match-pattern] a match pattern
+    [function-pattern] a function parameter pattern
+    [handler-pattern] a handler parameter pattern
+    [right-operand] a right operand
+    [left-operand] a left operand
+    }.

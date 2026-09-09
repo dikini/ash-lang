@@ -833,6 +833,18 @@ pub fn compile_resolve_diagnostic<'a>(
         .location(span)
         .map_err(|_| PresentationError::MissingSource)?;
     let mut facts: Vec<_> = subject.into_iter().collect();
+    if let Some((part, problem)) = error.work_state_context() {
+        facts.push(Fact {
+            name: "state_part",
+            kind: "resolver-state-part",
+            value: FactValue::Text(part),
+        });
+        facts.push(Fact {
+            name: "state_problem",
+            kind: "resolver-state-problem",
+            value: FactValue::Text(problem),
+        });
+    }
     if let Some((kind, problem)) = error.declaration_order_context() {
         facts.push(Fact {
             name: "declaration_kind",

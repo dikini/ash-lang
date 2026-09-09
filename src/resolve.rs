@@ -836,6 +836,10 @@ pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
+    WorkState {
+        part: &'static str,
+        problem: &'static str,
+    },
     DeclarationOrder {
         kind: &'static str,
         problem: &'static str,
@@ -923,6 +927,9 @@ impl ResolveError {
     fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         match self.1 {
+            Some(ResolveContext::WorkState { part, problem }) => {
+                Some((Message::resolve_work_state(part, problem), "work-state"))
+            }
             Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((
                 Message::resolve_declaration_order(kind, problem),
                 "declaration-order",
@@ -963,6 +970,13 @@ impl ResolveError {
     pub(crate) fn declaration_order_context(&self) -> Option<(&'static str, &'static str)> {
         match self.1 {
             Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((kind, problem)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn work_state_context(&self) -> Option<(&'static str, &'static str)> {
+        match self.1 {
+            Some(ResolveContext::WorkState { part, problem }) => Some((part, problem)),
             _ => None,
         }
     }
@@ -1152,6 +1166,7 @@ impl ResolveError {
                 | ResolveContext::DependencySummaryMismatch
                 | ResolveContext::DependencySummaryInvalid
                 | ResolveContext::DeclarationOrder { .. }
+                | ResolveContext::WorkState { .. }
                 | ResolveContext::MissingFileScope
                 | ResolveContext::MissingLexicalScope
                 | ResolveContext::MissingNominalScope
@@ -1378,6 +1393,7 @@ impl ResolveError {
             | ResolveContext::DependencySummaryMismatch
             | ResolveContext::DependencySummaryInvalid
             | ResolveContext::DeclarationOrder { .. }
+            | ResolveContext::WorkState { .. }
             | ResolveContext::MissingFileScope
             | ResolveContext::MissingLexicalScope
             | ResolveContext::MissingNominalScope
@@ -7081,7 +7097,11 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 definition.span,
                                 "the resolver produced no equation",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "equation",
+                                problem: "missing",
+                            }));
                         }
                         ResolvedDefinitionKind::Equational(ResolvedEquationalGlobal {
                             interface: ResolvedExternalInterface {
@@ -7136,6 +7156,12 @@ impl Resolver {
                                     parameter.span,
                                     "the resolver lost an operational parameter pattern",
                                 )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "operational-pattern",
+                                        problem: "missing",
+                                    },
+                                )
                             })?;
                             let pattern = ResolvedPatternOwner::new(pattern);
                             let annotation = ResolvedTypeOccurrenceOwner::new(
@@ -7152,14 +7178,22 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 operational.header.span,
                                 "the resolver retained an extra operational parameter pattern",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-pattern",
+                                problem: "extra",
+                            }));
                         }
                         if parameters.is_empty() {
                             return Err(error(
                                 ResolveReason::InternalState,
                                 operational.header.span,
                                 "the resolver produced no operational parameter",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-parameter",
+                                problem: "missing",
+                            }));
                         }
                         let result_type = ResolvedTypeOccurrenceOwner::new(
                             self.resolve_type(&operational.header.result_type)?,
@@ -7186,7 +7220,11 @@ impl Resolver {
                                 ResolveReason::InternalState,
                                 operational.body.span,
                                 "the resolver produced the wrong operational body payload",
-                            ));
+                            )
+                            .with_context(ResolveContext::WorkState {
+                                part: "operational-body",
+                                problem: "wrong",
+                            }));
                         }
                         let ResolvedExprKind::Block(body) = body.into_inner().kind else {
                             unreachable!("the operational body shape was checked")
@@ -8135,6 +8173,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a tuple type element",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "tuple-type-element",
+                            problem: "missing",
+                        })
                     })?;
                     let elements = completed.split_off(split);
                     let roots = elements
@@ -8169,6 +8211,12 @@ impl Resolver {
                                     surface.span,
                                     "the resolver lost an effect-row type argument",
                                 )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "effect-row-argument",
+                                        problem: "missing",
+                                    },
+                                )
                             })?,
                     );
                     let (codomain, codomain_root) = completed.pop_owned().ok_or_else(|| {
@@ -8177,6 +8225,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a function codomain",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-codomain",
+                            problem: "missing",
+                        })
                     })?;
                     let (domain, domain_root) = completed.pop_owned().ok_or_else(|| {
                         error(
@@ -8184,6 +8236,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a function domain",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-domain",
+                            problem: "missing",
+                        })
                     })?;
                     let (ty, effect_argument_roots) =
                         if let Some(effects) = effects {
@@ -8243,6 +8299,10 @@ impl Resolver {
                                                 source_instance.span,
                                                 "the resolver lost an effect-row type argument",
                                             )
+                                            .with_context(ResolveContext::WorkState {
+                                                part: "effect-row-argument",
+                                                problem: "missing",
+                                            })
                                         })?;
                                     arguments.push(argument);
                                     roots.push(root);
@@ -8268,6 +8328,12 @@ impl Resolver {
                                     ResolveReason::InternalState,
                                     effects.span,
                                     "the resolver retained an extra effect-row type argument",
+                                )
+                                .with_context(
+                                    ResolveContext::WorkState {
+                                        part: "effect-row-argument",
+                                        problem: "extra",
+                                    },
                                 ));
                             }
                             let tail = effects
@@ -8342,6 +8408,10 @@ impl Resolver {
                             surface.span,
                             "the resolver lost a type argument",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "type-argument",
+                            problem: "missing",
+                        })
                     })?;
                     let arguments = completed.split_off(split);
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
@@ -8371,7 +8441,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 surface.span,
                 "the resolver retained incomplete type state",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "type",
+                problem: "incomplete",
+            }));
         }
         let (ty, root) = completed.pop_owned().ok_or_else(|| {
             error(
@@ -8379,6 +8453,10 @@ impl Resolver {
                 surface.span,
                 "the resolver produced no type",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "type",
+                problem: "missing",
+            })
         })?;
         Ok(ResolvedType {
             ty: ty.into_inner(),
@@ -8465,7 +8543,11 @@ impl Resolver {
                 ResolveReason::InternalState,
                 block.span,
                 "the resolver produced the wrong block payload",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "block",
+                problem: "wrong",
+            }));
         };
         Ok(block)
     }
@@ -9679,6 +9761,10 @@ impl Resolver {
                             binding.pattern.span,
                             "the resolver produced no binding pattern",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "binding-pattern",
+                            problem: "missing",
+                        })
                     })?;
                     let pattern = ResolvedPatternOwner::new(pattern);
                     let annotation = binding
@@ -9693,6 +9779,10 @@ impl Resolver {
                             binding.span,
                             "the resolver lost a binding initializer",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "binding-initializer",
+                            problem: "missing",
+                        })
                     })?;
                     let Some(scope) = self.scopes.last_mut() else {
                         return Err(error(
@@ -9888,7 +9978,11 @@ impl Resolver {
                             ResolveReason::InternalState,
                             group.span,
                             "the resolver lost a recursive group member",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "recursive-member",
+                            problem: "missing",
+                        }));
                     }
                     let mut annotations = ResolvedTypeOccurrenceBuffer(Vec::new());
                     annotations
@@ -9942,13 +10036,21 @@ impl Resolver {
                             span,
                             "the resolver lost a block result",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "block-result",
+                            problem: "missing",
+                        })
                     })?;
                     if declaration_start > declarations.len() {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver lost a block binding",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "block-binding",
+                            problem: "missing",
+                        }));
                     }
                     let block_declarations = declarations.split_off(declaration_start).into_vec();
                     self.scopes.truncate(scope_checkpoint);
@@ -9976,13 +10078,21 @@ impl Resolver {
                             span,
                             "the resolver lost a function body",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-body",
+                            problem: "missing",
+                        })
                     })?;
                     if !matches!(body_expression.kind, ResolvedExprKind::Block(_)) {
                         return Err(error(
                             ResolveReason::InternalState,
                             span,
                             "the resolver produced the wrong function body payload",
-                        ));
+                        )
+                        .with_context(ResolveContext::WorkState {
+                            part: "function-body",
+                            problem: "wrong",
+                        }));
                     }
                     let ResolvedExprKind::Block(body) = body_expression.into_inner().kind else {
                         unreachable!("the function body shape was checked")
@@ -10003,6 +10113,10 @@ impl Resolver {
                             span,
                             "the resolver lost a tuple element",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "tuple-element",
+                            problem: "missing",
+                        })
                     })?;
                     let elements = expressions.split_off(split).into_vec();
                     expressions.push(ResolvedExpr {
@@ -10019,13 +10133,21 @@ impl Resolver {
                 initial_span,
                 "the resolver produced no expression",
             )
+            .with_context(ResolveContext::WorkState {
+                part: "expression",
+                problem: "missing",
+            })
         })?;
         if !expressions.is_empty() || !declarations.is_empty() {
             return Err(error(
                 ResolveReason::InternalState,
                 initial_span,
                 "the resolver retained incomplete expression state",
-            ));
+            )
+            .with_context(ResolveContext::WorkState {
+                part: "expression",
+                problem: "incomplete",
+            }));
         }
         Ok(result.into_inner())
     }
@@ -10081,6 +10203,10 @@ impl Resolver {
                     arm.span,
                     "the resolver produced no match pattern",
                 )
+                .with_context(ResolveContext::WorkState {
+                    part: "match-pattern",
+                    problem: "missing",
+                })
             })?;
             let pattern = ResolvedPatternOwner::new(pattern);
             self.push_binder_scope_many(&binders);
@@ -10391,6 +10517,10 @@ impl Resolver {
                         function.parameter.span,
                         "the resolver produced no function pattern",
                     )
+                    .with_context(ResolveContext::WorkState {
+                        part: "function-pattern",
+                        problem: "missing",
+                    })
                 })?;
                 let scope_checkpoint = self.scopes.len();
                 self.push_binder_scope_many(&binders);
@@ -10493,6 +10623,10 @@ impl Resolver {
                             clause.pattern.span,
                             "the resolver produced no handler pattern",
                         )
+                        .with_context(ResolveContext::WorkState {
+                            part: "handler-pattern",
+                            problem: "missing",
+                        })
                     })?);
                     let scope_checkpoint = self.scopes.len();
                     let resume_checkpoint = self.active_resumes.len();
@@ -10793,6 +10927,10 @@ fn take_expression_pair(
             span,
             "the resolver lost a right operand",
         )
+        .with_context(ResolveContext::WorkState {
+            part: "right-operand",
+            problem: "missing",
+        })
     })?;
     let left = expressions.pop_owned().ok_or_else(|| {
         error(
@@ -10800,6 +10938,10 @@ fn take_expression_pair(
             span,
             "the resolver lost a left operand",
         )
+        .with_context(ResolveContext::WorkState {
+            part: "left-operand",
+            problem: "missing",
+        })
     })?;
     Ok((left.into_inner(), right.into_inner()))
 }
@@ -10844,6 +10986,7 @@ fn lookup_error(
         | ResolveContext::DependencySummaryMismatch
         | ResolveContext::DependencySummaryInvalid
         | ResolveContext::DeclarationOrder { .. }
+        | ResolveContext::WorkState { .. }
         | ResolveContext::MissingFileScope
         | ResolveContext::MissingLexicalScope
         | ResolveContext::MissingNominalScope
@@ -14625,6 +14768,193 @@ mod tests {
             assert_eq!(json["responsibility"], "compiler");
             assert_eq!(json["facts"][0]["value"], cause);
             assert_eq!(json["labels"][0]["byte_end"], 17);
+        }
+    }
+
+    #[test]
+    fn work_state_messages_keep_each_existing_part_and_problem() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("state.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (part, problem, en, bg) in [
+            ("equation", "missing", "an equation", "уравнение"),
+            (
+                "operational-pattern",
+                "missing",
+                "an operational parameter pattern",
+                "шаблон на операционен параметър",
+            ),
+            (
+                "operational-pattern",
+                "extra",
+                "an operational parameter pattern",
+                "шаблон на операционен параметър",
+            ),
+            (
+                "operational-parameter",
+                "missing",
+                "an operational parameter",
+                "операционен параметър",
+            ),
+            (
+                "operational-body",
+                "wrong",
+                "an operational body",
+                "операционно тяло",
+            ),
+            (
+                "tuple-type-element",
+                "missing",
+                "a tuple type element",
+                "елемент на кортежен тип",
+            ),
+            (
+                "effect-row-argument",
+                "missing",
+                "an effect-row type argument",
+                "типов аргумент на ред от ефекти",
+            ),
+            (
+                "effect-row-argument",
+                "extra",
+                "an effect-row type argument",
+                "типов аргумент на ред от ефекти",
+            ),
+            (
+                "function-codomain",
+                "missing",
+                "a function result type",
+                "тип на резултата на функция",
+            ),
+            (
+                "function-domain",
+                "missing",
+                "a function argument type",
+                "тип на аргумента на функция",
+            ),
+            (
+                "type-argument",
+                "missing",
+                "a type argument",
+                "типов аргумент",
+            ),
+            ("type", "incomplete", "a type", "тип"),
+            ("type", "missing", "a type", "тип"),
+            ("block", "wrong", "a block", "блок"),
+            (
+                "binding-pattern",
+                "missing",
+                "a binding pattern",
+                "шаблон на обвързване",
+            ),
+            (
+                "binding-initializer",
+                "missing",
+                "a binding initializer",
+                "начален израз на обвързване",
+            ),
+            (
+                "recursive-member",
+                "missing",
+                "a recursive group member",
+                "член на рекурсивна група",
+            ),
+            (
+                "block-result",
+                "missing",
+                "a block result",
+                "резултат на блок",
+            ),
+            (
+                "block-binding",
+                "missing",
+                "a block binding",
+                "обвързване в блок",
+            ),
+            (
+                "function-body",
+                "missing",
+                "a function body",
+                "тяло на функция",
+            ),
+            (
+                "function-body",
+                "wrong",
+                "a function body",
+                "тяло на функция",
+            ),
+            (
+                "tuple-element",
+                "missing",
+                "a tuple element",
+                "елемент на кортеж",
+            ),
+            ("expression", "missing", "an expression", "израз"),
+            ("expression", "incomplete", "an expression", "израз"),
+            (
+                "match-pattern",
+                "missing",
+                "a match pattern",
+                "шаблон на съпоставяне",
+            ),
+            (
+                "function-pattern",
+                "missing",
+                "a function parameter pattern",
+                "шаблон на параметър на функция",
+            ),
+            (
+                "handler-pattern",
+                "missing",
+                "a handler parameter pattern",
+                "шаблон на параметър на обработчик",
+            ),
+            (
+                "right-operand",
+                "missing",
+                "a right operand",
+                "десен операнд",
+            ),
+            ("left-operand", "missing", "a left operand", "ляв операнд"),
+        ] {
+            let error = error(
+                ResolveReason::InternalState,
+                span,
+                "legacy wording is not presentation input",
+            )
+            .with_context(ResolveContext::WorkState { part, problem });
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains(subject), "{part}: {output}");
+                assert!(!output.contains("legacy wording"));
+                if locale == Locale::English {
+                    let expected = match problem {
+                        "missing" => "is missing",
+                        "extra" => "unexpectedly retains",
+                        "wrong" => "has the wrong value for",
+                        "incomplete" => "is incomplete for",
+                        _ => unreachable!(),
+                    };
+                    assert!(output.contains(expected));
+                }
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], "work-state");
+            assert_eq!(json["facts"][1]["value"], part);
+            assert_eq!(json["facts"][2]["value"], problem);
+            assert_eq!(json["labels"][0]["byte_end"], 4);
         }
     }
 
