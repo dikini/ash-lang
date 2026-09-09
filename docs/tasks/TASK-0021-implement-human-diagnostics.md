@@ -891,6 +891,15 @@ localization language. Color is not required for completion.
   fixture covers English, Bulgarian and JSON with and without a node. Coverage
   is 189/197 reasons, not an effort estimate. The library, catalogue, reporting
   and diagnostic batch passed, as did warnings-denied Clippy.
+- Added presentation for the existing Core node-type, application-type and
+  registry reasons, and evidence unknown-identity and invalid-root reasons.
+  Messages describe the retained failed relationship; they do not invent a
+  more specific cause. Existing structured causes still take precedence. No
+  producer or validation behavior changed. Extended table tests cover both
+  locales, optional Core nodes, evidence spans and unchanged JSON facts.
+  The library, catalogue, reporting, diagnostic and file-dispatch batch passed,
+  as did warnings-denied Clippy. Reason coverage is 194/197; internal-state
+  presentation, default switching and final verification remain open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

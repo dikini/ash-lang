@@ -92,6 +92,12 @@ impl EvidenceValidationFailure {
             return Some((cause.message(), "validation_site"));
         }
         Some(match self.reason {
+            EvidenceValidationReason::UnknownIdentity => {
+                (Message::evidence_unknown_identity(), "evidence_use")
+            }
+            EvidenceValidationReason::InvalidEvidenceRoot => {
+                (Message::evidence_invalid_root(), "evidence_use")
+            }
             EvidenceValidationReason::UnavailableImplementation => (
                 Message::evidence_unavailable_implementation(),
                 "evidence_use",
@@ -102,7 +108,6 @@ impl EvidenceValidationFailure {
             EvidenceValidationReason::TypeResourceExhausted => {
                 (Message::compiler_type_resources(), "validation_site")
             }
-            _ => return None,
         })
     }
 
@@ -7983,6 +7988,16 @@ mod tests {
                 None,
                 "The compiler selected an implementation that is not available in the module containing this use.",
             ),
+            (
+                unknown(span),
+                None,
+                "The compiler could not match linked interface evidence to a unique declaration with the expected owner.",
+            ),
+            (
+                invalid_root(span),
+                None,
+                "The compiler's selected evidence does not establish the interface requirement at this location.",
+            ),
         ] {
             let view = compile_evidence_failure(&error, &[&source]).unwrap();
             for locale in [Locale::English, Locale::Bulgarian] {
@@ -8012,9 +8027,6 @@ mod tests {
                 }
             );
             assert!(compile_evidence_failure(&error, &[]).is_err());
-        }
-        for error in [unknown(span), invalid_root(span)] {
-            assert!(compile_evidence_failure(&error, &[&source]).is_err());
         }
     }
 

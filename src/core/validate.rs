@@ -2400,6 +2400,20 @@ impl ValidationError {
             });
         }
         Some(match (self.reason, node) {
+            (ValidationReason::NodeType, None) => Message::core_validation_node_type(),
+            (ValidationReason::NodeType, Some(node)) => {
+                Message::core_validation_node_type_node(node)
+            }
+            (ValidationReason::ApplicationType, None) => {
+                Message::core_validation_application_type()
+            }
+            (ValidationReason::ApplicationType, Some(node)) => {
+                Message::core_validation_application_type_node(node)
+            }
+            (ValidationReason::Registry, None) => Message::core_validation_registry(),
+            (ValidationReason::Registry, Some(node)) => {
+                Message::core_validation_registry_node(node)
+            }
             (ValidationReason::Resource, None) => Message::core_validation_resource(),
             (ValidationReason::Resource, Some(node)) => {
                 Message::core_validation_resource_node(node)
@@ -14976,6 +14990,18 @@ mod tests {
             (
                 ValidationReason::Resource,
                 "The compiler could not complete Core validation within its work or storage limits.",
+            ),
+            (
+                ValidationReason::NodeType,
+                "The compiler produced inconsistent type information for a Core node or its checked evidence.",
+            ),
+            (
+                ValidationReason::ApplicationType,
+                "The compiler produced a Core application that does not match its checked function or argument information.",
+            ),
+            (
+                ValidationReason::Registry,
+                "The compiler's Core declaration or module registry is inconsistent.",
             ),
         ] {
             for node in [
