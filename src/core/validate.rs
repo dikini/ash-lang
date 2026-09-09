@@ -282,6 +282,23 @@ enum ValidationCause {
     RecursiveDataRoot,
     RecursivePayloadCall,
     RecursivePayloadForm,
+    ForeignBinderArena,
+    DuplicateBinder,
+    UnknownVariableBinder,
+    NonLexicalScopeOwner,
+    UnknownScopeOwner,
+    LocalScopeType,
+    LocalScopeEffects,
+    IncompleteScopeAnalysis,
+    UnboundCoreBinder,
+    UnboundLocalNominal,
+    UnexpectedLocalScope,
+    DuplicateLocalScope,
+    MissingLocalScope,
+    ScopeMissingChild,
+    MissingCaptureRequirement,
+    MissingRootRequirements,
+    MissingNodeRequirements,
 }
 
 impl ValidationError {
@@ -312,6 +329,23 @@ impl ValidationError {
             ValidationCause::RecursiveDataRoot => "recursive-data-root",
             ValidationCause::RecursivePayloadCall => "recursive-payload-call",
             ValidationCause::RecursivePayloadForm => "recursive-payload-form",
+            ValidationCause::ForeignBinderArena => "foreign-binder-arena",
+            ValidationCause::DuplicateBinder => "duplicate-binder",
+            ValidationCause::UnknownVariableBinder => "unknown-variable-binder",
+            ValidationCause::NonLexicalScopeOwner => "non-lexical-scope-owner",
+            ValidationCause::UnknownScopeOwner => "unknown-scope-owner",
+            ValidationCause::LocalScopeType => "local-scope-type",
+            ValidationCause::LocalScopeEffects => "local-scope-effects",
+            ValidationCause::IncompleteScopeAnalysis => "incomplete-scope-analysis",
+            ValidationCause::UnboundCoreBinder => "unbound-core-binder",
+            ValidationCause::UnboundLocalNominal => "unbound-local-nominal",
+            ValidationCause::UnexpectedLocalScope => "unexpected-local-scope",
+            ValidationCause::DuplicateLocalScope => "duplicate-local-scope",
+            ValidationCause::MissingLocalScope => "missing-local-scope",
+            ValidationCause::ScopeMissingChild => "scope-missing-child",
+            ValidationCause::MissingCaptureRequirement => "missing-capture-requirement",
+            ValidationCause::MissingRootRequirements => "missing-root-requirements",
+            ValidationCause::MissingNodeRequirements => "missing-node-requirements",
         })
     }
 
@@ -473,6 +507,108 @@ impl ValidationError {
                 (ValidationCause::RecursivePayloadForm, Some(node)) => {
                     Message::core_validation_recursive_payload_form_node(node)
                 }
+                (ValidationCause::ForeignBinderArena, None) => {
+                    Message::core_validation_foreign_binder_arena()
+                }
+                (ValidationCause::ForeignBinderArena, Some(node)) => {
+                    Message::core_validation_foreign_binder_arena_node(node)
+                }
+                (ValidationCause::DuplicateBinder, None) => {
+                    Message::core_validation_duplicate_binder()
+                }
+                (ValidationCause::DuplicateBinder, Some(node)) => {
+                    Message::core_validation_duplicate_binder_node(node)
+                }
+                (ValidationCause::UnknownVariableBinder, None) => {
+                    Message::core_validation_unknown_variable_binder()
+                }
+                (ValidationCause::UnknownVariableBinder, Some(node)) => {
+                    Message::core_validation_unknown_variable_binder_node(node)
+                }
+                (ValidationCause::NonLexicalScopeOwner, None) => {
+                    Message::core_validation_non_lexical_scope_owner()
+                }
+                (ValidationCause::NonLexicalScopeOwner, Some(node)) => {
+                    Message::core_validation_non_lexical_scope_owner_node(node)
+                }
+                (ValidationCause::UnknownScopeOwner, None) => {
+                    Message::core_validation_unknown_scope_owner()
+                }
+                (ValidationCause::UnknownScopeOwner, Some(node)) => {
+                    Message::core_validation_unknown_scope_owner_node(node)
+                }
+                (ValidationCause::LocalScopeType, None) => {
+                    Message::core_validation_local_scope_type()
+                }
+                (ValidationCause::LocalScopeType, Some(node)) => {
+                    Message::core_validation_local_scope_type_node(node)
+                }
+                (ValidationCause::LocalScopeEffects, None) => {
+                    Message::core_validation_local_scope_effects()
+                }
+                (ValidationCause::LocalScopeEffects, Some(node)) => {
+                    Message::core_validation_local_scope_effects_node(node)
+                }
+                (ValidationCause::IncompleteScopeAnalysis, None) => {
+                    Message::core_validation_incomplete_scope_analysis()
+                }
+                (ValidationCause::IncompleteScopeAnalysis, Some(node)) => {
+                    Message::core_validation_incomplete_scope_analysis_node(node)
+                }
+                (ValidationCause::UnboundCoreBinder, None) => {
+                    Message::core_validation_unbound_core_binder()
+                }
+                (ValidationCause::UnboundCoreBinder, Some(node)) => {
+                    Message::core_validation_unbound_core_binder_node(node)
+                }
+                (ValidationCause::UnboundLocalNominal, None) => {
+                    Message::core_validation_unbound_local_nominal()
+                }
+                (ValidationCause::UnboundLocalNominal, Some(node)) => {
+                    Message::core_validation_unbound_local_nominal_node(node)
+                }
+                (ValidationCause::UnexpectedLocalScope, None) => {
+                    Message::core_validation_unexpected_local_scope()
+                }
+                (ValidationCause::UnexpectedLocalScope, Some(node)) => {
+                    Message::core_validation_unexpected_local_scope_node(node)
+                }
+                (ValidationCause::DuplicateLocalScope, None) => {
+                    Message::core_validation_duplicate_local_scope()
+                }
+                (ValidationCause::DuplicateLocalScope, Some(node)) => {
+                    Message::core_validation_duplicate_local_scope_node(node)
+                }
+                (ValidationCause::MissingLocalScope, None) => {
+                    Message::core_validation_missing_local_scope()
+                }
+                (ValidationCause::MissingLocalScope, Some(node)) => {
+                    Message::core_validation_missing_local_scope_node(node)
+                }
+                (ValidationCause::ScopeMissingChild, None) => {
+                    Message::core_validation_missing_child()
+                }
+                (ValidationCause::ScopeMissingChild, Some(node)) => {
+                    Message::core_validation_missing_child_node(node)
+                }
+                (ValidationCause::MissingCaptureRequirement, None) => {
+                    Message::core_validation_missing_capture_requirement()
+                }
+                (ValidationCause::MissingCaptureRequirement, Some(node)) => {
+                    Message::core_validation_missing_capture_requirement_node(node)
+                }
+                (ValidationCause::MissingRootRequirements, None) => {
+                    Message::core_validation_missing_root_requirements()
+                }
+                (ValidationCause::MissingRootRequirements, Some(node)) => {
+                    Message::core_validation_missing_root_requirements_node(node)
+                }
+                (ValidationCause::MissingNodeRequirements, None) => {
+                    Message::core_validation_missing_node_requirements()
+                }
+                (ValidationCause::MissingNodeRequirements, Some(node)) => {
+                    Message::core_validation_missing_node_requirements_node(node)
+                }
             });
         }
         Some(match (self.reason, node) {
@@ -567,6 +703,23 @@ impl ValidationError {
                 | ValidationCause::RecursiveDataRoot
                 | ValidationCause::RecursivePayloadCall
                 | ValidationCause::RecursivePayloadForm => ValidationReason::RecursiveBinding,
+                ValidationCause::ForeignBinderArena
+                | ValidationCause::DuplicateBinder
+                | ValidationCause::UnknownVariableBinder
+                | ValidationCause::NonLexicalScopeOwner
+                | ValidationCause::UnknownScopeOwner
+                | ValidationCause::LocalScopeType
+                | ValidationCause::LocalScopeEffects
+                | ValidationCause::IncompleteScopeAnalysis
+                | ValidationCause::UnboundCoreBinder
+                | ValidationCause::UnboundLocalNominal
+                | ValidationCause::UnexpectedLocalScope
+                | ValidationCause::DuplicateLocalScope
+                | ValidationCause::MissingLocalScope
+                | ValidationCause::ScopeMissingChild
+                | ValidationCause::MissingCaptureRequirement
+                | ValidationCause::MissingRootRequirements
+                | ValidationCause::MissingNodeRequirements => ValidationReason::Scope,
             },
             node,
             cause: Some(cause),
@@ -6012,7 +6165,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         authenticated_nested: bool,
     ) -> Result<(), ValidationError> {
         if binder.arena() != self.program.arena {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ForeignBinderArena,
+                Some(node),
+            ));
         }
         self.validate_origin(binder.origin(), node)?;
         if let (Some(relation), Some(module)) = (&self.module_sources, binder.id().module())
@@ -6031,7 +6187,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Err(ValidationError::new(invalid_type, Some(node)));
         }
         if self.binders.contains_key(&binder.id()) {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(node)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::DuplicateBinder,
+                Some(node),
+            ));
         }
         self.binders
             .try_reserve(1)
@@ -6203,7 +6362,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .map_err(|error| error.at_node(id))?,
                 Some(PureExprKind::Variable(variable)) => {
                     let Some(binder) = self.binders.get(&variable.binder()) else {
-                        return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::UnknownVariableBinder,
+                            Some(id),
+                        ));
                     };
                     if !self.same_type_charged(&node.ty, binder.ty())? {
                         return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
@@ -6532,16 +6694,33 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             PureComputation::LocalNominalScope(scope) => {
                 let body = self.node(scope.body())?;
-                if !scope.owner().is_lexical()
-                    || self.program.registry.nominal(scope.owner()).is_none()
-                    || !self.same_type_charged(&node.ty, &body.ty)?
-                    || !self.same_effect_row_charged(
-                        F::effect_row(&node.effects),
-                        F::effect_row(&body.effects),
-                        id,
-                    )?
-                {
-                    return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+                if !scope.owner().is_lexical() {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::NonLexicalScopeOwner,
+                        Some(id),
+                    ));
+                }
+                if self.program.registry.nominal(scope.owner()).is_none() {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::UnknownScopeOwner,
+                        Some(id),
+                    ));
+                }
+                if !self.same_type_charged(&node.ty, &body.ty)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::LocalScopeType,
+                        Some(id),
+                    ));
+                }
+                if !self.same_effect_row_charged(
+                    F::effect_row(&node.effects),
+                    F::effect_row(&body.effects),
+                    id,
+                )? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::LocalScopeEffects,
+                        Some(id),
+                    ));
                 }
             }
             PureComputation::TypeAbstraction(abstraction) => {
@@ -7209,21 +7388,29 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.validate_local_scope_bijection()?;
         let analysis = self.analyze_free_binders()?;
         if analysis.analyzed_nodes != self.program.nodes.len() {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::IncompleteScopeAnalysis,
+                None,
+            ));
         }
         if let Some((key, requirement)) = analysis
             .root_requirements
             .iter()
             .min_by_key(|(_, requirement)| requirement.occurrence.value())
         {
-            return Err(ValidationError::new(
-                if matches!(key, ScopeRequirementKey::Resume(_, _)) {
-                    ValidationReason::Resume
-                } else {
-                    ValidationReason::Scope
-                },
-                Some(requirement.occurrence),
-            ));
+            return Err(match key {
+                ScopeRequirementKey::Resume(_, _) => {
+                    ValidationError::new(ValidationReason::Resume, Some(requirement.occurrence))
+                }
+                ScopeRequirementKey::Binder(_) => ValidationError::with_cause(
+                    ValidationCause::UnboundCoreBinder,
+                    Some(requirement.occurrence),
+                ),
+                ScopeRequirementKey::LocalNominal(_) => ValidationError::with_cause(
+                    ValidationCause::UnboundLocalNominal,
+                    Some(requirement.occurrence),
+                ),
+            });
         }
         Ok(())
     }
@@ -7261,12 +7448,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             };
             let id = node_id(self.program.arena, index)?;
             self.charge_type_work(1)?;
-            if !expected.contains(&scope.owner()) || !introduced.insert(scope.owner()) {
-                return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+            if !expected.contains(&scope.owner()) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::UnexpectedLocalScope,
+                    Some(id),
+                ));
+            }
+            if !introduced.insert(scope.owner()) {
+                return Err(ValidationError::with_cause(
+                    ValidationCause::DuplicateLocalScope,
+                    Some(id),
+                ));
             }
         }
         if introduced != expected {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingLocalScope,
+                None,
+            ));
         }
         Ok(())
     }
@@ -7695,7 +7894,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(ScopeAnalysisTask::Finish(id));
                     for child_index in (0..child_count).rev() {
                         let child = F::child_at(kind, child_index).ok_or_else(|| {
-                            ValidationError::new(ValidationReason::Scope, Some(id))
+                            ValidationError::with_cause(
+                                ValidationCause::ScopeMissingChild,
+                                Some(id),
+                            )
                         })?;
                         work.push(ScopeAnalysisTask::Enter(child));
                     }
@@ -7742,8 +7944,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                         !initializer
                                             .contains_key(&ScopeRequirementKey::Binder(*capture))
                                     }) {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Scope,
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::MissingCaptureRequirement,
                                             Some(id),
                                         ));
                                     }
@@ -7862,7 +8064,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             for child_index in 0..F::child_count(&node.kind) {
                                 let child =
                                     F::child_at(&node.kind, child_index).ok_or_else(|| {
-                                        ValidationError::new(ValidationReason::Scope, Some(id))
+                                        ValidationError::with_cause(
+                                            ValidationCause::ScopeMissingChild,
+                                            Some(id),
+                                        )
                                     })?;
                                 let mut child_free = self.requirements_for(&requirements, child)?;
                                 F::visit_operation_child_binders(
@@ -7906,7 +8111,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let root_index = self.index(self.program.root)?;
         let Some(root_requirements) = requirements[root_index].take() else {
-            return Err(ValidationError::new(ValidationReason::Scope, None));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingRootRequirements,
+                None,
+            ));
         };
         Ok(ScopeAnalysis {
             root_requirements,
@@ -7921,7 +8129,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<ScopeRequirements, ValidationError> {
         let index = self.index(id)?;
         let Some(free) = requirements.get(index).and_then(Option::as_ref) else {
-            return Err(ValidationError::new(ValidationReason::Scope, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::MissingNodeRequirements,
+                Some(id),
+            ));
         };
         let capability_count = free
             .keys()
@@ -9797,6 +10008,154 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scope_failure_messages_keep_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::ForeignBinderArena,
+                "foreign-binder-arena",
+                "The compiler retained a Core binder owned by a different arena.",
+            ),
+            (
+                ValidationCause::DuplicateBinder,
+                "duplicate-binder",
+                "The compiler declared the same Core binder identity more than once.",
+            ),
+            (
+                ValidationCause::UnknownVariableBinder,
+                "unknown-variable-binder",
+                "The compiler retained a Core variable whose binder is not declared.",
+            ),
+            (
+                ValidationCause::NonLexicalScopeOwner,
+                "non-lexical-scope-owner",
+                "The compiler used a non-lexical nominal identity as a local Core scope owner.",
+            ),
+            (
+                ValidationCause::UnknownScopeOwner,
+                "unknown-scope-owner",
+                "The compiler retained a local Core scope whose nominal owner is absent from the registry.",
+            ),
+            (
+                ValidationCause::LocalScopeType,
+                "local-scope-type",
+                "The compiler retained a local Core scope whose result type differs from its body's type.",
+            ),
+            (
+                ValidationCause::LocalScopeEffects,
+                "local-scope-effects",
+                "The compiler retained a local Core scope whose effects differ from its body's effects.",
+            ),
+            (
+                ValidationCause::IncompleteScopeAnalysis,
+                "incomplete-scope-analysis",
+                "The compiler's scope analysis did not cover every stored Core node.",
+            ),
+            (
+                ValidationCause::UnboundCoreBinder,
+                "unbound-core-binder",
+                "The compiler retained a Core use without an enclosing scope for its binder.",
+            ),
+            (
+                ValidationCause::UnboundLocalNominal,
+                "unbound-local-nominal",
+                "The compiler retained a local nominal type requirement without its enclosing Core scope.",
+            ),
+            (
+                ValidationCause::UnexpectedLocalScope,
+                "unexpected-local-scope",
+                "The compiler retained a local Core scope not listed among the registry's lexical nominal identities.",
+            ),
+            (
+                ValidationCause::DuplicateLocalScope,
+                "duplicate-local-scope",
+                "The compiler introduced the same local nominal identity in more than one Core scope.",
+            ),
+            (
+                ValidationCause::MissingLocalScope,
+                "missing-local-scope",
+                "The compiler retained a lexical nominal identity without a corresponding Core scope.",
+            ),
+            (
+                ValidationCause::ScopeMissingChild,
+                "scope-missing-child",
+                "The compiler stored a Core node whose declared child edge cannot be read.",
+            ),
+            (
+                ValidationCause::MissingCaptureRequirement,
+                "missing-capture-requirement",
+                "A compiler-recorded implementation capture is absent from the initializer's scope requirements.",
+            ),
+            (
+                ValidationCause::MissingRootRequirements,
+                "missing-root-requirements",
+                "The compiler has no retained scope-analysis result for the Core root.",
+            ),
+            (
+                ValidationCause::MissingNodeRequirements,
+                "missing-node-requirements",
+                "The compiler needs a Core node's scope-analysis result before it is available.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.scope");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn binder_scope_checks_keep_distinct_causes() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let mut program = builder.finish(root).unwrap();
+        let binder = TypedBinder::new(program.arena, BinderId::new(0), Type::Unit, origin(&file));
+        let mut validator = Validator::new(&program, &[&file]);
+        validator
+            .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+            .unwrap();
+        let error = validator
+            .collect_binder(root, &binder, ValidationReason::NodeType, false, false)
+            .unwrap_err();
+        assert_eq!(error.cause_name(), Some("duplicate-binder"));
+        let error = validator.requirements_for(&[None], root).err().unwrap();
+        assert_eq!(error.cause_name(), Some("missing-node-requirements"));
+        drop(validator);
+        program.nodes[0].kind =
+            PureExprKind::Variable(super::super::variable::VariableNode::new(binder.id()));
+        let mut validator = Validator::new(&program, &[&file]);
+        let error = validator.run().unwrap_err();
+        assert_eq!(error.cause_name(), Some("unknown-variable-binder"));
+        let error = validator.validate_scopes().unwrap_err();
+        assert_eq!(error.cause_name(), Some("unbound-core-binder"));
+    }
+
     #[test]
     fn recursive_constructor_checks_keep_the_failed_relationship() {
         let file = source();
@@ -24718,6 +25077,7 @@ mod tests {
         let error = validate(program, &[&file]).expect_err("foreign binder capability");
         assert_eq!(error.reason(), ValidationReason::Scope);
         assert_eq!(error.node(), Some(NodeId::new(arena, 1)));
+        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
     }
 
     #[test]
