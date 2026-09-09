@@ -320,21 +320,34 @@ fn requires_pure_core_projection(
     Ok(false)
 }
 
-pub(crate) struct SingleSiteTypeMessage<'a> {
+pub(crate) struct TypeSourceMessage<'a> {
     pub(crate) message: crate::message::Message<'a>,
     pub(crate) relationship: &'static str,
     pub(crate) fact: Option<(&'static str, &'a str)>,
+    pub(crate) minimum_related: usize,
 }
 
 impl TypeReason {
-    pub(crate) fn single_site_message<'a>(
+    pub(crate) fn source_message<'a>(
         self,
         expected: Option<&'a str>,
         witness: Option<&'a str>,
-    ) -> Option<SingleSiteTypeMessage<'a>> {
+    ) -> Option<TypeSourceMessage<'a>> {
         use crate::message::Message;
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
+            Self::UnsafeRecursiveInitializer => (
+                Message::recursion_initializer(),
+                "recursive_initializer",
+                None,
+            ),
+            Self::UnsafeRecursiveRoot => (Message::recursion_root(), "recursive_initializer", None),
+            Self::NewtypeRecursiveRepresentation => (
+                Message::newtype_representation_cycle(),
+                "cycle_closing_occurrence",
+                None,
+            ),
+            Self::CleanupContext => (Message::cleanup_context(), "discard", None),
             Self::InfiniteType => (Message::type_infinite(), "infinite_type", None),
             Self::AmbiguousType => (Message::type_ambiguous(), "ambiguous_type", None),
             Self::UnguardedRecursiveUse => {
@@ -390,10 +403,40 @@ impl TypeReason {
             Self::RedundantCase => (Message::coverage_redundant_case(), "case", None),
             _ => return None,
         };
-        Some(SingleSiteTypeMessage {
+        Some(TypeSourceMessage {
             message,
             relationship,
             fact,
+            minimum_related: match self {
+                Self::UnsafeRecursiveInitializer
+                | Self::UnsafeRecursiveRoot
+                | Self::CleanupContext => 2,
+                Self::NewtypeRecursiveRepresentation => 1,
+                _ => 0,
+            },
+        })
+    }
+
+    pub(crate) fn source_related_message(
+        self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        Some(match (self, index) {
+            (Self::UnsafeRecursiveInitializer | Self::UnsafeRecursiveRoot, 0) => {
+                (Message::recursion_group(), "recursive_group")
+            }
+            (Self::UnsafeRecursiveInitializer | Self::UnsafeRecursiveRoot, 1) => {
+                (Message::recursion_member_annotation(), "member_annotation")
+            }
+            (Self::NewtypeRecursiveRepresentation, _) => {
+                (Message::newtype_cycle_member(), "representation_cycle")
+            }
+            (Self::CleanupContext, 0) => (Message::cleanup_required_action(), "cleanup_action"),
+            (Self::CleanupContext, 1) => {
+                (Message::cleanup_abandoned_handler(), "abandoned_handler")
+            }
+            _ => return None,
         })
     }
 

@@ -150,6 +150,24 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A recursive function member requires a direct anonymous function.
+    recursion_initializer => "recursion-initializer" {},
+    /// A recursive data member requires a constructor root.
+    recursion_root => "recursion-root" {},
+    /// The enclosing simultaneous recursive group.
+    recursion_group => "recursion-group" {},
+    /// The recursive member's declared type.
+    recursion_member_annotation => "recursion-member-annotation" {},
+    /// Newtype representations form a forbidden cycle.
+    newtype_representation_cycle => "newtype-representation-cycle" {},
+    /// A declaration participating in the representation cycle.
+    newtype_cycle_member => "newtype-cycle-member" {},
+    /// Discard removes an interpreter required by cleanup.
+    cleanup_context => "cleanup-context" {},
+    /// The cleanup action that requires the abandoned interpreter.
+    cleanup_required_action => "cleanup-required-action" {},
+    /// The handler removed by discard.
+    cleanup_abandoned_handler => "cleanup-abandoned-handler" {},
     /// First-order inference would construct an infinite type.
     type_infinite => "type-infinite" {},
     /// Inference cannot determine a complete type at this source location.

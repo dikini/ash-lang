@@ -1118,6 +1118,69 @@ fn inference_and_continuation_messages_preserve_source_locations_without_invente
     }
 }
 
+#[test]
+fn recursive_and_cleanup_messages_retain_every_causal_label() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let cleanup = "effect Stop {\nstop : Unit -> Unit\n}\neffect Log {\nlog : Unit -> Unit\n}\naction : Unit -> Unit ! {Log}\naction ignored = perform Log.log ()\nmain : Unit -> Int\nmain () = handle {\nlet logged = perform Log.log ()\nhandle (handle (cleanup action {\nlet ignored = perform Stop.stop ()\n42\n}) with Log {\nlog ignored => (resume ()) + 1\n}) with Stop {\nstop ignored => {\nlet done = discard\n7\n}\n}\n} with Log {\nlog ignored => resume ()\n}\n";
+    for (reason, text, lead, relations) in [
+        (
+            TypeReason::UnsafeRecursiveInitializer,
+            "main : Unit -> Int\nmain () = {\nlet rec value : Unit -> Int = {\nlet candidate : Unit -> Int = fn(ignored) {\n1\n}\ncandidate\n}\nvalue ()\n}\n",
+            "This recursive initializer must be a direct `fn` expression.",
+            vec!["recursive_group", "member_annotation"],
+        ),
+        (
+            TypeReason::UnsafeRecursiveRoot,
+            "type Stream =\nNext(Int, Stream)\nmain : Unit -> Stream\nmain () = {\nlet rec stream : Stream = {\nNext(1, stream)\n}\nstream\n}\n",
+            "This recursive data initializer must start with a fully applied constructor of its declared nominal type.",
+            vec!["recursive_group", "member_annotation"],
+        ),
+        (
+            TypeReason::NewtypeRecursiveRepresentation,
+            "newtype First = First(Second)\nnewtype Second = Second(First)\n",
+            "These newtype representations form a recursive cycle.",
+            vec!["representation_cycle", "representation_cycle"],
+        ),
+        (
+            TypeReason::CleanupContext,
+            cleanup,
+            "Discard would remove a handler that this cleanup action still needs.",
+            vec!["cleanup_action", "abandoned_handler"],
+        ),
+    ] {
+        let fixture = ModuleFixture::load("causal-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source failure");
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English {
+                assert!(String::from_utf8(output).unwrap().contains(lead));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        let labels = json["labels"].as_array().unwrap();
+        assert_eq!(labels.len(), error.related.len() + 1);
+        assert_eq!(error.related.len(), relations.len());
+        for ((label, original), relation) in labels[1..].iter().zip(&error.related).zip(relations) {
+            assert_eq!(label["relationship"], relation);
+            assert_eq!(label["byte_start"], original.span().range().start());
+            assert_eq!(label["byte_end"], original.span().range().end());
+        }
+        let mut missing = (*error).clone();
+        missing.related.clear();
+        assert!(compile_type_diagnostic(&missing, &[fixture.loaded().source()]).is_err());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

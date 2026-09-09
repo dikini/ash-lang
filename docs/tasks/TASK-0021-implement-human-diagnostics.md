@@ -356,6 +356,17 @@ localization language. Color is not required for completion.
   All 94 focused diagnostic, catalogue and effect tests and warnings-denied
   Clippy passed. This changes compile-time reporting only, not runtime behavior
   or CLI defaults.
+- Recursive initializer/root failures, newtype representation cycles and
+  cleanup-context failures now render their complete related locations. The
+  phase owns the recursive-group/member, cycle-participant and
+  cleanup-action/abandoned-handler relationships. Missing required labels
+  fail presentation rather than silently losing causal context. Four source
+  fixtures verify both locales, JSON label order and exact spans, including
+  a two-declaration representation cycle and an abandoned cleanup handler.
+  Type presentation covers 24 of 35 source reasons; each catalogue contains
+  149 templates. All 119 focused diagnostic, catalogue, recursion, newtype
+  and cleanup tests and warnings-denied Clippy passed. Source acceptance and
+  runtime behavior remain unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -97,18 +97,19 @@ pub fn compile_type_diagnostic<'a>(
     diagnostic: &'a Diagnostic<TypeReason>,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
-    if let Some(crate::elaborate::SingleSiteTypeMessage {
+    if let Some(crate::elaborate::TypeSourceMessage {
         message,
         relationship,
         fact,
+        minimum_related,
     }) = diagnostic
         .reason
-        .single_site_message(diagnostic.expected.as_deref(), diagnostic.found.as_deref())
+        .source_message(diagnostic.expected.as_deref(), diagnostic.found.as_deref())
     {
-        // Single-site failures need no expected/found type comparison.
+        // These failures need no expected/found type comparison.
         // Preserve the optional phase fact with its own semantic name.
-        if !diagnostic.related.is_empty() {
-            return Err(PresentationError::Unsupported);
+        if diagnostic.related.len() < minimum_related {
+            return Err(PresentationError::MissingFact);
         }
         let span = diagnostic.primary.span();
         let source = sources
@@ -127,6 +128,29 @@ pub fn compile_type_diagnostic<'a>(
                 value: FactValue::Text(value),
             })
             .collect();
+        let mut related = Vec::with_capacity(diagnostic.related.len());
+        for (index, original) in diagnostic.related.iter().enumerate() {
+            let (message, relationship) = diagnostic
+                .reason
+                .source_related_message(index)
+                .ok_or(PresentationError::Unsupported)?;
+            let span = original.span();
+            let source = sources
+                .iter()
+                .copied()
+                .find(|source| source.id() == span.source())
+                .ok_or(PresentationError::MissingSource)?;
+            source
+                .location(span)
+                .map_err(|_| PresentationError::MissingSource)?;
+            related.push(Label {
+                source,
+                span,
+                message,
+                relationship,
+                facts: Vec::new(),
+            });
+        }
         return Ok(CompileDiagnostic {
             reason: diagnostic.reason.to_string(),
             responsibility: "source",
@@ -138,7 +162,7 @@ pub fn compile_type_diagnostic<'a>(
                 facts: facts.clone(),
             }),
             message,
-            related: Vec::new(),
+            related,
             facts,
         });
     }
