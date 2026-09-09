@@ -184,6 +184,34 @@ messages! {
     first_declaration => "first-declaration" {},
     /// The complete earlier global definition, distinct from its name site.
     first_definition => "first-definition" {},
+    /// The equation and its declared signature have different names.
+    resolve_equation_name => "resolve-equation-name" { name: &'a str = "other", expected: &'a str = "value" },
+    /// A newtype constructor must repeat the type's name.
+    resolve_newtype_name => "resolve-newtype-name" { name: &'a str = "Other", expected: &'a str = "Wrapper" },
+    /// An explicit parameter has no occurrence in its declaration header.
+    resolve_unused_parameter => "resolve-unused-parameter" { name: &'a str = "A" },
+    /// A file-wide binding conflicts with an import or existing namespace entry.
+    resolve_import_conflict => "resolve-import-conflict" { name: &'a str = "Cell" },
+    /// An opaque type does not expose its constructor to this module.
+    resolve_opaque_constructor => "resolve-opaque-constructor" { name: &'a str = "Box" },
+    /// The defining module retained a private declaration.
+    resolve_private_export => "resolve-private-export" { name: &'a str = "hidden" },
+    /// An import or qualified reference found no available declaration.
+    resolve_missing_export => "resolve-missing-export" { name: &'a str = "absent" },
+    /// A qualified reference names no imported module alias.
+    resolve_missing_module_alias => "resolve-missing-module-alias" { name: &'a str = "Missing" },
+    /// A name differs from the spelling required by its declaration.
+    incorrect_name => "incorrect-name" {},
+    /// A parameter is absent from the declaration header.
+    unused_parameter => "unused-parameter" {},
+    /// A binding conflicts with a file-wide name.
+    conflicting_binding => "conflicting-binding" {},
+    /// An imported name is unavailable at this occurrence.
+    inaccessible_name => "inaccessible-name" {},
+    /// The declaration that determines the required spelling.
+    required_name_declaration => "required-name-declaration" {},
+    /// The original private or opaque declaration.
+    inaccessible_declaration => "inaccessible-declaration" {},
     /// A retained canonical module path has no parent directory.
     module_missing_parent => "module-missing-parent" {},
     /// A projected import has no module-name segments.

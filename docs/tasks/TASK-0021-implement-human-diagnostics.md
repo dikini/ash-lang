@@ -262,6 +262,18 @@ localization language. Color is not required for completion.
   declaration orders and method parameters conflicting with owner parameters.
   The broader run also found and corrected a stale unknown-name assertion from
   the earlier lookup batch. No subagents or full-workspace gate were needed.
+- Equation/newtype name requirements, unused explicit parameters, import
+  conflicts, unavailable exports and opaque constructors now have English and
+  Bulgarian messages. The resolver retains private, missing-export and
+  missing-alias causes independently of wording. JSON retains required names
+  and cross-file declaration relationships without attributing a local import
+  alias to the defining declaration. The existing name-context field carries
+  the additional causes; no new reporting framework was introduced.
+- Broader checks for this batch passed 1,231 library tests, 143 integration
+  tests, the type-field ownership check and warnings-denied Clippy. Review
+  identified the renamed-import label case; its regression fixture checks that
+  only the occurrence carries the local alias spelling. After that correction,
+  all 64 focused tests and warnings-denied Clippy passed again.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

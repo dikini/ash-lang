@@ -827,10 +827,10 @@ impl fmt::Display for ResolveReason {
 
 /// A structured name-resolution failure kept compact in pipeline results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<LookupScope>);
+pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<NameContext>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LookupScope {
+enum NameContext {
     Term,
     EffectOperation,
     Type,
@@ -840,6 +840,9 @@ enum LookupScope {
     Interface,
     Effect,
     ExportedEffect,
+    PrivateExport,
+    MissingExport,
+    MissingModuleAlias,
 }
 
 impl ResolveError {
@@ -857,6 +860,30 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        match self.reason {
+            ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                return Some((crate::message::Message::incorrect_name(), "incorrect_name"));
+            }
+            ResolveReason::UnusedTypeParameter => {
+                return Some((
+                    crate::message::Message::unused_parameter(),
+                    "unused_parameter",
+                ));
+            }
+            ResolveReason::ImportConflict => {
+                return Some((
+                    crate::message::Message::conflicting_binding(),
+                    "conflicting_binding",
+                ));
+            }
+            ResolveReason::UnavailableExport | ResolveReason::OpaqueConstructor => {
+                return Some((
+                    crate::message::Message::inaccessible_name(),
+                    "inaccessible_name",
+                ));
+            }
+            _ => {}
+        }
         if self.is_duplicate_declaration() {
             Some((crate::message::Message::duplicate_name(), "duplicate_name"))
         } else if self.1.is_some() {
@@ -873,6 +900,23 @@ impl ResolveError {
         &self,
         index: usize,
     ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if index == 0 {
+            match self.reason {
+                ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                    return Some((
+                        crate::message::Message::required_name_declaration(),
+                        "required_name_declaration",
+                    ));
+                }
+                ResolveReason::UnavailableExport | ResolveReason::OpaqueConstructor => {
+                    return Some((
+                        crate::message::Message::inaccessible_declaration(),
+                        "inaccessible_declaration",
+                    ));
+                }
+                _ => {}
+            }
+        }
         if !self.is_duplicate_declaration() {
             return None;
         }
@@ -891,21 +935,80 @@ impl ResolveError {
 
     pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
         match self.1 {
-            Some(LookupScope::Term) => Some("term"),
-            Some(LookupScope::EffectOperation) => Some("effect-operation"),
-            Some(LookupScope::Type) => Some("type"),
-            Some(LookupScope::EffectRowParameter) => Some("effect-row-parameter"),
-            Some(LookupScope::InterfaceParameter) => Some("interface-parameter"),
-            Some(LookupScope::Constructor) => Some("constructor"),
-            Some(LookupScope::Interface) => Some("interface"),
-            Some(LookupScope::Effect) => Some("effect"),
-            Some(LookupScope::ExportedEffect) => Some("exported-effect"),
-            None => None,
+            Some(NameContext::Term) => Some("term"),
+            Some(NameContext::EffectOperation) => Some("effect-operation"),
+            Some(NameContext::Type) => Some("type"),
+            Some(NameContext::EffectRowParameter) => Some("effect-row-parameter"),
+            Some(NameContext::InterfaceParameter) => Some("interface-parameter"),
+            Some(NameContext::Constructor) => Some("constructor"),
+            Some(NameContext::Interface) => Some("interface"),
+            Some(NameContext::Effect) => Some("effect"),
+            Some(NameContext::ExportedEffect) => Some("exported-effect"),
+            None
+            | Some(
+                NameContext::PrivateExport
+                | NameContext::MissingExport
+                | NameContext::MissingModuleAlias,
+            ) => None,
+        }
+    }
+
+    pub(crate) fn related_name(&self) -> Option<&str> {
+        if self.is_duplicate_declaration() {
+            self.found.as_deref()
+        } else {
+            // An imported spelling may differ from the inaccessible declaration's name.
+            self.expected_name()
+        }
+    }
+
+    pub(crate) fn expected_name(&self) -> Option<&str> {
+        match self.reason {
+            ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
+                self.expected.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn access_name(&self) -> Option<&'static str> {
+        if self.reason == ResolveReason::OpaqueConstructor {
+            return Some("opaque-constructor");
+        }
+        match self.1 {
+            Some(NameContext::PrivateExport) => Some("private"),
+            Some(NameContext::MissingExport) => Some("not-exported"),
+            Some(NameContext::MissingModuleAlias) => Some("unknown-module-alias"),
+            _ => None,
         }
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         let name = self.found.as_deref()?;
+        match self.reason {
+            ResolveReason::EquationNameMismatch => {
+                return Some(crate::message::Message::resolve_equation_name(
+                    name,
+                    self.expected_name()?,
+                ));
+            }
+            ResolveReason::NewtypeConstructorName => {
+                return Some(crate::message::Message::resolve_newtype_name(
+                    name,
+                    self.expected_name()?,
+                ));
+            }
+            ResolveReason::UnusedTypeParameter => {
+                return Some(crate::message::Message::resolve_unused_parameter(name));
+            }
+            ResolveReason::ImportConflict => {
+                return Some(crate::message::Message::resolve_import_conflict(name));
+            }
+            ResolveReason::OpaqueConstructor => {
+                return Some(crate::message::Message::resolve_opaque_constructor(name));
+            }
+            _ => {}
+        }
         if self.is_duplicate_declaration() {
             return Some(match self.reason {
                 ResolveReason::DuplicateGlobal => {
@@ -933,32 +1036,37 @@ impl ResolveError {
             });
         }
         Some(match self.1? {
-            LookupScope::Term => crate::message::Message::resolve_unknown_term(name),
-            LookupScope::EffectOperation => {
+            NameContext::Term => crate::message::Message::resolve_unknown_term(name),
+            NameContext::EffectOperation => {
                 crate::message::Message::resolve_unknown_operation(name)
             }
-            LookupScope::Type => crate::message::Message::resolve_unknown_type(name),
-            LookupScope::EffectRowParameter => {
+            NameContext::Type => crate::message::Message::resolve_unknown_type(name),
+            NameContext::EffectRowParameter => {
                 crate::message::Message::resolve_unknown_row_parameter(name)
             }
-            LookupScope::InterfaceParameter => {
+            NameContext::InterfaceParameter => {
                 crate::message::Message::resolve_unknown_interface_parameter(name)
             }
-            LookupScope::Constructor => crate::message::Message::resolve_unknown_constructor(name),
-            LookupScope::Interface => crate::message::Message::resolve_unknown_interface(name),
-            LookupScope::Effect => crate::message::Message::resolve_unknown_effect(name),
-            LookupScope::ExportedEffect => crate::message::Message::resolve_unexported_effect(name),
+            NameContext::Constructor => crate::message::Message::resolve_unknown_constructor(name),
+            NameContext::Interface => crate::message::Message::resolve_unknown_interface(name),
+            NameContext::Effect => crate::message::Message::resolve_unknown_effect(name),
+            NameContext::ExportedEffect => crate::message::Message::resolve_unexported_effect(name),
+            NameContext::PrivateExport => crate::message::Message::resolve_private_export(name),
+            NameContext::MissingExport => crate::message::Message::resolve_missing_export(name),
+            NameContext::MissingModuleAlias => {
+                crate::message::Message::resolve_missing_module_alias(name)
+            }
         })
     }
     /// Returns the common structured diagnostic fields.
-    /// Phase-specific lookup context remains on this failure owner.
+    /// Phase-specific name context remains on this failure owner.
     #[must_use]
     pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
         &self.0
     }
 
     /// Consumes the failure and returns its common diagnostic fields.
-    /// This legacy conversion does not retain phase-specific lookup context.
+    /// This legacy conversion does not retain phase-specific name context.
     #[must_use]
     pub fn into_diagnostic(self) -> Diagnostic<ResolveReason> {
         *self.0
@@ -1715,6 +1823,8 @@ fn validate_newtype_shape(
             declaration.name.span,
             "this nominal declaration defines the required spelling",
         ));
+        diagnostic.expected = Some(declaration.name.text.clone());
+        diagnostic.found = Some(constructor.name.text.clone());
         return Err(diagnostic.into());
     }
     Ok((constructor, representation))
@@ -5426,7 +5536,12 @@ impl Resolver {
             .get(&qualified.qualifier.text)
             .map(Some)
             .ok_or_else(|| {
-                withheld_export_error(qualified.qualifier.span, &qualified.qualifier.text, None)
+                lookup_error(
+                    NameContext::MissingModuleAlias,
+                    qualified.qualifier.span,
+                    &qualified.qualifier.text,
+                    "this module alias is not bound",
+                )
             })
     }
 
@@ -5482,7 +5597,7 @@ impl Resolver {
                 SourceLabel::new(name.span, "this nominal type is not declared"),
             );
             diagnostic.found = Some(name.text.clone());
-            ResolveError(Box::new(diagnostic), Some(LookupScope::Type))
+            ResolveError(Box::new(diagnostic), Some(NameContext::Type))
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -5561,7 +5676,7 @@ impl Resolver {
                 ));
             }
             return Err(lookup_error(
-                LookupScope::ExportedEffect,
+                NameContext::ExportedEffect,
                 member.span,
                 &member.text,
                 "this effect is not exported by the selected module",
@@ -5580,7 +5695,7 @@ impl Resolver {
             ));
         }
         Err(lookup_error(
-            LookupScope::Effect,
+            NameContext::Effect,
             member.span,
             &member.text,
             "this effect is not declared",
@@ -5694,7 +5809,7 @@ impl Resolver {
                     .map(EffectRowVariable::rigid)
                     .ok_or_else(|| {
                         lookup_error(
-                            LookupScope::EffectRowParameter,
+                            NameContext::EffectRowParameter,
                             tail.span,
                             &tail.text,
                             "this effect-row tail parameter is not declared",
@@ -5796,7 +5911,7 @@ impl Resolver {
             })
             .ok_or_else(|| {
                 lookup_error(
-                    LookupScope::EffectOperation,
+                    NameContext::EffectOperation,
                     operation.span,
                     &operation.text,
                     "this operation is not declared by the selected effect",
@@ -6012,7 +6127,7 @@ impl Resolver {
         diagnostic.found = Some(reference.member().text.clone());
         Err(ResolveError(
             Box::new(diagnostic),
-            Some(LookupScope::Constructor),
+            Some(NameContext::Constructor),
         ))
     }
 
@@ -7728,7 +7843,7 @@ impl Resolver {
                                         .map(EffectRowVariable::rigid)
                                         .ok_or_else(|| {
                                             lookup_error(
-                                                LookupScope::EffectRowParameter,
+                                                NameContext::EffectRowParameter,
                                                 tail.span,
                                                 &tail.text,
                                                 "this effect-row tail parameter is not declared",
@@ -9791,10 +9906,10 @@ impl Resolver {
                                 SourceLabel::new(member.span, "this constructor is not declared"),
                             );
                             diagnostic.found = Some(member.text.clone());
-                            ResolveError(Box::new(diagnostic), Some(LookupScope::Constructor))
+                            ResolveError(Box::new(diagnostic), Some(NameContext::Constructor))
                         } else {
                             lookup_error(
-                                LookupScope::Term,
+                                NameContext::Term,
                                 member.span,
                                 &member.text,
                                 "this name is not in scope",
@@ -10252,19 +10367,22 @@ fn error(reason: ResolveReason, span: crate::source::Span, message: &str) -> Res
 }
 
 fn lookup_error(
-    scope: LookupScope,
+    scope: NameContext,
     span: crate::source::Span,
     name: &str,
     message: &str,
 ) -> ResolveError {
     let reason = match scope {
-        LookupScope::Term | LookupScope::EffectOperation => ResolveReason::UnknownName,
-        LookupScope::Type | LookupScope::EffectRowParameter | LookupScope::InterfaceParameter => {
+        NameContext::Term | NameContext::EffectOperation => ResolveReason::UnknownName,
+        NameContext::Type | NameContext::EffectRowParameter | NameContext::InterfaceParameter => {
             ResolveReason::UnknownType
         }
-        LookupScope::Constructor => ResolveReason::UnknownConstructor,
-        LookupScope::Interface => ResolveReason::UnknownInterface,
-        LookupScope::Effect | LookupScope::ExportedEffect => ResolveReason::UnknownEffect,
+        NameContext::Constructor => ResolveReason::UnknownConstructor,
+        NameContext::Interface => ResolveReason::UnknownInterface,
+        NameContext::Effect | NameContext::ExportedEffect => ResolveReason::UnknownEffect,
+        NameContext::PrivateExport
+        | NameContext::MissingExport
+        | NameContext::MissingModuleAlias => ResolveReason::UnavailableExport,
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = Some(name.to_owned());
@@ -10374,18 +10492,21 @@ fn withheld_export_error(
     spelling: &str,
     withheld: Option<WithheldImport>,
 ) -> ResolveError {
-    let (reason, message) = match withheld.map(|withheld| withheld.kind) {
+    let (reason, message, context) = match withheld.map(|withheld| withheld.kind) {
         Some(WithheldExportKind::Private) => (
             ResolveReason::UnavailableExport,
             "this declaration is private to its defining module",
+            Some(NameContext::PrivateExport),
         ),
         Some(WithheldExportKind::OpaqueConstructor) => (
             ResolveReason::OpaqueConstructor,
             "this constructor belongs to an opaque type",
+            None,
         ),
         None => (
             ResolveReason::UnavailableExport,
             "the dependency exports no declaration with this spelling",
+            Some(NameContext::MissingExport),
         ),
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
@@ -10396,7 +10517,7 @@ fn withheld_export_error(
         ));
     }
     diagnostic.found = Some(spelling.to_owned());
-    diagnostic.into()
+    ResolveError(Box::new(diagnostic), context)
 }
 
 fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -10405,7 +10526,7 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
         SourceLabel::new(span, "this interface is not declared"),
     );
     diagnostic.found = Some(spelling.to_owned());
-    ResolveError(Box::new(diagnostic), Some(LookupScope::Interface))
+    ResolveError(Box::new(diagnostic), Some(NameContext::Interface))
 }
 
 fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
@@ -10418,7 +10539,7 @@ fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
     );
     diagnostic.expected = Some("interface parameter".to_owned());
     diagnostic.found = Some(name.text.clone());
-    ResolveError(Box::new(diagnostic), Some(LookupScope::InterfaceParameter))
+    ResolveError(Box::new(diagnostic), Some(NameContext::InterfaceParameter))
 }
 
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {

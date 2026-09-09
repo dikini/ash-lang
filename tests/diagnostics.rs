@@ -465,6 +465,88 @@ fn duplicate_declarations_render_names_and_original_locations() {
     }
 }
 
+#[test]
+fn declaration_name_requirements_render_retained_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    for (text, reason, name, expected, english) in [
+        (
+            "value : Unit -> Int\nother () = 1\n",
+            ResolveReason::EquationNameMismatch,
+            "other",
+            Some("value"),
+            "The equation is named `other`, but its signature declares `value`. Rename the equation to `value`.",
+        ),
+        (
+            "newtype Wrapper = Other(Int)\n",
+            ResolveReason::NewtypeConstructorName,
+            "Other",
+            Some("Wrapper"),
+            "The constructor is named `Other`, but this newtype requires `Wrapper`.",
+        ),
+        (
+            "interface Bad<A> {\nbad<B, C> : (A, B) -> B\n}\n",
+            ResolveReason::UnusedTypeParameter,
+            "C",
+            None,
+            "The explicit type parameter `C` is not used in the declaration header.",
+        ),
+        (
+            "import @builtin.cell as Cell\ntype Cell = Make\n",
+            ResolveReason::ImportConflict,
+            "Cell",
+            None,
+            "The name `Cell` conflicts with a binding already in scope for this file.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("name-requirement.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        assert_eq!(error.expected.as_deref(), expected);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let diagnostic = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &diagnostic, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+            if let Some(expected) = expected {
+                assert!(output.contains(&format!("`{expected}`")));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostic).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
+        if let Some(expected) = expected {
+            assert_eq!(json["facts"][1]["name"], "expected_name");
+            assert_eq!(json["facts"][1]["value"], expected);
+            assert_eq!(
+                json["labels"][1]["relationship"],
+                "required_name_declaration"
+            );
+            assert_eq!(json["labels"][1]["facts"][0]["value"], expected);
+        }
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)

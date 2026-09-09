@@ -191,6 +191,20 @@ pub fn compile_resolve_diagnostic<'a>(
         value: FactValue::Text(name),
     };
     let mut facts = vec![name];
+    if let Some(expected) = error.expected_name() {
+        facts.push(Fact {
+            name: "expected_name",
+            kind: "identifier",
+            value: FactValue::Text(expected),
+        });
+    }
+    if let Some(access) = error.access_name() {
+        facts.push(Fact {
+            name: "access",
+            kind: "name-access",
+            value: FactValue::Text(access),
+        });
+    }
     if let Some(scope) = error.lookup_scope_name() {
         facts.push(Fact {
             name: "lookup_scope",
@@ -217,7 +231,14 @@ pub fn compile_resolve_diagnostic<'a>(
             span,
             message,
             relationship,
-            facts: vec![name],
+            facts: error
+                .related_name()
+                .map(|value| Fact {
+                    value: FactValue::Text(value),
+                    ..name
+                })
+                .into_iter()
+                .collect(),
         });
     }
     Ok(CompileDiagnostic {
