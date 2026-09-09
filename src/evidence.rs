@@ -826,9 +826,6 @@ impl EvidenceSelector {
             .try_reserve(fact.methods.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         for method in &fact.methods {
-            constraint_work
-                .charge_type(&method.value_type)
-                .map_err(|()| SelectionFailure::ConstraintResource)?;
             let method_parameters = method.authoritative_type_parameters();
             let method_parameter_records = method_parameters
                 .len()
@@ -877,8 +874,16 @@ impl EvidenceSelector {
             methods.push(MethodEntry {
                 id: method.id,
                 type_parameters: type_parameters.into_boxed_slice(),
-                value_type: clone_type_with_budget(&method.value_type, type_work)
-                    .map_err(|()| SelectionFailure::TypeResource)?,
+                // One type preflight owns both traversal and retained-cell
+                // charges; no separate count-only worklist is needed.
+                value_type: clone_type_with_budget(&method.value_type, &mut |cells| {
+                    constraint_work
+                        .charge(cells)
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    type_work
+                        .charge(cells)
+                        .map_err(|()| SelectionFailure::TypeResource)
+                })?,
                 span: method.span,
             });
             method_ids.push(method.id);
@@ -5050,7 +5055,9 @@ mod tests {
 
     #[test]
     fn interface_selector_method_scheme_has_exact_atomic_dual_boundaries() {
-        const EXACT_CONSTRAINT_WORK: usize = 20;
+        // Binder and index admission costs ten cells; the shared clone
+        // preflight visits the five method-type cells once in each ledger.
+        const EXACT_CONSTRAINT_WORK: usize = 10 + 5;
 
         let setup = || {
             let mut fact = interface_fact_with_kind(Kind::Type);
@@ -5131,9 +5138,81 @@ mod tests {
     }
 
     #[test]
+    fn deep_method_clone_ingress_has_atomic_dual_budget_retries() {
+        const DEPTH: usize = 16_384;
+        const METHOD_CELLS: usize = 2 * DEPTH + 3;
+        // Three interface-parameter checks and two method-index cells precede
+        // the two cloned methods. Type retention also owns one binder and Kind.
+        const CONSTRAINT_WORK: usize = 5 + 2 * METHOD_CELLS;
+        const TYPE_WORK: usize = 2 + 2 * METHOD_CELLS;
+        std::thread::Builder::new()
+            .name("deep-method-clone-ingress".to_owned())
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut fact = interface_fact_with_kind(Kind::Type);
+                fact.methods = (0..2)
+                    .map(|index| {
+                        CheckedInterfaceMethodFact::with_mirrored_binder_authority_for_test(
+                            MethodId::new(fact.id, index),
+                            format!("method{index}"),
+                            Box::new([]),
+                            Type::Function(
+                                Box::new(Type::Variable(unary_parameter(&fact).id)),
+                                Box::new(deep_value_type(DEPTH)),
+                            ),
+                            Origin::Source(fact.span),
+                            fact.span,
+                            fact.span,
+                        )
+                    })
+                    .collect();
+                let registry = registry_for_interface_fact(&fact);
+                for (constraint_limit, type_limit, expected) in [
+                    (
+                        CONSTRAINT_WORK - 1,
+                        TYPE_WORK,
+                        SelectionFailure::ConstraintResource,
+                    ),
+                    (
+                        CONSTRAINT_WORK,
+                        TYPE_WORK - 1,
+                        SelectionFailure::TypeResource,
+                    ),
+                ] {
+                    let mut selector = EvidenceSelector::new();
+                    assert_eq!(
+                        selector.add_interface_fact(
+                            &registry,
+                            &fact,
+                            &mut InterfaceConstraintBudget::with_limit(constraint_limit),
+                            &mut TypeWorkBudget::with_limit(type_limit),
+                        ),
+                        Err(expected),
+                    );
+                    assert!(selector.interfaces.is_empty());
+                    assert!(selector.interface_indices.is_empty());
+                    assert!(selector.method_indices.is_empty());
+                    let mut constraints = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
+                    let mut types = TypeWorkBudget::with_limit(TYPE_WORK);
+                    selector
+                        .add_interface_fact(&registry, &fact, &mut constraints, &mut types)
+                        .expect("fresh exact ledgers should retry both deep methods");
+                    assert_eq!(constraints.used(), CONSTRAINT_WORK);
+                    assert_eq!(types.used(), TYPE_WORK);
+                    assert_eq!(selector.interfaces[0].methods.len(), 2);
+                }
+            })
+            .expect("the deep method-clone worker should spawn")
+            .join()
+            .expect("staged and published deep methods must dispose iteratively");
+    }
+
+    #[test]
     fn wide_method_scheme_ingress_charges_retained_and_duplicate_indexes() {
         const WIDTH: usize = 1_024;
-        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 7 + 11;
+        // Four cells per method binder, one per cloned tuple element, and
+        // seven fixed interface, method-index, and outer-type cells.
+        const EXACT_CONSTRAINT_WORK: usize = WIDTH * 5 + 7;
         const EXACT_TYPE_WORK: usize = WIDTH * 3 + 5;
 
         let setup = || {

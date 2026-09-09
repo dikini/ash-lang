@@ -1365,14 +1365,17 @@ mod tests {
         // publication. The fixed graph order is base, short facade, first long
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
-        // Each of the four importers also scans the retained data summaries:
-        // 18 repeated one-parameter nominal admissions, each charging shape,
-        // parameter record, Kind, and two Origins (18 * 5 = 90). Checking,
-        // linking, and linked-evidence validation contributions are unchanged.
+        // Producer authentication adds 329, 317, 317, 318, and 3 cells to
+        // checking. Shared capture visits remove 72, 72, 74, and 73 repeated
+        // nominal-retention cells from the four importers. Linking still
+        // contributes 149 cells; linked-evidence validation contributes 1660.
+        // Shared type-clone preflights remove 24 checking cells in the base
+        // and 12 in each importer, without changing retained type work.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 829, 1_464, 1_748, 2_383, 2_667, 3_296, 3_584, 4_642, 5_067, 5_216, 6_876,
+            0, 1, 1_134, 1_697, 2_286, 2_849, 3_438, 3_993, 4_587, 5_572, 5_988, 6_137, 7_797,
         ];
-        const EXACT_CONSTRAINT_WORK: usize = 6_516 + 4 * 18 * 5;
+        const EXACT_CONSTRAINT_WORK: usize =
+            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12);
         let source = relational_interface_graph_source();
         let directory = source
             .0
@@ -1547,27 +1550,30 @@ mod tests {
     fn wide_interface_graph_records_the_exact_validation_prefix() {
         // Keep linking just below the unchanged graph limit so the witness
         // continues to isolate validation as the first over-budget phase.
-        const WIDTH: usize = 4_890;
-        // Dependency checking is declaration 8W + checked facts 9W +
-        // selector admission 10W + summary freeze 10W. A monomorphic method
+        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 29) / 65;
+        // Dependency checking is declaration 8W + checked facts 6W +
+        // selector admission 7W + summary freeze 10W + producer
+        // authentication 7W. Both clone preflights charge their three type
+        // cells to both ledgers. A monomorphic method
         // has no private binder payload and therefore adds no authority work.
-        const DEPENDENCY_CHECKED: usize = 37 * WIDTH;
+        const DEPENDENCY_CHECKED: usize = 38 * WIDTH;
         // Entry resolution adds complete-vector summary authentication 7W, first-route
         // interface retention 9W, and one dependency-route cell.
-        const ENTRY_RESOLVED: usize = 53 * WIDTH + 1;
+        const ENTRY_RESOLVED: usize = 54 * WIDTH + 1;
         // Entry checking additionally authenticates the W imported interface
         // arities and visits its one global declaration before interface and
-        // method admission.
-        const ENTRY_CHECKED: usize = 64 * WIDTH + 13;
+        // method admission. Producer authentication adds three cells for
+        // the entry's withheld main name.
+        const ENTRY_CHECKED: usize = 62 * WIDTH + 16;
         // Linking adds its W+7 graph/carrier prefix, W+5 structural
         // authentication, and the W-cell canonical-owner uniqueness index.
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
-        const LINKED: usize = 67 * WIDTH + 25;
+        const LINKED: usize = 65 * WIDTH + 28;
         // Validation owns a 49W+55 complete-application authentication suffix
         // and publishes one private method-evidence capability only after the
         // complete graph succeeds.
-        const VALIDATED: usize = 116 * WIDTH + 80;
+        const VALIDATED: usize = 114 * WIDTH + 83;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",
@@ -1657,6 +1663,7 @@ mod tests {
         );
         const {
             assert!(LINKED < crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+            assert!(LINKED + 65 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
             assert!(VALIDATED > crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
         }
     }

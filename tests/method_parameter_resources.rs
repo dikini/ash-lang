@@ -253,13 +253,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "selector method-scheme ingress",
             EVIDENCE_SOURCE,
             "fn interface_selector_method_scheme_has_exact_atomic_dual_boundaries()",
-            "const EXACT_CONSTRAINT_WORK: usize = 20;",
+            "const EXACT_CONSTRAINT_WORK: usize = 10 + 5;",
         ),
         (
             "selector scheme ingress",
             EVIDENCE_SOURCE,
             "fn wide_method_scheme_ingress_charges_retained_and_duplicate_indexes()",
-            "const EXACT_CONSTRAINT_WORK: usize = WIDTH * 7 + 11;",
+            "const EXACT_CONSTRAINT_WORK: usize = WIDTH * 5 + 7;",
         ),
         (
             "selector scheme ingress type ledger",
@@ -487,7 +487,8 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
         );
     }
 
-    assert_eq!(7 * 1_024 + 11, 7_179);
+    assert_eq!(10 + 5, 15);
+    assert_eq!(5 * 1_024 + 7, 5_127);
     assert_eq!(3 * 1_024 + 5, 3_077);
     assert_eq!(1 + 3 + 2 * 5 + 3 + 1 + 1, 19);
     assert_eq!(3 + 2 * 5 + 2 * (1 + 1) + (1 + 1), 19);

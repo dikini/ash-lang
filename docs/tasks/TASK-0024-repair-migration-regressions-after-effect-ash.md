@@ -127,8 +127,20 @@ automation and publication are outside this task and do not gate completion.
   ordinary source rejection; the evidence report records the outcomes.
 - Full workspace verification, final review and main integration remain
   outstanding. This is an implementation checkpoint, not task completion.
-- Checkpoint formatting passes. The full library run passes 1,215 tests and
-  fails five; the evidence report lists the outstanding failures.
+- Checkpoint formatting passes. After correcting five accounting fixtures for
+  producer authentication and shared scans, all 1,220 library tests pass.
+  Production limits are unchanged. The workspace gate also exposed a missing
+  borrowed-carrier inventory entry, now corrected, and two interface-resource
+  failures. Shared counting/clone preflights now charge both ledgers in one
+  walk. The unchanged capacity and exhaustion fixtures pass, along with all
+  1,221 library and 61 resource-scope typing tests. The complete workspace
+  gate passed the long architecture checks, then found stale formula strings
+  in the method-resource manifest. Those expectations now match the verified
+  probes, and all four method-resource tests pass. The full verification result
+  is recorded below.
+- The unfiltered `cargo xtask verify` passed, including all workspace tests,
+  Clippy and rustdoc with warnings denied. Independent semantic and quality
+  reviews found no blocking issues. Main integration remains outstanding.
 
 ## Discoveries
 

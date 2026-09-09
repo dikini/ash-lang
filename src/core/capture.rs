@@ -158,7 +158,7 @@ impl CaptureValueSummary {
         }))
     }
 
-    // Each alias scans its shared graph again, so each scan is charged here.
+    // Charge each explicit scan, including repeated scans of a shared graph.
     pub(crate) fn effects<'a>(
         &'a self,
         budget: &mut TypeWorkBudget,

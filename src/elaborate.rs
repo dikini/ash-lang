@@ -18276,15 +18276,19 @@ fn checked_interface_facts(
             .map_err(|_| constraint_resource())?;
         for method in &interface.methods {
             constraint_work
-                .charge_type(&method.annotation.ty)
-                .map_err(|()| constraint_resource())?;
-            constraint_work
                 .charge(method.type_parameters.len())
                 .map_err(|()| constraint_resource())?;
             let method_parameters =
                 clone_checked_type_variables(&method.type_parameters, type_work)?;
-            let value_type = clone_type_with_budget(&method.annotation.ty, type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            // The clone preflight charges each visited cell to both owning
+            // ledgers without a separate type-counting worklist.
+            let value_type =
+                crate::types::clone_type_with_budget(&method.annotation.ty, &mut |cells| {
+                    constraint_work
+                        .charge(cells)
+                        .map_err(|()| constraint_resource())?;
+                    type_work.charge(cells).map_err(|()| type_resource())
+                })?;
             methods.push(
                 CheckedInterfaceMethodFact::with_resolved_binder_authority(
                     method,
@@ -25964,7 +25968,11 @@ mod tests {
         // A monomorphic private interface retains no method-binder authority.
         // Unconditional arity preflight adds one interface-map cell plus the
         // interface and global declaration visits.
-        const EXACT_WORK: usize = 39 + 1 + 2;
+        // Producer authentication visits three withheld names, charging one
+        // map cell and two ordered-index cells for each name.
+        // Shared clone preflights remove three pending-worklist cells from
+        // both checked-fact construction and selector admission.
+        const EXACT_WORK: usize = 39 + 1 + 2 + 3 * 3 - 2 * 3;
         let mut short = InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
 
         let failure =
@@ -26699,7 +26707,11 @@ mod tests {
         // add eight aligned root cells to the predecessor boundary. Global
         // arity preflight adds one interface-map cell, visits the interface,
         // implementation, and global declarations, and checks the head.
-        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1;
+        // Producer authentication also visits the three withheld names,
+        // charging one map cell and two ordered-index cells for each name.
+        // Checked-fact and selector clones each avoid three cells from the
+        // former separate type-counting worklist.
+        const EXACT_WORK: usize = 84 + 8 + 1 + 3 + 1 + 3 * 3 - 2 * 3;
         let declarations = concat!(
             "interface Keep<A> {\nkeep : A -> A\n}\n\n",
             "impl Keep<Int> {\nkeep value = value\n}\n",

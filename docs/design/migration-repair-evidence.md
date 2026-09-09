@@ -1,9 +1,10 @@
 # Migration-discovered compiler repair evidence
 
 This informative report records TASK-0024's repair work from main baseline
-`274bdbe`, after the `effect-ash` closeout `a64f10b`. Full verification and main
-integration remain pending. The [specification](../../spec/README.md) defines
-correct language behavior; this report records implementation evidence.
+`274bdbe`, after the `effect-ash` closeout `a64f10b`. Full worktree verification
+passed; main integration remains pending. The
+[specification](../../spec/README.md) defines correct language behavior; this
+report records implementation evidence.
 
 ## Baseline and causes
 
@@ -17,6 +18,11 @@ Fresh baseline verification passed 1,214 library and 14 CLI tests. The eight
 original entries did not all retain their historical failure: both search
 programs already succeeded with their original hashes. The other six entries
 and their dictionary dependencies exhausted type work before summary admission.
+Those baseline rejections returned status 2, empty stdout, and
+`internal.resource.type-work` followed by `type work resource limit exceeded`;
+they supplied no causal source labels. The search dependency returned status 1
+with `entry.missing-main` at bytes 0–6521. A fresh baseline build reproduced
+these distinctions during final verification preparation.
 
 Three implementation defects were isolated:
 
@@ -50,6 +56,16 @@ the complete authentication pass against the existing cumulative ledgers before
 publication. Synthetic freeze fixtures must satisfy the same admission
 invariants as real summaries; this is not a diagnostic-presentation feature.
 
+The full gate caught a capacity regression introduced by that additional
+authentication: the existing 2,800-interface acceptance fixture exceeded the
+cumulative constraint budget. Interface fact construction and selector
+admission each counted method types in a separate walk before cloning them.
+The clone's existing preflight now charges both ledgers, eliminating those
+redundant worklists without removing semantic checks. The two-module fixture
+uses `114W + 83` constraint cells, or 319,283 at width 2,800. Both that accepted
+fixture and the 4,500-interface validation-exhaustion fixture are unchanged
+and pass. No capacity test was weakened to accommodate publication checks.
+
 ## Original-source outcomes
 
 Each entry below was run unchanged with the repair worktree's freshly built
@@ -74,6 +90,27 @@ The red-black dependency's own main succeeds with hash
 `6c159135693e2dff8d81dc97fb60fafcebfeb9b0c09cb4deebec4757e4a716fc`.
 The search and iterator dependencies reach `entry.missing-main`, as expected.
 
+For the four constraint rejections, source 0 is the entry and source 1 is its
+dictionary dependency. Byte ranges are half-open:
+
+| Entry | Primary range | Required declaration | Interface declaration |
+| --- | --- | --- | --- |
+| `red-black-dictionary/main.ash` | 1088–1107 | 3417–3423 | 391–450 |
+| `red-black-dictionary/02-build-and-persistence.ash` | 801–820 | 3417–3423 | 391–450 |
+| `tree-iterator/main.ash` | 927–945 | 4155–4160 | 551–610 |
+| `tree-iterator/02-retained-state.ash` | 1157–1175 | 4155–4160 | 551–610 |
+
+Each also retains the causal import at source 0, bytes 0–35. The opaque
+rejections in the first table identify the entry's primary range and the
+dependency's declaration range. Missing-main dependency controls identify the
+whole entry: bytes 0–6521 for search and 0–7764 for iterator.
+
+To repeat an outcome, build `ash` with `cargo build --bin ash --locked`, then
+invoke `target/debug/ash` with the absolute original entry path under the
+retained ash-doc evidence directory. Check status, stdout hash or emptiness,
+stderr reason and the ranges above. The historical two-pin verifier remains
+unchanged; it tests historical failures, not the repaired compiler.
+
 These outcomes distinguish compiler repair from teaching-source migration.
 Missing implementation selection is an ordinary source rejection under current
 Ash, not a remaining internal compiler failure.
@@ -93,17 +130,21 @@ Ash, not a remaining internal compiler failure.
   their original charged-scan tests.
 - [Summary tests](../../src/resolved.rs) cover private-family ownership,
   malformed producer publication and exact cumulative freeze/authentication
-  work. Full fixture and workspace verification is still pending.
+  work. All 121 focused summary tests pass.
+- [Selector tests](../../src/evidence.rs) cover both ledgers' exact and
+  one-short clone boundaries, polymorphic and wide method schemes, and two
+  deep methods whose failed staging publishes no selector entries. Retrying
+  that same selector with fresh exact ledgers succeeds on a 256 KiB stack.
 
 Focused import verification passed 128 resolver tests, 16 library-import tests
 and 9 module-resolution tests before the later method-index and producer changes.
 The method-index budget test and method-rich source regression passed afterward.
-Final whole-worktree verification, independent final review and merged-main
-verification remain required before completion.
+Full worktree verification and independent final reviews passed. Main
+integration and merged-main verification remain required before completion.
 
-Checkpoint verification passed formatting. The full library test run passed
-1,215 tests and failed five; this checkpoint is not ready for integration.
-The outstanding tests are:
+Checkpoint `a7138e1` passed formatting. Its full library run passed 1,215 tests
+and failed five accounting fixtures. The followup passed all 1,220 library
+tests after correcting these boundaries:
 
 - `driver::tests::relational_interface_graph_has_an_exact_cross_stage_boundary`
 - `driver::tests::wide_interface_graph_records_the_exact_validation_prefix`
@@ -111,7 +152,46 @@ The outstanding tests are:
 - `elaborate::tests::one_constraint_budget_spans_all_checked_modules`
 - `evidence_validation::tests::deep_constructor_scheme_crosses_check_and_link_then_is_disposed_before_core`
 
-Investigate these failures before claiming full verification.
+Producer authentication adds nine constraint cells to each small elaboration
+fixture; combined clone preflights save six. The relational graph now uses
+7,797 cells, including authentication and savings from shared capture visits
+and clone preflights. The wide fixture derives width 5,040 from the unchanged
+limit: linking uses 327,628 cells and validation reaches 574,643, preserving
+validation as the first over-budget phase. The deep
+fixture retains 16,384 levels on a 256 KiB stack and asserts its exact 213,021
+type-work charge under the default budget. Exact, one-short, retry and stage
+checks remain.
+
+After the combined clone preflights, fresh verification passed all 1,221
+library tests, six interface-resource tests and 61 resource-scope typing tests.
+The unfiltered `cargo xtask verify` passed afterward: formatting, locked
+metadata and build, Clippy with warnings denied, all workspace tests and
+rustdoc with warnings denied. This includes 17 library-import tests, nine
+module-resolution tests, 32 architecture tests and four method-resource tests.
+
+The first workspace gate also detected the new borrowed graph-visit index
+missing from the source-derived type-carrier inventory. Its manifest entry now
+records transient borrowed retention, the caller's type-work ledger and summary
+ownership. The inventory check itself is unchanged.
+The method-resource source manifest also needed its two selector formula
+expectations updated to match the verified probes: `10 + 5` and `5W + 7`.
+All four method-resource tests passed with those corrected expectations.
+The complete remaining-test check passed afterward, excluding only the long
+architecture ownership check already passed by the preceding full run. This
+is diagnostic evidence, not a substitute for the unfiltered workspace gate.
+
+Independent semantic and code-quality reviews of `274bdbe..a7138e1` found no
+blocking product issues. They checked closure and access boundaries, ordered
+method records, per-edge graph visits, cumulative producer authentication and
+synthetic fixture validity. A stale scan comment was corrected. One test
+coverage limitation remains: the missing-metadata retention test supplies
+fresh visitors directly; it does not itself detect moving the visitor outside
+the import-edge loop. The actual loop placement was checked in both reviews.
+Both reviews also approved the accounting-fixture corrections and the borrowed
+carrier inventory entry. The corrected inventory test passed independently.
+The combined clone-preflight implementation and deep dual-budget retry test
+also passed both reviews. All eight original entries and three dependency
+controls retained their recorded outcomes after that change.
 
 ## Handoff boundary
 

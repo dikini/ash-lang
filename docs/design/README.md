@@ -44,8 +44,8 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
   resources, linked authentication, Core locality, migration, and exclusions
   for the first `lib-ash` increment.
 - [Migration repair evidence](migration-repair-evidence.md) — current-main
-  reproduction, compiler repairs and original-source outcomes; final
-  verification and integration remain pending.
+  reproduction, verified compiler repairs and original-source outcomes;
+  main integration remains pending.
 - [Explicit kinds and higher-kinded parameter evidence](lib-ash/kinds-evidence.md)
   — fixed kinds, canonical application, inference and evidence preservation,
   body-free and linked authentication, Core authority, resources, migration,

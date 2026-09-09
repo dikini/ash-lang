@@ -244,6 +244,7 @@ define_kind_site_profiles! {
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, TypeTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierPatternCoveragePatternCoverageCoreTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, PatternCoverage, PatternCoverage, CoreTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, TypeTree),
+    FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeSummaryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, SummaryTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeRegistryTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Type, RegistryTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, TypeOperation, Kind, KindTree),
     FieldBorrowedTransientCarrierRetentionPreservedCarrierResolvedKindResolutionTypeKindTree => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, ResolvedKind, ResolutionType, KindTree),
@@ -377,6 +378,9 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Collector-local graph borrows use the caller's type ledger in both
+    // summary construction and import retention; they own no summary tree.
+    kind_site!("src/core/capture.rs::CaptureGraphVisits.seen", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeSummaryTree),
     kind_site!("src/core/capture.rs::CaptureValueSummary.graph", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/core/capture.rs::SummaryGraph.callables", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
     kind_site!("src/core/capture.rs::SummaryGraph.code", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
