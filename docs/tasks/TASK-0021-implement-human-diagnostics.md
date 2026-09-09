@@ -771,6 +771,13 @@ localization language. Color is not required for completion.
   layouts. Core coverage is 16/23 reasons and overall coverage is 172/197.
   All 1,277 library tests, 86 diagnostic/catalogue tests and warnings-denied
   Clippy passed.
+- Core continuation diagnostics retain 17 causes for unbound/captured uses,
+  branch agreement, clause consumption, use-state markers, clause contracts,
+  resume argument/result types and effect relationships. Check order and charges
+  are unchanged. Tests exercise capture rejection, missing/forged contracts and
+  34 optional-node localized/JSON layouts. Core coverage is 17/23 reasons and
+  overall coverage is 173/197. All 1,280 library tests, 86 diagnostic/catalogue
+  tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

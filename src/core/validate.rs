@@ -323,6 +323,23 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    UnboundContinuation,
+    ContinuationBranchUsage,
+    MissingClauseConsumption,
+    RepeatedClauseConsumption,
+    ForeignClauseContinuation,
+    CapturedContinuation,
+    ResumeUseState,
+    DiscardUseState,
+    DiscardResultType,
+    DiscardMissingContract,
+    ResumeMissingContract,
+    ResumeHandlerShape,
+    ResumeMissingClause,
+    ResumeArgumentType,
+    ResumeResultType,
+    ResumeEffectRow,
+    ResumeArgumentEffects,
     PatternDepth,
     PatternTypeMismatch,
     PatternInvalidType,
@@ -467,6 +484,23 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::UnboundContinuation => "unbound-continuation",
+            ValidationCause::ContinuationBranchUsage => "continuation-branch-usage",
+            ValidationCause::MissingClauseConsumption => "missing-clause-consumption",
+            ValidationCause::RepeatedClauseConsumption => "repeated-clause-consumption",
+            ValidationCause::ForeignClauseContinuation => "foreign-clause-continuation",
+            ValidationCause::CapturedContinuation => "captured-continuation",
+            ValidationCause::ResumeUseState => "resume-use-state",
+            ValidationCause::DiscardUseState => "discard-use-state",
+            ValidationCause::DiscardResultType => "discard-result-type",
+            ValidationCause::DiscardMissingContract => "discard-missing-contract",
+            ValidationCause::ResumeMissingContract => "resume-missing-contract",
+            ValidationCause::ResumeHandlerShape => "resume-handler-shape",
+            ValidationCause::ResumeMissingClause => "resume-missing-clause",
+            ValidationCause::ResumeArgumentType => "resume-argument-type",
+            ValidationCause::ResumeResultType => "resume-result-type",
+            ValidationCause::ResumeEffectRow => "resume-effect-row",
+            ValidationCause::ResumeArgumentEffects => "resume-argument-effects",
             ValidationCause::PatternDepth => "pattern-depth",
             ValidationCause::PatternTypeMismatch => "pattern-type-mismatch",
             ValidationCause::PatternInvalidType => "pattern-invalid-type",
@@ -1435,6 +1469,108 @@ impl ValidationError {
                 (ValidationCause::MatchScrutineeType, Some(node)) => {
                     Message::core_validation_match_scrutinee_type_node(node)
                 }
+                (ValidationCause::UnboundContinuation, None) => {
+                    Message::core_validation_unbound_continuation()
+                }
+                (ValidationCause::UnboundContinuation, Some(node)) => {
+                    Message::core_validation_unbound_continuation_node(node)
+                }
+                (ValidationCause::ContinuationBranchUsage, None) => {
+                    Message::core_validation_continuation_branch_usage()
+                }
+                (ValidationCause::ContinuationBranchUsage, Some(node)) => {
+                    Message::core_validation_continuation_branch_usage_node(node)
+                }
+                (ValidationCause::MissingClauseConsumption, None) => {
+                    Message::core_validation_missing_clause_consumption()
+                }
+                (ValidationCause::MissingClauseConsumption, Some(node)) => {
+                    Message::core_validation_missing_clause_consumption_node(node)
+                }
+                (ValidationCause::RepeatedClauseConsumption, None) => {
+                    Message::core_validation_repeated_clause_consumption()
+                }
+                (ValidationCause::RepeatedClauseConsumption, Some(node)) => {
+                    Message::core_validation_repeated_clause_consumption_node(node)
+                }
+                (ValidationCause::ForeignClauseContinuation, None) => {
+                    Message::core_validation_foreign_clause_continuation()
+                }
+                (ValidationCause::ForeignClauseContinuation, Some(node)) => {
+                    Message::core_validation_foreign_clause_continuation_node(node)
+                }
+                (ValidationCause::CapturedContinuation, None) => {
+                    Message::core_validation_captured_continuation()
+                }
+                (ValidationCause::CapturedContinuation, Some(node)) => {
+                    Message::core_validation_captured_continuation_node(node)
+                }
+                (ValidationCause::ResumeUseState, None) => {
+                    Message::core_validation_resume_use_state()
+                }
+                (ValidationCause::ResumeUseState, Some(node)) => {
+                    Message::core_validation_resume_use_state_node(node)
+                }
+                (ValidationCause::DiscardUseState, None) => {
+                    Message::core_validation_discard_use_state()
+                }
+                (ValidationCause::DiscardUseState, Some(node)) => {
+                    Message::core_validation_discard_use_state_node(node)
+                }
+                (ValidationCause::DiscardResultType, None) => {
+                    Message::core_validation_discard_result_type()
+                }
+                (ValidationCause::DiscardResultType, Some(node)) => {
+                    Message::core_validation_discard_result_type_node(node)
+                }
+                (ValidationCause::DiscardMissingContract, None) => {
+                    Message::core_validation_discard_missing_contract()
+                }
+                (ValidationCause::DiscardMissingContract, Some(node)) => {
+                    Message::core_validation_discard_missing_contract_node(node)
+                }
+                (ValidationCause::ResumeMissingContract, None) => {
+                    Message::core_validation_resume_missing_contract()
+                }
+                (ValidationCause::ResumeMissingContract, Some(node)) => {
+                    Message::core_validation_resume_missing_contract_node(node)
+                }
+                (ValidationCause::ResumeHandlerShape, None) => {
+                    Message::core_validation_resume_handler_shape()
+                }
+                (ValidationCause::ResumeHandlerShape, Some(node)) => {
+                    Message::core_validation_resume_handler_shape_node(node)
+                }
+                (ValidationCause::ResumeMissingClause, None) => {
+                    Message::core_validation_resume_missing_clause()
+                }
+                (ValidationCause::ResumeMissingClause, Some(node)) => {
+                    Message::core_validation_resume_missing_clause_node(node)
+                }
+                (ValidationCause::ResumeArgumentType, None) => {
+                    Message::core_validation_resume_argument_type()
+                }
+                (ValidationCause::ResumeArgumentType, Some(node)) => {
+                    Message::core_validation_resume_argument_type_node(node)
+                }
+                (ValidationCause::ResumeResultType, None) => {
+                    Message::core_validation_resume_result_type()
+                }
+                (ValidationCause::ResumeResultType, Some(node)) => {
+                    Message::core_validation_resume_result_type_node(node)
+                }
+                (ValidationCause::ResumeEffectRow, None) => {
+                    Message::core_validation_resume_effect_row()
+                }
+                (ValidationCause::ResumeEffectRow, Some(node)) => {
+                    Message::core_validation_resume_effect_row_node(node)
+                }
+                (ValidationCause::ResumeArgumentEffects, None) => {
+                    Message::core_validation_resume_argument_effects()
+                }
+                (ValidationCause::ResumeArgumentEffects, Some(node)) => {
+                    Message::core_validation_resume_argument_effects_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -1567,6 +1703,23 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::UnboundContinuation
+                | ValidationCause::ContinuationBranchUsage
+                | ValidationCause::MissingClauseConsumption
+                | ValidationCause::RepeatedClauseConsumption
+                | ValidationCause::ForeignClauseContinuation
+                | ValidationCause::CapturedContinuation
+                | ValidationCause::ResumeUseState
+                | ValidationCause::DiscardUseState
+                | ValidationCause::DiscardResultType
+                | ValidationCause::DiscardMissingContract
+                | ValidationCause::ResumeMissingContract
+                | ValidationCause::ResumeHandlerShape
+                | ValidationCause::ResumeMissingClause
+                | ValidationCause::ResumeArgumentType
+                | ValidationCause::ResumeResultType
+                | ValidationCause::ResumeEffectRow
+                | ValidationCause::ResumeArgumentEffects => ValidationReason::Resume,
                 ValidationCause::PatternDepth
                 | ValidationCause::PatternTypeMismatch
                 | ValidationCause::PatternInvalidType
@@ -8463,9 +8616,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .min_by_key(|(_, requirement)| requirement.occurrence.value())
         {
             return Err(match key {
-                ScopeRequirementKey::Resume(_, _) => {
-                    ValidationError::new(ValidationReason::Resume, Some(requirement.occurrence))
-                }
+                ScopeRequirementKey::Resume(_, _) => ValidationError::with_cause(
+                    ValidationCause::UnboundContinuation,
+                    Some(requirement.occurrence),
+                ),
                 ScopeRequirementKey::Binder(_) => ValidationError::with_cause(
                     ValidationCause::UnboundCoreBinder,
                     Some(requirement.occurrence),
@@ -9090,8 +9244,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                             })
                                         })
                                     {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Resume,
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::ContinuationBranchUsage,
                                             Some(id),
                                         ));
                                     }
@@ -9155,13 +9309,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 {
                                     let capability = child_free
                                         .remove(&ScopeRequirementKey::Resume(handler, owner));
-                                    if capability.is_none_or(|capability| capability.paths != 1)
-                                        || child_free.keys().any(|key| {
-                                            matches!(key, ScopeRequirementKey::Resume(_, _))
-                                        })
+                                    let cause = if capability.is_none() {
+                                        Some(ValidationCause::MissingClauseConsumption)
+                                    } else if capability
+                                        .is_some_and(|capability| capability.paths != 1)
                                     {
-                                        return Err(ValidationError::new(
-                                            ValidationReason::Resume,
+                                        Some(ValidationCause::RepeatedClauseConsumption)
+                                    } else if child_free
+                                        .keys()
+                                        .any(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
+                                    {
+                                        Some(ValidationCause::ForeignClauseContinuation)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(cause) = cause {
+                                        return Err(ValidationError::with_cause(
+                                            cause,
                                             Some(child),
                                         ));
                                     }
@@ -9234,7 +9398,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .keys()
             .any(|key| matches!(key, ScopeRequirementKey::Resume(_, _)))
         {
-            Err(ValidationError::new(ValidationReason::Resume, Some(owner)))
+            Err(ValidationError::with_cause(
+                ValidationCause::CapturedContinuation,
+                Some(owner),
+            ))
         } else {
             Ok(())
         }
@@ -10368,15 +10535,25 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 }
                 EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
                     if resume.use_state != ResumeUse::Consumed {
-                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::ResumeUseState,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
                     has_discard = true;
-                    if discard.use_state() != ResumeUse::Consumed
-                        || !self.same_type_charged(&node.ty, &Type::Unit)?
-                    {
-                        return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+                    if discard.use_state() != ResumeUse::Consumed {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardUseState,
+                            Some(id),
+                        ));
+                    }
+                    if !self.same_type_charged(&node.ty, &Type::Unit)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardResultType,
+                            Some(id),
+                        ));
                     }
                 }
                 EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
@@ -10404,8 +10581,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
                     self.charge_type_work(1)?;
                     if !clause_contracts.contains_key(&(discard.handler(), discard.owner())) {
-                        return Err(ValidationError::new(
-                            ValidationReason::Resume,
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::DiscardMissingContract,
                             Some(node_id(self.program.arena, index)?),
                         ));
                     }
@@ -11067,28 +11244,40 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         self.charge_type_work(1)?;
         let contract = contracts
             .get(&(resume.handler(), resume.owner()))
-            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+            .ok_or_else(|| {
+                ValidationError::with_cause(ValidationCause::ResumeMissingContract, Some(id))
+            })?;
         let handler_node = self.node(contract.handler)?;
         let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
             handler,
         )) = &handler_node.kind
         else {
-            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+            return Err(ValidationError::with_cause(
+                ValidationCause::ResumeHandlerShape,
+                Some(id),
+            ));
         };
-        let clause = handler
-            .clauses()
-            .get(contract.clause)
-            .ok_or_else(|| ValidationError::new(ValidationReason::Resume, Some(id)))?;
+        let clause = handler.clauses().get(contract.clause).ok_or_else(|| {
+            ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
+        })?;
         let (_, result) =
             self.effect_signature(handler.effect(), clause.operation(), id, type_binders)?;
         let value = self.node(resume.value())?;
-        if resume.use_state() != super::effect::ResumeUse::Consumed
-            || !self.same_type_charged(&value.ty, &result)?
-            || !self.same_type_charged(&node.ty, &handler_node.ty)?
-            || !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)?
-            || !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)?
-        {
-            return Err(ValidationError::new(ValidationReason::Resume, Some(id)));
+        let cause = if resume.use_state() != super::effect::ResumeUse::Consumed {
+            Some(ValidationCause::ResumeUseState)
+        } else if !self.same_type_charged(&value.ty, &result)? {
+            Some(ValidationCause::ResumeArgumentType)
+        } else if !self.same_type_charged(&node.ty, &handler_node.ty)? {
+            Some(ValidationCause::ResumeResultType)
+        } else if !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)? {
+            Some(ValidationCause::ResumeEffectRow)
+        } else if !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)? {
+            Some(ValidationCause::ResumeArgumentEffects)
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            return Err(ValidationError::with_cause(cause, Some(id)));
         }
         Ok(())
     }
@@ -11127,6 +11316,195 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn core_continuation_messages_preserve_the_failed_relationship() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::UnboundContinuation,
+                "unbound-continuation",
+                "The compiler retained a continuation use without its enclosing operation clause.",
+            ),
+            (
+                ValidationCause::ContinuationBranchUsage,
+                "continuation-branch-usage",
+                "Core match branches disagree about which continuations they consume or how many times they consume them.",
+            ),
+            (
+                ValidationCause::MissingClauseConsumption,
+                "missing-clause-consumption",
+                "A Core operation clause does not consume its continuation.",
+            ),
+            (
+                ValidationCause::RepeatedClauseConsumption,
+                "repeated-clause-consumption",
+                "A Core operation clause does not consume its continuation exactly once.",
+            ),
+            (
+                ValidationCause::ForeignClauseContinuation,
+                "foreign-clause-continuation",
+                "A Core operation clause retains a use of another clause's continuation.",
+            ),
+            (
+                ValidationCause::CapturedContinuation,
+                "captured-continuation",
+                "The compiler retained a continuation requirement across a boundary that forbids continuation capture.",
+            ),
+            (
+                ValidationCause::ResumeUseState,
+                "resume-use-state",
+                "The compiler retained a resume operation without a consumed-continuation state.",
+            ),
+            (
+                ValidationCause::DiscardUseState,
+                "discard-use-state",
+                "The compiler retained a discard operation without a consumed-continuation state.",
+            ),
+            (
+                ValidationCause::DiscardResultType,
+                "discard-result-type",
+                "A Core discard operation has a result type other than Unit.",
+            ),
+            (
+                ValidationCause::DiscardMissingContract,
+                "discard-missing-contract",
+                "The compiler has no operation-clause contract for a Core discard's handler and continuation owner.",
+            ),
+            (
+                ValidationCause::ResumeMissingContract,
+                "resume-missing-contract",
+                "The compiler has no operation-clause contract for a Core resume's handler and continuation owner.",
+            ),
+            (
+                ValidationCause::ResumeHandlerShape,
+                "resume-handler-shape",
+                "A Core continuation contract points to a node that is not a handler.",
+            ),
+            (
+                ValidationCause::ResumeMissingClause,
+                "resume-missing-clause",
+                "A Core continuation contract points to a clause absent from its handler.",
+            ),
+            (
+                ValidationCause::ResumeArgumentType,
+                "resume-argument-type",
+                "A Core resume argument's type differs from the operation's result type.",
+            ),
+            (
+                ValidationCause::ResumeResultType,
+                "resume-result-type",
+                "A Core resume's result type differs from its handler's result type.",
+            ),
+            (
+                ValidationCause::ResumeEffectRow,
+                "resume-effect-row",
+                "A Core resume's effect row differs from its handler's output row.",
+            ),
+            (
+                ValidationCause::ResumeArgumentEffects,
+                "resume-argument-effects",
+                "A Core resume argument has effects outside its handler's output row.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.resume");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn continuation_contract_failures_keep_missing_and_wrong_handler_distinct() {
+        use super::super::effect::{EffectCoreBuilder, HandlerId, ResumeNode, ResumeUse};
+        let file = source();
+        let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(Default::default()));
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let handler = HandlerId::new(0);
+        let owner = crate::resolved::ResumeId::new(0);
+        let resume = ResumeNode::new(handler, owner, ResumeUse::Consumed, root);
+        let mut contracts = HashMap::new();
+        let error = validator
+            .validate_effect_resume(
+                root,
+                &program.nodes[0],
+                &resume,
+                &HashMap::new(),
+                &contracts,
+            )
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::ResumeMissingContract));
+        contracts.insert(
+            (handler, owner),
+            EffectClauseContract {
+                handler: root,
+                clause: 0,
+            },
+        );
+        let error = validator
+            .validate_effect_resume(
+                root,
+                &program.nodes[0],
+                &resume,
+                &HashMap::new(),
+                &contracts,
+            )
+            .unwrap_err();
+        assert_eq!(error.cause, Some(ValidationCause::ResumeHandlerShape));
+    }
+
+    #[test]
+    fn continuation_capture_failure_has_a_precise_message() {
+        let file = source();
+        let mut builder = CoreBuilder::new();
+        let root = builder.unit(Type::Unit, origin(&file)).unwrap();
+        let program = builder.finish(root).unwrap();
+        let validator = Validator::new(&program, &[&file]);
+        let mut requirements = HashMap::new();
+        validator
+            .reject_resume_capture(&requirements, root)
+            .unwrap();
+        validator
+            .retain_resume_requirement(
+                &mut requirements,
+                super::super::effect::HandlerId::new(0),
+                crate::resolved::ResumeId::new(0),
+                root,
+                1,
+            )
+            .unwrap();
+        let error = validator
+            .reject_resume_capture(&requirements, root)
+            .unwrap_err();
+        assert_eq!(error.reason(), ValidationReason::Resume);
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
+    }
 
     #[test]
     fn core_pattern_messages_preserve_the_failed_relationship() {
