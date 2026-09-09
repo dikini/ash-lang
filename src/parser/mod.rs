@@ -219,6 +219,38 @@ pub enum ExpectedForm {
     EndOfFile,
 }
 
+impl ExpectedForm {
+    /// Stable grammar category retained independently of localized wording.
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Expression => "expression",
+            Self::Operand => "operand",
+            Self::Identifier => "identifier",
+            Self::Type => "type",
+            Self::EffectRow => "effect-row",
+            Self::Kind => "kind",
+            Self::Pattern => "pattern",
+            Self::InterfaceParameter => "interface-parameter",
+            Self::InterfaceMethod => "interface-method",
+            Self::EffectOperation => "effect-operation",
+            Self::InterfaceApplication => "interface-application",
+            Self::ImplementationMethod => "implementation-method",
+            Self::Comma => "comma",
+            Self::LeftParen => "left-paren",
+            Self::RightParen => "right-paren",
+            Self::LeftBrace => "left-brace",
+            Self::RightBrace => "right-brace",
+            Self::Greater => "greater",
+            Self::Colon => "colon",
+            Self::Equal => "equal",
+            Self::Arrow => "arrow",
+            Self::FatArrow => "fat-arrow",
+            Self::LineEnd => "line-end",
+            Self::EndOfFile => "end-of-file",
+        }
+    }
+}
+
 /// A parser-owned reason retained independently from rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseReason {
@@ -289,6 +321,29 @@ pub enum SynchronizationBoundary {
     EndOfFile,
 }
 
+impl SynchronizationBoundary {
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::LogicalLineEnd => "logical-line-end",
+            Self::TypeParameterSeparator => "type-parameter-separator",
+            Self::TypeParameterListClosing => "type-parameter-list-closing",
+            Self::TypeDeclarationEqual => "type-declaration-equal",
+            Self::EquationalGlobalColon => "equational-global-colon",
+            Self::InterfaceMethodColon => "interface-method-colon",
+            Self::OperationalParameterOpeningParen => "operational-parameter-opening-paren",
+            Self::ImplementationInterfaceHead => "implementation-interface-head",
+            Self::InterfaceBodyOpeningBrace => "interface-body-opening-brace",
+            Self::ImplementationBodyOpeningBrace => "implementation-body-opening-brace",
+            Self::OperationalBodyOpeningBrace => "operational-body-opening-brace",
+            Self::BlockClosingBrace => "block-closing-brace",
+            Self::InterfaceClosingBrace => "interface-closing-brace",
+            Self::ImplementationClosingBrace => "implementation-closing-brace",
+            Self::ParenthesisClosing => "parenthesis-closing",
+            Self::EndOfFile => "end-of-file",
+        }
+    }
+}
+
 /// One structured parser diagnostic and its parser-specific recovery facts.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseDiagnostic {
@@ -353,6 +408,20 @@ pub enum FoundToken {
     EndOfFile,
 }
 
+impl FoundToken {
+    /// Grammar category or fixed Ash spelling, never an English description.
+    pub(crate) const fn diagnostic_name(self) -> &'static str {
+        match self {
+            Self::Identifier => "identifier",
+            Self::UpperIdentifier => "uppercase-identifier",
+            Self::Integer => "integer",
+            Self::Spelling(spelling) => spelling,
+            Self::LineEnd => "line-end",
+            Self::EndOfFile => "end-of-file",
+        }
+    }
+}
+
 impl Deref for ParseDiagnostic {
     type Target = Diagnostic<ParseReason>;
 
@@ -373,6 +442,35 @@ impl fmt::Display for ParseReason {
             Self::Semicolon => "parse.semicolon",
             Self::UnexpectedToken => "parse.unexpected-token",
         })
+    }
+}
+
+impl ParseDiagnostic {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'static>> {
+        use crate::message::Message;
+        Some(match self.reason {
+            ParseReason::ExpectedForm => Message::parse_expected(self.expected_form?),
+            ParseReason::ExpectedOperand => Message::parse_operand(),
+            ParseReason::UnclosedGroup => Message::parse_unclosed_group(),
+            ParseReason::RepeatedEquality => Message::parse_repeated_equality(),
+            ParseReason::ExpectedRecursiveMember => Message::parse_recursive_member(),
+            ParseReason::UnexpectedAnd => Message::parse_unexpected_and(),
+            ParseReason::Semicolon => Message::parse_semicolon(),
+            ParseReason::UnexpectedToken => Message::parse_unexpected_token(),
+        })
+    }
+
+    pub(crate) const fn primary_relationship(&self) -> &'static str {
+        match self.diagnostic.reason {
+            ParseReason::ExpectedForm => "expected_form",
+            ParseReason::ExpectedOperand => "operator",
+            ParseReason::UnclosedGroup => "opening_group",
+            ParseReason::RepeatedEquality => "repeated_equality",
+            ParseReason::ExpectedRecursiveMember => "expected_recursive_member",
+            ParseReason::UnexpectedAnd | ParseReason::Semicolon | ParseReason::UnexpectedToken => {
+                "unexpected_token"
+            }
+        }
     }
 }
 

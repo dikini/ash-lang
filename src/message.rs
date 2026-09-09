@@ -41,6 +41,15 @@ impl Locale {
 /// use ash::message::Message;
 /// let _ = Message::initializer(42);
 /// ```
+/// Grammar descriptions must come from typed parser facts, not English text:
+/// ```compile_fail
+/// use ash::message::Message;
+/// let _ = Message::parse_expected("an expression");
+/// ```
+/// ```compile_fail
+/// use ash::{message::Message, parser::ExpectedForm};
+/// let _ = Message::parse_found(ExpectedForm::Expression);
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Message<'a> {
     key: &'static str,
@@ -53,34 +62,79 @@ impl<'a> Message<'a> {
     }
 }
 
+// Only retained argument types participate; catalogue values borrow compiler facts.
+trait Argument<'a> {
+    fn value(self) -> &'a str;
+}
+
+impl<'a> Argument<'a> for &'a str {
+    fn value(self) -> &'a str {
+        self
+    }
+}
+
+impl Argument<'_> for crate::parser::ExpectedForm {
+    fn value(self) -> &'static str {
+        self.diagnostic_name()
+    }
+}
+
+impl Argument<'_> for crate::parser::FoundToken {
+    fn value(self) -> &'static str {
+        self.diagnostic_name()
+    }
+}
+
 // One declaration supplies typed constructors and exhaustive test examples.
 // The concrete carrier remains visible to the source ownership inventory.
 macro_rules! messages {
-    ($( $(#[$doc:meta])* $constructor:ident => $key:literal { $($argument:ident),* } ),* $(,)?) => {
+    ($( $(#[$doc:meta])* $constructor:ident => $key:literal { $($argument:ident: $ty:ty = $example:expr),* } ),* $(,)?) => {
         impl<'a> Message<'a> {
             $(
                 $(#[$doc])*
                 #[must_use]
-                pub fn $constructor($($argument: &'a str),*) -> Self {
-                    Self { key: $key, arguments: vec![$((stringify!($argument), $argument)),*] }
+                pub fn $constructor($($argument: $ty),*) -> Self {
+                    Self { key: $key, arguments: vec![$((stringify!($argument), $argument.value())),*] }
                 }
             )*
 
             #[cfg(test)]
             fn examples() -> Vec<Message<'static>> {
-                vec![$(Message::$constructor($(stringify!($argument)),*)),*]
+                vec![$(Message::$constructor($($example),*)),*]
             }
         }
     };
 }
 
 messages! {
+    /// The operator needs a right operand.
+    parse_operand => "parse-operand" {},
+    /// This opening parenthesis has no matching ).
+    parse_unclosed_group => "parse-unclosed-group" {},
+    /// Equality comparisons cannot be chained without parentheses.
+    parse_repeated_equality => "parse-repeated-equality" {},
+    /// A recursive binding member is required here.
+    parse_recursive_member => "parse-recursive-member" {},
+    /// and is allowed only within a recursive binding group.
+    parse_unexpected_and => "parse-unexpected-and" {},
+    /// Ash does not support semicolons.
+    parse_semicolon => "parse-semicolon" {},
+    /// This token is not allowed at this grammar position.
+    parse_unexpected_token => "parse-unexpected-token" {},
+    /// Parsing continues from this position.
+    parse_recovery => "parse-recovery" {},
+    /// Parsing resumes at this boundary.
+    parse_synchronization => "parse-synchronization" {},
     /// A binding initializer disagrees with its annotation.
-    binding_initializer => "binding-initializer" { expected, found },
+    binding_initializer => "binding-initializer" { expected: &'a str = "expected", found: &'a str = "found" },
     /// The initializer's actual type.
-    initializer => "initializer" { found },
+    initializer => "initializer" { found: &'a str = "found" },
     /// The annotated type requirement.
-    binding_annotation => "binding-annotation" { expected },
+    binding_annotation => "binding-annotation" { expected: &'a str = "expected" },
+    /// The grammar form required at this position.
+    parse_expected => "parse-expected" { expected: crate::parser::ExpectedForm = crate::parser::ExpectedForm::Expression },
+    /// The token category or fixed spelling encountered by the parser.
+    parse_found => "parse-found" { found: crate::parser::FoundToken = crate::parser::FoundToken::EndOfFile },
     /// A carriage return without its required line feed.
     lex_bare_carriage_return => "lex-bare-carriage-return" {},
     /// An excluded byte order mark.
@@ -175,6 +229,9 @@ mod tests {
         for element in &pattern.elements {
             match element {
                 PatternElement::TextElement { .. } => {}
+                PatternElement::Placeable {
+                    expression: Expression::Inline(InlineExpression::StringLiteral { .. }),
+                } => {}
                 PatternElement::Placeable {
                     expression: Expression::Inline(InlineExpression::VariableReference { id }),
                 } => {

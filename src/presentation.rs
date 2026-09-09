@@ -7,6 +7,7 @@ use crate::{
     elaborate::TypeReason,
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
+    parser::{FoundToken, ParseContext, ParseDiagnostic, SynchronizationBoundary},
     source::{SourceFile, Span},
 };
 
@@ -33,6 +34,7 @@ pub struct Label<'a> {
 #[derive(Clone, Copy)]
 struct Fact<'a> {
     name: &'static str,
+    kind: &'static str,
     value: &'a str,
 }
 
@@ -72,10 +74,12 @@ pub fn compile_type_diagnostic<'a>(
     // Both representations borrow the phase's original values.
     let expected_fact = Fact {
         name: "expected",
+        kind: "code",
         value: expected,
     };
     let found_fact = Fact {
         name: "found",
+        kind: "code",
         value: found,
     };
     let label = |span: Span, message, relationship, fact| {
@@ -137,6 +141,7 @@ pub fn compile_lex_diagnostic<'a>(
         .map_err(|_| PresentationError::MissingSource)?;
     let fact = Fact {
         name: "found",
+        kind: "code",
         value: found,
     };
     Ok(CompileDiagnostic {
@@ -151,6 +156,94 @@ pub fn compile_lex_diagnostic<'a>(
         },
         related: Vec::new(),
         facts: vec![fact],
+    })
+}
+
+/// Exposes retained grammar and recovery facts without interpreting legacy prose.
+///
+/// # Errors
+/// Returns a missing grammar fact or admitted source context.
+pub fn compile_parse_diagnostic<'a>(
+    diagnostic: &'a ParseDiagnostic,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let message = diagnostic.message().ok_or(PresentationError::MissingFact)?;
+    let mut facts = Vec::new();
+    if let Some(expected) = diagnostic.expected_form() {
+        facts.push(Fact {
+            name: "expected",
+            kind: "syntax",
+            value: expected.diagnostic_name(),
+        });
+    }
+    if let Some(found) = diagnostic.found_token() {
+        facts.push(Fact {
+            name: "found",
+            kind: if matches!(found, FoundToken::Spelling(_)) {
+                "code"
+            } else {
+                "syntax"
+            },
+            value: found.diagnostic_name(),
+        });
+    }
+    let label = |span: Span, message, relationship, facts| {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        Ok(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts,
+        })
+    };
+    let primary = label(
+        diagnostic.primary.span(),
+        message.clone(),
+        diagnostic.primary_relationship(),
+        Vec::new(),
+    )?;
+    let mut related = Vec::new();
+    if let Some(span) = diagnostic.recovery_position() {
+        related.push(label(
+            span,
+            diagnostic
+                .found_token()
+                .map_or_else(Message::parse_recovery, Message::parse_found),
+            "recovery_position",
+            Vec::new(),
+        )?);
+    }
+    for &ParseContext::Synchronization { boundary, span } in &diagnostic.context {
+        let message = if boundary == SynchronizationBoundary::EndOfFile {
+            Message::parse_found(FoundToken::EndOfFile)
+        } else {
+            Message::parse_synchronization()
+        };
+        related.push(label(
+            span,
+            message,
+            "synchronization",
+            vec![Fact {
+                name: "boundary",
+                kind: "syntax",
+                value: boundary.diagnostic_name(),
+            }],
+        )?);
+    }
+    Ok(CompileDiagnostic {
+        reason: diagnostic.reason.to_string(),
+        message,
+        primary,
+        related,
+        facts,
     })
 }
 
@@ -256,7 +349,7 @@ fn facts<'a>(source: &[Fact<'a>]) -> Vec<JsonFact<'a>> {
         .iter()
         .map(|fact| JsonFact {
             name: fact.name,
-            kind: "code",
+            kind: fact.kind,
             value: fact.value,
         })
         .collect()

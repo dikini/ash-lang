@@ -102,10 +102,23 @@ localization language. Color is not required for completion.
 - This slice-2 checkpoint passed the focused presentation, catalogue, JSON,
   rendering and existing diagnostic suites, all 1,227 library tests, the
   bidirectional type-field ownership check and warnings-denied Clippy.
-  Review found no actionable defects. Parser translations are next: use typed
-  grammar arguments and Fluent selectors, testing every selector category.
+  Review found no actionable defects in that checkpoint.
   Graph-loading source retention and the remainder of slice 2 are still open;
   the full workspace gate has not yet been rerun for this checkpoint.
+- Parser presentation now uses typed grammar arguments and Fluent selectors.
+  Tests check exact English/Bulgarian wording for all expected forms and found
+  categories, punctuation, EOF, ordered parser diagnostics, and distinct
+  immediate-recovery and synchronization relationships. JSON retains grammar
+  categories independently of wording. Checked-construction examples reject
+  English strings and the wrong enum type as grammar arguments.
+- Parser review caught found-token facts incorrectly attached to the primary
+  opening-group span, and an unjustified assumption that a missing recursive
+  member always follows `and`. Failing regressions drove both fixes; followup
+  review confirmed them. No recovery or acceptance policy changed.
+- Parser checkpoint verification passed the five focused diagnostic suites,
+  all 1,227 library tests, eight rustdoc tests and warnings-denied Clippy.
+  Markdown lint, relative links and `git diff --check` passed. The broad
+  compile-time migration and full slice-2 gate remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
