@@ -320,21 +320,41 @@ fn requires_pure_core_projection(
     Ok(false)
 }
 
-pub(crate) struct PatternMessage<'a> {
+pub(crate) struct SingleSiteTypeMessage<'a> {
     pub(crate) message: crate::message::Message<'a>,
     pub(crate) relationship: &'static str,
     pub(crate) fact: Option<(&'static str, &'a str)>,
 }
 
 impl TypeReason {
-    pub(crate) fn pattern_message<'a>(
+    pub(crate) fn single_site_message<'a>(
         self,
         expected: Option<&'a str>,
         witness: Option<&'a str>,
-    ) -> Option<PatternMessage<'a>> {
+    ) -> Option<SingleSiteTypeMessage<'a>> {
         use crate::message::Message;
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
+            Self::InfiniteType => (Message::type_infinite(), "infinite_type", None),
+            Self::AmbiguousType => (Message::type_ambiguous(), "ambiguous_type", None),
+            Self::UnguardedRecursiveUse => {
+                (Message::recursion_unguarded_use(), "recursive_use", None)
+            }
+            Self::ResumeNotConsumed => (
+                Message::continuation_not_consumed(),
+                "continuation_usage",
+                None,
+            ),
+            Self::ResumeAlreadyConsumed => (
+                Message::continuation_already_consumed(),
+                "continuation_usage",
+                None,
+            ),
+            Self::ResumeCapture => (
+                Message::continuation_capture(),
+                "continuation_capture",
+                None,
+            ),
             Self::PatternMismatch => (
                 Message::pattern_type_mismatch(expected?),
                 "pattern",
@@ -370,7 +390,7 @@ impl TypeReason {
             Self::RedundantCase => (Message::coverage_redundant_case(), "case", None),
             _ => return None,
         };
-        Some(PatternMessage {
+        Some(SingleSiteTypeMessage {
             message,
             relationship,
             fact,

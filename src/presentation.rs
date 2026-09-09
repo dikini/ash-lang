@@ -97,16 +97,16 @@ pub fn compile_type_diagnostic<'a>(
     diagnostic: &'a Diagnostic<TypeReason>,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
-    if let Some(crate::elaborate::PatternMessage {
+    if let Some(crate::elaborate::SingleSiteTypeMessage {
         message,
         relationship,
         fact,
     }) = diagnostic
         .reason
-        .pattern_message(diagnostic.expected.as_deref(), diagnostic.found.as_deref())
+        .single_site_message(diagnostic.expected.as_deref(), diagnostic.found.as_deref())
     {
-        // Pattern checking retains either an expected type or an uncovered
-        // value, not an expected/found type comparison. Keep those facts distinct.
+        // Single-site failures need no expected/found type comparison.
+        // Preserve the optional phase fact with its own semantic name.
         if !diagnostic.related.is_empty() {
             return Err(PresentationError::Unsupported);
         }

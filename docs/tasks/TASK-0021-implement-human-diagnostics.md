@@ -347,6 +347,15 @@ localization language. Color is not required for completion.
   stress test. After replacing the presentation tuple with a named record,
   all 71 diagnostic/catalogue tests and warnings-denied Clippy passed again.
   Source acceptance, CLI defaults and runtime reporting remain unchanged.
+- Single-location presentation also covers infinite and undetermined inferred
+  types, unguarded recursive uses, and missing, repeated or captured
+  continuation consumption. These six reasons retain source locations without
+  inventing type facts. Nine source cases cover inference, recursion, branch
+  completion, repeated resume/discard, and function/recursive capture. Type
+  presentation covers 20 of 35 source reasons, with 140 templates per locale.
+  All 94 focused diagnostic, catalogue and effect tests and warnings-denied
+  Clippy passed. This changes compile-time reporting only, not runtime behavior
+  or CLI defaults.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

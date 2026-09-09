@@ -150,6 +150,18 @@ macro_rules! messages {
 }
 
 messages! {
+    /// First-order inference would construct an infinite type.
+    type_infinite => "type-infinite" {},
+    /// Inference cannot determine a complete type at this source location.
+    type_ambiguous => "type-ambiguous" {},
+    /// A recursive occurrence crosses a forcing or transporting expression.
+    recursion_unguarded_use => "recursion-unguarded-use" {},
+    /// A path can finish without consuming its continuation.
+    continuation_not_consumed => "continuation-not-consumed" {},
+    /// A path consumes its continuation more than once.
+    continuation_already_consumed => "continuation-already-consumed" {},
+    /// A nested scope captures an enclosing clause's completion capability.
+    continuation_capture => "continuation-capture" {},
     /// A pattern disagrees with the type of the value being matched.
     pattern_type_mismatch => "pattern-type-mismatch" { expected: &'a str = "Bool" },
     /// A constructor occurrence has the wrong payload shape.
