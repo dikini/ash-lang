@@ -983,6 +983,8 @@ messages! {
     core_validation_unknown_core_row_binder_node => "core-validation-unknown-core-row-binder-node" { node: usize = 42 },
     core_validation_non_row_tail_kind => "core-validation-non-row-tail-kind" {},
     core_validation_non_row_tail_kind_node => "core-validation-non-row-tail-kind-node" { node: usize = 42 },
+    core_validation_resource => "core-validation-resource" {},
+    core_validation_resource_node => "core-validation-resource-node" { node: usize = 42 },
     /// The compiler stored a Core node from a different dialect than the selected program.
     core_validation_dialect => "core-validation-dialect" {},
     /// The compiler selected a root node that is not valid in this Core arena.

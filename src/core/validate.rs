@@ -2400,6 +2400,10 @@ impl ValidationError {
             });
         }
         Some(match (self.reason, node) {
+            (ValidationReason::Resource, None) => Message::core_validation_resource(),
+            (ValidationReason::Resource, Some(node)) => {
+                Message::core_validation_resource_node(node)
+            }
             (ValidationReason::DialectMembership, None) => Message::core_validation_dialect(),
             (ValidationReason::Root, None) => Message::core_validation_root(),
             (ValidationReason::Cycle, None) => Message::core_validation_cycle(),
@@ -14947,7 +14951,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_failure_messages_preserve_optional_node_identity() {
+    fn reason_only_failure_messages_preserve_optional_node_identity() {
         use crate::{
             message::{Catalogue, Locale},
             presentation::{compile_core_validation_failure, write_human, write_json},
@@ -14968,6 +14972,10 @@ mod tests {
             (
                 ValidationReason::Unreachable,
                 "The compiler retained a Core node that cannot be reached from the program root.",
+            ),
+            (
+                ValidationReason::Resource,
+                "The compiler could not complete Core validation within its work or storage limits.",
             ),
         ] {
             for node in [

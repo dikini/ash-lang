@@ -885,6 +885,12 @@ localization language. Color is not required for completion.
   supplies width calculation rather than a local Unicode table. Two table-driven
   regressions and the combined rendering, reporting, JSON, diagnostic, CLI and
   runtime-reporting batch passed (117 tests), as did warnings-denied Clippy.
+- Core resource failures now render from the existing reason and optional node,
+  without new causes or producer changes. The message covers work and storage
+  limits without inventing an allocation-failure cause. The existing reason-only
+  fixture covers English, Bulgarian and JSON with and without a node. Coverage
+  is 189/197 reasons, not an effort estimate. The library, catalogue, reporting
+  and diagnostic batch passed, as did warnings-denied Clippy.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
