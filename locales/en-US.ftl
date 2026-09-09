@@ -110,6 +110,17 @@ module-unknown-builtin = This import names no compiler-owned module.
 module-not-found = The imported source file `{ $path }` does not exist.
 module-import-cycle = This import creates a dependency cycle through `{ $path }`.
 module-path-escape = The imported source file `{ $path }` is outside a root that must contain it.
+source-ids = Ash cannot allocate another source identity for `{ $path }`.
+source-unrepresentable-span = Ash encountered an unrepresentable source length or token offset while constructing a span for `{ $path }`.
+source-path-limit = The display path for `{ $path }` exceeds Ash's source-model limit.
+source-text-limit = The text in `{ $path }` exceeds Ash's source-model size limit.
+source-line-limit = `{ $path }` has more lines than Ash's source model can represent.
+source-column-limit = A line in `{ $path }` has more columns than Ash's source model can represent.
+source-range = Ash produced byte range { $start }..{ $end } outside the { $length } bytes of `{ $path }`.
+source-foreign-span = Ash used a span from source { $found } where source { $expected } was required for `{ $path }`.
+source-offset = Ash used byte offset { $offset } beyond the { $length } bytes of `{ $path }`.
+source-code-point = Ash used byte offset { $offset } inside a UTF-8 code point in `{ $path }`.
+source-line-state = Ash's internal line index for `{ $path }` is inconsistent.
 module-resource = Ash exhausted resources for { $resource ->
     [graph-identities] module graph identities
     [sources] module sources

@@ -138,6 +138,28 @@ macro_rules! messages {
 }
 
 messages! {
+    /// Span construction failed after source admission.
+    source_unrepresentable_span => "source-unrepresentable-span" { path: &'a Path = Path::new("source.ash") },
+    /// Source identity allocation is exhausted.
+    source_ids => "source-ids" { path: &'a Path = Path::new("source.ash") },
+    /// The display path exceeds source model limits.
+    source_path_limit => "source-path-limit" { path: &'a Path = Path::new("source.ash") },
+    /// Source text exceeds the representable byte length.
+    source_text_limit => "source-text-limit" { path: &'a Path = Path::new("source.ash") },
+    /// The line count exceeds the representable range.
+    source_line_limit => "source-line-limit" { path: &'a Path = Path::new("source.ash") },
+    /// A line exceeds the representable column range.
+    source_column_limit => "source-column-limit" { path: &'a Path = Path::new("source.ash") },
+    /// An internal byte range exceeds source bounds.
+    source_range => "source-range" { path: &'a Path = Path::new("source.ash"), start: usize = 3, end: usize = 9, length: usize = 4 },
+    /// An internal span belongs to another source.
+    source_foreign_span => "source-foreign-span" { path: &'a Path = Path::new("source.ash"), expected: usize = 1, found: usize = 2 },
+    /// An internal offset exceeds source bounds.
+    source_offset => "source-offset" { path: &'a Path = Path::new("source.ash"), offset: usize = 9, length: usize = 4 },
+    /// An internal offset is not a UTF-8 boundary.
+    source_code_point => "source-code-point" { path: &'a Path = Path::new("source.ash"), offset: usize = 3 },
+    /// The source line index is internally inconsistent.
+    source_line_state => "source-line-state" { path: &'a Path = Path::new("source.ash") },
     /// A shared localized explanation of a retained I/O category.
     io_cause => "io-cause" { kind: std::io::ErrorKind = std::io::ErrorKind::PermissionDenied },
     /// A configured root cannot be resolved, with a retained I/O cause.

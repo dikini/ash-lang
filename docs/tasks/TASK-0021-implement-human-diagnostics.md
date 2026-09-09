@@ -174,8 +174,8 @@ localization language. Color is not required for completion.
   or allocation cause. Presentation now obtains responsibility explicitly from
   the module owner rather than treating every non-source failure as invocation.
   Legacy source-rejection classification and CLI exits are unchanged.
-- Invalid-internal-path messages remain outstanding, along with source-model
-  and projection failures. Review found no actionable defects
+- Invalid-internal-path and projection messages remain outstanding.
+  Review found no actionable defects
   in the path-escape and module-resource presentation changes.
 - This checkpoint passed all 1,228 library tests, the focused module-loading,
   input, catalogue and existing diagnostic suites, and warnings-denied Clippy.
@@ -190,6 +190,21 @@ localization language. Color is not required for completion.
 - Unavailable-root verification passed all 1,230 library tests, five focused
   suites and warnings-denied Clippy. Markdown lint and diff whitespace checks
   passed; the full slice-2 gate remains outstanding.
+- Graph source-model failures now have explicit messages for all ten retained
+  causes. The source owner distinguishes input representation limits from
+  compiler identity exhaustion and invalid internal spans or indexes. JSON
+  retains native paths and exact range, offset, length and identity quantities;
+  invalid source positions are never used to manufacture labels. The graph's
+  existing `input.source-model` reason and CLI exit behaviour are unchanged.
+- Review found that `TextTooLarge` also reports an invariant failure during
+  span construction on admitted text. The graph boundary now retains a typed
+  source operation, used for responsibility and wording and preserved in JSON.
+  A failing regression demonstrated incorrect input blame before the fix;
+  followup review confirmed the corrected compiler classification and wording.
+- Source-model verification passed all 1,230 library tests, five focused
+  diagnostic/source/module suites, warnings-denied Clippy and the bidirectional
+  type-field ownership check. Markdown lint and diff whitespace checks passed;
+  broad compile-time migration and the full slice-2 gate remain outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

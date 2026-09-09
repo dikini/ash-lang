@@ -5,6 +5,162 @@ use ash::{
 };
 
 #[test]
+fn graph_source_model_errors_preserve_causes_and_internal_quantities() {
+    use ash::source::{ByteRange, SourceError, SourceFile};
+    let first = SourceFile::new("first.ash", "").unwrap();
+    let second = SourceFile::new("second.ash", "").unwrap();
+    for (error, cause, responsibility) in [
+        (
+            SourceError::SourceIdExhausted,
+            "source-id-exhausted",
+            "compiler",
+        ),
+        (
+            SourceError::DisplayPathTooLarge,
+            "display-path-too-large",
+            "input",
+        ),
+        (SourceError::TextTooLarge, "text-too-large", "input"),
+        (SourceError::TooManyLines, "too-many-lines", "input"),
+        (SourceError::LineTooLong, "line-too-long", "input"),
+        (
+            SourceError::RangeOutsideSource {
+                range: ByteRange::new(3, 9).unwrap(),
+                source_len: 4,
+            },
+            "range-outside-source",
+            "compiler",
+        ),
+        (
+            SourceError::ForeignSpan {
+                expected: first.id(),
+                found: second.id(),
+            },
+            "foreign-span",
+            "compiler",
+        ),
+        (
+            SourceError::OffsetOutsideSource {
+                offset: u32::MAX,
+                source_len: 4,
+            },
+            "offset-outside-source",
+            "compiler",
+        ),
+        (
+            SourceError::OffsetSplitsCodePoint { offset: 3 },
+            "offset-splits-code-point",
+            "compiler",
+        ),
+        (
+            SourceError::InvalidLineState,
+            "invalid-line-state",
+            "compiler",
+        ),
+    ] {
+        let failure = GraphDiagnostic::from(LoadGraphError::SourceModel {
+            path: "source.ash".into(),
+            error,
+            operation: ash::source::SourceOperation::Admission,
+            import_span: None,
+        });
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("source.ash"));
+            if responsibility == "compiler" {
+                assert!(output.contains("Ash"));
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "input.source-model");
+        assert_eq!(json["responsibility"], responsibility);
+        assert_eq!(json["labels"], serde_json::json!([]));
+        assert_eq!(json["facts"][1]["value"], cause);
+        let facts = json["facts"].as_array().unwrap();
+        assert_eq!(
+            facts[0],
+            serde_json::json!({"name":"path", "kind":"path", "value":"source.ash"})
+        );
+        let expected_quantities = match cause {
+            "range-outside-source" => vec![("start", 3), ("end", 9), ("source_len", 4)],
+            "foreign-span" => vec![
+                ("expected_source", first.id().value()),
+                ("found_source", second.id().value()),
+            ],
+            "offset-outside-source" => vec![("offset", u32::MAX), ("source_len", 4)],
+            "offset-splits-code-point" => vec![("offset", 3)],
+            _ => Vec::new(),
+        };
+        assert_eq!(facts.len(), 3 + expected_quantities.len());
+        assert_eq!(
+            facts.last().unwrap(),
+            &serde_json::json!({"name":"operation", "kind":"source-operation", "value":"admission"})
+        );
+        for (fact, (name, value)) in facts[2..].iter().zip(expected_quantities) {
+            assert_eq!(
+                *fact,
+                serde_json::json!({"name":name, "kind":"integer", "value":value})
+            );
+        }
+        if cause == "offset-outside-source" {
+            assert_eq!(json["facts"][2]["value"], u32::MAX);
+            assert_eq!(json["facts"][3]["value"], 4);
+        }
+    }
+}
+
+#[test]
+fn an_unrepresentable_admitted_span_is_not_reported_as_oversized_input() {
+    let failure = GraphDiagnostic::from(LoadGraphError::SourceModel {
+        path: "source.ash".into(),
+        error: ash::source::SourceError::TextTooLarge,
+        operation: ash::source::SourceOperation::SpanConstruction,
+        import_span: None,
+    });
+    let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+    let mut output = Vec::new();
+    write_json(&mut output, &diagnostics[0]).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["responsibility"], "compiler");
+    assert_eq!(
+        json["facts"].as_array().unwrap().last().unwrap()["value"],
+        "span-construction"
+    );
+    for (locale, expected) in [
+        (
+            Locale::English,
+            "Ash encountered an unrepresentable source length or token offset while constructing a span for `source.ash`.",
+        ),
+        (
+            Locale::Bulgarian,
+            "Ash срещна непредставима дължина на изходен файл или отместване на токен при създаване на диапазон за `source.ash`.",
+        ),
+    ] {
+        let mut output = Vec::new();
+        write_short(
+            &mut output,
+            &diagnostics[0],
+            &Catalogue::new(locale).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("{expected} [input.source-model]\n")
+        );
+    }
+}
+
+#[test]
 fn root_name_errors_are_invocation_diagnostics_with_localized_facts() {
     use ash::module::ModuleRoots;
     for (roots, reason, root, en, bg) in [

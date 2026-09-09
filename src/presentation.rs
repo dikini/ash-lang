@@ -12,7 +12,7 @@ use crate::{
     message::{Catalogue, CatalogueError, Message},
     module::{GraphDiagnostic, LoadGraphError, ModuleSyntaxFailure, io_kind_name},
     parser::{FoundToken, ParseContext, ParseDiagnostic, ResourceFailure, SynchronizationBoundary},
-    source::{SourceFile, Span},
+    source::{SourceError, SourceFile, Span},
 };
 
 /// A missing fact or unsupported adapter in the staged compile-time migration.
@@ -299,6 +299,73 @@ pub fn compile_graph_diagnostics(
     context: &GraphDiagnostic,
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
     let failure = context.failure();
+    if let LoadGraphError::SourceModel {
+        path,
+        error,
+        operation,
+        ..
+    } = failure
+    {
+        let mut facts = vec![
+            Fact {
+                name: "path",
+                kind: "path",
+                value: FactValue::Path(path),
+            },
+            Fact {
+                name: "cause",
+                kind: "source-model",
+                value: FactValue::Text(error.diagnostic_name()),
+            },
+        ];
+        let mut quantity = |name, value: u32| {
+            facts.push(Fact {
+                name,
+                kind: "integer",
+                value: FactValue::Integer(value as usize),
+            })
+        };
+        match error {
+            SourceError::RangeOutsideSource { range, source_len } => {
+                quantity("start", range.start());
+                quantity("end", range.end());
+                quantity("source_len", *source_len);
+            }
+            SourceError::ForeignSpan { expected, found } => {
+                quantity("expected_source", expected.value());
+                quantity("found_source", found.value());
+            }
+            SourceError::OffsetOutsideSource { offset, source_len } => {
+                quantity("offset", *offset);
+                quantity("source_len", *source_len);
+            }
+            SourceError::OffsetSplitsCodePoint { offset } => quantity("offset", *offset),
+            SourceError::SourceIdExhausted
+            | SourceError::DisplayPathTooLarge
+            | SourceError::TextTooLarge
+            | SourceError::TooManyLines
+            | SourceError::LineTooLong
+            | SourceError::InvalidLineState => {}
+        }
+        return Ok(vec![CompileDiagnostic {
+            reason: "input.source-model".into(),
+            responsibility: error.responsibility(*operation),
+            message: error.message(path, *operation),
+            primary: import_label(context, "import_target")?,
+            related: Vec::new(),
+            facts: {
+                facts.push(Fact {
+                    name: "operation",
+                    kind: "source-operation",
+                    value: FactValue::Text(match operation {
+                        crate::source::SourceOperation::Admission => "admission",
+                        crate::source::SourceOperation::SpanConstruction => "span-construction",
+                    }),
+                });
+                facts
+            },
+        }]);
+    }
     if let LoadGraphError::Module(failure) = failure {
         let message = failure.message().ok_or(PresentationError::Unsupported)?;
         let mut facts = Vec::new();

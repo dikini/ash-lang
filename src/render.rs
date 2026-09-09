@@ -186,6 +186,7 @@ fn graph_failure(error: &LoadGraphError) -> String {
             path,
             error,
             import_span,
+            ..
         } => {
             let mut output = String::from("input.source-model");
             append_optional_import_primary(

@@ -795,6 +795,8 @@ pub enum LoadGraphError {
         path: PathBuf,
         /// The source-model failure.
         error: SourceError,
+        /// Distinguishes input admission from checked operations on admitted text.
+        operation: crate::source::SourceOperation,
         /// The causing import, or `None` for the entry path.
         import_span: Option<Span>,
     },
@@ -1468,6 +1470,7 @@ fn parse_surface_module(
         LoadGraphError::SourceModel {
             path: path.to_path_buf(),
             error,
+            operation: crate::source::SourceOperation::Admission,
             import_span,
         }
     })?;
@@ -1475,6 +1478,7 @@ fn parse_surface_module(
         lex_with_budget(&source, syntax_budget).map_err(|error| LoadGraphError::SourceModel {
             path: path.to_path_buf(),
             error,
+            operation: crate::source::SourceOperation::SpanConstruction,
             import_span,
         })?;
     let tree = parse_with_budget(lexed, syntax_budget);

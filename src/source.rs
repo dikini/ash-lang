@@ -548,6 +548,87 @@ pub enum SourceError {
     InvalidLineState,
 }
 
+/// The operation that produced a source-model error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceOperation {
+    /// Validating new text before admitting a source file.
+    Admission,
+    /// Constructing token spans against an already admitted source.
+    SpanConstruction,
+}
+
+impl SourceError {
+    pub(crate) const fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::SourceIdExhausted => "source-id-exhausted",
+            Self::DisplayPathTooLarge => "display-path-too-large",
+            Self::TextTooLarge => "text-too-large",
+            Self::TooManyLines => "too-many-lines",
+            Self::LineTooLong => "line-too-long",
+            Self::RangeOutsideSource { .. } => "range-outside-source",
+            Self::ForeignSpan { .. } => "foreign-span",
+            Self::OffsetOutsideSource { .. } => "offset-outside-source",
+            Self::OffsetSplitsCodePoint { .. } => "offset-splits-code-point",
+            Self::InvalidLineState => "invalid-line-state",
+        }
+    }
+    pub(crate) const fn responsibility(&self, operation: SourceOperation) -> &'static str {
+        if matches!(operation, SourceOperation::SpanConstruction) {
+            return "compiler";
+        }
+        match self {
+            Self::DisplayPathTooLarge
+            | Self::TextTooLarge
+            | Self::TooManyLines
+            | Self::LineTooLong => "input",
+            Self::SourceIdExhausted
+            | Self::RangeOutsideSource { .. }
+            | Self::ForeignSpan { .. }
+            | Self::OffsetOutsideSource { .. }
+            | Self::OffsetSplitsCodePoint { .. }
+            | Self::InvalidLineState => "compiler",
+        }
+    }
+    pub(crate) fn message<'a>(
+        &self,
+        path: &'a std::path::Path,
+        operation: SourceOperation,
+    ) -> crate::message::Message<'a> {
+        use crate::message::Message;
+        if matches!(
+            (self, operation),
+            (Self::TextTooLarge, SourceOperation::SpanConstruction)
+        ) {
+            return Message::source_unrepresentable_span(path);
+        }
+        match self {
+            Self::SourceIdExhausted => Message::source_ids(path),
+            Self::DisplayPathTooLarge => Message::source_path_limit(path),
+            Self::TextTooLarge => Message::source_text_limit(path),
+            Self::TooManyLines => Message::source_line_limit(path),
+            Self::LineTooLong => Message::source_column_limit(path),
+            Self::RangeOutsideSource { range, source_len } => Message::source_range(
+                path,
+                range.start() as usize,
+                range.end() as usize,
+                *source_len as usize,
+            ),
+            Self::ForeignSpan { expected, found } => Message::source_foreign_span(
+                path,
+                expected.value() as usize,
+                found.value() as usize,
+            ),
+            Self::OffsetOutsideSource { offset, source_len } => {
+                Message::source_offset(path, *offset as usize, *source_len as usize)
+            }
+            Self::OffsetSplitsCodePoint { offset } => {
+                Message::source_code_point(path, *offset as usize)
+            }
+            Self::InvalidLineState => Message::source_line_state(path),
+        }
+    }
+}
+
 impl fmt::Display for SourceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
