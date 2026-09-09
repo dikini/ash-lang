@@ -323,6 +323,13 @@ pub fn compile_graph_diagnostics(
                 value: FactValue::Text(resource.diagnostic_name()),
             });
         }
+        if let Some(kind) = failure.io_kind() {
+            facts.push(Fact {
+                name: "io_kind",
+                kind: "io",
+                value: FactValue::Text(io_kind_name(kind)),
+            });
+        }
         return Ok(vec![CompileDiagnostic {
             reason: failure.reason().to_string(),
             responsibility: failure.responsibility(),

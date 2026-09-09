@@ -174,13 +174,22 @@ localization language. Color is not required for completion.
   or allocation cause. Presentation now obtains responsibility explicitly from
   the module owner rather than treating every non-source failure as invocation.
   Legacy source-rejection classification and CLI exits are unchanged.
-- Unavailable-root and invalid-internal-path messages remain outstanding, along
-  with source-model and projection failures. Review found no actionable defects
+- Invalid-internal-path messages remain outstanding, along with source-model
+  and projection failures. Review found no actionable defects
   in the path-escape and module-resource presentation changes.
 - This checkpoint passed all 1,228 library tests, the focused module-loading,
   input, catalogue and existing diagnostic suites, and warnings-denied Clippy.
   Markdown lint and diff whitespace checks passed. The full slice-2 gate remains
   outstanding.
+- Unavailable-root diagnostics retain invocation responsibility, configured root
+  and native path, and the I/O category when available. Without a retained cause,
+  wording states only that the path could not be used as a directory. Input-read
+  and root messages share the existing I/O wording through a Fluent reference.
+  Catalogue contract tests check transitive arguments and reject missing
+  references and cycles. Review found no actionable defects.
+- Unavailable-root verification passed all 1,230 library tests, five focused
+  suites and warnings-denied Clippy. Markdown lint and diff whitespace checks
+  passed; the full slice-2 gate remains outstanding.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

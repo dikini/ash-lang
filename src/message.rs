@@ -138,6 +138,12 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A shared localized explanation of a retained I/O category.
+    io_cause => "io-cause" { kind: std::io::ErrorKind = std::io::ErrorKind::PermissionDenied },
+    /// A configured root cannot be resolved, with a retained I/O cause.
+    module_root_io => "module-root-io" { path: &'a Path = Path::new("library"), root: &'a str = "std", kind: std::io::ErrorKind = std::io::ErrorKind::PermissionDenied },
+    /// A configured root could not be admitted as a directory.
+    module_root_unavailable => "module-root-unavailable" { path: &'a Path = Path::new("library"), root: &'a str = "std" },
     /// Resource exhaustion in a specific module-loader operation.
     module_resource => "module-resource" { resource: crate::module::ModuleResource = crate::module::ModuleResource::Sources },
     /// A configured root attempts to replace a compiler-owned root.
@@ -284,7 +290,12 @@ mod tests {
     use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn variables<'a>(pattern: &'a Pattern<&'a str>, result: &mut BTreeSet<&'a str>) {
+    fn variables<'a>(
+        pattern: &'a Pattern<&'a str>,
+        patterns: &BTreeMap<&'a str, &'a Pattern<&'a str>>,
+        active: &mut BTreeSet<&'a str>,
+        result: &mut BTreeSet<&'a str>,
+    ) -> bool {
         for element in &pattern.elements {
             match element {
                 PatternElement::TextElement { .. } => {}
@@ -297,20 +308,43 @@ mod tests {
                     result.insert(id.name);
                 }
                 PatternElement::Placeable {
+                    expression:
+                        Expression::Inline(InlineExpression::MessageReference {
+                            id,
+                            attribute: None,
+                        }),
+                } => {
+                    let Some(referenced) = patterns.get(id.name) else {
+                        return false;
+                    };
+                    if !active.insert(id.name) {
+                        return false;
+                    }
+                    if !variables(referenced, patterns, active, result) {
+                        return false;
+                    }
+                    active.remove(id.name);
+                }
+                PatternElement::Placeable {
                     expression: Expression::Select { selector, variants },
                 } => {
                     if let InlineExpression::VariableReference { id } = selector {
                         result.insert(id.name);
+                    } else {
+                        return false;
                     }
                     for variant in variants {
-                        variables(&variant.value, result);
+                        if !variables(&variant.value, patterns, active, result) {
+                            return false;
+                        }
                     }
                 }
                 _ => {
-                    panic!("extend contract coverage before introducing another Fluent expression")
+                    return false;
                 }
             }
         }
+        true
     }
 
     fn contract_matches(source: &str) -> bool {
@@ -324,7 +358,7 @@ mod tests {
                 (key, values.iter().map(|(name, _)| *name).collect())
             })
             .collect();
-        let mut actual = BTreeMap::new();
+        let mut patterns = BTreeMap::new();
         for entry in &resource.body {
             if let Entry::Message(message) = entry {
                 let Some(pattern) = &message.value else {
@@ -333,12 +367,18 @@ mod tests {
                 if !message.attributes.is_empty() {
                     return false;
                 }
-                let mut names = BTreeSet::new();
-                variables(pattern, &mut names);
-                if actual.insert(message.id.name, names).is_some() {
+                if patterns.insert(message.id.name, pattern).is_some() {
                     return false;
                 }
             }
+        }
+        let mut actual = BTreeMap::new();
+        for (&key, pattern) in &patterns {
+            let mut names = BTreeSet::new();
+            if !variables(pattern, &patterns, &mut BTreeSet::from([key]), &mut names) {
+                return false;
+            }
+            actual.insert(key, names);
         }
         actual == expected
     }
@@ -365,6 +405,25 @@ mod tests {
         )));
         assert!(!contract_matches(
             &english.replace("initializer =", "unused =")
+        ));
+    }
+
+    #[test]
+    fn catalogue_references_preserve_transitive_arguments_and_reject_cycles() {
+        let english = include_str!("../locales/en-US.ftl");
+        assert!(contract_matches(english));
+        assert!(!contract_matches(
+            &english.replace("{ io-cause }", "{ missing-cause }")
+        ));
+        assert!(!contract_matches(
+            &english.replace("{ io-cause }", "{ input-read }")
+        ));
+        assert!(!contract_matches(
+            &english.replace("{ io-cause }", "{ module-root-io }")
+        ));
+        assert!(!contract_matches(&english.replace("$kind", "$unknown")));
+        assert!(!contract_matches(
+            &english.replace("{ io-cause }", "unavailable")
         ));
     }
 

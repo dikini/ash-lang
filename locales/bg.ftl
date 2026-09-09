@@ -57,8 +57,10 @@ parse-recovery = Разборът продължава от това място.
 parse-synchronization = Разборът се възобновява на тази граница.
 input-invalid-utf8 = `{ $path }` не е валиден изходен файл в UTF-8.
 import-target = Неуспехът възникна при обработката на този импорт.
-input-read =
-    Не може да се прочете `{ $path }`: { $kind ->
+module-root-unavailable = Не може да се използва `{ $path }` като директория за корен за модули `{ $root }`.
+module-root-io = Не може да се използва `{ $path }` за корен за модули `{ $root }`: { io-cause }
+input-read = Не може да се прочете `{ $path }`: { io-cause }
+io-cause = { $kind ->
         [not-found] файлът или директорията не съществува.
         [permission-denied] достъпът е отказан.
         [connection-refused] връзката е отказана.

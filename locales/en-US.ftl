@@ -56,8 +56,10 @@ parse-recovery = Parsing continues from this position.
 parse-synchronization = Parsing resumes at this boundary.
 input-invalid-utf8 = `{ $path }` is not a valid UTF-8 source file.
 import-target = The failure occurred while processing this import.
-input-read =
-    Cannot read `{ $path }`: { $kind ->
+module-root-unavailable = Cannot use `{ $path }` as a directory for module root `{ $root }`.
+module-root-io = Cannot use `{ $path }` for module root `{ $root }`: { io-cause }
+input-read = Cannot read `{ $path }`: { io-cause }
+io-cause = { $kind ->
         [not-found] the file or directory does not exist.
         [permission-denied] access is denied.
         [connection-refused] the connection was refused.

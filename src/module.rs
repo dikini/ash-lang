@@ -522,7 +522,11 @@ impl ModuleFailure {
             ModuleReason::ImportCycle => Message::module_import_cycle(self.path()?),
             ModuleReason::PathEscape => Message::module_path_escape(self.path()?),
             ModuleReason::ResourceLimit => Message::module_resource(self.resource_kind()?),
-            ModuleReason::RootUnavailable | ModuleReason::InvalidPath => return None,
+            ModuleReason::RootUnavailable => match self.io_kind() {
+                Some(kind) => Message::module_root_io(self.path()?, self.root()?, kind),
+                None => Message::module_root_unavailable(self.path()?, self.root()?),
+            },
+            ModuleReason::InvalidPath => return None,
         })
     }
 
@@ -627,6 +631,58 @@ impl Error for ModuleFailure {}
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+    #[test]
+    fn unavailable_root_retains_io_facts_without_inventing_a_directory_cause() {
+        for kind in [None, Some(io::ErrorKind::PermissionDenied)] {
+            let failure = GraphDiagnostic::from(LoadGraphError::Module(ModuleFailure::invocation(
+                ModuleReason::RootUnavailable,
+                Some(PathBuf::from("library")),
+                Some("std".into()),
+                kind,
+            )));
+            let diagnostics = crate::presentation::compile_graph_diagnostics(&failure).unwrap();
+            for (locale, expected) in [
+                (
+                    crate::message::Locale::English,
+                    if kind.is_some() {
+                        "Cannot use `library` for module root `std`: access is denied."
+                    } else {
+                        "Cannot use `library` as a directory for module root `std`."
+                    },
+                ),
+                (
+                    crate::message::Locale::Bulgarian,
+                    if kind.is_some() {
+                        "Не може да се използва `library` за корен за модули `std`: достъпът е отказан."
+                    } else {
+                        "Не може да се използва `library` като директория за корен за модули `std`."
+                    },
+                ),
+            ] {
+                let mut output = Vec::new();
+                crate::presentation::write_short(
+                    &mut output,
+                    &diagnostics[0],
+                    &crate::message::Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    String::from_utf8(output).unwrap(),
+                    format!("{expected} [invocation.root-unavailable]\n")
+                );
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &diagnostics[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["responsibility"], "invocation");
+            assert_eq!(json["labels"], serde_json::json!([]));
+            let facts = json["facts"].as_array().unwrap();
+            assert_eq!(facts.len(), if kind.is_some() { 3 } else { 2 });
+            if kind.is_some() {
+                assert_eq!(facts[2]["value"], "permission-denied");
+            }
+        }
+    }
     #[test]
     fn module_resource_messages_preserve_compiler_responsibility_and_kind() {
         for (resource, name, en, bg) in [
