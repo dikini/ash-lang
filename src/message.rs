@@ -150,6 +150,16 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An anonymous function lacks an expected function type.
+    function_needs_context => "function-needs-context" {},
+    /// An unannotated binding requires its initializer to infer a type.
+    function_context_binding => "function-context-binding" {},
+    /// A program result requires type synthesis.
+    function_context_result => "function-context-result" {},
+    /// An application requires the function expression to infer a type.
+    function_context_application => "function-context-application" {},
+    /// An operator requires the operand to infer a type.
+    function_context_operator => "function-context-operator" {},
     /// The general checking rule compares required and synthesized types.
     type_mismatch => "type-mismatch" { expected: &'a str = "Int", found: &'a str = "Bool" },
     /// An outward type or effect row retains a local nominal identity.

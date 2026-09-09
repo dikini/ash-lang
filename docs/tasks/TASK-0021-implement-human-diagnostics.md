@@ -384,6 +384,19 @@ localization language. Color is not required for completion.
   contain 154 templates. All 89 focused diagnostic, catalogue and cleanup
   tests and warnings-denied Clippy passed; the nominal-spelling case passed
   separately after being added. CLI defaults and runtime reporting are unchanged.
+- Source type failures now retain a small phase-owned `TypeDiagnostic`
+  wrapper, following the resolver's existing pattern. Common fields and
+  legacy rendering remain available; localized presentation retains the
+  wrapper rather than discarding its context. Anonymous-function failures
+  preserve their typed binding, result, application or operator synthesis
+  cause, including the case with no additional cause. Annotation advice is
+  emitted only for binding contexts. Six producer-level cause cases and five
+  source fixtures verify the semantic JSON context and causal labels. Type
+  presentation covers 27 of 35 source reasons, with 159 templates per locale.
+  All 1,234 library tests, 89 focused integration tests, the type-field
+  ownership inventory and warnings-denied Clippy passed. A medium-effort
+  review found no issues. Source acceptance, failure ordering and runtime
+  reporting are unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

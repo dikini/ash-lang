@@ -7,7 +7,6 @@ use std::{
 
 use crate::{
     diagnostic::{Diagnostic, compare_source_spans},
-    elaborate::TypeReason,
     lexer::LexReason,
     message::{Catalogue, CatalogueError, Message},
     module::{GraphDiagnostic, LoadGraphError, ModuleSyntaxFailure, io_kind_name},
@@ -141,17 +140,16 @@ pub fn compile_type_mismatch_diagnostic<'a>(
 /// Returns an unsupported family or a missing causal fact/source. This staged
 /// adapter is not yet selected by the executable's default renderer.
 pub fn compile_type_diagnostic<'a>(
-    diagnostic: &'a Diagnostic<TypeReason>,
+    diagnostic: &'a crate::elaborate::TypeDiagnostic,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
     if let Some(crate::elaborate::TypeSourceMessage {
         message,
         relationship,
         fact,
+        fact_kind,
         minimum_related,
-    }) = diagnostic
-        .reason
-        .source_message(diagnostic.expected.as_deref(), diagnostic.found.as_deref())
+    }) = diagnostic.source_message()
     {
         // These failures need no expected/found type comparison.
         // Preserve the optional phase fact with its own semantic name.
@@ -171,14 +169,13 @@ pub fn compile_type_diagnostic<'a>(
             .into_iter()
             .map(|(name, value)| Fact {
                 name,
-                kind: "code",
+                kind: fact_kind,
                 value: FactValue::Text(value),
             })
             .collect();
         let mut related = Vec::with_capacity(diagnostic.related.len());
         for (index, original) in diagnostic.related.iter().enumerate() {
             let (message, relationship) = diagnostic
-                .reason
                 .source_related_message(index)
                 .ok_or(PresentationError::Unsupported)?;
             let span = original.span();
@@ -1107,7 +1104,7 @@ pub fn write_json(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{diagnostic::SourceLabel, source::ByteRange};
+    use crate::{diagnostic::SourceLabel, elaborate::TypeReason, source::ByteRange};
 
     #[test]
     fn changing_presentation_messages_cannot_change_json_facts() {
@@ -1125,6 +1122,7 @@ mod tests {
         ));
         diagnostic.expected = Some("Bool".into());
         diagnostic.found = Some("Int".into());
+        let diagnostic = diagnostic.into();
         let mut view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
         let mut before = Vec::new();
         write_json(&mut before, &view).unwrap();

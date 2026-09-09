@@ -324,6 +324,7 @@ pub(crate) struct TypeSourceMessage<'a> {
     pub(crate) message: crate::message::Message<'a>,
     pub(crate) relationship: &'static str,
     pub(crate) fact: Option<(&'static str, &'a str)>,
+    pub(crate) fact_kind: &'static str,
     pub(crate) minimum_related: usize,
 }
 
@@ -411,6 +412,7 @@ impl TypeReason {
             message,
             relationship,
             fact,
+            fact_kind: "code",
             minimum_related: match self {
                 Self::UnsafeRecursiveInitializer
                 | Self::UnsafeRecursiveRoot
@@ -682,17 +684,115 @@ impl From<BuildError> for ElaborationFailure {
     }
 }
 
+/// A source type diagnostic with phase-owned context for presentation.
+/// Common fields remain available through dereferencing; localized reporting
+/// must retain this owner rather than copying only the common diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TypeDiagnostic {
+    diagnostic: Diagnostic<TypeReason>,
+    context: TypeDiagnosticContext,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TypeDiagnosticContext {
+    Plain,
+    FunctionNeedsContext(Option<SynthesisCause>),
+}
+
+impl From<Diagnostic<TypeReason>> for TypeDiagnostic {
+    fn from(diagnostic: Diagnostic<TypeReason>) -> Self {
+        Self {
+            diagnostic,
+            context: TypeDiagnosticContext::Plain,
+        }
+    }
+}
+
+impl std::ops::Deref for TypeDiagnostic {
+    type Target = Diagnostic<TypeReason>;
+    fn deref(&self) -> &Self::Target {
+        &self.diagnostic
+    }
+}
+
+impl std::ops::DerefMut for TypeDiagnostic {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.diagnostic
+    }
+}
+
+impl TypeDiagnostic {
+    pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason != TypeReason::FunctionNeedsContext {
+            return self
+                .reason
+                .source_message(self.expected.as_deref(), self.found.as_deref());
+        }
+        let TypeDiagnosticContext::FunctionNeedsContext(cause) = self.context else {
+            return None;
+        };
+        let context = match cause {
+            None => "expected-function",
+            Some(SynthesisCause::Binding(_) | SynthesisCause::NestedBinding(_)) => "binding",
+            Some(SynthesisCause::ProgramResult(_)) => "program-result",
+            Some(SynthesisCause::Application { .. }) => "application",
+            Some(SynthesisCause::Operator(_)) => "operator",
+        };
+        Some(TypeSourceMessage {
+            message: crate::message::Message::function_needs_context(),
+            relationship: "anonymous_function",
+            fact: Some(("required_context", context)),
+            fact_kind: "synthesis-context",
+            minimum_related: usize::from(cause.is_some()),
+        })
+    }
+
+    pub(crate) fn source_related_message(
+        &self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if self.reason != TypeReason::FunctionNeedsContext {
+            return self.reason.source_related_message(index);
+        }
+        if index != 0 {
+            return None;
+        }
+        let TypeDiagnosticContext::FunctionNeedsContext(Some(cause)) = self.context else {
+            return None;
+        };
+        use crate::message::Message;
+        Some(match cause {
+            SynthesisCause::Binding(_) | SynthesisCause::NestedBinding(_) => {
+                (Message::function_context_binding(), "binding")
+            }
+            SynthesisCause::ProgramResult(_) => {
+                (Message::function_context_result(), "program_result")
+            }
+            SynthesisCause::Application { .. } => {
+                (Message::function_context_application(), "application")
+            }
+            SynthesisCause::Operator(_) => (Message::function_context_operator(), "operator"),
+        })
+    }
+}
+
 /// A source diagnostic, general checking mismatch, or compiler failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TypeError {
     /// A categorized Ash source rejection.
-    Source(Box<Diagnostic<TypeReason>>),
+    Source(Box<TypeDiagnostic>),
     /// A categorized interface or implementation source rejection.
     Interface(Box<Diagnostic<InterfaceReason>>),
     /// The general checking rule found structurally unequal types.
     Mismatch(TypeMismatch),
     /// Typed elaboration could not preserve its compiler invariants.
     Internal(ElaborationFailure),
+}
+
+impl TypeError {
+    fn source(diagnostic: Diagnostic<TypeReason>) -> Self {
+        Self::Source(Box::new(diagnostic.into()))
+    }
 }
 
 impl fmt::Display for TypeError {
@@ -4517,7 +4617,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     diagnostic.expected = Some(self.registry.display_source_type(&expected));
                     diagnostic.found = Some(self.registry.display_source_type(&found));
-                    return Err(TypeError::Source(Box::new(diagnostic)));
+                    return Err(TypeError::source(diagnostic));
                 }
             }
         }
@@ -7631,7 +7731,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
                 diagnostic.expected = Some(Type::Int.to_string());
                 diagnostic.found = Some(self.registry.display_source_type(&found));
-                Err(TypeError::Source(Box::new(diagnostic)))
+                Err(TypeError::source(diagnostic))
             }
             Err(UnificationFailure::Infinite) => Err(inference_failure(
                 TypeReason::InfiniteType,
@@ -8653,7 +8753,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declaration,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         self.deferred_local_nominal_escapes.clear();
         Ok(())
@@ -8744,7 +8844,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             acquisition,
             "this resource is acquired here",
         ));
-        TypeError::Source(Box::new(diagnostic))
+        TypeError::source(diagnostic)
     }
 
     fn elaborate_result(
@@ -12431,7 +12531,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 declaration_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         let mut retained_declarations = declarations.split_off(declaration_start);
         while !retained_declarations.is_empty() {
@@ -12670,7 +12770,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 effect_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         let zonked_type = IterativeTypeOwner::new(self.zonk(&body.ty)?);
         let zonked_effects = self.zonk_effect_row(&body.effects)?;
@@ -12689,7 +12789,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 effect_span,
                 "this local nominal identity is scoped here",
             ));
-            return Err(TypeError::Source(Box::new(diagnostic)));
+            return Err(TypeError::source(diagnostic));
         }
         self.type_work
             .charge(3)
@@ -18157,7 +18257,7 @@ fn check_newtype_representation_cycles(
                             "this declaration participates in the recursive representation cycle",
                         ));
                     }
-                    return Err(TypeError::Source(Box::new(diagnostic)));
+                    return Err(TypeError::source(diagnostic));
                 }
                 2 => {}
                 _ => unreachable!("newtype representation traversal state is ternary"),
@@ -19069,7 +19169,7 @@ enum CheckKind {
     },
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SynthesisCause {
     Binding(Span),
     NestedBinding(Span),
@@ -20439,7 +20539,7 @@ fn check_mismatch(
                 ));
                 diagnostic.expected = Some(registry.display_source_type(&expected));
                 diagnostic.found = Some(registry.display_source_type(&found));
-                return TypeError::Source(Box::new(diagnostic));
+                return TypeError::source(diagnostic);
             }
             let expected = registry.display_source_type(&expected);
             let found = registry.display_source_type(&found);
@@ -20459,7 +20559,7 @@ fn check_mismatch(
             }
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         CheckKind::Definition { result_cause } => {
             let expected = registry.display_source_type(&expected);
@@ -20474,7 +20574,7 @@ fn check_mismatch(
             ));
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         CheckKind::BindingInitializer {
             initializer_span,
@@ -20495,7 +20595,7 @@ fn check_mismatch(
             ));
             diagnostic.expected = Some(expected);
             diagnostic.found = Some(found);
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
     }
 }
@@ -20534,7 +20634,10 @@ fn function_needs_context(span: Span, cause: Option<SynthesisCause>) -> TypeErro
         diagnostic.related.push(SourceLabel::new(span, message));
         diagnostic.help = help.map(str::to_owned);
     }
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic,
+        context: TypeDiagnosticContext::FunctionNeedsContext(cause),
+    }))
 }
 
 fn not_applicable(
@@ -20553,7 +20656,7 @@ fn not_applicable(
     ));
     diagnostic.expected = Some("function".to_owned());
     diagnostic.found = Some(registry.display_source_type(found));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn equation_interface_not_function(
@@ -20575,7 +20678,7 @@ fn equation_interface_not_function(
     ));
     diagnostic.expected = Some("function".to_owned());
     diagnostic.found = Some(found);
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn schedule_left<'a>(
@@ -21007,14 +21110,14 @@ fn pattern_mismatch(span: Span, expected: &Type, registry: &ResolvedRegistry) ->
         SourceLabel::new(span, "this pattern does not match its expected type"),
     );
     diagnostic.expected = Some(registry.display_source_type(expected));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn constructor_mismatch(span: Span) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
+    TypeError::source(Diagnostic::new(
         TypeReason::ConstructorMismatch,
         SourceLabel::new(span, "this constructor has the wrong payload shape"),
-    )))
+    ))
 }
 
 fn case_error(
@@ -21025,7 +21128,7 @@ fn case_error(
 ) -> TypeError {
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = witness;
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn binding_origin(binding: &ResolvedBinding) -> Origin {
@@ -21266,17 +21369,17 @@ fn unsafe_recursive_root(
         member.annotation.span,
         "this is the member's declared nominal type",
     ));
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn unguarded_recursive_use(span: Span) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
+    TypeError::source(Diagnostic::new(
         TypeReason::UnguardedRecursiveUse,
         SourceLabel::new(
             span,
             "a recursive occurrence crosses a forcing or transporting expression",
         ),
-    )))
+    ))
 }
 
 fn unsafe_recursive_initializer(
@@ -21300,7 +21403,7 @@ fn unsafe_recursive_initializer(
     ));
     diagnostic.expected = Some("a direct `fn` initializer".into());
     diagnostic.help = Some("initialize the recursive member directly with `fn`".into());
-    TypeError::Source(Box::new(diagnostic))
+    TypeError::source(diagnostic)
 }
 
 fn equational_origin(
@@ -22432,10 +22535,7 @@ fn type_contains_unsolved_row_inference(
 }
 
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
-    TypeError::Source(Box::new(Diagnostic::new(
-        reason,
-        SourceLabel::new(span, message),
-    )))
+    TypeError::source(Diagnostic::new(reason, SourceLabel::new(span, message)))
 }
 
 fn capture_failure(
@@ -22475,7 +22575,7 @@ fn capture_failure(
                 handler,
                 "this nearest matching handler is abandoned",
             ));
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         Failure::Invalid => invalid_state(),
         Failure::Resource => type_resource(),
@@ -22500,7 +22600,7 @@ fn capture_failure(
                 acquisition,
                 "this resource is acquired here",
             ));
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
         Failure::Unsafe(unsafe_discard) => {
             let related_count = 1 + usize::from(unsafe_discard.owner.is_some());
@@ -22533,7 +22633,7 @@ fn capture_failure(
                 };
                 diagnostic.related.push(SourceLabel::new(owner, message));
             }
-            TypeError::Source(Box::new(diagnostic))
+            TypeError::source(diagnostic)
         }
     }
 }
@@ -23406,6 +23506,81 @@ pub(crate) fn cell_resource_linked_header_fixture_for_test() -> ResolvedModulePr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn function_context_presentation_keeps_every_synthesis_cause() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+            source::{ByteRange, SourceFile},
+        };
+        let source = SourceFile::new("context.ash", "fn source context").unwrap();
+        let primary = source.span(ByteRange::new(0, 2).unwrap()).unwrap();
+        let related = source.span(ByteRange::new(3, 17).unwrap()).unwrap();
+        for (cause, context, relation) in [
+            (None, "expected-function", None),
+            (
+                Some(SynthesisCause::Binding(related)),
+                "binding",
+                Some("binding"),
+            ),
+            (
+                Some(SynthesisCause::NestedBinding(related)),
+                "binding",
+                Some("binding"),
+            ),
+            (
+                Some(SynthesisCause::ProgramResult(related)),
+                "program-result",
+                Some("program_result"),
+            ),
+            (
+                Some(SynthesisCause::Application {
+                    whole_span: related,
+                    argument_span: related,
+                }),
+                "application",
+                Some("application"),
+            ),
+            (
+                Some(SynthesisCause::Operator(related)),
+                "operator",
+                Some("operator"),
+            ),
+        ] {
+            let TypeError::Source(error) = function_needs_context(primary, cause) else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let output = String::from_utf8(output).unwrap();
+                if locale == Locale::English {
+                    assert!(
+                        output.contains("This anonymous function needs an expected function type.")
+                    );
+                    assert_eq!(
+                        output.contains("Add a function type annotation to this binding."),
+                        context == "binding"
+                    );
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["name"], "required_context");
+            assert_eq!(json["facts"][0]["kind"], "synthesis-context");
+            assert_eq!(json["facts"][0]["value"], context);
+            assert_eq!(
+                json["labels"].as_array().unwrap().len(),
+                1 + usize::from(relation.is_some())
+            );
+            if let Some(relation) = relation {
+                assert_eq!(json["labels"][1]["relationship"], relation);
+            }
+        }
+    }
+
     use std::{
         fs,
         path::{Path, PathBuf},

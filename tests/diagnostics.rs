@@ -960,6 +960,7 @@ fn pattern_and_coverage_messages_render_only_retained_semantic_facts() {
             Diagnostic::new(reason, SourceLabel::new(span, "not presentation text"));
         diagnostic.expected = expected.map(str::to_owned);
         diagnostic.found = witness.map(str::to_owned);
+        let diagnostic = diagnostic.into();
         let view = compile_type_diagnostic(&diagnostic, &[&source]).unwrap();
         for locale in [Locale::English, Locale::Bulgarian] {
             let mut output = Vec::new();
@@ -1268,6 +1269,40 @@ fn general_type_mismatch_renders_retained_types_and_expression_span() {
             error.span().range().start()
         );
         assert_eq!(json["labels"][0]["byte_end"], error.span().range().end());
+    }
+}
+
+#[test]
+fn anonymous_function_presentation_uses_the_producers_retained_context() {
+    use ash::presentation::{compile_type_diagnostic, write_json};
+    for (text, context) in [
+        (FUNCTION_NEEDS_CONTEXT, "binding"),
+        (FUNCTION_RESULT_NEEDS_CONTEXT, "expected-function"),
+        (FUNCTION_NON_FUNCTION_CONTEXT, "expected-function"),
+        (
+            "main : Unit -> Int\nmain () = (fn(value) {\nvalue\n}) 1\n",
+            "application",
+        ),
+        (
+            "main : Unit -> Int\nmain () = (fn(value) {\nvalue\n}) + 1\n",
+            "operator",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("function-context-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source diagnostic");
+        };
+        assert_eq!(error.reason, TypeReason::FunctionNeedsContext);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], context);
+        assert_eq!(json["labels"][0]["relationship"], "anonymous_function");
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
     }
 }
 

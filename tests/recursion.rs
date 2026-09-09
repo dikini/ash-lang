@@ -23,7 +23,7 @@ fn run(text: &str) -> ash::driver::Observation {
     run_module("recursion.ash", text).expect("fixture should run")
 }
 
-fn typing_error(text: &str) -> Box<ash::diagnostic::Diagnostic<TypeReason>> {
+fn typing_error(text: &str) -> Box<ash::elaborate::TypeDiagnostic> {
     let error = run_module("recursion.ash", text).expect_err("fixture should fail typing");
     let PipelineFailure::Typing(TypeError::Source(diagnostic)) = error else {
         panic!("expected a source typing error, found {error:?}")
