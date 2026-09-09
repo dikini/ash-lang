@@ -1610,6 +1610,46 @@ fn implementation_head_and_prerequisite_messages() {
     }
 }
 
+#[test]
+fn interface_privacy_and_duplicate_requirement_messages() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_interface_diagnostic, write_human},
+    };
+    for (text, reason) in [
+        (
+            "interface Equal<A> {\nequal : (A, A) -> Bool\n}\npub same : A -> Bool where Equal<A>\nsame value = true\n",
+            InterfaceReason::ConstraintPrivateInterface,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\npub impl Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::ImplPrivateInterface,
+        ),
+        (
+            "type Option<A> =\nNone\n| Some(A)\ninterface Equal<A> {\nequal : A -> A\n}\npub interface Render<A> {\nrender : A -> A\n}\npub impl Render<Option<A>> where Equal<A> {\nrender value = value\n}\n",
+            InterfaceReason::ImplPrivateInterface,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nsame : A -> A where Equal<A>, Equal<A>\nsame value = value\n",
+            InterfaceReason::DuplicateRequirement,
+        ),
+        (
+            "interface Equal<A> {\nequal : A -> A\n}\nimpl Equal<Int> where Equal<Int>, Equal<Int> {\nequal value = value\n}\n",
+            InterfaceReason::DuplicateRequirement,
+        ),
+    ] {
+        let fixture = ModuleFixture::load("interface-requirement-message.ash", text);
+        let TypeError::Interface(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected interface error")
+        };
+        assert_eq!(error.reason, reason);
+        let view = compile_interface_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

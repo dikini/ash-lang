@@ -1968,12 +1968,24 @@ impl InterfaceReason {
                 | Self::ImplVariableHead
                 | Self::ImplPrerequisiteVariable
                 | Self::ImplPrerequisiteNotDecreasing
+                | Self::ConstraintPrivateInterface
+                | Self::ImplPrivateInterface
+                | Self::DuplicateRequirement
         ))
     }
 
     pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match self {
+            Self::ConstraintPrivateInterface => (
+                Message::constraint_private_interface(),
+                "public_requirement",
+            ),
+            Self::ImplPrivateInterface => (
+                Message::impl_private_interface(),
+                "public_implementation_interface",
+            ),
+            Self::DuplicateRequirement => (Message::duplicate_requirement(), "requirement"),
             Self::ImplVariableHead => (Message::impl_variable_head(), "implementation_key"),
             Self::ImplPrerequisiteVariable => (
                 Message::impl_prerequisite_variable(),
@@ -2026,6 +2038,11 @@ impl InterfaceReason {
             Self::ImplMissingMethod => (Message::evidence_required_method(), "required_method"),
             Self::ImplDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
             Self::ImplExtraMethod => (Message::impl_interface(), "interface_declaration"),
+            Self::ConstraintPrivateInterface | Self::ImplPrivateInterface => (
+                Message::private_interface_declaration(),
+                "private_interface",
+            ),
+            Self::DuplicateRequirement => (Message::earlier_requirement(), "earlier_requirement"),
             Self::ImplVariableHead => (Message::impl_selected_interface(), "implemented_interface"),
             Self::ImplPrerequisiteVariable => {
                 (Message::impl_head_variables(), "implementation_head")

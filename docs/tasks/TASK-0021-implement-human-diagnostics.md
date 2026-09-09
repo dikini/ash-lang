@@ -467,6 +467,12 @@ localization language. Color is not required for completion.
   163 focused tests and warnings-denied Clippy passed. Interface/constraint
   coverage is 13 of 28 reasons, with 208 templates per locale. No producer or
   language check changed.
+- Public-definition privacy, public-implementation privacy and duplicate
+  requirement messages reuse the retained private-interface or earlier-requirement
+  spans. Five source cases cover global requirements, implementation heads and
+  prerequisites in both locales. No new metadata or producer changes were
+  needed. Interface/constraint coverage is 16 of 28 reasons, with 213 templates
+  per locale. All 208 focused tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

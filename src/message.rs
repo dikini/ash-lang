@@ -150,6 +150,16 @@ macro_rules! messages {
 }
 
 messages! {
+    /// This public definition exposes a private interface in its requirements.
+    constraint_private_interface => "constraint-private-interface" {},
+    /// A public implementation must use public interfaces both for its head and for its prerequisites.
+    impl_private_interface => "impl-private-interface" {},
+    /// This exact interface requirement is declared more than once.
+    duplicate_requirement => "duplicate-requirement" {},
+    /// This interface is declared private here.
+    private_interface_declaration => "private-interface-declaration" {},
+    /// The earlier identical requirement is here.
+    earlier_requirement => "earlier-requirement" {},
     /// An implementation's selection key cannot consist only of bare type variables.
     impl_variable_head => "impl-variable-head" {},
     /// This prerequisite uses a type variable that does not occur in the implementation head.
