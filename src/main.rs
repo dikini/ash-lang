@@ -44,7 +44,7 @@ where
             return 2;
         }
         Err(ConfigurationFailure::Roots(failure)) => {
-            let failure = FileFailure::Graph(LoadGraphError::Module(failure));
+            let failure = FileFailure::Graph(LoadGraphError::Module(failure).into());
             let _ = write_output(stderr, render::file_failure(&failure).as_bytes());
             return 2;
         }

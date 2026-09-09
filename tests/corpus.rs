@@ -765,8 +765,11 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Lexical,
             ExpectedReason::Lexical { lexical, parser },
-            FileFailure::Graph(LoadGraphError::Syntax(actual)),
+            FileFailure::Graph(context),
         ) => {
+            let LoadGraphError::Syntax(actual) = context.failure() else {
+                panic!("{} must retain its syntax stage", case.id);
+            };
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
                 actual
@@ -792,8 +795,11 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
         (
             Stage::Parser,
             ExpectedReason::Parser { parser, lexical },
-            FileFailure::Graph(LoadGraphError::Syntax(actual)),
+            FileFailure::Graph(context),
         ) => {
+            let LoadGraphError::Syntax(actual) = context.failure() else {
+                panic!("{} must retain its syntax stage", case.id);
+            };
             assert_eq!(actual.resource, None, "{}", case.id);
             assert_eq!(
                 actual
@@ -849,7 +855,7 @@ fn assert_source_reason(case: &InvalidCase, failure: &FileFailure) {
 fn bare_carriage_return_is_a_structured_lexical_rejection() {
     let source = TempSource::write("\rmain : Unit -> Int\nmain () = 1\n");
     let failure = run(source.0.clone()).expect_err("bare CR must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("bare CR should fail in the syntax pipeline");
     };
     assert_eq!(
@@ -867,7 +873,7 @@ fn bare_carriage_return_is_a_structured_lexical_rejection() {
 fn an_independent_parser_failure_survives_an_earlier_lexical_failure() {
     let source = TempSource::write("$\nmain : Unit -> Bool\nmain () = true == false == true\n");
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -894,7 +900,7 @@ fn a_complete_module_retains_an_independent_lexical_failure() {
     let text = "$\nfn identity(value : Int) -> Int {\n    value\n}\n";
     let source = TempSource::write(text);
     let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-    let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+    let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
         panic!("the mixed source should fail in the syntax pipeline");
     };
 
@@ -919,7 +925,7 @@ fn a_lexically_rejected_line_after_complete_declarations_has_only_its_lexical_re
         let text = format!("identity : Int -> Int\nidentity value = value\n\n{line}");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded line should fail in the syntax pipeline");
         };
 
@@ -946,7 +952,7 @@ fn a_lexically_rejected_tail_does_not_create_a_parser_diagnostic() {
         let text = format!("fn identity(value : Int) -> Int {{\n    value\n}}\n\n{tail}");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded tail should fail in the syntax pipeline");
         };
 
@@ -972,7 +978,7 @@ fn a_lexically_rejected_definition_tail_does_not_create_a_parser_diagnostic() {
         let text = format!("identity : Int -> Int\nidentity value = value {tail}\n");
         let source = TempSource::write(&text);
         let failure = run(source.0.clone()).expect_err("invalid source must not reach evaluation");
-        let FileFailure::Graph(LoadGraphError::Syntax(actual)) = failure else {
+        let Some(LoadGraphError::Syntax(actual)) = failure.graph_failure() else {
             panic!("the excluded definition tail should fail in the syntax pipeline");
         };
 

@@ -53,18 +53,19 @@ pub fn run_module(name: &str, source: &str) -> Result<Observation, PipelineFailu
     }) {
         Ok(observation) => Ok(observation),
         Err(FileFailure::Pipeline(context)) => Err(context.into_failure()),
-        Err(FileFailure::Graph(LoadGraphError::Syntax(failure))) => {
-            Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
-                lexical: failure.lexical,
-                parser: failure.parser,
-                resource: failure.resource,
-            })))
-        }
-        Err(FileFailure::Graph(LoadGraphError::Projection { error, .. })) => {
-            Err(PipelineFailure::Projection(error))
-        }
-        Err(FileFailure::Graph(LoadGraphError::SourceModel { error, .. }))
-        | Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
+        Err(FileFailure::Graph(context)) => match context.into_failure() {
+            LoadGraphError::Syntax(failure) => {
+                Err(PipelineFailure::Syntax(Box::new(SyntaxFailure {
+                    lexical: failure.lexical,
+                    parser: failure.parser,
+                    resource: failure.resource,
+                })))
+            }
+            LoadGraphError::Projection { error, .. } => Err(PipelineFailure::Projection(error)),
+            LoadGraphError::SourceModel { error, .. } => Err(PipelineFailure::SourceModel(error)),
+            failure => panic!("the temporary module fixture reached an input failure: {failure}"),
+        },
+        Err(FileFailure::Source(error)) => Err(PipelineFailure::SourceModel(error)),
         Err(failure) => panic!("the temporary module fixture reached an input failure: {failure}"),
     }
 }

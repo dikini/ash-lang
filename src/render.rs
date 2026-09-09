@@ -109,7 +109,7 @@ pub fn observation(observation: &Observation) -> String {
 #[must_use]
 pub fn file_failure(failure: &FileFailure) -> String {
     let mut output = match failure {
-        FileFailure::Graph(error) => graph_failure(error),
+        FileFailure::Graph(error) => graph_failure(error.failure()),
         FileFailure::Read { path, kind } => {
             format!("input.read\n{}: {kind}", path.display())
         }
@@ -203,7 +203,7 @@ fn graph_failure(error: &LoadGraphError) -> String {
             append_detail(&mut output, "path", failure.source.display_path());
             output
         }
-        LoadGraphError::Projection { source, error } => {
+        LoadGraphError::Projection { source, error, .. } => {
             let mut output = projection_failure(*error);
             append_detail(&mut output, "path", source.display_path());
             output

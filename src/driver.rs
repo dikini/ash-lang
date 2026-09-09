@@ -20,7 +20,9 @@ use crate::{
     interface::InterfaceConstraintBudget,
     kind::KindFailure,
     lexer::LexReason,
-    module::{LoadGraphError, ModuleGraph, ModuleId, ModuleRoots, load_module_graph},
+    module::{
+        GraphDiagnostic, LoadGraphError, ModuleGraph, ModuleId, ModuleRoots, load_module_graph,
+    },
     parser::{ParseDiagnostic, ProjectionError, ResourceFailure},
     pattern::UsefulnessBudget,
     resolve::{
@@ -476,7 +478,7 @@ impl PipelineDiagnostic {
 #[derive(Debug)]
 pub enum FileFailure {
     /// Module graph loading failed at its owning stage.
-    Graph(LoadGraphError),
+    Graph(GraphDiagnostic),
     /// The source path could not be read.
     Read {
         /// The requested path.
@@ -505,6 +507,14 @@ impl From<PipelineFailure> for FileFailure {
 }
 
 impl FileFailure {
+    /// Borrows the original graph-loading failure without its source context.
+    #[must_use]
+    pub fn graph_failure(&self) -> Option<&LoadGraphError> {
+        match self {
+            Self::Graph(context) => Some(context.failure()),
+            _ => None,
+        }
+    }
     /// Borrows the underlying phase failure, when graph loading succeeded.
     #[must_use]
     pub fn pipeline_failure(&self) -> Option<&PipelineFailure> {
@@ -539,7 +549,7 @@ impl FileFailure {
     #[must_use]
     pub fn reason_code(&self) -> String {
         match self {
-            Self::Graph(error) => match error {
+            Self::Graph(error) => match error.failure() {
                 LoadGraphError::Module(failure) => failure.reason().to_string(),
                 LoadGraphError::Read { .. } => "input.read".to_owned(),
                 LoadGraphError::InvalidUtf8 { .. } => "input.invalid-utf8".to_owned(),

@@ -319,6 +319,15 @@ fn overlapping_owner_failures_follow_source_order_through_descendants() {
             .is_some_and(|path| path.ends_with("outside-first/child.ash")),
         "the first source branch should fail first: {failure:?}"
     );
+    let span = failure.as_module_failure().unwrap().primary_span().unwrap();
+    drop(tree);
+    let source = failure
+        .sources()
+        .find(|source| source.id() == span.source())
+        .unwrap();
+    assert!(Path::new(source.display_path()).ends_with("root/pkg/deep.ash"));
+    assert_eq!(source.text(), "import escape_first.child as Child\n");
+    assert_eq!(source.location(span).unwrap().start().line(), 1);
 }
 
 #[test]
@@ -330,7 +339,7 @@ fn imported_syntax_failures_retain_the_parser_stage() {
     let failure = load_module_graph(&entry, &ModuleRoots::empty())
         .expect_err("the imported source should fail parsing");
 
-    assert!(matches!(&failure, LoadGraphError::Syntax(_)));
+    assert!(matches!(failure.failure(), LoadGraphError::Syntax(_)));
     assert_eq!(failure.module_reason(), None);
     assert!(failure.is_source_rejection());
 }
@@ -349,7 +358,7 @@ fn imported_syntax_resource_failures_retain_the_rejected_source() {
     let failure = load_module_graph(&entry, &ModuleRoots::empty())
         .expect_err("the imported source should exhaust structural syntax depth");
 
-    let LoadGraphError::Syntax(failure) = failure else {
+    let LoadGraphError::Syntax(failure) = failure.failure() else {
         panic!("syntax resources should remain owned by the parser stage");
     };
     assert_eq!(failure.source.display_path(), rejected.to_string_lossy());
@@ -503,4 +512,54 @@ fn root_configuration_rejects_every_reserved_word() {
         );
         assert!(!failure.is_source_rejection(), "{spelling}");
     }
+}
+#[test]
+fn failed_nested_import_retains_admitted_sources_after_files_are_removed() {
+    let tree = TempTree::create();
+    let entry = tree.write("entry.ash", "import child as Child\n");
+    let child_text = "import missing as Missing\n";
+    tree.write("child.ash", child_text);
+    let error = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    let span = error.as_module_failure().unwrap().primary_span().unwrap();
+    drop(tree);
+    let source = error
+        .sources()
+        .find(|source| source.id() == span.source())
+        .unwrap();
+    assert_eq!(source.text(), child_text);
+    assert_eq!(source.location(span).unwrap().start().line(), 1);
+    assert_eq!(error.sources().count(), 2);
+    assert_eq!(error.module_reason(), Some(ModuleReason::NotFound));
+    assert!(error.is_source_rejection());
+}
+#[test]
+fn rejected_dependency_keeps_its_source_and_the_import_location() {
+    let tree = TempTree::create();
+    let entry_text = "import child as Child\n";
+    let entry = tree.write("entry.ash", entry_text);
+    let rejected_text = "main : Unit -> Int\nmain () = (41\n";
+    tree.write("child.ash", rejected_text);
+    let error = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+    drop(tree);
+    let import = error.failure().import_span().unwrap();
+    let importer = error
+        .sources()
+        .find(|source| source.id() == import.source())
+        .unwrap();
+    assert_eq!(importer.text(), entry_text);
+    assert_eq!(error.sources().count(), 2);
+    let LoadGraphError::Syntax(failure) = error.failure() else {
+        panic!("syntax failure");
+    };
+    assert_eq!(failure.source.text(), rejected_text);
+    let sources: Vec<_> = error.sources().collect();
+    let view = ash::presentation::compile_parse_diagnostic(&failure.parser[0], &sources).unwrap();
+    let mut output = Vec::new();
+    ash::presentation::write_human(
+        &mut output,
+        &view,
+        &ash::message::Catalogue::new(ash::message::Locale::English).unwrap(),
+    )
+    .unwrap();
+    assert!(String::from_utf8(output).unwrap().contains("main () = (41"));
 }

@@ -119,6 +119,21 @@ localization language. Color is not required for completion.
   all 1,227 library tests, eight rustdoc tests and warnings-denied Clippy.
   Markdown lint, relative links and `git diff --check` passed. The broad
   compile-time migration and full slice-2 gate remain outstanding.
+- Graph-loading failures now retain staged sources through a separate
+  `GraphDiagnostic` owner. Original failures and source-rejection classifications
+  remain unchanged. Syntax and projection failures retain the selecting import
+  span; rejected source text is moved, not cloned. Tests remove the input files
+  before inspecting nested-import and syntax diagnostics, and verify the actual
+  earlier descendant source for a later owner-propagation failure.
+- Graph-context review found no ownership or error-order defects. The five
+  focused graph/module/corpus/diagnostic suites passed. Clippy exposed a large
+  error carrier; boxing the graph failure keeps caller error values small,
+  without adding allocation to runtime failure reporting. The graph-context
+  checkpoint passed the full `cargo xtask verify` gate: formatting, build,
+  warnings-denied Clippy, workspace tests and warnings-denied documentation.
+  Markdown lint and relative links were checked separately. Graph/input
+  presentation is next; the remaining compile-time families and later slices
+  are not complete.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

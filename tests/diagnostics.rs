@@ -7,7 +7,7 @@ use std::{
 mod support;
 
 use ash::{
-    driver::{FileFailure, PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
+    driver::{PipelineFailure, RunConfiguration, SyntaxFailure, run_path},
     elaborate::{TypeError, TypeReason, check_module},
     interface::InterfaceReason,
     kind::{KindExpectation, KindFailure, KindReason},
@@ -264,7 +264,7 @@ fn syntax_failure_reason_and_rendering_follow_source_order_across_stages() {
         roots: ModuleRoots::empty(),
     })
     .expect_err("the module should retain both independent syntax failures");
-    let FileFailure::Graph(LoadGraphError::Syntax(syntax)) = &file_error else {
+    let Some(LoadGraphError::Syntax(syntax)) = file_error.graph_failure() else {
         panic!("the independent lexical and parser failures should retain graph syntax ownership")
     };
     let parser = syntax
