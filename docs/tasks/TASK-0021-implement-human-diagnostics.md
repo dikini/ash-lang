@@ -900,6 +900,15 @@ localization language. Color is not required for completion.
   The library, catalogue, reporting, diagnostic and file-dispatch batch passed,
   as did warnings-denied Clippy. Reason coverage is 194/197; internal-state
   presentation, default switching and final verification remain open.
+- Added explicit messages for the retained Core handler/capture-state category
+  and elaboration invalid-state category. More-specific causes still take
+  precedence; neither message invents missing details or source corrections.
+  No producer behavior changed. Both locales and JSON are covered by the
+  extended tables, and the executable test now checks the elaboration category
+  as a structured fact rather than an unsupported-adapter fallback. The library,
+  executable, catalogue, reporting, diagnostic and file-dispatch batch passed,
+  along with warnings-denied Clippy. Reason coverage is 196/197; resolver
+  internal-state labels, source-context gaps, defaults and closeout remain open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

@@ -2400,6 +2400,8 @@ impl ValidationError {
             });
         }
         Some(match (self.reason, node) {
+            (ValidationReason::Handler, None) => Message::core_validation_handler(),
+            (ValidationReason::Handler, Some(node)) => Message::core_validation_handler_node(node),
             (ValidationReason::NodeType, None) => Message::core_validation_node_type(),
             (ValidationReason::NodeType, Some(node)) => {
                 Message::core_validation_node_type_node(node)
@@ -15002,6 +15004,10 @@ mod tests {
             (
                 ValidationReason::Registry,
                 "The compiler's Core declaration or module registry is inconsistent.",
+            ),
+            (
+                ValidationReason::Handler,
+                "The compiler produced inconsistent handler or capture-safety information in Core.",
             ),
         ] {
             for node in [

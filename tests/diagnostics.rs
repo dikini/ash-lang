@@ -1904,6 +1904,12 @@ fn elaboration_failures_identify_resources_and_the_core_path() {
     };
     for (error, name, value, explanation) in [
         (
+            ElaborationFailure::InvalidState,
+            "cause",
+            "invalid-state",
+            "The compiler could not construct typed Core because its elaboration state is inconsistent.",
+        ),
+        (
             ElaborationFailure::TypeResourceExhausted,
             "resource",
             "type-work",
@@ -1938,7 +1944,6 @@ fn elaboration_failures_identify_resources_and_the_core_path() {
         assert_eq!(json["facts"][0]["name"], name);
         assert_eq!(json["facts"][0]["value"], value);
     }
-    assert!(compile_elaboration_failure(&ElaborationFailure::InvalidState, &[]).is_err());
 }
 
 #[test]

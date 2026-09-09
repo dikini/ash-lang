@@ -688,7 +688,12 @@ impl ElaborationFailure {
                 "elaboration-failure",
                 "effect-core-unavailable",
             ),
-            Self::InvalidState => return None,
+            Self::InvalidState => (
+                Message::elaboration_invalid_state(),
+                "cause",
+                "elaboration-failure",
+                "invalid-state",
+            ),
             Self::Kind { context, .. } => (
                 context.message(),
                 "kind_cause",

@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_internal_gap_remains_visible_in_json_without_changing_the_reason() {
+    fn explicit_internal_failure_preserves_its_category_in_json() {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let status = execute_with_runner(
@@ -336,16 +336,10 @@ mod tests {
         assert_eq!(status, 2);
         let json: serde_json::Value = serde_json::from_slice(&stderr).unwrap();
         assert_eq!(json["reason"], "type.internal");
-        assert_eq!(
-            json["developer_details"]["presentation_error"],
-            "unsupported"
-        );
-        assert!(
-            json["developer_details"]["retained_diagnostic"]
-                .as_str()
-                .unwrap()
-                .contains("typed elaboration state")
-        );
+        assert_eq!(json["responsibility"], "compiler");
+        assert_eq!(json["facts"][0]["name"], "cause");
+        assert_eq!(json["facts"][0]["value"], "invalid-state");
+        assert!(json.get("developer_details").is_none());
     }
 
     #[test]
