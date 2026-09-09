@@ -613,6 +613,17 @@ localization language. Color is not required for completion.
   checking and shared lookup helpers remain. All 28 kind-checker tests, three
   catalogue tests and warnings-denied Clippy passed. Catalogues contain 380
   templates per locale. Kind internal-state family coverage remains partial.
+- Kind internal-state presentation is complete locally. The final 32 causes
+  cover body-free checks and shared lookup failures, bringing the cause enum to
+  123 variants. The lookup helper now requires a typed cause; the plain-text-only
+  internal constructor is removed. A conditional owner-kind check also retains
+  its selected cause. Every production internal failure now carries a cause;
+  malformed test-only payloads without one remain rejected by presentation.
+  Both kind internal/resource reasons are covered, with 412 catalogue templates
+  per locale. All 1,250 library tests, 86 diagnostic/catalogue tests and
+  warnings-denied Clippy passed. Legacy text and checks remain unchanged.
+  Preserving kind causes through callers that collapse them into broader
+  failures remains part of the compiler-cause boundary work.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

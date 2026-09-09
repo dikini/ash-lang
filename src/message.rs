@@ -150,6 +150,70 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler retained a constructor scheme referring to a variable outside its owner parameters.
+    kind_internal_body_free_constructor_owner => "kind-internal-body-free-constructor-owner" {},
+    /// The compiler has no canonical parameter kinds for an interface occurrence checked without a body.
+    kind_internal_body_free_interface_kind => "kind-internal-body-free-interface-kind" {},
+    /// The compiler retained a checked constructor scheme whose resulting kind is not Type.
+    kind_internal_body_free_constructor_kind => "kind-internal-body-free-constructor-kind" {},
+    /// The compiler retained a function-type component with the wrong kind during body-free checking.
+    kind_internal_body_free_function_kind => "kind-internal-body-free-function-kind" {},
+    /// The compiler retained an interface application with the wrong argument count during body-free checking.
+    kind_internal_body_free_interface_arity => "kind-internal-body-free-interface-arity" {},
+    /// The compiler retained an interface argument with the wrong kind during body-free checking.
+    kind_internal_body_free_interface_argument => "kind-internal-body-free-interface-argument" {},
+    /// The compiler retained an empty or all-parameter determinant seed for a checked interface.
+    kind_internal_body_free_determinant_seed => "kind-internal-body-free-determinant-seed" {},
+    /// The compiler retained a checked interface method whose resulting kind is not Type.
+    kind_internal_body_free_method_kind => "kind-internal-body-free-method-kind" {},
+    /// The compiler retained a checked interface method with an empty required-parameter seed.
+    kind_internal_body_free_required_seed => "kind-internal-body-free-required-seed" {},
+    /// The compiler retained a checked interface method without a function type.
+    kind_internal_body_free_method_function => "kind-internal-body-free-method-function" {},
+    /// The compiler retained a checked interface method that omits a required parameter.
+    kind_internal_body_free_missing_parameter => "kind-internal-body-free-missing-parameter" {},
+    /// The compiler retained a duplicate type parameter in a checked interface method.
+    kind_internal_body_free_method_duplicate_parameter => "kind-internal-body-free-method-duplicate-parameter" {},
+    /// The compiler retained a duplicate type parameter in a checked interface.
+    kind_internal_body_free_interface_duplicate_parameter => "kind-internal-body-free-interface-duplicate-parameter" {},
+    /// The compiler retained an interface parameter seed that is not a unique subset in declaration order.
+    kind_internal_body_free_seed_order => "kind-internal-body-free-seed-order" {},
+    /// The compiler retained a checked monotype with the wrong canonical kind.
+    kind_internal_body_free_monotype_kind => "kind-internal-body-free-monotype-kind" {},
+    /// The compiler retained a tuple element with the wrong kind during body-free checking.
+    kind_internal_body_free_tuple_kind => "kind-internal-body-free-tuple-kind" {},
+    /// The compiler retained a type application with the wrong argument kind during body-free checking.
+    kind_internal_body_free_application_argument => "kind-internal-body-free-application-argument" {},
+    /// The compiler retained a type application whose operator does not have a function kind.
+    kind_internal_body_free_non_function_kind => "kind-internal-body-free-non-function-kind" {},
+    /// The compiler retained a checked value scheme whose resulting kind is not Type.
+    kind_internal_body_free_value_kind => "kind-internal-body-free-value-kind" {},
+    /// The compiler tried to retain a source diagnostic while checking kinds without source bodies.
+    kind_internal_body_free_source_diagnostic => "kind-internal-body-free-source-diagnostic" {},
+    /// The compiler retained a lexical newtype referring to a missing canonical constructor.
+    kind_internal_lookup_lexical_constructor => "kind-internal-lookup-lexical-constructor" {},
+    /// The compiler has no canonical parameter records for a lexical nominal type.
+    kind_internal_lookup_lexical_parameters => "kind-internal-lookup-lexical-parameters" {},
+    /// The compiler retained a lexical nominal marker referring to a missing canonical record.
+    kind_internal_lookup_lexical_nominal => "kind-internal-lookup-lexical-nominal" {},
+    /// The compiler has no canonical parameter records for a local nominal type.
+    kind_internal_lookup_nominal_parameters => "kind-internal-lookup-nominal-parameters" {},
+    /// The compiler retained a newtype referring to a missing canonical constructor.
+    kind_internal_lookup_newtype_constructor => "kind-internal-lookup-newtype-constructor" {},
+    /// The compiler has no declaration-ordered payload provenance for a nominal type.
+    kind_internal_lookup_payload_provenance => "kind-internal-lookup-payload-provenance" {},
+    /// The compiler retained a nominal type referring to a missing canonical constructor.
+    kind_internal_lookup_nominal_constructor => "kind-internal-lookup-nominal-constructor" {},
+    /// The compiler's declaration order contains an invalid effect index.
+    kind_internal_lookup_effect_index => "kind-internal-lookup-effect-index" {},
+    /// The compiler's declaration order contains an invalid global-definition index.
+    kind_internal_lookup_global_index => "kind-internal-lookup-global-index" {},
+    /// The compiler's declaration order contains an invalid implementation index.
+    kind_internal_lookup_implementation_index => "kind-internal-lookup-implementation-index" {},
+    /// The compiler's declaration order contains an invalid interface index.
+    kind_internal_lookup_interface_index => "kind-internal-lookup-interface-index" {},
+    /// The compiler's declaration order contains an invalid nominal-type index.
+    kind_internal_lookup_nominal_index => "kind-internal-lookup-nominal-index" {},
     /// The compiler has no canonical kind for a type binder.
     kind_internal_missing_canonical_binder => "kind-internal-missing-canonical-binder" {},
     /// The compiler retained a declaration binder that conflicts with its canonical registry record.

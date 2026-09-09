@@ -517,7 +517,7 @@ pub fn compile_entry_diagnostic<'a>(
 /// Presents source kind errors or compiler resource failures through distinct classifications.
 ///
 /// # Errors
-/// Returns missing source context or unsupported internal-state causes.
+/// Returns missing source context or a missing internal-state cause.
 pub fn compile_kind_failure<'a>(
     error: &'a crate::kind::KindFailure,
     sources: &[&'a SourceFile],
