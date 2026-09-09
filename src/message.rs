@@ -150,6 +150,26 @@ macro_rules! messages {
 }
 
 messages! {
+    /// This evidence declaration needs an active local nominal type in its selection key: the determinant arguments, or all arguments when there is no determination edge.
+    evidence_local_key => "evidence-local-key" {},
+    /// An active evidence declaration already supplies this exact interface application.
+    evidence_duplicate => "evidence-duplicate" {},
+    /// These evidence declarations have the same determining arguments but different dependent arguments.
+    evidence_determination_conflict => "evidence-determination-conflict" {},
+    /// This evidence declaration does not supply a required interface method.
+    evidence_missing_method => "evidence-missing-method" {},
+    /// This evidence declaration supplies the same method more than once.
+    evidence_duplicate_method => "evidence-duplicate-method" {},
+    /// This method does not belong to the interface supplied by this evidence declaration.
+    evidence_extra_method => "evidence-extra-method" {},
+    /// The earlier active evidence declaration is here.
+    evidence_earlier => "evidence-earlier" {},
+    /// This interface method must be supplied.
+    evidence_required_method => "evidence-required-method" {},
+    /// This method was already supplied here.
+    evidence_earlier_method => "evidence-earlier-method" {},
+    /// The supplied interface is declared here.
+    evidence_interface => "evidence-interface" {},
     /// A recursive call changes its required instantiation.
     type_polymorphic_recursion => "type-polymorphic-recursion" { expected: &'a str = "A", found: &'a str = "(A, A)" },
     /// The recursive function keeps one instantiation.

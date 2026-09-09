@@ -285,6 +285,56 @@ pub fn compile_type_diagnostic<'a>(
     })
 }
 
+/// Exposes phase-owned interface diagnostics without interpreting prose.
+///
+/// # Errors
+/// Returns unsupported reasons, missing facts or missing source context.
+pub fn compile_interface_diagnostic<'a>(
+    error: &'a Diagnostic<crate::interface::InterfaceReason>,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let (message, relationship) = error
+        .reason
+        .message()
+        .ok_or(PresentationError::Unsupported)?;
+    if error.expected.is_some() || error.found.is_some() {
+        return Err(PresentationError::Unsupported);
+    }
+    let label = |span: Span, message, relationship| {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        Ok(Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: Vec::new(),
+        })
+    };
+    let mut related = Vec::with_capacity(error.related.len());
+    for (index, original) in error.related.iter().enumerate() {
+        let (message, relationship) = error
+            .reason
+            .related_message(index)
+            .ok_or(PresentationError::Unsupported)?;
+        related.push(label(original.span(), message, relationship)?);
+    }
+    Ok(CompileDiagnostic {
+        reason: error.reason.to_string(),
+        responsibility: "source",
+        primary: Some(label(error.primary.span(), message.clone(), relationship)?),
+        message,
+        related,
+        facts: Vec::new(),
+    })
+}
+
 /// Exposes the entry module's local-main contract failure.
 ///
 /// # Errors

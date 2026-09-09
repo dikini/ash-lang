@@ -442,6 +442,15 @@ localization language. Color is not required for completion.
   all 35 source reasons, with 186 templates per locale. All 83 focused tests
   and warnings-denied Clippy passed. Internal failures,
   interface/constraint presentation and runtime reporting remain outstanding.
+- Interface presentation now covers the six lexical-evidence admission reasons:
+  missing local key, duplicate source, determination conflict, missing method,
+  duplicate method and extra method. Phase-owned messages distinguish evidence
+  keys, declarations and methods; related labels identify the earlier source,
+  required method, earlier method or interface declaration. The adapter does
+  not interpret legacy prose or discard unexpected facts or labels. No
+  producer or admission behavior changed. Interface/constraint coverage is
+  6 of 28 reasons, with 196 templates per locale. All 59 focused tests and
+  warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

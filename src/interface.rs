@@ -1957,6 +1957,46 @@ pub enum InterfaceReason {
     ImplExtraMethod,
 }
 
+impl InterfaceReason {
+    pub(crate) fn message(self) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        Some(match self {
+            Self::EvidenceMissingLocalKey => (Message::evidence_local_key(), "evidence_key"),
+            Self::EvidenceDuplicate => (Message::evidence_duplicate(), "evidence_key"),
+            Self::EvidenceDeterminationConflict => {
+                (Message::evidence_determination_conflict(), "evidence_key")
+            }
+            Self::EvidenceMissingMethod => {
+                (Message::evidence_missing_method(), "evidence_declaration")
+            }
+            Self::EvidenceDuplicateMethod => {
+                (Message::evidence_duplicate_method(), "evidence_method")
+            }
+            Self::EvidenceExtraMethod => (Message::evidence_extra_method(), "evidence_method"),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn related_message(
+        self,
+        index: usize,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        if index != 0 {
+            return None;
+        }
+        use crate::message::Message;
+        Some(match self {
+            Self::EvidenceDuplicate | Self::EvidenceDeterminationConflict => {
+                (Message::evidence_earlier(), "earlier_evidence")
+            }
+            Self::EvidenceMissingMethod => (Message::evidence_required_method(), "required_method"),
+            Self::EvidenceDuplicateMethod => (Message::evidence_earlier_method(), "earlier_method"),
+            Self::EvidenceExtraMethod => (Message::evidence_interface(), "interface_declaration"),
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for InterfaceReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {

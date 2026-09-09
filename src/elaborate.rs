@@ -23928,6 +23928,64 @@ mod tests {
     }
 
     #[test]
+    fn lexical_evidence_messages_preserve_admission_causes() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_interface_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("evidence.ash", "source earlier").unwrap();
+        let primary = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        let earlier = source.span(ByteRange::new(7, 14).unwrap()).unwrap();
+        for reason in [
+            InterfaceReason::EvidenceMissingLocalKey,
+            InterfaceReason::EvidenceDuplicate,
+            InterfaceReason::EvidenceDeterminationConflict,
+            InterfaceReason::EvidenceMissingMethod,
+            InterfaceReason::EvidenceDuplicateMethod,
+            InterfaceReason::EvidenceExtraMethod,
+        ] {
+            let related = if reason == InterfaceReason::EvidenceMissingLocalKey {
+                primary
+            } else {
+                earlier
+            };
+            let TypeError::Interface(error) = lexical_evidence_error(reason, primary, related)
+            else {
+                unreachable!()
+            };
+            let view = compile_interface_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(
+                    !String::from_utf8(output)
+                        .unwrap()
+                        .contains("is not admitted")
+                );
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], reason.to_string());
+            assert_eq!(
+                json["labels"][0]["relationship"],
+                match reason {
+                    InterfaceReason::EvidenceMissingLocalKey
+                    | InterfaceReason::EvidenceDuplicate
+                    | InterfaceReason::EvidenceDeterminationConflict => "evidence_key",
+                    InterfaceReason::EvidenceMissingMethod => "evidence_declaration",
+                    _ => "evidence_method",
+                }
+            );
+            assert_eq!(json["responsibility"], "source");
+            assert_eq!(
+                json["labels"].as_array().unwrap().len(),
+                1 + usize::from(primary != related)
+            );
+        }
+    }
+
+    #[test]
     fn recursive_presentation_preserves_optional_label_roles() {
         use crate::presentation::{compile_type_diagnostic, write_json};
         let source = SourceFile::new("recursive.ash", "call").unwrap();
