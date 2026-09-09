@@ -836,6 +836,18 @@ localization language. Color is not required for completion.
   passed. Runtime presentation covers 14/14 base reasons, bringing presentation
   coverage to 188/197; this is not an effort estimate. CLI format selection,
   preparation fallback and the remaining compiler-internal paths are still open.
+- Diagnostic option selection is implemented separately from program/root
+  validation and execution settings. It scans all arguments, preserves root
+  operands and non-UTF-8 paths, and selects exactly one valid format before the
+  entry path even when ordinary invocation validation will fail. Locale tests
+  cover explicit selection, LC_ALL/LC_MESSAGES/LANG precedence, empty values,
+  unsupported names and non-UTF-8 fallback. Missing, repeated and misplaced
+  options are rejected; duplicate locale options use environment fallback for
+  reporting the invocation error. The proposed CLI spelling is
+  `--message-format human|short|json` and `--locale NAME`. Six selection tests,
+  14 executable tests, 13 CLI tests, three catalogue tests, one compile-time JSON
+  test and warnings-denied Clippy passed. Selection is not yet wired into the
+  executable; its current default remains unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
