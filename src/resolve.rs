@@ -105,7 +105,7 @@ fn build_source_effect_row_with_provenance(
                     written[index].1,
                     "this exact effect instance is already present in the written row",
                 );
-                failure.0.related.push(SourceLabel::new(
+                failure.0.diagnostic.related.push(SourceLabel::new(
                     written[earlier].1,
                     "the first exact effect instance is here",
                 ));
@@ -832,7 +832,13 @@ impl fmt::Display for ResolveReason {
 
 /// A structured name-resolution failure kept compact in pipeline results.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ResolveError(Box<Diagnostic<ResolveReason>>, Option<ResolveContext>);
+pub struct ResolveError(Box<ResolveErrorData>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResolveErrorData {
+    diagnostic: Diagnostic<ResolveReason>,
+    context: Option<ResolveContext>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ResolveContext {
@@ -919,17 +925,24 @@ impl ResolveIdentitySpace {
 }
 
 impl ResolveError {
+    fn new(diagnostic: Diagnostic<ResolveReason>, context: Option<ResolveContext>) -> Self {
+        Self(Box::new(ResolveErrorData {
+            diagnostic,
+            context,
+        }))
+    }
+
     fn with_context(mut self, context: ResolveContext) -> Self {
         // A contextual boundary must not replace a more specific retained cause.
-        if self.1.is_none() {
-            self.1 = Some(context);
+        if self.0.context.is_none() {
+            self.0.context = Some(context);
         }
         self
     }
 
     fn internal_message(&self) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::WorkState { part, problem }) => {
                 Some((Message::resolve_work_state(part, problem), "work-state"))
             }
@@ -964,21 +977,21 @@ impl ResolveError {
         }
     }
     pub(crate) fn kind_context(&self) -> Option<crate::kind::KindFailureContext> {
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::Kind(context)) => Some(context),
             _ => None,
         }
     }
 
     pub(crate) fn declaration_order_context(&self) -> Option<(&'static str, &'static str)> {
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::DeclarationOrder { kind, problem }) => Some((kind, problem)),
             _ => None,
         }
     }
 
     pub(crate) fn work_state_context(&self) -> Option<(&'static str, &'static str)> {
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::WorkState { part, problem }) => Some((part, problem)),
             _ => None,
         }
@@ -994,7 +1007,7 @@ impl ResolveError {
 
     pub(crate) const fn is_source_rejection(&self) -> bool {
         !matches!(
-            self.0.reason,
+            self.0.diagnostic.reason,
             ResolveReason::BinderIdExhausted
                 | ResolveReason::TypeResourceExhausted
                 | ResolveReason::ConstraintResourceExhausted
@@ -1003,7 +1016,7 @@ impl ResolveError {
     }
 
     fn identity_space(&self) -> Option<ResolveIdentitySpace> {
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::IdentityExhaustion(space)) => Some(space),
             _ => None,
         }
@@ -1011,7 +1024,7 @@ impl ResolveError {
 
     const fn is_duplicate_declaration(&self) -> bool {
         matches!(
-            self.0.reason,
+            self.0.diagnostic.reason,
             ResolveReason::DuplicateGlobal
                 | ResolveReason::DuplicateType
                 | ResolveReason::DuplicateConstructor
@@ -1095,7 +1108,7 @@ impl ResolveError {
         }
         if self.is_duplicate_declaration() {
             Some((crate::message::Message::duplicate_name(), "duplicate_name"))
-        } else if self.1.is_some() {
+        } else if self.0.context.is_some() {
             Some((
                 crate::message::Message::unresolved_name(),
                 "unresolved_name",
@@ -1149,7 +1162,7 @@ impl ResolveError {
     }
 
     pub(crate) const fn lookup_scope_name(&self) -> Option<&'static str> {
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::Term) => Some("term"),
             Some(ResolveContext::EffectOperation) => Some("effect-operation"),
             Some(ResolveContext::Type) => Some("type"),
@@ -1217,7 +1230,9 @@ impl ResolveError {
 
     pub(crate) fn name_use(&self) -> Option<&'static str> {
         match self.reason {
-            ResolveReason::TypeKind if self.1 == Some(ResolveContext::MixedTypeRowRoles) => {
+            ResolveReason::TypeKind
+                if self.0.context == Some(ResolveContext::MixedTypeRowRoles) =>
+            {
                 Some("mixed-type-and-row-tail")
             }
             ResolveReason::TypeKind => Some("interface-as-type"),
@@ -1249,7 +1264,7 @@ impl ResolveError {
         if self.reason == ResolveReason::OpaqueConstructor {
             return Some("opaque-constructor");
         }
-        match self.1 {
+        match self.0.context {
             Some(ResolveContext::PrivateExport) => Some("private"),
             Some(ResolveContext::MissingExport) => Some("not-exported"),
             Some(ResolveContext::MissingModuleAlias) => Some("unknown-module-alias"),
@@ -1302,7 +1317,9 @@ impl ResolveError {
         }
         let name = self.found.as_deref()?;
         match self.reason {
-            ResolveReason::TypeKind if self.1 == Some(ResolveContext::MixedTypeRowRoles) => {
+            ResolveReason::TypeKind
+                if self.0.context == Some(ResolveContext::MixedTypeRowRoles) =>
+            {
                 return Some(crate::message::Message::resolve_mixed_type_row_roles(name));
             }
             ResolveReason::TypeKind => {
@@ -1363,7 +1380,7 @@ impl ResolveError {
                 _ => return None,
             });
         }
-        Some(match self.1? {
+        Some(match self.0.context? {
             ResolveContext::Term => crate::message::Message::resolve_unknown_term(name),
             ResolveContext::EffectOperation => {
                 crate::message::Message::resolve_unknown_operation(name)
@@ -1407,20 +1424,20 @@ impl ResolveError {
     /// Phase-specific diagnostic context remains on this failure owner.
     #[must_use]
     pub fn diagnostic(&self) -> &Diagnostic<ResolveReason> {
-        &self.0
+        &self.0.diagnostic
     }
 
     /// Consumes the failure and returns its common diagnostic fields.
     /// This legacy conversion does not retain phase-specific diagnostic context.
     #[must_use]
     pub fn into_diagnostic(self) -> Diagnostic<ResolveReason> {
-        *self.0
+        self.0.diagnostic
     }
 }
 
 impl From<Diagnostic<ResolveReason>> for ResolveError {
     fn from(diagnostic: Diagnostic<ResolveReason>) -> Self {
-        Self(Box::new(diagnostic), None)
+        Self::new(diagnostic, None)
     }
 }
 
@@ -1434,7 +1451,7 @@ impl Deref for ResolveError {
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0.render_plain())
+        formatter.write_str(&self.0.diagnostic.render_plain())
     }
 }
 
@@ -6215,7 +6232,7 @@ impl Resolver {
                 SourceLabel::new(name.span, "this nominal type is not declared"),
             );
             diagnostic.found = Some(name.text.clone());
-            ResolveError(Box::new(diagnostic), Some(ResolveContext::Type))
+            ResolveError::new(diagnostic, Some(ResolveContext::Type))
         })?;
         Ok(ImportedNominalName { id })
     }
@@ -6742,8 +6759,8 @@ impl Resolver {
             SourceLabel::new(reference.member().span, "this constructor is not declared"),
         );
         diagnostic.found = Some(reference.member().text.clone());
-        Err(ResolveError(
-            Box::new(diagnostic),
+        Err(ResolveError::new(
+            diagnostic,
             Some(ResolveContext::Constructor),
         ))
     }
@@ -10699,7 +10716,7 @@ impl Resolver {
                     expression.span,
                     message,
                 );
-                failure.0.expected = Some(builtin.to_owned());
+                failure.0.diagnostic.expected = Some(builtin.to_owned());
                 return Err(failure);
             }
             SurfaceExprKind::Resource(source) => {
@@ -10849,7 +10866,7 @@ impl Resolver {
                                 SourceLabel::new(member.span, "this constructor is not declared"),
                             );
                             diagnostic.found = Some(member.text.clone());
-                            ResolveError(Box::new(diagnostic), Some(ResolveContext::Constructor))
+                            ResolveError::new(diagnostic, Some(ResolveContext::Constructor))
                         } else {
                             lookup_error(
                                 ResolveContext::Term,
@@ -11319,7 +11336,7 @@ fn take_expression_pair(
 
 fn identity_error(space: ResolveIdentitySpace, span: Span, message: &str) -> ResolveError {
     let mut failure = error(ResolveReason::BinderIdExhausted, span, message);
-    failure.1 = Some(ResolveContext::IdentityExhaustion(space));
+    failure.0.context = Some(ResolveContext::IdentityExhaustion(space));
     failure
 }
 
@@ -11329,7 +11346,7 @@ fn kind_context_error(
     message: &str,
 ) -> ResolveError {
     let mut failure = error(ResolveReason::InternalState, span, message);
-    failure.1 = Some(ResolveContext::Kind(context));
+    failure.0.context = Some(ResolveContext::Kind(context));
     failure
 }
 
@@ -11368,7 +11385,7 @@ fn lookup_error(
     };
     let mut diagnostic = Diagnostic::new(reason, SourceLabel::new(span, message));
     diagnostic.found = Some(name.to_owned());
-    ResolveError(Box::new(diagnostic), Some(scope))
+    ResolveError::new(diagnostic, Some(scope))
 }
 
 fn imported_nominal_merge_error(
@@ -11525,7 +11542,7 @@ fn withheld_export_error(
         ));
     }
     diagnostic.found = Some(spelling.to_owned());
-    ResolveError(Box::new(diagnostic), context)
+    ResolveError::new(diagnostic, context)
 }
 
 fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -11534,7 +11551,7 @@ fn unknown_interface_error(span: crate::source::Span, spelling: &str) -> Resolve
         SourceLabel::new(span, "this interface is not declared"),
     );
     diagnostic.found = Some(spelling.to_owned());
-    ResolveError(Box::new(diagnostic), Some(ResolveContext::Interface))
+    ResolveError::new(diagnostic, Some(ResolveContext::Interface))
 }
 
 fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
@@ -11547,10 +11564,7 @@ fn unknown_determination_parameter_error(name: &SurfaceName) -> ResolveError {
     );
     diagnostic.expected = Some("interface parameter".to_owned());
     diagnostic.found = Some(name.text.clone());
-    ResolveError(
-        Box::new(diagnostic),
-        Some(ResolveContext::InterfaceParameter),
-    )
+    ResolveError::new(diagnostic, Some(ResolveContext::InterfaceParameter))
 }
 
 fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
@@ -11569,7 +11583,7 @@ fn continuation_outside_clause(span: crate::source::Span, operation: &str) -> Re
         span,
         "resume and discard are available only inside an operation clause",
     );
-    failure.0.found = Some(operation.to_owned());
+    failure.0.diagnostic.found = Some(operation.to_owned());
     failure
 }
 
@@ -15161,6 +15175,20 @@ mod tests {
             assert_eq!(json["responsibility"], "compiler");
             assert_eq!(json["facts"][0]["value"], cause);
             assert_eq!(json["labels"][0]["byte_end"], 17);
+            let failure =
+                crate::driver::FileFailure::from(crate::driver::PipelineFailure::Resolution(error));
+            let gap = crate::presentation::compile_file_diagnostics(&failure)
+                .err()
+                .unwrap();
+            output.clear();
+            crate::presentation::write_unadapted_file_diagnostic(&mut output, &failure, gap)
+                .unwrap();
+            let fallback: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(fallback["facts"], json["facts"]);
+            assert_eq!(
+                fallback["developer_details"]["presentation_error"],
+                "missing-source"
+            );
         }
     }
 

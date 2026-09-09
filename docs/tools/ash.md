@@ -309,7 +309,10 @@ main () = {
         }
     }
     match observed {
-        Report(Failed(primary), FailureItem(first, FailureItem(second, NoFailures))) => primary * 10000 + first * 100 + second
+        Report(
+            Failed(primary),
+            FailureItem(first, FailureItem(second, NoFailures))
+        ) => primary * 10000 + first * 100 + second
         _ => 0
     }
 }
@@ -720,3 +723,30 @@ remains the only guaranteed observation.
 
 Exact diagnostic colors, gutters, and prose are presentation details. Stable
 reason codes and causal source labels remain structured before rendering.
+
+## Maintaining diagnostic messages
+
+Reuse the phase's reason, facts and spans. Declare a message and its typed
+arguments in `src/message.rs`; for example, the existing term lookup message is:
+
+```rust
+resolve_unknown_term => "resolve-unknown-term" { name: &'a str = "missing" },
+```
+
+The example value supplies the generated catalogue test. Add the same key and
+arguments to both `locales/en-US.ftl` and `locales/bg.ftl`:
+
+```text
+resolve-unknown-term = No term named `{ $name }` is in scope.
+```
+
+The phase selects `Message::resolve_unknown_term(name)` from its retained facts;
+the presentation adapter supplies semantic JSON facts and label relationships.
+Renderers do not need a new message-specific branch. To change wording or a
+translation, edit the appropriate catalogue entry, retaining its key and named
+arguments. Update exact-wording assertions where applicable; do not change JSON
+reasons or facts just because the prose changed.
+
+Run the catalogue tests and the affected phase's human/JSON tests together.
+Runtime messages additionally require pre-execution preparation and tests of the
+separate allocation-independent reporter; do not format them after failure.

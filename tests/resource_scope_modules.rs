@@ -269,7 +269,13 @@ fn cli_preserves_builtin_failure_categories_and_resource_execution() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(String::from_utf8_lossy(&output.stderr).starts_with(prefix));
+        if prefix.is_empty() {
+            assert!(output.stderr.is_empty());
+        } else {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).ends_with(&format!("reason: {prefix}"))
+            );
+        }
         if code == 0 {
             assert_eq!(output.stdout, b"42 : Int\n");
             assert!(output.stderr.is_empty());
@@ -284,7 +290,11 @@ fn cli_preserves_builtin_failure_categories_and_resource_execution() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(output.stderr.starts_with(b"invocation.reserved-root\n"));
+    assert!(
+        output
+            .stderr
+            .ends_with(b"reason: invocation.reserved-root\n")
+    );
 }
 
 #[test]

@@ -58,6 +58,26 @@ localization language. Color is not required for completion.
 
 ## Progress
 
+- Integration verification found a resolver stack regression: diagnostic
+  context enlarged error values on compiler stack frames. Keeping the context
+  inside the existing diagnostic allocation restores the unchanged 256 KiB
+  cleanup test. Runtime cleanup and diagnostic contents are unchanged.
+- Exceptional resolution fallback now reuses the normal adapter's structured
+  facts even without source text; the retained-cause regression passes. Two
+  lexical-scope diagnostic identifiers are recorded in the existing Core
+  architecture allowlist. Corpus assertions use JSON; module CLI assertions
+  use the new human output while retaining their structured library checks.
+  The focused corpus (12 tests), CLI/resource/documentation batch (106 tests)
+  and architecture-name check pass. The complete `cargo xtask verify` gate
+  passes for this batch, including the full architecture and large-cycle tests;
+  earlier full runs exposed the now-corrected legacy expectations.
+- The executable guide includes the message addition and translation-update
+  workflow. No downstream edition pin, merge, push or tag is changed.
+- The final integration worktree also passes all eight unchanged ash-doc
+  canary entries at `492a3abec1324c3c0c0e8f0376d380092e883561`: success stdout
+  hashes, rejection reasons, causal ranges and relationships, opacity facts,
+  and empty output channels match. No fallback occurs. Both changed Markdown
+  files pass lint and local-link checks. Downstream adoption remains separate.
 - Design exploration and architectural decision are recorded.
 - The task-owned [execution plan](human-diagnostics-execution-plan.md) records
   the test-first implementation and verification sequence.

@@ -805,32 +805,12 @@ pub fn compile_kind_diagnostic<'a>(
     })
 }
 
-/// Exposes phase-owned resolution facts without interpreting diagnostic prose.
-///
-/// # Errors
-/// Returns an unsupported family, missing facts or source context.
-pub fn compile_resolve_diagnostic<'a>(
-    error: &'a crate::resolve::ResolveError,
-    sources: &[&'a SourceFile],
-) -> Result<CompileDiagnostic<'a>, PresentationError> {
-    let message = error.message().ok_or(PresentationError::Unsupported)?;
+fn resolve_facts(error: &crate::resolve::ResolveError) -> Vec<Fact<'_>> {
     let subject = error.subject_fact().map(|(name, kind, value)| Fact {
         name,
         kind,
         value: FactValue::Text(value),
     });
-    let (primary_message, primary_relationship) = error
-        .primary_message()
-        .ok_or(PresentationError::Unsupported)?;
-    let span = error.primary.span();
-    let source = sources
-        .iter()
-        .copied()
-        .find(|source| source.id() == span.source())
-        .ok_or(PresentationError::MissingSource)?;
-    source
-        .location(span)
-        .map_err(|_| PresentationError::MissingSource)?;
     let mut facts: Vec<_> = subject.into_iter().collect();
     if let Some((part, problem)) = error.work_state_context() {
         facts.push(Fact {
@@ -891,6 +871,36 @@ pub fn compile_resolve_diagnostic<'a>(
             value: FactValue::Text(scope),
         });
     }
+    facts
+}
+
+/// Exposes phase-owned resolution facts without interpreting diagnostic prose.
+///
+/// # Errors
+/// Returns an unsupported family, missing facts or source context.
+pub fn compile_resolve_diagnostic<'a>(
+    error: &'a crate::resolve::ResolveError,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let message = error.message().ok_or(PresentationError::Unsupported)?;
+    let subject = error.subject_fact().map(|(name, kind, value)| Fact {
+        name,
+        kind,
+        value: FactValue::Text(value),
+    });
+    let (primary_message, primary_relationship) = error
+        .primary_message()
+        .ok_or(PresentationError::Unsupported)?;
+    let span = error.primary.span();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let facts = resolve_facts(error);
     let mut related = Vec::with_capacity(error.related.len());
     if let Some(context) = error.kind_context() {
         let origin = context.span();
@@ -1337,11 +1347,15 @@ pub fn write_unadapted_file_diagnostic(
         _ if failure.is_source_rejection() => "source",
         _ => "compiler",
     };
+    let retained_facts = match failure.pipeline_failure() {
+        Some(crate::driver::PipelineFailure::Resolution(error)) => resolve_facts(error),
+        _ => Vec::new(),
+    };
     let data = serde_json::json!({
         "schema_version": 1,
         "reason": failure.reason_code(),
         "responsibility": responsibility,
-        "facts": [],
+        "facts": facts(&retained_facts),
         "labels": [],
         "developer_details": {
             "presentation_error": match error {

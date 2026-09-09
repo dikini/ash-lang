@@ -433,6 +433,7 @@ const INVALID_CASES: &[InvalidCase] = &[
 
 fn ash(path: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_ash"))
+        .args(["--message-format", "json"])
         .arg(path)
         .output()
         .expect("the Ash executable should start")
@@ -523,17 +524,21 @@ fn module_newtype_mixed_failures_report_the_earlier_ordinary_payload_kind_owner(
     let output = ash(Path::new(PATH));
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
+    let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(diagnostic["reason"], "kind.not-applicable");
+    assert_eq!(diagnostic["facts"][0]["name"], "expected_kind");
+    assert_eq!(diagnostic["facts"][0]["value"], "Type -> _");
+    assert_eq!(diagnostic["facts"][1]["name"], "found_kind");
+    assert_eq!(diagnostic["facts"][1]["value"], "Type");
+    assert_eq!(diagnostic["labels"][0]["relationship"], "kind_mismatch");
     assert_eq!(
-        output.stderr,
-        concat!(
-            "kind.not-applicable\n",
-            "primary: source 0 25..38: this type does not have a function kind\n",
-            "related: source 0 0..39: the applied type's kind is fixed by this declaration\n",
-            "expected Type -> _\n",
-            "found Type\n",
-        )
-        .as_bytes(),
+        diagnostic["labels"][1]["relationship"],
+        "found_kind_declaration"
     );
+    assert_eq!(diagnostic["labels"][0]["byte_start"], 25);
+    assert_eq!(diagnostic["labels"][0]["byte_end"], 38);
+    assert_eq!(diagnostic["labels"][1]["byte_start"], 0);
+    assert_eq!(diagnostic["labels"][1]["byte_end"], 39);
 }
 
 #[test]
@@ -661,13 +666,12 @@ fn method_parameter_migration_and_exclusion_corpus_is_complete() {
         let output = ash(&source.0);
         assert_eq!(output.status.code(), Some(1), "{}: {output:?}", case.route);
         assert!(output.stdout.is_empty(), "{}: {output:?}", case.route);
-        assert!(
-            output
-                .stderr
-                .starts_with(format!("{}\n", case.reason).as_bytes()),
-            "{}: {output:?}",
-            case.route,
-        );
+        let first = serde_json::Deserializer::from_slice(&output.stderr)
+            .into_iter::<serde_json::Value>()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first["reason"], case.reason, "{}", case.route);
     }
 
     let predecessor = TempSource::write(concat!(
@@ -684,11 +688,8 @@ fn method_parameter_migration_and_exclusion_corpus_is_complete() {
     let predecessor_cli = ash(&predecessor.0);
     assert_eq!(predecessor_cli.status.code(), Some(1));
     assert!(predecessor_cli.stdout.is_empty());
-    assert!(
-        predecessor_cli
-            .stderr
-            .starts_with(b"interface.method-parameter\n")
-    );
+    let diagnostic: serde_json::Value = serde_json::from_slice(&predecessor_cli.stderr).unwrap();
+    assert_eq!(diagnostic["reason"], "interface.method-parameter");
 
     let explicit = TempSource::write(concat!(
         "interface Project<I> {\nproject<A> : (I, A) -> A\n}\n\n",

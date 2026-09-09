@@ -2115,7 +2115,7 @@ fn tool_source_rejection_uses_status_one_and_stderr() {
         .expect("the documented executable should start");
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("type.operator-operand\n"));
+    assert!(String::from_utf8_lossy(&output.stderr).ends_with("reason: type.operator-operand\n"));
     assert_documented("docs/tools/ash.md", TYPE_REJECTION_MODULE);
 }
 

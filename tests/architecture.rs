@@ -5672,6 +5672,9 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "MethodEvidenceProducer"
                     | "ScopeRequirement"
                     | "ScopeRequirementKey"
+                    // Diagnostic causes for lexical scope metadata, not interface machinery.
+                    | "MissingCaptureRequirement"
+                    | "MissingTypeRequirementSlot"
                     | "ScopeRequirements"
                     | "authenticated_method_evidence"
                     | "enclosing_implementation_replacements"
