@@ -307,6 +307,17 @@ resolve-unknown-interface = No interface named `{ $name }` is in scope.
 resolve-unknown-effect = No effect named `{ $name }` is in scope.
 resolve-unexported-effect = The selected module exports no effect named `{ $name }`.
 source-ids = Ash cannot allocate another source identity for `{ $path }`.
+source-ids-unlocated = Ash cannot allocate another source identity.
+source-unrepresentable-span-unlocated = Ash encountered an unrepresentable source length or token offset while constructing a span.
+source-path-limit-unlocated = The display path exceeds Ash's source-model limit.
+source-text-limit-unlocated = The source text exceeds Ash's source-model size limit.
+source-line-limit-unlocated = The source has more lines than Ash's source model can represent.
+source-column-limit-unlocated = A source line has more columns than Ash's source model can represent.
+source-range-unlocated = Ash produced byte range { $start }..{ $end } outside the source's { $length } bytes.
+source-foreign-span-unlocated = Ash used a span from source { $found } where source { $expected } was required.
+source-offset-unlocated = Ash used byte offset { $offset } beyond the source's { $length } bytes.
+source-code-point-unlocated = Ash used byte offset { $offset } inside a UTF-8 code point.
+source-line-state-unlocated = Ash's internal source line index is inconsistent.
 projection-recovery = Ash encountered syntax-recovery markers while converting `{ $path }` to its internal form.
 projection-malformed = Ash found inconsistent internal syntax for `{ $path }`: { $cause ->
     [unexpected-finish] a closing event has no opening event.

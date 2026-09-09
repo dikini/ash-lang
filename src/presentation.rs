@@ -1076,7 +1076,7 @@ pub fn compile_parse_diagnostic<'a>(
 ///
 /// # Errors
 /// Returns an unsupported staged cause or missing source context. Legacy bare
-/// source-model, syntax and projection failures do not identify their owning
+/// syntax and projection failures do not identify their owning
 /// source; graph-loading failures retain that context and use the graph adapter.
 pub fn compile_file_diagnostics(
     failure: &crate::driver::FileFailure,
@@ -1090,7 +1090,12 @@ pub fn compile_file_diagnostics(
         FileFailure::Graph(context) => return compile_graph_diagnostics(context),
         FileFailure::Read { path, kind } => compile_input_diagnostic(path, Some(*kind)),
         FileFailure::InvalidUtf8 { path } => compile_input_diagnostic(path, None),
-        FileFailure::Source(_) => return Err(PresentationError::MissingSource),
+        FileFailure::Source(error) => compile_source_model_error(
+            error,
+            crate::source::SourceOperation::Admission,
+            None,
+            "input.source-model",
+        ),
         FileFailure::Pipeline(context) => match context.failure() {
             PipelineFailure::Resolution(error) => compile_resolve_diagnostic(error, &sources)?,
             PipelineFailure::Kind(error) => compile_kind_failure(error, &sources)?,
@@ -1112,14 +1117,89 @@ pub fn compile_file_diagnostics(
             }
             PipelineFailure::Validation(error) => compile_core_validation_failure(error, &sources)?,
             PipelineFailure::Runtime(_) => return Err(PresentationError::Unsupported),
-            PipelineFailure::SourceModel(_)
-            | PipelineFailure::Syntax(_)
-            | PipelineFailure::Projection(_) => {
+            PipelineFailure::SourceModel(error) => compile_source_model_error(
+                error,
+                crate::source::SourceOperation::SpanConstruction,
+                None,
+                "internal.source-model",
+            ),
+            PipelineFailure::Syntax(_) | PipelineFailure::Projection(_) => {
                 return Err(PresentationError::MissingSource);
             }
         },
     };
     Ok(vec![diagnostic])
+}
+
+fn compile_source_model_error<'a>(
+    error: &crate::source::SourceError,
+    operation: crate::source::SourceOperation,
+    path: Option<&'a std::path::Path>,
+    reason: &'static str,
+) -> CompileDiagnostic<'a> {
+    let mut facts = Vec::new();
+    if let Some(path) = path {
+        facts.push(Fact {
+            name: "path",
+            kind: "path",
+            value: FactValue::Path(path),
+        });
+    }
+    facts.push(Fact {
+        name: "cause",
+        kind: "source-model",
+        value: FactValue::Text(error.diagnostic_name()),
+    });
+    let mut quantity = |name, value: u32| {
+        facts.push(Fact {
+            name,
+            kind: "integer",
+            value: FactValue::Integer(value as usize),
+        })
+    };
+    match error {
+        SourceError::RangeOutsideSource { range, source_len } => {
+            quantity("start", range.start());
+            quantity("end", range.end());
+            quantity("source_len", *source_len);
+        }
+        SourceError::ForeignSpan { expected, found } => {
+            quantity("expected_source", expected.value());
+            quantity("found_source", found.value());
+        }
+        SourceError::OffsetOutsideSource { offset, source_len } => {
+            quantity("offset", *offset);
+            quantity("source_len", *source_len);
+        }
+        SourceError::OffsetSplitsCodePoint { offset } => quantity("offset", *offset),
+        SourceError::SourceIdExhausted
+        | SourceError::DisplayPathTooLarge
+        | SourceError::TextTooLarge
+        | SourceError::TooManyLines
+        | SourceError::LineTooLong
+        | SourceError::InvalidLineState => {}
+    }
+    CompileDiagnostic {
+        reason: reason.into(),
+        responsibility: error.responsibility(operation),
+        message: path.map_or_else(
+            || error.message_without_path(operation),
+            |path| error.message(path, operation),
+        ),
+        primary: None,
+        related: Vec::new(),
+        facts: {
+            facts.push(Fact {
+                name: "operation",
+                kind: "source-operation",
+                value: FactValue::Text(match operation {
+                    crate::source::SourceOperation::Admission => "admission",
+                    crate::source::SourceOperation::SpanConstruction => "span-construction",
+                }),
+            });
+            facts
+        },
+    }
 }
 
 /// Presents the executable's invocation grammar without inventing source labels.
@@ -1256,65 +1336,10 @@ pub fn compile_graph_diagnostics(
         ..
     } = failure
     {
-        let mut facts = vec![
-            Fact {
-                name: "path",
-                kind: "path",
-                value: FactValue::Path(path),
-            },
-            Fact {
-                name: "cause",
-                kind: "source-model",
-                value: FactValue::Text(error.diagnostic_name()),
-            },
-        ];
-        let mut quantity = |name, value: u32| {
-            facts.push(Fact {
-                name,
-                kind: "integer",
-                value: FactValue::Integer(value as usize),
-            })
-        };
-        match error {
-            SourceError::RangeOutsideSource { range, source_len } => {
-                quantity("start", range.start());
-                quantity("end", range.end());
-                quantity("source_len", *source_len);
-            }
-            SourceError::ForeignSpan { expected, found } => {
-                quantity("expected_source", expected.value());
-                quantity("found_source", found.value());
-            }
-            SourceError::OffsetOutsideSource { offset, source_len } => {
-                quantity("offset", *offset);
-                quantity("source_len", *source_len);
-            }
-            SourceError::OffsetSplitsCodePoint { offset } => quantity("offset", *offset),
-            SourceError::SourceIdExhausted
-            | SourceError::DisplayPathTooLarge
-            | SourceError::TextTooLarge
-            | SourceError::TooManyLines
-            | SourceError::LineTooLong
-            | SourceError::InvalidLineState => {}
-        }
-        return Ok(vec![CompileDiagnostic {
-            reason: "input.source-model".into(),
-            responsibility: error.responsibility(*operation),
-            message: error.message(path, *operation),
-            primary: import_label(context, "import_target")?,
-            related: Vec::new(),
-            facts: {
-                facts.push(Fact {
-                    name: "operation",
-                    kind: "source-operation",
-                    value: FactValue::Text(match operation {
-                        crate::source::SourceOperation::Admission => "admission",
-                        crate::source::SourceOperation::SpanConstruction => "span-construction",
-                    }),
-                });
-                facts
-            },
-        }]);
+        let mut diagnostic =
+            compile_source_model_error(error, *operation, Some(path), "input.source-model");
+        diagnostic.primary = import_label(context, "import_target")?;
+        return Ok(vec![diagnostic]);
     }
     if let LoadGraphError::Module(failure) = failure {
         let message = failure.message().ok_or(PresentationError::Unsupported)?;

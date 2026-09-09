@@ -627,6 +627,39 @@ impl SourceError {
             Self::InvalidLineState => Message::source_line_state(path),
         }
     }
+
+    pub(crate) fn message_without_path(
+        &self,
+        operation: SourceOperation,
+    ) -> crate::message::Message<'static> {
+        use crate::message::Message;
+        match self {
+            Self::TextTooLarge if operation == SourceOperation::SpanConstruction => {
+                Message::source_unrepresentable_span_unlocated()
+            }
+            Self::SourceIdExhausted => Message::source_ids_unlocated(),
+            Self::DisplayPathTooLarge => Message::source_path_limit_unlocated(),
+            Self::TextTooLarge => Message::source_text_limit_unlocated(),
+            Self::TooManyLines => Message::source_line_limit_unlocated(),
+            Self::LineTooLong => Message::source_column_limit_unlocated(),
+            Self::RangeOutsideSource { range, source_len } => Message::source_range_unlocated(
+                range.start() as usize,
+                range.end() as usize,
+                *source_len as usize,
+            ),
+            Self::ForeignSpan { expected, found } => Message::source_foreign_span_unlocated(
+                expected.value() as usize,
+                found.value() as usize,
+            ),
+            Self::OffsetOutsideSource { offset, source_len } => {
+                Message::source_offset_unlocated(*offset as usize, *source_len as usize)
+            }
+            Self::OffsetSplitsCodePoint { offset } => {
+                Message::source_code_point_unlocated(*offset as usize)
+            }
+            Self::InvalidLineState => Message::source_line_state_unlocated(),
+        }
+    }
 }
 
 impl fmt::Display for SourceError {

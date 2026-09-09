@@ -75,14 +75,83 @@ fn file_input_dispatch_preserves_path_and_io_kind_without_source_labels() {
 }
 
 #[test]
-fn missing_source_context_fallback_keeps_input_responsibility_and_marks_the_gap() {
-    let failure = FileFailure::Source(ash::source::SourceError::TextTooLarge);
+fn unlocated_source_errors_preserve_facts_without_inventing_paths() {
+    use ash::message::{Catalogue, Locale};
+    use ash::presentation::write_human;
+    use ash::source::{ByteRange, SourceError, SourceFile};
+    let first = SourceFile::new("first.ash", "").unwrap();
+    let second = SourceFile::new("second.ash", "").unwrap();
+    for error in [
+        SourceError::SourceIdExhausted,
+        SourceError::DisplayPathTooLarge,
+        SourceError::TextTooLarge,
+        SourceError::TooManyLines,
+        SourceError::LineTooLong,
+        SourceError::RangeOutsideSource {
+            range: ByteRange::new(1, 4).unwrap(),
+            source_len: 3,
+        },
+        SourceError::ForeignSpan {
+            expected: first.id(),
+            found: second.id(),
+        },
+        SourceError::OffsetOutsideSource {
+            offset: u32::MAX,
+            source_len: 3,
+        },
+        SourceError::OffsetSplitsCodePoint { offset: 1 },
+        SourceError::InvalidLineState,
+    ] {
+        for (failure, operation) in [
+            (FileFailure::Source(error), "admission"),
+            (
+                FileFailure::from(PipelineFailure::SourceModel(error)),
+                "span-construction",
+            ),
+        ] {
+            let views = compile_file_diagnostics(&failure).unwrap();
+            assert_eq!(views.len(), 1);
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &views[0], &Catalogue::new(locale).unwrap()).unwrap();
+                assert!(!output.is_empty());
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &views[0]).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], failure.reason_code());
+            assert_eq!(json["labels"], serde_json::json!([]));
+            assert!(json.get("developer_details").is_none());
+            let facts = json["facts"].as_array().unwrap();
+            assert!(!facts.iter().any(|fact| fact["name"] == "path"));
+            assert_eq!(facts.last().unwrap()["value"], operation);
+            if operation == "span-construction" {
+                assert_eq!(json["responsibility"], "compiler");
+            }
+            if matches!(error, SourceError::OffsetOutsideSource { .. }) {
+                assert!(
+                    facts
+                        .iter()
+                        .any(|fact| fact["name"] == "offset" && fact["value"] == u32::MAX)
+                );
+            }
+            if matches!(error, SourceError::TextTooLarge) && operation == "admission" {
+                assert_eq!(json["responsibility"], "input");
+            }
+        }
+    }
+}
+
+#[test]
+fn missing_source_context_fallback_marks_the_gap_and_excludes_runtime() {
+    let failure = FileFailure::from(PipelineFailure::Projection(
+        ash::parser::ProjectionError::RecoveryNodesPresent,
+    ));
     let error = compile_file_diagnostics(&failure).err().unwrap();
     let mut output = Vec::new();
     ash::presentation::write_unadapted_file_diagnostic(&mut output, &failure, error).unwrap();
     let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(json["reason"], failure.reason_code());
-    assert_eq!(json["responsibility"], "input");
     assert_eq!(
         json["developer_details"]["presentation_error"],
         "missing-source"
@@ -91,7 +160,7 @@ fn missing_source_context_fallback_keeps_input_responsibility_and_marks_the_gap(
         json["developer_details"]["retained_diagnostic"]
             .as_str()
             .unwrap()
-            .contains("source")
+            .contains("projection")
     );
     let failure = FileFailure::from(PipelineFailure::Runtime(RuntimeFailure::HeapCapacity));
     output.clear();

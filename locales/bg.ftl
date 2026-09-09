@@ -1094,3 +1094,14 @@ runtime-label-teardown = Първа грешка при освобождаван
 runtime-label-cleanup = Състояние на почистването
 invocation-usage = Очаква се: ash [--message-format human|short|json] [--locale NAME] [--root name=path]... <entry-file>. Опциите трябва да са преди входния файл; форматът и локалът могат да бъдат зададени само по веднъж.
 output-write = Ash не можа да запише резултата от програмата на стандартния изход.
+source-ids-unlocated = Ash не може да задели нова идентичност на източник.
+source-unrepresentable-span-unlocated = Ash срещна непредставима дължина на източник или отместване на токен при създаване на диапазон.
+source-path-limit-unlocated = Пътят за показване надхвърля ограничението на модела на източниците на Ash.
+source-text-limit-unlocated = Текстът на източника надхвърля ограничението за размер на модела на източниците на Ash.
+source-line-limit-unlocated = Източникът има повече редове, отколкото моделът на източниците на Ash може да представи.
+source-column-limit-unlocated = Ред от източника има повече колони, отколкото моделът на източниците на Ash може да представи.
+source-range-unlocated = Ash създаде байтов диапазон { $start }..{ $end } извън { $length } байта на източника.
+source-foreign-span-unlocated = Ash използва диапазон от източник { $found }, когато се изискваше източник { $expected }.
+source-offset-unlocated = Ash използва байтово отместване { $offset } извън { $length } байта на източника.
+source-code-point-unlocated = Ash използва байтово отместване { $offset } във вътрешността на UTF-8 кодова точка.
+source-line-state-unlocated = Вътрешният индекс на редовете на източника в Ash е несъгласуван.

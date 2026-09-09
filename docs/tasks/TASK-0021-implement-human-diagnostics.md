@@ -909,6 +909,15 @@ localization language. Color is not required for completion.
   executable, catalogue, reporting, diagnostic and file-dispatch batch passed,
   along with warnings-denied Clippy. Reason coverage is 196/197; resolver
   internal-state labels, source-context gaps, defaults and closeout remain open.
+- Bare source-model failures now render without an owning path. Admission and
+  span-construction failures preserve their distinct reasons, responsibility,
+  cause and numeric facts; unavailable paths and labels are omitted. Graph
+  source errors share the fact mapping and retain their paths and import labels.
+  Eleven pathless templates cover the existing source-error variants and the
+  span-construction length case in both locales. Table tests cover all ten
+  variants in both operations. File-dispatch, input, catalogue and reporting
+  tests passed, followed by the five catalogue-contract tests and warnings-denied
+  Clippy. Bare syntax/projection context and resolver labels remain open.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
