@@ -144,6 +144,16 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An interface occupies a value-type position.
+    resolve_type_kind => "resolve-type-kind" { name: &'a str = "Marker" },
+    /// An interface position contains a known non-interface name.
+    resolve_interface_kind => "resolve-interface-kind" { name: &'a str = "Thing" },
+    /// An effect position contains a known non-effect name.
+    resolve_effect_kind => "resolve-effect-kind" { name: &'a str = "Thing" },
+    /// An implicit parameter has incompatible type and row-tail roles.
+    resolve_mixed_type_row_roles => "resolve-mixed-type-row-roles" { name: &'a str = "R" },
+    /// The occurrence uses a name in an incompatible role.
+    incompatible_name_role => "incompatible-name-role" {},
     /// A function body does not match its required result type.
     type_definition_result => "type-definition-result" { expected: &'a str = "Int", found: &'a str = "Bool" },
     /// A primitive operand must be Int.

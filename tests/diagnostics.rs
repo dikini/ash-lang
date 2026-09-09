@@ -547,6 +547,74 @@ fn declaration_name_requirements_render_retained_facts() {
     }
 }
 
+#[test]
+fn resolver_name_roles_have_distinct_messages_and_machine_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_json, write_short},
+    };
+    for (text, reason, name, usage, english) in [
+        (
+            "interface Marker<A> {\nmark : A -> Bool\n}\ntype Bad = Bad(Marker)\n",
+            ResolveReason::TypeKind,
+            "Marker",
+            "interface-as-type",
+            "The interface `Marker` cannot be used as a value type.",
+        ),
+        (
+            "type Thing = Thing\nimpl Thing<Int> {\n}\n",
+            ResolveReason::InterfaceKind,
+            "Thing",
+            "interface-required",
+            "The name `Thing` does not refer to an interface.",
+        ),
+        (
+            "type Thing = Thing\nprobe : Unit -> Unit ! {Thing}\nprobe () = ()\n",
+            ResolveReason::EffectKind,
+            "Thing",
+            "effect-required",
+            "The name `Thing` does not refer to an effect.",
+        ),
+        (
+            "probe : R -> Unit ! {| R}\nprobe value = ()\n",
+            ResolveReason::TypeKind,
+            "R",
+            "mixed-type-and-row-tail",
+            "The parameter `R` is used both as a type and as an effect-row tail; these require different kinds.",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("name-role.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        assert_eq!(error.found.as_deref(), Some(name));
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_resolve_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_short(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{name}`")));
+            if locale == Locale::English {
+                assert!(output.contains(english), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["value"], name);
+        assert_eq!(json["facts"][1]["name"], "name_use");
+        assert_eq!(json["facts"][1]["value"], usage);
+        assert_eq!(json["labels"][0]["relationship"], "incompatible_name_role");
+    }
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)

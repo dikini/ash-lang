@@ -843,6 +843,7 @@ enum NameContext {
     PrivateExport,
     MissingExport,
     MissingModuleAlias,
+    MixedTypeRowRoles,
 }
 
 impl ResolveError {
@@ -861,6 +862,12 @@ impl ResolveError {
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
         match self.reason {
+            ResolveReason::TypeKind | ResolveReason::InterfaceKind | ResolveReason::EffectKind => {
+                return Some((
+                    crate::message::Message::incompatible_name_role(),
+                    "incompatible_name_role",
+                ));
+            }
             ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
                 return Some((crate::message::Message::incorrect_name(), "incorrect_name"));
             }
@@ -948,8 +955,21 @@ impl ResolveError {
             | Some(
                 NameContext::PrivateExport
                 | NameContext::MissingExport
-                | NameContext::MissingModuleAlias,
+                | NameContext::MissingModuleAlias
+                | NameContext::MixedTypeRowRoles,
             ) => None,
+        }
+    }
+
+    pub(crate) fn name_use(&self) -> Option<&'static str> {
+        match self.reason {
+            ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
+                Some("mixed-type-and-row-tail")
+            }
+            ResolveReason::TypeKind => Some("interface-as-type"),
+            ResolveReason::InterfaceKind => Some("interface-required"),
+            ResolveReason::EffectKind => Some("effect-required"),
+            _ => None,
         }
     }
 
@@ -986,6 +1006,18 @@ impl ResolveError {
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         let name = self.found.as_deref()?;
         match self.reason {
+            ResolveReason::TypeKind if self.1 == Some(NameContext::MixedTypeRowRoles) => {
+                return Some(crate::message::Message::resolve_mixed_type_row_roles(name));
+            }
+            ResolveReason::TypeKind => {
+                return Some(crate::message::Message::resolve_type_kind(name));
+            }
+            ResolveReason::InterfaceKind => {
+                return Some(crate::message::Message::resolve_interface_kind(name));
+            }
+            ResolveReason::EffectKind => {
+                return Some(crate::message::Message::resolve_effect_kind(name));
+            }
             ResolveReason::EquationNameMismatch => {
                 return Some(crate::message::Message::resolve_equation_name(
                     name,
@@ -1055,6 +1087,9 @@ impl ResolveError {
             NameContext::MissingExport => crate::message::Message::resolve_missing_export(name),
             NameContext::MissingModuleAlias => {
                 crate::message::Message::resolve_missing_module_alias(name)
+            }
+            NameContext::MixedTypeRowRoles => {
+                crate::message::Message::resolve_mixed_type_row_roles(name)
             }
         })
     }
@@ -5669,11 +5704,7 @@ impl Resolver {
             if namespace.nominals.contains_key(&member.text)
                 || namespace.interfaces.contains_key(&member.text)
             {
-                return Err(error(
-                    ResolveReason::EffectKind,
-                    member.span,
-                    "this uppercase name does not denote an effect",
-                ));
+                return Err(effect_kind_error(member.span, &member.text));
             }
             return Err(lookup_error(
                 NameContext::ExportedEffect,
@@ -5688,11 +5719,7 @@ impl Resolver {
         if self.type_names.contains_key(&member.text)
             || self.interface_names.contains_key(&member.text)
         {
-            return Err(error(
-                ResolveReason::EffectKind,
-                member.span,
-                "this uppercase name does not denote an effect",
-            ));
+            return Err(effect_kind_error(member.span, &member.text));
         }
         Err(lookup_error(
             NameContext::Effect,
@@ -10380,6 +10407,7 @@ fn lookup_error(
         NameContext::Constructor => ResolveReason::UnknownConstructor,
         NameContext::Interface => ResolveReason::UnknownInterface,
         NameContext::Effect | NameContext::ExportedEffect => ResolveReason::UnknownEffect,
+        NameContext::MixedTypeRowRoles => ResolveReason::TypeKind,
         NameContext::PrivateExport
         | NameContext::MissingExport
         | NameContext::MissingModuleAlias => ResolveReason::UnavailableExport,
@@ -10548,6 +10576,16 @@ fn interface_kind_error(span: crate::source::Span, spelling: &str) -> ResolveErr
         SourceLabel::new(span, "this name does not denote an interface"),
     );
     diagnostic.expected = Some("interface".to_owned());
+    diagnostic.found = Some(spelling.to_owned());
+    diagnostic.into()
+}
+
+fn effect_kind_error(span: crate::source::Span, spelling: &str) -> ResolveError {
+    let mut diagnostic = Diagnostic::new(
+        ResolveReason::EffectKind,
+        SourceLabel::new(span, "this uppercase name does not denote an effect"),
+    );
+    diagnostic.expected = Some("effect".to_owned());
     diagnostic.found = Some(spelling.to_owned());
     diagnostic.into()
 }
@@ -10854,9 +10892,10 @@ fn retain_free_type_name<'a>(
             Ok(())
         }
         std::collections::hash_map::Entry::Occupied(entry) => match entry.get() {
-            Some(existing) if reject_mixed_roles && *existing != role => Err(error(
-                ResolveReason::TypeKind,
+            Some(existing) if reject_mixed_roles && *existing != role => Err(lookup_error(
+                NameContext::MixedTypeRowRoles,
                 name.span,
+                &name.text,
                 "this parameter name is used both as an ordinary type and as an effect-row tail",
             )),
             None | Some(_) => Ok(()),

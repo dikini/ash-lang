@@ -300,6 +300,14 @@ localization language. Color is not required for completion.
   causes still fail explicitly. Sixty focused diagnostic, rendering, JSON and
   catalogue tests passed, along with warnings-denied Clippy. Both catalogues
   now contain 113 templates.
+- Resolver type/interface/effect name-role failures now have explicit messages
+  and machine facts, bringing resolution coverage to 21 of 30 reasons. The
+  overloaded type-kind reason distinguishes an interface used as a value type
+  from an implicit parameter used as both a type and a row tail. Effect-kind
+  producers retain the offending spelling on local and qualified routes.
+  The batch passed 128 focused diagnostic, resolution, module-resolution and
+  catalogue tests and warnings-denied Clippy. Both catalogues contain 118
+  templates; source acceptance and CLI defaults are unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

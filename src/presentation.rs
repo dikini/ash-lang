@@ -326,6 +326,13 @@ pub fn compile_resolve_diagnostic<'a>(
         value: FactValue::Text(name),
     };
     let mut facts = vec![name];
+    if let Some(usage) = error.name_use() {
+        facts.push(Fact {
+            name: "name_use",
+            kind: "name-use",
+            value: FactValue::Text(usage),
+        });
+    }
     if let Some(expected) = error.expected_name() {
         facts.push(Fact {
             name: "expected_name",

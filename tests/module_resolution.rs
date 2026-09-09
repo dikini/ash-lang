@@ -15,6 +15,32 @@ use ash::{
 static TEMP_IDS: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn qualified_non_effect_retains_the_selected_name() {
+    use ash::presentation::{compile_resolve_diagnostic, write_json};
+    let tree = TempTree::create();
+    tree.write("library.ash", "pub type Thing = Thing\n");
+    let failure = run_path(RunConfiguration {
+        entry: tree.write(
+            "entry.ash",
+            "import library as Lib\nprobe : Unit -> Unit ! {Lib.Thing}\nprobe () = ()\n",
+        ),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, ResolveReason::EffectKind);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_resolve_diagnostic(error, &sources).unwrap();
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["facts"][0]["value"], "Thing");
+    assert_eq!(json["facts"][1]["value"], "effect-required");
+}
+
+#[test]
 fn inaccessible_names_render_access_causes_and_cross_file_declarations() {
     use ash::{
         message::{Catalogue, Locale},
