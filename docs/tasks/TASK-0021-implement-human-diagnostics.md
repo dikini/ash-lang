@@ -810,6 +810,19 @@ localization language. Color is not required for completion.
   corruption. Only capture-analysis internal failures remain in Handler's generic
   path; it is not yet counted complete. All 1,286 library tests, 86
   diagnostic/catalogue tests and warnings-denied Clippy passed.
+- Runtime JSON reporting now reuses the 14 existing base reasons and bounded
+  resource-report facts without adding failure categories. The separate writer
+  retains primary and first teardown details, cleanup status, zero and maximum
+  integer amounts, and the undetermined cause of storage reservation failure.
+  It uses borrowed data, static fragments and stack numeric buffers, without an
+  owned JSON tree or catalogue formatting. Five new tests cover base reasons,
+  resource causes and phases, cleanup states, and failure at every output byte
+  without retry or flush after a write error. These tests, 14 executable tests,
+  13 CLI tests, four compile-time rendering/JSON tests and warnings-denied Clippy
+  passed. Human/short runtime output and CLI format selection remain outstanding;
+  this does not count runtime reasons as fully presented. The unapplied capture
+  catalogue expansion was set aside; remaining internal presentation must reuse
+  existing classifications and retain only missing explanatory facts.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
