@@ -375,6 +375,15 @@ localization language. Color is not required for completion.
   Type presentation covers 26 of 35 source reasons, with 153 templates per
   locale. All 135 focused diagnostic, catalogue and resource-scope tests and
   warnings-denied Clippy passed; no source or runtime behavior changed.
+- General `type.mismatch` presentation now borrows the failure's retained
+  source type spellings. Human output and JSON expose required/found types
+  and the original expression span without inventing a declaration location.
+  Cleanup callback domain/result failures and a named nominal parameter
+  exercise the adapter. This completes the separate one-reason general
+  mismatch family; source-reason coverage remains 26 of 35. Both catalogues
+  contain 154 templates. All 89 focused diagnostic, catalogue and cleanup
+  tests and warnings-denied Clippy passed; the nominal-spelling case passed
+  separately after being added. CLI defaults and runtime reporting are unchanged.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

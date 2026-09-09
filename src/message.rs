@@ -150,6 +150,8 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The general checking rule compares required and synthesized types.
+    type_mismatch => "type-mismatch" { expected: &'a str = "Int", found: &'a str = "Bool" },
     /// An outward type or effect row retains a local nominal identity.
     local_nominal_escape => "local-nominal-escape" {},
     /// The scope that owns the escaping local nominal identity.

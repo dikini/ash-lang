@@ -1222,6 +1222,55 @@ fn escape_messages_relate_outward_dependencies_to_their_scope() {
     }
 }
 
+#[test]
+fn general_type_mismatch_renders_retained_types_and_expression_span() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_mismatch_diagnostic, write_human, write_json},
+    };
+    for (ty, body) in [
+        ("Int -> Unit", "()"),
+        ("Unit -> Int", "42"),
+        ("Count -> Unit", "()"),
+    ] {
+        let text = format!(
+            "newtype Count = Count(Int)\naction : {ty}\naction ignored = {body}\nmain : Unit -> Int\nmain () = cleanup action {{\n42\n}}\n"
+        );
+        let fixture = ModuleFixture::load("general-mismatch.ash", &text);
+        let TypeError::Mismatch(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected general mismatch");
+        };
+        let view = compile_type_mismatch_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(ty), "{output}");
+            if locale == Locale::English {
+                assert!(
+                    output.contains("This expression must have type"),
+                    "{output}"
+                );
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], "type.mismatch");
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["facts"][0]["name"], "expected");
+        assert_eq!(json["facts"][1]["name"], "found");
+        assert_eq!(json["facts"][1]["value"], ty);
+        assert_eq!(json["labels"].as_array().unwrap().len(), 1);
+        assert_eq!(json["labels"][0]["relationship"], "expression");
+        assert_eq!(
+            json["labels"][0]["byte_start"],
+            error.span().range().start()
+        );
+        assert_eq!(json["labels"][0]["byte_end"], error.span().range().end());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

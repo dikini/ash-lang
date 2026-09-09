@@ -585,6 +585,14 @@ pub struct TypeMismatch {
 }
 
 impl TypeMismatch {
+    pub(crate) fn display_types(&self) -> (&str, &str) {
+        (&self.expected_display, &self.found_display)
+    }
+
+    pub(crate) fn message(&self) -> crate::message::Message<'_> {
+        crate::message::Message::type_mismatch(&self.expected_display, &self.found_display)
+    }
+
     /// Returns the expression that did not check.
     #[must_use]
     pub const fn span(&self) -> Span {

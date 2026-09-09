@@ -119,6 +119,7 @@ entry-effects = Calling `main` must require no effects from its caller.
 entry-open-result = The result type of `main` must be fully determined, with no type parameters, quantified types, or open effect rows.
 entry-constrained = The entry point `main` must require no interface evidence from its caller.
 entry-module = This is the entry module.
+type-mismatch = This expression must have type `{ $expected }`, but it has type `{ $found }`.
 local-nominal-escape = This type or effect row exposes a local nominal type outside its scope.
 local-nominal-scope = This scope owns the local nominal type.
 resource-escape = This value or computation depends on a resource that would be out of scope.

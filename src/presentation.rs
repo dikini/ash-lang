@@ -88,6 +88,53 @@ pub struct CompileDiagnostic<'a> {
     facts: Vec<Fact<'a>>,
 }
 
+/// Exposes the general checking rule's retained source type spellings.
+///
+/// # Errors
+/// Returns missing source context. No declaration location is invented when
+/// the general checking rule retains only the mismatching expression.
+pub fn compile_type_mismatch_diagnostic<'a>(
+    mismatch: &'a crate::elaborate::TypeMismatch,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let span = mismatch.span();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let (expected, found) = mismatch.display_types();
+    let found_fact = Fact {
+        name: "found",
+        kind: "code",
+        value: FactValue::Text(found),
+    };
+    Ok(CompileDiagnostic {
+        reason: "type.mismatch".into(),
+        responsibility: "source",
+        message: mismatch.message(),
+        primary: Some(Label {
+            source,
+            span,
+            message: Message::type_found(found),
+            relationship: "expression",
+            facts: vec![found_fact],
+        }),
+        related: Vec::new(),
+        facts: vec![
+            Fact {
+                name: "expected",
+                kind: "code",
+                value: FactValue::Text(expected),
+            },
+            found_fact,
+        ],
+    })
+}
+
 /// Exposes retained type-error facts without inspecting diagnostic prose.
 ///
 /// # Errors
