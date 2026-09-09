@@ -238,6 +238,14 @@ coverage-non-exhaustive = Тези случаи не покриват всичк
 coverage-empty-match = Изразът `match` изисква поне един клон.
 coverage-redundant-case = Този случай никога не може да бъде избран, защото предходните случаи вече покриват входните му стойности.
 resolve-identity-exhausted = Ash изчерпа пространството от идентификатори за { $space ->
+    [interface] интерфейси в модул
+    [method] методи в интерфейс
+    [effect] ефекти в модул
+    [operation] операции в ефект
+    [implementation] реализации в модул
+    [requirement] изисквания за интерфейси в декларация
+    [nominal] номинални типове в модул
+    [constructor] конструктори в декларация
     [type-binder] типови параметри
     [local-nominal] локални номинални типове
     [continuation] продължения

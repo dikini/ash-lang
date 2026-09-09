@@ -866,6 +866,22 @@ enum ResolveContext {
 /// The compiler identity space exhausted during resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolveIdentitySpace {
+    /// Identifiers for interfaces in a module.
+    Interface,
+    /// Identifiers for methods in an interface.
+    Method,
+    /// Identifiers for effects in a module.
+    Effect,
+    /// Identifiers for operations in an effect.
+    Operation,
+    /// Identifiers for implementations in a module.
+    Implementation,
+    /// Identifiers for interface requirements in a declaration.
+    Requirement,
+    /// Identifiers for nominal types in a module.
+    Nominal,
+    /// Identifiers for constructors in a declaration.
+    Constructor,
     /// Value binders, including generated implementation binders.
     TermBinder,
     /// Type binders, including lexical method parameters.
@@ -882,6 +898,14 @@ impl ResolveIdentitySpace {
     pub(crate) const fn diagnostic_name(self) -> &'static str {
         match self {
             Self::TermBinder => "term-binder",
+            Self::Interface => "interface",
+            Self::Method => "method",
+            Self::Effect => "effect",
+            Self::Operation => "operation",
+            Self::Implementation => "implementation",
+            Self::Requirement => "requirement",
+            Self::Nominal => "nominal",
+            Self::Constructor => "constructor",
             Self::TypeBinder => "type-binder",
             Self::LocalNominal => "local-nominal",
             Self::Continuation => "continuation",
@@ -982,6 +1006,9 @@ impl ResolveError {
     }
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
+        if self.identity_space().is_some() {
+            return Some((self.message()?, "identity_allocation"));
+        }
         if let Some((message, _)) = self.internal_message() {
             return Some((message, "resolution_site"));
         }
@@ -1135,6 +1162,13 @@ impl ResolveError {
     }
 
     pub(crate) fn subject_fact(&self) -> Option<(&'static str, &'static str, &str)> {
+        if let Some(space) = self.identity_space() {
+            return Some((
+                "identity_space",
+                "resolver-identity-space",
+                space.diagnostic_name(),
+            ));
+        }
         if let Some((_, cause)) = self.internal_message() {
             return Some(("cause", "resolver-internal-cause", cause));
         }
@@ -1206,6 +1240,9 @@ impl ResolveError {
     }
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        if let Some(space) = self.identity_space() {
+            return Some(crate::message::Message::resolve_identity_exhausted(space));
+        }
         if let Some((message, _)) = self.internal_message() {
             return Some(message);
         }
@@ -2613,6 +2650,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many interface declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Interface,
+                ))
             })?;
             let id = InterfaceId::new(self.module, index);
             self.interface_names
@@ -2625,6 +2665,9 @@ impl Resolver {
                         method.span,
                         "the interface contains too many method declarations",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Method,
+                    ))
                 })?;
                 let method_id = MethodId::new(id, method_index);
                 self.method_names.insert(
@@ -2662,6 +2705,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many effect declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Effect,
+                ))
             })?;
             let id = EffectId::new(self.module, declaration_index);
             self.effect_names.insert(declaration.name.text.clone(), id);
@@ -2714,6 +2760,9 @@ impl Resolver {
                         operation.span,
                         "the effect contains too many operations",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Operation,
+                    ))
                 })?;
                 let operation_id = OperationId::new(id, operation_index);
                 let operation_name = try_clone_resolution_string(
@@ -3122,6 +3171,9 @@ impl Resolver {
                 implementation.span,
                 "the file contains too many implementation declarations",
             )
+            .with_context(ResolveContext::IdentityExhaustion(
+                ResolveIdentitySpace::Implementation,
+            ))
         })?;
         let id = ImplId::new(self.module, index);
 
@@ -6261,6 +6313,9 @@ impl Resolver {
                     requirement.span,
                     "the declaration contains too many interface requirements",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Requirement,
+                ))
             })?;
             let application = self.resolve_interface_application(requirement)?;
             resolved.0.push(ResolvedRequirement {
@@ -7405,6 +7460,9 @@ impl Resolver {
                     declaration.span,
                     "the file contains too many type declarations",
                 )
+                .with_context(ResolveContext::IdentityExhaustion(
+                    ResolveIdentitySpace::Nominal,
+                ))
             })?;
             let id = NominalTypeId::new(self.module, index);
             self.type_names.insert(declaration.name.text.clone(), id);
@@ -7454,6 +7512,9 @@ impl Resolver {
                         constructor.span,
                         "the declaration contains too many constructors",
                     )
+                    .with_context(ResolveContext::IdentityExhaustion(
+                        ResolveIdentitySpace::Constructor,
+                    ))
                 })?;
                 let id = ConstructorId::new(*owner, index);
                 self.constructor_names
@@ -14414,6 +14475,88 @@ mod tests {
             assert_eq!(json["facts"][0]["kind"], "resolver-identity-space");
             assert_eq!(json["facts"][0]["value"], fact);
             assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+        }
+    }
+
+    #[test]
+    fn declaration_capacity_messages_keep_the_existing_internal_reason() {
+        use crate::message::{Catalogue, Locale};
+        let source = SourceFile::new("capacity.ash", "name").unwrap();
+        let span = source.span(ByteRange::new(0, 4).unwrap()).unwrap();
+        for (space, name, en, bg) in [
+            (
+                ResolveIdentitySpace::Interface,
+                "interface",
+                "interfaces in a module",
+                "интерфейси в модул",
+            ),
+            (
+                ResolveIdentitySpace::Method,
+                "method",
+                "methods in an interface",
+                "методи в интерфейс",
+            ),
+            (
+                ResolveIdentitySpace::Effect,
+                "effect",
+                "effects in a module",
+                "ефекти в модул",
+            ),
+            (
+                ResolveIdentitySpace::Operation,
+                "operation",
+                "operations in an effect",
+                "операции в ефект",
+            ),
+            (
+                ResolveIdentitySpace::Implementation,
+                "implementation",
+                "implementations in a module",
+                "реализации в модул",
+            ),
+            (
+                ResolveIdentitySpace::Requirement,
+                "requirement",
+                "interface requirements in a declaration",
+                "изисквания за интерфейси в декларация",
+            ),
+            (
+                ResolveIdentitySpace::Nominal,
+                "nominal",
+                "nominal types in a module",
+                "номинални типове в модул",
+            ),
+            (
+                ResolveIdentitySpace::Constructor,
+                "constructor",
+                "constructors in a declaration",
+                "конструктори в декларация",
+            ),
+        ] {
+            let error = error(ResolveReason::InternalState, span, "legacy description")
+                .with_context(ResolveContext::IdentityExhaustion(space));
+            let view = crate::presentation::compile_resolve_diagnostic(&error, &[&source]).unwrap();
+            for (locale, subject) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+                let mut output = Vec::new();
+                crate::presentation::write_human(
+                    &mut output,
+                    &view,
+                    &Catalogue::new(locale).unwrap(),
+                )
+                .unwrap();
+                let output = String::from_utf8(output).unwrap();
+                assert!(output.contains(subject));
+                assert!(!output.contains("legacy description"));
+            }
+            let mut output = Vec::new();
+            crate::presentation::write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], "resolve.internal-state");
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["name"], "identity_space");
+            assert_eq!(json["facts"][0]["value"], name);
+            assert_eq!(json["labels"][0]["relationship"], "identity_allocation");
+            assert_eq!(json["labels"][0]["byte_end"], 4);
         }
     }
 

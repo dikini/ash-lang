@@ -237,6 +237,14 @@ coverage-non-exhaustive = These cases do not cover every possible input; for exa
 coverage-empty-match = A match requires at least one arm.
 coverage-redundant-case = This case can never be selected because earlier cases already cover its inputs.
 resolve-identity-exhausted = Ash exhausted its identifier space for { $space ->
+    [interface] interfaces in a module
+    [method] methods in an interface
+    [effect] effects in a module
+    [operation] operations in an effect
+    [implementation] implementations in a module
+    [requirement] interface requirements in a declaration
+    [nominal] nominal types in a module
+    [constructor] constructors in a declaration
     [type-binder] type parameters
     [local-nominal] local nominal types
     [continuation] continuations

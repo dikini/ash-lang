@@ -952,6 +952,10 @@ localization language. Color is not required for completion.
   original reasons and spans are unchanged. A table covers all five kinds and
   five retained problems. All 133 resolver tests, five catalogue-contract tests
   and warnings-denied Clippy passed.
+- Eight declaration-capacity checks now reuse identifier-exhaustion presentation
+  with their actual identity space. Their existing internal-state reason and
+  source span remain unchanged. The eight-case locale/JSON table, all 134
+  resolver tests, five catalogue-contract tests and warnings-denied Clippy passed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
