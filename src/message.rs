@@ -150,6 +150,8 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler selected an implementation unavailable at this use.
+    evidence_unavailable_implementation => "evidence-unavailable-implementation" {},
     /// The compiler ran out of resources for type checking and type construction.
     compiler_type_resources => "compiler-type-resources" {},
     /// The compiler ran out of resources for interface and constraint processing.

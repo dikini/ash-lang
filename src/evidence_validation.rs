@@ -74,6 +74,33 @@ pub struct EvidenceValidationFailure {
 }
 
 impl EvidenceValidationFailure {
+    pub(crate) fn diagnostic_message(
+        self,
+    ) -> Option<(crate::message::Message<'static>, &'static str)> {
+        use crate::message::Message;
+        Some(match self.reason {
+            EvidenceValidationReason::UnavailableImplementation => (
+                Message::evidence_unavailable_implementation(),
+                "evidence_use",
+            ),
+            EvidenceValidationReason::ConstraintResourceExhausted => {
+                (Message::compiler_constraint_resources(), "validation_site")
+            }
+            EvidenceValidationReason::TypeResourceExhausted => {
+                (Message::compiler_type_resources(), "validation_site")
+            }
+            _ => return None,
+        })
+    }
+
+    pub(crate) const fn diagnostic_resource(self) -> Option<&'static str> {
+        match self.reason {
+            EvidenceValidationReason::ConstraintResourceExhausted => Some("constraint-work"),
+            EvidenceValidationReason::TypeResourceExhausted => Some("type-work"),
+            _ => None,
+        }
+    }
+
     const fn new(reason: EvidenceValidationReason, primary: Span) -> Self {
         Self { reason, primary }
     }
@@ -7807,6 +7834,65 @@ mod tests {
 
     static FIXTURE_IDS: AtomicU64 = AtomicU64::new(0);
 
+    #[test]
+    fn evidence_failure_messages_preserve_resource_and_occurrence_context() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_evidence_failure, write_human, write_json},
+        };
+        let source = SourceFile::new("evidence.ash", "use_value").unwrap();
+        let span = source.span(ByteRange::new(0, 9).unwrap()).unwrap();
+        for (error, resource_name, explanation) in [
+            (
+                resource(span),
+                Some("constraint-work"),
+                "The compiler ran out of resources for interface and constraint processing.",
+            ),
+            (
+                type_resource(span),
+                Some("type-work"),
+                "The compiler ran out of resources for type checking and type construction.",
+            ),
+            (
+                unavailable(span),
+                None,
+                "The compiler selected an implementation that is not available in the module containing this use.",
+            ),
+        ] {
+            let view = compile_evidence_failure(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                if locale == Locale::English {
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(output.contains(explanation));
+                    assert!(output.contains("use_value"));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["reason"], error.reason().to_string());
+            assert_eq!(json["responsibility"], "compiler");
+            assert_eq!(json["facts"][0]["value"], "evidence-validation");
+            if let Some(resource) = resource_name {
+                assert_eq!(json["facts"][1]["value"], resource);
+            }
+            assert_eq!(
+                json["labels"][0]["relationship"],
+                if resource_name.is_some() {
+                    "validation_site"
+                } else {
+                    "evidence_use"
+                }
+            );
+            assert!(compile_evidence_failure(&error, &[]).is_err());
+        }
+        for error in [unknown(span), invalid_root(span)] {
+            assert!(compile_evidence_failure(&error, &[&source]).is_err());
+        }
+    }
+
     fn deep_application_type(depth: usize) -> Type {
         let mut ty = Type::Int;
         for _ in 0..depth {
@@ -14875,6 +14961,23 @@ mod tests {
             failure.reason(),
             EvidenceValidationReason::UnavailableImplementation
         );
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let diagnostic = crate::presentation::compile_evidence_failure(&failure, &sources).unwrap();
+        for locale in [
+            crate::message::Locale::English,
+            crate::message::Locale::Bulgarian,
+        ] {
+            crate::presentation::write_human(
+                &mut Vec::new(),
+                &diagnostic,
+                &crate::message::Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+        }
     }
 
     #[test]

@@ -402,6 +402,54 @@ pub fn compile_elaboration_failure(
     })
 }
 
+/// Exposes a compiler-owned failure while validating linked interface evidence.
+///
+/// # Errors
+/// Returns unsupported for causes not yet retained precisely, or missing source context.
+pub fn compile_evidence_failure<'a>(
+    error: &crate::evidence_validation::EvidenceValidationFailure,
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
+    let (message, relationship) = error
+        .diagnostic_message()
+        .ok_or(PresentationError::Unsupported)?;
+    let span = error.primary();
+    let source = sources
+        .iter()
+        .copied()
+        .find(|source| source.id() == span.source())
+        .ok_or(PresentationError::MissingSource)?;
+    source
+        .location(span)
+        .map_err(|_| PresentationError::MissingSource)?;
+    let mut facts = vec![Fact {
+        name: "stage",
+        kind: "compiler-stage",
+        value: FactValue::Text("evidence-validation"),
+    }];
+    if let Some(resource) = error.diagnostic_resource() {
+        facts.push(Fact {
+            name: "resource",
+            kind: "resource",
+            value: FactValue::Text(resource),
+        });
+    }
+    Ok(CompileDiagnostic {
+        reason: error.reason().to_string(),
+        responsibility: "compiler",
+        primary: Some(Label {
+            source,
+            span,
+            message: message.clone(),
+            relationship,
+            facts: Vec::new(),
+        }),
+        message,
+        related: Vec::new(),
+        facts,
+    })
+}
+
 /// Exposes the entry module's local-main contract failure.
 ///
 /// # Errors

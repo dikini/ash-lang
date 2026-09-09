@@ -374,3 +374,4 @@ coverage-work-limit = The compiler could not complete pattern coverage analysis 
 compiler-type-resources = The compiler ran out of resources for type checking and type construction.
 compiler-constraint-resources = The compiler ran out of resources for interface and constraint processing.
 effect-core-unavailable = The compiler tried to lower effect syntax through its pure Core path.
+evidence-unavailable-implementation = The compiler selected an implementation that is not available in the module containing this use.

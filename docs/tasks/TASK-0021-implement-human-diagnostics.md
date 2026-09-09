@@ -546,6 +546,16 @@ localization language. Color is not required for completion.
   warnings-denied Clippy.
   Elaboration internal/resource coverage is five of six reasons, with 277
   templates per locale. Generic internal state still needs retained causes.
+- Evidence validation now presents unavailable selected implementations and
+  type/constraint resource failures with compiler responsibility, the retained
+  validation span and a structured stage fact. Resource messages reuse the
+  existing catalogue entries. Both locales and JSON cover the three reasons;
+  the linked unavailable-implementation fixture also renders its actual failure.
+  Unknown-identity and invalid-root failures remain unsupported pending more
+  specific retained causes. Evidence-validation coverage is three of five
+  reasons, with 278 templates per locale. All 137 evidence-validation tests,
+  three catalogue tests and warnings-denied Clippy passed. No validation check,
+  resource charge or diagnostic precedence changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
