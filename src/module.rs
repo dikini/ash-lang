@@ -482,6 +482,23 @@ pub struct ModuleFailure {
 }
 
 impl ModuleFailure {
+    pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
+        use crate::message::Message;
+        Some(match self.reason {
+            ModuleReason::ReservedRoot => Message::module_reserved_root(self.root()?),
+            ModuleReason::DuplicateRoot => Message::module_duplicate_root(self.root()?),
+            ModuleReason::InvalidRootName => Message::module_invalid_root_name(self.root()?),
+            ModuleReason::UnknownRoot => Message::module_unknown_root(self.root()?),
+            ModuleReason::UnknownBuiltin => Message::module_unknown_builtin(),
+            ModuleReason::NotFound => Message::module_not_found(self.path()?),
+            ModuleReason::ImportCycle => Message::module_import_cycle(self.path()?),
+            ModuleReason::PathEscape
+            | ModuleReason::RootUnavailable
+            | ModuleReason::InvalidPath
+            | ModuleReason::ResourceLimit => return None,
+        })
+    }
+
     fn source(reason: ModuleReason, primary: Span, path: Option<PathBuf>) -> Self {
         Self {
             reason,

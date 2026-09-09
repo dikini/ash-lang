@@ -624,3 +624,85 @@ fn graph_syntax_rendering_merges_stages_and_retains_import_context() {
         assert!(import["path"].as_str().unwrap().ends_with("entry.ash"));
     }
 }
+
+#[test]
+fn module_source_errors_render_retained_imports_and_target_facts() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_graph_diagnostics, write_json, write_short},
+    };
+    for (source, reason, en, bg) in [
+        (
+            "import @absent.helper as Helper\n",
+            "module.unknown-root",
+            "No module root named `absent` is configured.",
+            "Не е зададен корен за модули с име `absent`.",
+        ),
+        (
+            "import @builtin.absent as Absent\n",
+            "module.unknown-builtin",
+            "This import names no compiler-owned module.",
+            "Този импорт не посочва модул, предоставен от компилатора.",
+        ),
+        (
+            "import absent as Absent\n",
+            "module.not-found",
+            "The imported source file",
+            "Импортираният изходен файл",
+        ),
+        (
+            "import entry as Entry\n",
+            "module.import-cycle",
+            "This import creates a dependency cycle",
+            "Този импорт създава цикъл от зависимости",
+        ),
+    ] {
+        let tree = TempTree::create();
+        let entry = tree.write("entry.ash", source);
+        let failure = load_module_graph(&entry, &ModuleRoots::empty()).unwrap_err();
+        drop(tree);
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        for (locale, expected) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(expected));
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["reason"], reason);
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["labels"][0]["relationship"], "import_target");
+        assert_eq!(json["labels"][0]["path"], entry.to_str().unwrap());
+        for (locale, label) in [
+            (
+                Locale::English,
+                "The failure occurred while processing this import.",
+            ),
+            (
+                Locale::Bulgarian,
+                "Неуспехът възникна при обработката на този импорт.",
+            ),
+        ] {
+            let mut output = Vec::new();
+            ash::presentation::write_human(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            assert!(String::from_utf8(output).unwrap().contains(label));
+        }
+        if reason == "module.unknown-root" {
+            assert_eq!(json["facts"][0]["value"], "absent");
+        } else if reason == "module.not-found" || reason == "module.import-cycle" {
+            assert_eq!(json["facts"][0]["kind"], "path");
+        }
+    }
+}

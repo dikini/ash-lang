@@ -5,6 +5,62 @@ use ash::{
 };
 
 #[test]
+fn root_name_errors_are_invocation_diagnostics_with_localized_facts() {
+    use ash::module::ModuleRoots;
+    for (roots, reason, root, en, bg) in [
+        (
+            vec![("builtin", ".")],
+            "invocation.reserved-root",
+            "builtin",
+            "The module root `builtin` is reserved by Ash.",
+            "Коренът за модули `builtin` е запазен от Ash.",
+        ),
+        (
+            vec![("std", "."), ("std", ".")],
+            "invocation.duplicate-root",
+            "std",
+            "The module root `std` is configured more than once.",
+            "Коренът за модули `std` е зададен повече от веднъж.",
+        ),
+        (
+            vec![("Bad", ".")],
+            "invocation.invalid-root-name",
+            "Bad",
+            "`Bad` is not a valid lowercase Ash identifier for a module root.",
+            "`Bad` не е валиден идентификатор на Ash с малка начална буква за корен за модули.",
+        ),
+    ] {
+        let failure =
+            GraphDiagnostic::from(LoadGraphError::Module(ModuleRoots::new(roots).unwrap_err()));
+        let diagnostics = compile_graph_diagnostics(&failure).unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        for (locale, expected) in [(Locale::English, en), (Locale::Bulgarian, bg)] {
+            let mut output = Vec::new();
+            write_short(
+                &mut output,
+                &diagnostics[0],
+                &Catalogue::new(locale).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                String::from_utf8(output).unwrap(),
+                format!("{expected} [{reason}]\n")
+            );
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &diagnostics[0]).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "invocation");
+        assert_eq!(json["reason"], reason);
+        assert_eq!(json["labels"], serde_json::json!([]));
+        assert_eq!(
+            json["facts"],
+            serde_json::json!([{"name":"root", "kind":"identifier", "value":root}])
+        );
+    }
+}
+
+#[test]
 fn unreadable_entry_has_input_responsibility_without_a_synthetic_location() {
     let failure = GraphDiagnostic::from(LoadGraphError::Read {
         path: "missing.ash".into(),

@@ -299,6 +299,36 @@ pub fn compile_graph_diagnostics(
     context: &GraphDiagnostic,
 ) -> Result<Vec<CompileDiagnostic<'_>>, PresentationError> {
     let failure = context.failure();
+    if let LoadGraphError::Module(failure) = failure {
+        let message = failure.message().ok_or(PresentationError::Unsupported)?;
+        let mut facts = Vec::new();
+        if let Some(root) = failure.root() {
+            facts.push(Fact {
+                name: "root",
+                kind: "identifier",
+                value: FactValue::Text(root),
+            });
+        }
+        if let Some(path) = failure.path() {
+            facts.push(Fact {
+                name: "path",
+                kind: "path",
+                value: FactValue::Path(path),
+            });
+        }
+        return Ok(vec![CompileDiagnostic {
+            reason: failure.reason().to_string(),
+            responsibility: if failure.is_source_rejection() {
+                "source"
+            } else {
+                "invocation"
+            },
+            message,
+            primary: import_label(context, "import_target")?,
+            related: Vec::new(),
+            facts,
+        }]);
+    }
     if let LoadGraphError::Syntax(failure) = failure {
         return compile_graph_syntax(context, failure);
     }

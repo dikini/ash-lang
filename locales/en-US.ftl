@@ -55,7 +55,7 @@ parse-unexpected-token = This token is not allowed at this grammar position.
 parse-recovery = Parsing continues from this position.
 parse-synchronization = Parsing resumes at this boundary.
 input-invalid-utf8 = `{ $path }` is not a valid UTF-8 source file.
-import-target = This import selected the target file.
+import-target = The failure occurred while processing this import.
 input-read =
     Cannot read `{ $path }`: { $kind ->
         [not-found] the file or directory does not exist.
@@ -100,4 +100,11 @@ input-read =
        *[uncategorized] an uncategorized I/O error occurred.
     }
 syntax-depth = Parsing `{ $path }` reached the compiler's nesting limit of { $limit }.
+module-reserved-root = The module root `{ $root }` is reserved by Ash.
+module-duplicate-root = The module root `{ $root }` is configured more than once.
+module-invalid-root-name = `{ $root }` is not a valid lowercase Ash identifier for a module root.
+module-unknown-root = No module root named `{ $root }` is configured.
+module-unknown-builtin = This import names no compiler-owned module.
+module-not-found = The imported source file `{ $path }` does not exist.
+module-import-cycle = This import creates a dependency cycle through `{ $path }`.
 syntax-work = Processing `{ $path }` reached the compiler's syntax-work limit of { $limit }.

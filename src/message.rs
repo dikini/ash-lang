@@ -132,6 +132,20 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A configured root attempts to replace a compiler-owned root.
+    module_reserved_root => "module-reserved-root" { root: &'a str = "builtin" },
+    /// One root name appears more than once in the invocation.
+    module_duplicate_root => "module-duplicate-root" { root: &'a str = "std" },
+    /// A root name fails the existing identifier check.
+    module_invalid_root_name => "module-invalid-root-name" { root: &'a str = "Bad" },
+    /// An absolute import selects an unconfigured root.
+    module_unknown_root => "module-unknown-root" { root: &'a str = "std" },
+    /// No compiler-owned module matches the selected builtin path.
+    module_unknown_builtin => "module-unknown-builtin" {},
+    /// Canonicalization reported that the imported file does not exist.
+    module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },
+    /// An import reaches a module active in the current traversal.
+    module_import_cycle => "module-import-cycle" { path: &'a Path = Path::new("entry.ash") },
     /// Compiler protection for syntax nesting stopped parsing.
     syntax_depth => "syntax-depth" { path: &'a str = "source.ash", limit: usize = 128 },
     /// Cumulative retained syntax work reached the compiler budget.

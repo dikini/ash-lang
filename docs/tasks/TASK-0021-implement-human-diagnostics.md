@@ -158,6 +158,21 @@ localization language. Color is not required for completion.
   all 1,227 library tests, nine rustdoc tests and warnings-denied Clippy passed.
   Remaining graph/module adapters, broad phase coverage and the full slice-2
   gate are still outstanding; runtime reporting and CLI defaults are unchanged.
+- Module presentation now covers reserved, duplicate and invalid root names,
+  unknown roots and compiler-owned modules, missing imported files and import
+  cycles. The module owner selects checked messages; presentation borrows its
+  retained root/path facts and import span. Real loader tests render after the
+  fixture files are removed. Both catalogues cover these seven families.
+- Review caught an import label claiming successful target selection for an
+  unknown root or builtin. A failing human-output regression drove neutral
+  processing-context wording in both catalogues; followup review confirmed the
+  fix. Six focused suites, all 1,227 library tests and warnings-denied Clippy
+  passed. Markdown lint and diff whitespace checks passed separately.
+- Path escape, unavailable root, invalid internal path and module resource
+  messages remain outstanding, along with source-model and projection failures.
+  Before admitting internal module failures, replace the staged source-versus-
+  invocation presentation split with explicit owner responsibility; the existing
+  source-rejection boolean cannot distinguish invocation from compiler failure.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian
