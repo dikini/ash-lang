@@ -742,6 +742,19 @@ localization language. Color is not required for completion.
   and 18 optional-node localized/JSON layouts. Core coverage is 12/23 reasons
   and overall coverage is 168/197. All 1,273 library tests, 86 diagnostic/catalogue
   tests and warnings-denied Clippy passed.
+- Core discard and resource-escape diagnostics retain capture-checker causes
+  and causal spans. Unproved discard, unfinished clause completion, required
+  cleanup, abandoned cleanup handlers and escaping resource dependencies have
+  distinct explanations. Core presentation now takes retained sources, reuses
+  existing label wording and preserves compiler responsibility. Tests exercise
+  cross-file labels, exact byte spans, missing sources and corrupted programs
+  before and after transformations. These two reasons bring Core coverage to
+  14/23 and overall coverage to 170/197.
+- Eight Core type-operation causes now distinguish missing kind-analysis
+  results, duplicate generated type binders and non-inert effect abstraction
+  bodies. This reason remains partially presented and is not counted complete.
+  The combined batch passed 1,275 library tests, 86 diagnostic/catalogue tests
+  and warnings-denied Clippy.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

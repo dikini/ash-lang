@@ -257,12 +257,24 @@ pub struct ValidationError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ValidationCause {
+    CapturedResourceEscape {
+        source: crate::source::Span,
+        acquisition: crate::source::Span,
+    },
+    UnsafeCoreDiscard(super::capture::UnsafeDiscard),
+    CoreCleanupContext {
+        discard: crate::source::Span,
+        action: crate::source::Span,
+        handler: crate::source::Span,
+    },
     MissingChild,
     ForeignArena,
     MissingNode,
     NodeIdentityRange,
     EmptyMatch,
-    RedundantArm { arm: usize },
+    RedundantArm {
+        arm: usize,
+    },
     NonExhaustiveMatch,
     MissingOrigin,
     OriginDepth,
@@ -311,6 +323,14 @@ enum ValidationCause {
     UnresolvedCoreRow,
     UnknownCoreRowBinder,
     NonRowTailKind,
+    MissingTupleKinds,
+    MissingArgumentKind,
+    MissingFunctionKind,
+    MissingCodomainKind,
+    MissingDomainKind,
+    CoreKindResultCount,
+    DuplicateGeneratedTypeBinder,
+    EffectAbstractionBody,
     UnknownCoreEffect,
     CoreOperationOwner,
     CoreEffectArgumentCount,
@@ -335,6 +355,13 @@ enum ValidationCause {
 impl ValidationError {
     pub(crate) fn cause_name(&self) -> Option<&'static str> {
         Some(match self.cause? {
+            ValidationCause::CapturedResourceEscape { .. } => "captured-resource-escape",
+            ValidationCause::CoreCleanupContext { .. } => "cleanup-context",
+            ValidationCause::UnsafeCoreDiscard(failure) => match failure.owner {
+                None => "discard-unproved",
+                Some(super::capture::CompletionOwner::Cleanup(_)) => "discard-cleanup",
+                Some(super::capture::CompletionOwner::Clause(_)) => "discard-clause",
+            },
             ValidationCause::MissingChild => "missing-child",
             ValidationCause::ForeignArena => "foreign-arena",
             ValidationCause::MissingNode => "missing-node",
@@ -389,6 +416,14 @@ impl ValidationError {
             ValidationCause::UnresolvedCoreRow => "unresolved-core-row",
             ValidationCause::UnknownCoreRowBinder => "unknown-core-row-binder",
             ValidationCause::NonRowTailKind => "non-row-tail-kind",
+            ValidationCause::MissingTupleKinds => "missing-tuple-kinds",
+            ValidationCause::MissingArgumentKind => "missing-argument-kind",
+            ValidationCause::MissingFunctionKind => "missing-function-kind",
+            ValidationCause::MissingCodomainKind => "missing-codomain-kind",
+            ValidationCause::MissingDomainKind => "missing-domain-kind",
+            ValidationCause::CoreKindResultCount => "core-kind-result-count",
+            ValidationCause::DuplicateGeneratedTypeBinder => "duplicate-generated-type-binder",
+            ValidationCause::EffectAbstractionBody => "effect-abstraction-body",
             ValidationCause::UnknownCoreEffect => "unknown-core-effect",
             ValidationCause::CoreOperationOwner => "core-operation-owner",
             ValidationCause::CoreEffectArgumentCount => "core-effect-argument-count",
@@ -427,6 +462,69 @@ impl ValidationError {
         }
     }
 
+    pub(crate) fn capture_labels(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            crate::source::Span,
+            crate::message::Message<'static>,
+            &'static str,
+        ),
+    > {
+        use crate::message::Message;
+        let labels = match self.cause {
+            Some(ValidationCause::CapturedResourceEscape {
+                source,
+                acquisition,
+            }) => [
+                Some((source, Message::resource_escape(), "escaping_dependency")),
+                Some((
+                    acquisition,
+                    Message::resource_acquisition(),
+                    "resource_acquisition",
+                )),
+                None,
+            ],
+            Some(ValidationCause::CoreCleanupContext {
+                discard,
+                action,
+                handler,
+            }) => [
+                Some((discard, Message::cleanup_context(), "discard")),
+                Some((action, Message::cleanup_required_action(), "cleanup_action")),
+                Some((
+                    handler,
+                    Message::cleanup_abandoned_handler(),
+                    "abandoned_handler",
+                )),
+            ],
+            Some(ValidationCause::UnsafeCoreDiscard(failure)) => {
+                let (message, owner) = match failure.owner {
+                    None => (Message::discard_unknown(), None),
+                    Some(super::capture::CompletionOwner::Cleanup(span)) => (
+                        Message::discard_cleanup(),
+                        Some((span, Message::discard_cleanup_owner(), "cleanup_action")),
+                    ),
+                    Some(super::capture::CompletionOwner::Clause(span)) => (
+                        Message::discard_clause(),
+                        Some((span, Message::discard_clause_owner(), "completion_clause")),
+                    ),
+                };
+                [
+                    Some((failure.discard, message, "discard")),
+                    Some((
+                        failure.request,
+                        Message::discard_request(),
+                        "capturing_request",
+                    )),
+                    owner,
+                ]
+            }
+            _ => [None, None, None],
+        };
+        labels.into_iter().flatten()
+    }
+
     pub(crate) fn diagnostic_message(&self) -> Option<crate::message::Message<'static>> {
         use crate::message::Message;
         let node = self
@@ -436,6 +534,36 @@ impl ValidationError {
             .ok()?;
         if let Some(cause) = self.cause {
             return Some(match (cause, node) {
+                (ValidationCause::CapturedResourceEscape { .. }, None) => {
+                    Message::core_resource_escape()
+                }
+                (ValidationCause::CapturedResourceEscape { .. }, Some(node)) => {
+                    Message::core_resource_escape_node(node)
+                }
+                (ValidationCause::CoreCleanupContext { .. }, None) => {
+                    Message::core_cleanup_context()
+                }
+                (ValidationCause::CoreCleanupContext { .. }, Some(node)) => {
+                    Message::core_cleanup_context_node(node)
+                }
+                (ValidationCause::UnsafeCoreDiscard(failure), node) => {
+                    match (failure.owner, node) {
+                        (None, None) => Message::core_discard_unknown(),
+                        (None, Some(node)) => Message::core_discard_unknown_node(node),
+                        (Some(super::capture::CompletionOwner::Clause(_)), None) => {
+                            Message::core_discard_clause()
+                        }
+                        (Some(super::capture::CompletionOwner::Clause(_)), Some(node)) => {
+                            Message::core_discard_clause_node(node)
+                        }
+                        (Some(super::capture::CompletionOwner::Cleanup(_)), None) => {
+                            Message::core_discard_cleanup()
+                        }
+                        (Some(super::capture::CompletionOwner::Cleanup(_)), Some(node)) => {
+                            Message::core_discard_cleanup_node(node)
+                        }
+                    }
+                }
                 (ValidationCause::MissingChild, None) => Message::core_validation_missing_child(),
                 (ValidationCause::ForeignArena, None) => Message::core_validation_foreign_arena(),
                 (ValidationCause::MissingNode, None) => Message::core_validation_missing_node(),
@@ -853,6 +981,54 @@ impl ValidationError {
                 (ValidationCause::ResourceProviderMethodCount, Some(node)) => {
                     Message::core_validation_resource_provider_method_count_node(node)
                 }
+                (ValidationCause::MissingTupleKinds, None) => {
+                    Message::core_validation_missing_tuple_kinds()
+                }
+                (ValidationCause::MissingTupleKinds, Some(node)) => {
+                    Message::core_validation_missing_tuple_kinds_node(node)
+                }
+                (ValidationCause::MissingArgumentKind, None) => {
+                    Message::core_validation_missing_argument_kind()
+                }
+                (ValidationCause::MissingArgumentKind, Some(node)) => {
+                    Message::core_validation_missing_argument_kind_node(node)
+                }
+                (ValidationCause::MissingFunctionKind, None) => {
+                    Message::core_validation_missing_function_kind()
+                }
+                (ValidationCause::MissingFunctionKind, Some(node)) => {
+                    Message::core_validation_missing_function_kind_node(node)
+                }
+                (ValidationCause::MissingCodomainKind, None) => {
+                    Message::core_validation_missing_codomain_kind()
+                }
+                (ValidationCause::MissingCodomainKind, Some(node)) => {
+                    Message::core_validation_missing_codomain_kind_node(node)
+                }
+                (ValidationCause::MissingDomainKind, None) => {
+                    Message::core_validation_missing_domain_kind()
+                }
+                (ValidationCause::MissingDomainKind, Some(node)) => {
+                    Message::core_validation_missing_domain_kind_node(node)
+                }
+                (ValidationCause::CoreKindResultCount, None) => {
+                    Message::core_validation_core_kind_result_count()
+                }
+                (ValidationCause::CoreKindResultCount, Some(node)) => {
+                    Message::core_validation_core_kind_result_count_node(node)
+                }
+                (ValidationCause::DuplicateGeneratedTypeBinder, None) => {
+                    Message::core_validation_duplicate_generated_type_binder()
+                }
+                (ValidationCause::DuplicateGeneratedTypeBinder, Some(node)) => {
+                    Message::core_validation_duplicate_generated_type_binder_node(node)
+                }
+                (ValidationCause::EffectAbstractionBody, None) => {
+                    Message::core_validation_effect_abstraction_body()
+                }
+                (ValidationCause::EffectAbstractionBody, Some(node)) => {
+                    Message::core_validation_effect_abstraction_body_node(node)
+                }
                 (ValidationCause::NonRowTailKind, None) => {
                     Message::core_validation_non_row_tail_kind()
                 }
@@ -928,6 +1104,9 @@ impl ValidationError {
     const fn with_cause(cause: ValidationCause, node: Option<NodeId>) -> Self {
         Self {
             reason: match cause {
+                ValidationCause::CapturedResourceEscape { .. } => ValidationReason::ResourceEscape,
+                ValidationCause::UnsafeCoreDiscard(_)
+                | ValidationCause::CoreCleanupContext { .. } => ValidationReason::DiscardUnsafe,
                 ValidationCause::MissingChild
                 | ValidationCause::ForeignArena
                 | ValidationCause::MissingNode
@@ -982,6 +1161,14 @@ impl ValidationError {
                 | ValidationCause::UnresolvedCoreRow
                 | ValidationCause::UnknownCoreRowBinder
                 | ValidationCause::NonRowTailKind => ValidationReason::TypeScope,
+                ValidationCause::MissingTupleKinds
+                | ValidationCause::MissingArgumentKind
+                | ValidationCause::MissingFunctionKind
+                | ValidationCause::MissingCodomainKind
+                | ValidationCause::MissingDomainKind
+                | ValidationCause::CoreKindResultCount
+                | ValidationCause::DuplicateGeneratedTypeBinder
+                | ValidationCause::EffectAbstractionBody => ValidationReason::TypeOperation,
                 ValidationCause::UnknownCoreEffect
                 | ValidationCause::CoreOperationOwner
                 | ValidationCause::CoreEffectArgumentCount
@@ -5975,7 +6162,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishTuple(count) => {
                     if completed.len() < count {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingTupleKinds,
+                            None,
+                        ));
                     }
                     let kinds = completed.split_off(completed.len() - count);
                     for kind in kinds {
@@ -5988,10 +6178,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishApplication => {
                     let Some(argument) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingArgumentKind,
+                            None,
+                        ));
                     };
                     let Some(mut function) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingFunctionKind,
+                            None,
+                        ));
                     };
                     let Kind::Arrow(domain, codomain) = &mut function else {
                         return Ok(None);
@@ -6005,10 +6201,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::FinishFunction => {
                     let Some(codomain) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingCodomainKind,
+                            None,
+                        ));
                     };
                     let Some(domain) = completed.pop() else {
-                        return Err(ValidationError::new(ValidationReason::TypeOperation, None));
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::MissingDomainKind,
+                            None,
+                        ));
                     };
                     if !self.same_kind_charged(&domain, &Kind::Type)?
                         || !self.same_kind_charged(&codomain, &Kind::Type)?
@@ -6023,7 +6225,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         if completed.len() == 1 {
             Ok(completed.pop())
         } else {
-            Err(ValidationError::new(ValidationReason::TypeOperation, None))
+            Err(ValidationError::with_cause(
+                ValidationCause::CoreKindResultCount,
+                None,
+            ))
         }
     }
 
@@ -6548,17 +6753,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                 }
                 if definitions.contains_key(parameter) {
-                    return Err(ValidationError::new(
-                        match parameter {
-                            crate::types::TypeVariableId::Resolved { .. } => {
-                                ValidationReason::Registry
-                            }
-                            crate::types::TypeVariableId::Generated(_) => {
-                                ValidationReason::TypeOperation
-                            }
-                        },
-                        Some(id),
-                    ));
+                    return Err(match parameter {
+                        crate::types::TypeVariableId::Resolved { .. } => {
+                            ValidationError::new(ValidationReason::Registry, Some(id))
+                        }
+                        crate::types::TypeVariableId::Generated(_) => ValidationError::with_cause(
+                            ValidationCause::DuplicateGeneratedTypeBinder,
+                            Some(id),
+                        ),
+                    });
                 }
                 definitions
                     .try_reserve(1)
@@ -9141,16 +9344,32 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             super::capture::Failure::Invalid => {
                 ValidationError::new(ValidationReason::Handler, None)
             }
-            super::capture::Failure::Escape { .. } => {
-                ValidationError::new(ValidationReason::ResourceEscape, None)
-            }
-            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::new(
-                ValidationReason::DiscardUnsafe,
+            super::capture::Failure::Escape {
+                source,
+                acquisition,
+            } => ValidationError::with_cause(
+                ValidationCause::CapturedResourceEscape {
+                    source,
+                    acquisition,
+                },
+                None,
+            ),
+            super::capture::Failure::Unsafe(unsafe_discard) => ValidationError::with_cause(
+                ValidationCause::UnsafeCoreDiscard(unsafe_discard),
                 Some(NodeId::new(self.program.arena, unsafe_discard.node as u32)),
             ),
-            super::capture::Failure::CleanupContext { .. } => {
-                ValidationError::new(ValidationReason::DiscardUnsafe, None)
-            }
+            super::capture::Failure::CleanupContext {
+                discard,
+                action,
+                handler,
+            } => ValidationError::with_cause(
+                ValidationCause::CoreCleanupContext {
+                    discard,
+                    action,
+                    handler,
+                },
+                None,
+            ),
             super::capture::Failure::CleanupRow { node, .. } => ValidationError::new(
                 ValidationReason::EffectRow,
                 Some(NodeId::new(self.program.arena, node as u32)),
@@ -9676,8 +9895,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         application,
                     ))) => current = application.function(),
                     _ => {
-                        return Err(ValidationError::new(
-                            ValidationReason::TypeOperation,
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::EffectAbstractionBody,
                             Some(root),
                         ));
                     }
@@ -10335,6 +10554,209 @@ pub(super) use tests::{registration_proof_check, registration_proof_program};
 mod tests {
 
     #[test]
+    fn core_type_bookkeeping_messages_preserve_the_failed_check() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_core_validation_failure, write_human, write_json},
+        };
+        let arena = super::super::dialect::ArenaId::new(101);
+        for (cause, name, english) in [
+            (
+                ValidationCause::MissingTupleKinds,
+                "missing-tuple-kinds",
+                "The compiler's Core kind analysis has fewer tuple-element results than required.",
+            ),
+            (
+                ValidationCause::MissingArgumentKind,
+                "missing-argument-kind",
+                "The compiler's Core kind analysis has no result for a type application's argument.",
+            ),
+            (
+                ValidationCause::MissingFunctionKind,
+                "missing-function-kind",
+                "The compiler's Core kind analysis has no result for a type application's function.",
+            ),
+            (
+                ValidationCause::MissingCodomainKind,
+                "missing-codomain-kind",
+                "The compiler's Core kind analysis has no result for a function type's codomain.",
+            ),
+            (
+                ValidationCause::MissingDomainKind,
+                "missing-domain-kind",
+                "The compiler's Core kind analysis has no result for a function type's domain.",
+            ),
+            (
+                ValidationCause::CoreKindResultCount,
+                "core-kind-result-count",
+                "The compiler's Core kind analysis did not finish with exactly one result.",
+            ),
+            (
+                ValidationCause::DuplicateGeneratedTypeBinder,
+                "duplicate-generated-type-binder",
+                "The compiler declared the same generated type-variable identity in more than one Core type abstraction.",
+            ),
+            (
+                ValidationCause::EffectAbstractionBody,
+                "effect-abstraction-body",
+                "The compiler retained an effect-Core type abstraction whose body is not an inert value or type application.",
+            ),
+        ] {
+            for node in [None, Some(NodeId::new(arena, 42))] {
+                let error = ValidationError::with_cause(cause, node);
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    if locale == Locale::English {
+                        assert!(String::from_utf8(output).unwrap().contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], "core.validation.type-operation");
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert!(json["labels"].as_array().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn capture_failure_presentation_preserves_cross_file_causes() {
+        use super::super::capture::{CompletionOwner, UnsafeDiscard};
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{
+                PresentationError, compile_core_validation_failure, write_human, write_json,
+            },
+        };
+        let first = SourceFile::new("discard.ash", "discard").unwrap();
+        let second = SourceFile::new("owner.ash", "cleanup").unwrap();
+        let source = first.span(ByteRange::new(0, 7).unwrap()).unwrap();
+        let request = second.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let owner = second.span(ByteRange::new(1, 7).unwrap()).unwrap();
+        let unsafe_discard = |owner| {
+            ValidationCause::UnsafeCoreDiscard(UnsafeDiscard {
+                node: 42,
+                discard: source,
+                request,
+                owner,
+            })
+        };
+        for (cause, name, reason, english, relations) in [
+            (
+                ValidationCause::CapturedResourceEscape {
+                    source,
+                    acquisition: request,
+                },
+                "captured-resource-escape",
+                "core.validation.resource-escape",
+                "depends on a resource beyond",
+                vec![
+                    (source, "escaping_dependency"),
+                    (request, "resource_acquisition"),
+                ],
+            ),
+            (
+                ValidationCause::CoreCleanupContext {
+                    discard: source,
+                    action: request,
+                    handler: owner,
+                },
+                "cleanup-context",
+                "core.validation.discard-unsafe",
+                "removes a handler required by cleanup",
+                vec![
+                    (source, "discard"),
+                    (request, "cleanup_action"),
+                    (owner, "abandoned_handler"),
+                ],
+            ),
+            (
+                unsafe_discard(None),
+                "discard-unproved",
+                "core.validation.discard-unsafe",
+                "without proof",
+                vec![(source, "discard"), (request, "capturing_request")],
+            ),
+            (
+                unsafe_discard(Some(CompletionOwner::Cleanup(owner))),
+                "discard-cleanup",
+                "core.validation.discard-unsafe",
+                "skips a cleanup action",
+                vec![
+                    (source, "discard"),
+                    (request, "capturing_request"),
+                    (owner, "cleanup_action"),
+                ],
+            ),
+            (
+                unsafe_discard(Some(CompletionOwner::Clause(owner))),
+                "discard-clause",
+                "core.validation.discard-unsafe",
+                "skips a clause",
+                vec![
+                    (source, "discard"),
+                    (request, "capturing_request"),
+                    (owner, "completion_clause"),
+                ],
+            ),
+        ] {
+            for node in [
+                None,
+                Some(NodeId::new(super::super::dialect::ArenaId::new(101), 42)),
+            ] {
+                let error = ValidationError::with_cause(cause, node);
+                assert!(matches!(
+                    compile_core_validation_failure(&error, &[]),
+                    Err(PresentationError::MissingSource)
+                ));
+                assert!(matches!(
+                    compile_core_validation_failure(&error, &[&first]),
+                    Err(PresentationError::MissingSource)
+                ));
+                let view = compile_core_validation_failure(&error, &[&first, &second]).unwrap();
+                for locale in [Locale::English, Locale::Bulgarian] {
+                    let mut output = Vec::new();
+                    write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(output.contains("discard.ash"));
+                    assert!(output.contains("owner.ash"));
+                    if locale == Locale::English {
+                        assert!(output.contains(english));
+                    }
+                }
+                let mut output = Vec::new();
+                write_json(&mut output, &view).unwrap();
+                let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                assert_eq!(json["reason"], reason);
+                assert_eq!(json["responsibility"], "compiler");
+                assert!(
+                    json["facts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|fact| fact["name"] == "cause" && fact["value"] == name)
+                );
+                assert_eq!(json["labels"].as_array().unwrap().len(), relations.len());
+                for (index, (span, relationship)) in relations.iter().enumerate() {
+                    assert_eq!(json["labels"][index]["relationship"], *relationship);
+                    assert_eq!(json["labels"][index]["byte_start"], span.range().start());
+                    assert_eq!(json["labels"][index]["byte_end"], span.range().end());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn effect_identity_messages_preserve_the_failed_relation() {
         use crate::{
             message::{Catalogue, Locale},
@@ -10390,7 +10812,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -10535,7 +10957,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -10631,7 +11053,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -10719,7 +11141,7 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.reason(), ValidationReason::TypeScope);
-        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
         assert_eq!(error.cause, Some(ValidationCause::UnresolvedCoreInference));
         let identity = crate::types::TypeVariableId::new(0);
         let error = validator
@@ -10847,7 +11269,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -11067,7 +11489,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -11132,7 +11554,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.reason(), ValidationReason::RecursiveBinding);
             assert_eq!(error.cause_name(), Some(cause));
-            assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
         }
     }
     #[test]
@@ -11190,7 +11612,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, 0))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
                 }
@@ -11290,7 +11712,7 @@ mod tests {
             for node in [None, Some(match_id)] {
                 let mut failure = error.clone();
                 failure.node = node;
-                let view = compile_core_validation_failure(&failure).unwrap();
+                let view = compile_core_validation_failure(&failure, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -11349,7 +11771,7 @@ mod tests {
         ] {
             for node in [None, Some(NodeId::new(arena, u32::MAX))] {
                 let error = ValidationError::with_cause(cause, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -11410,7 +11832,7 @@ mod tests {
                 )),
             ] {
                 let error = ValidationError::new(reason, node);
-                let view = compile_core_validation_failure(&error).unwrap();
+                let view = compile_core_validation_failure(&error, &[]).unwrap();
                 for locale in [Locale::English, Locale::Bulgarian] {
                     let mut output = Vec::new();
                     write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
@@ -11437,10 +11859,10 @@ mod tests {
             }
         }
         assert!(
-            compile_core_validation_failure(&ValidationError::new(
-                ValidationReason::NodeBounds,
-                None
-            ))
+            compile_core_validation_failure(
+                &ValidationError::new(ValidationReason::NodeBounds, None),
+                &[]
+            )
             .is_err()
         );
     }
@@ -11777,12 +12199,15 @@ mod tests {
                 EffectExprKind::Pure(PureExprKind::Variable(
                     crate::core::variable::VariableNode::new(dangerous.unwrap()),
                 ));
+            let error =
+                super::super::validate_effect_modules(core, &borrowed, &relations).unwrap_err();
             assert_eq!(
-                super::super::validate_effect_modules(core, &borrowed, &relations)
-                    .unwrap_err()
-                    .reason(),
+                error.reason(),
                 ValidationReason::ResourceEscape,
                 "pass {pass}"
+            );
+            assert!(
+                crate::presentation::compile_core_validation_failure(&error, &borrowed).is_ok()
             );
         }
     }
@@ -11873,11 +12298,20 @@ mod tests {
                         "7"
                     );
                 } else {
+                    let error = result.unwrap_err();
                     assert_eq!(
-                        result.unwrap_err().reason(),
+                        error.reason(),
                         ValidationReason::DiscardUnsafe,
                         "pass {pass}"
                     );
+                    let view =
+                        crate::presentation::compile_core_validation_failure(&error, &borrowed)
+                            .unwrap();
+                    let mut output = Vec::new();
+                    crate::presentation::write_json(&mut output, &view).unwrap();
+                    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+                    assert_eq!(json["labels"][0]["relationship"], "discard");
+                    assert!(json["labels"].as_array().unwrap().len() > 1);
                 }
             }
         }
@@ -21915,7 +22349,7 @@ mod tests {
             .expect_err("forged local representation effect metadata must reject");
         assert_eq!(error.reason(), ValidationReason::EffectIdentity);
         assert_eq!(error.node(), Some(program.root));
-        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -23646,6 +24080,7 @@ mod tests {
             .expect_err("distinct abstraction nodes must define distinct type-variable identities");
         assert_eq!(error.reason(), ValidationReason::TypeOperation);
         assert_eq!(error.node(), Some(right_abstraction));
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[&file]).is_ok());
     }
 
     #[test]
@@ -25052,7 +25487,7 @@ mod tests {
                     )
                     .expect_err("the second wildcard is redundant");
                 assert_eq!(error.reason(), ValidationReason::Coverage);
-                assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+                assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
                 drop(validator);
                 program.discard_iteratively();
             })
@@ -25289,7 +25724,7 @@ mod tests {
         assert_eq!(error.reason(), ValidationReason::NewtypeConversion);
         assert_eq!(error.cause, Some(ValidationCause::ConversionUnknownOwner));
         assert_eq!(error.node(), Some(root));
-        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -25524,7 +25959,7 @@ mod tests {
             };
             if let Some(cause) = cause {
                 assert_eq!(error.cause, Some(cause), "{case:?}");
-                assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+                assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
             }
         }
     }
@@ -25778,7 +26213,7 @@ mod tests {
 
         let error = validate(program, &[&file]).expect_err("missing origin");
         assert_eq!(error.reason(), ValidationReason::Provenance);
-        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -25835,7 +26270,7 @@ mod tests {
         let error = validate(program, &[&file]).expect_err("foreign binder capability");
         assert_eq!(error.reason(), ValidationReason::Scope);
         assert_eq!(error.node(), Some(NodeId::new(arena, 1)));
-        assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+        assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
     #[test]
@@ -25873,7 +26308,7 @@ mod tests {
             assert_eq!(error.reason(), ValidationReason::NodeBounds);
             assert_eq!(error.cause_name(), Some(cause));
             assert_eq!(error.node(), Some(NodeId::new(arena, 0)));
-            assert!(crate::presentation::compile_core_validation_failure(&error).is_ok());
+            assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
         }
 
         let cyclic = StoredNode {

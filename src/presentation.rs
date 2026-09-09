@@ -518,13 +518,16 @@ pub fn compile_evidence_failure<'a>(
     })
 }
 
-/// Exposes a compiler-owned Core validation failure and its optional arena-local node.
+/// Exposes a compiler-owned Core validation failure, its optional arena-local
+/// node and retained capture-analysis source relationships.
 ///
 /// # Errors
 /// Returns unsupported for causes not yet presented or a node handle that cannot be represented.
-pub fn compile_core_validation_failure(
+/// Returns missing source when a retained causal span cannot be resolved.
+pub fn compile_core_validation_failure<'a>(
     error: &crate::core::validate::ValidationError,
-) -> Result<CompileDiagnostic<'static>, PresentationError> {
+    sources: &[&'a SourceFile],
+) -> Result<CompileDiagnostic<'a>, PresentationError> {
     let message = error
         .diagnostic_message()
         .ok_or(PresentationError::Unsupported)?;
@@ -544,6 +547,30 @@ pub fn compile_core_validation_failure(
             kind: "core-validation-cause",
             value: FactValue::Text(cause),
         });
+    }
+    let mut primary = None;
+    let mut related = Vec::new();
+    for (span, message, relationship) in error.capture_labels() {
+        let source = sources
+            .iter()
+            .copied()
+            .find(|source| source.id() == span.source())
+            .ok_or(PresentationError::MissingSource)?;
+        source
+            .location(span)
+            .map_err(|_| PresentationError::MissingSource)?;
+        let label = Label {
+            source,
+            span,
+            message,
+            relationship,
+            facts: Vec::new(),
+        };
+        if primary.is_none() {
+            primary = Some(label);
+        } else {
+            related.push(label);
+        }
     }
     if let Some(arm) = error.arm_number() {
         facts.push(Fact {
@@ -586,8 +613,8 @@ pub fn compile_core_validation_failure(
         reason: error.reason().to_string(),
         responsibility: "compiler",
         message,
-        primary: None,
-        related: Vec::new(),
+        primary,
+        related,
         facts,
     })
 }
