@@ -558,6 +558,109 @@ fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     (offset(start), offset(start + needle.len()))
 }
 
+#[test]
+fn common_type_failures_render_expected_and_found_types() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, reason, primary, related) in [
+        (
+            T001,
+            TypeReason::DefinitionResult,
+            "definition_result",
+            "result_annotation",
+        ),
+        (
+            T002,
+            TypeReason::OperatorOperand,
+            "operator_operand",
+            "operator_requirement",
+        ),
+        (
+            T003,
+            TypeReason::NotApplicable,
+            "application_function",
+            "application",
+        ),
+        (T004, TypeReason::Argument, "argument", "function_domain"),
+        (
+            EQUATION_INTERFACE_NOT_FUNCTION,
+            TypeReason::EquationInterfaceNotFunction,
+            "equation_signature",
+            "equation_head",
+        ),
+        (
+            BINDING_INITIALIZER,
+            TypeReason::BindingInitializer,
+            "initializer",
+            "binding_annotation",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("type-message.ash", text);
+        let failure = run_path(RunConfiguration {
+            entry: fixture.loaded().canonical_path().to_path_buf(),
+            roots: ModuleRoots::empty(),
+        })
+        .unwrap_err();
+        let Some(PipelineFailure::Typing(TypeError::Source(error))) = failure.pipeline_failure()
+        else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_type_diagnostic(error, &sources).unwrap();
+        let mut missing_cause = error.as_ref().clone();
+        missing_cause.related.clear();
+        assert!(compile_type_diagnostic(&missing_cause, &sources).is_err());
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&format!("`{}`", error.found.as_deref().unwrap())));
+            if locale == Locale::English {
+                let lead = match reason {
+                    TypeReason::DefinitionResult => "The function body must return",
+                    TypeReason::OperatorOperand => "This operator requires an `Int` operand",
+                    TypeReason::NotApplicable => "This expression cannot be called",
+                    TypeReason::Argument => "This function argument must have type",
+                    TypeReason::EquationInterfaceNotFunction => {
+                        "This equation needs a function signature"
+                    }
+                    _ => "", // Existing initializer tests assert its complete wording.
+                };
+                assert!(output.contains(lead), "{output}");
+            }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(
+            json["facts"][0]["value"],
+            error.expected.as_deref().unwrap()
+        );
+        assert_eq!(json["facts"][1]["value"], error.found.as_deref().unwrap());
+        assert_eq!(json["labels"][0]["relationship"], primary);
+        assert_eq!(json["labels"][1]["relationship"], related);
+        assert_eq!(
+            json["labels"].as_array().unwrap().len(),
+            error.related.len() + 1
+        );
+        if error.related.len() == 2 {
+            assert_eq!(json["labels"][2]["relationship"], "application");
+        }
+        for (label, original) in json["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(std::iter::once(&error.primary).chain(&error.related))
+        {
+            assert_eq!(label["byte_start"], original.span().range().start());
+            assert_eq!(label["byte_end"], original.span().range().end());
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

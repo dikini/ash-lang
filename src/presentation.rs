@@ -97,9 +97,6 @@ pub fn compile_type_diagnostic<'a>(
     diagnostic: &'a Diagnostic<TypeReason>,
     sources: &[&'a SourceFile],
 ) -> Result<CompileDiagnostic<'a>, PresentationError> {
-    if diagnostic.reason != TypeReason::BindingInitializer {
-        return Err(PresentationError::Unsupported);
-    }
     let expected = diagnostic
         .expected
         .as_deref()
@@ -108,9 +105,17 @@ pub fn compile_type_diagnostic<'a>(
         .found
         .as_deref()
         .ok_or(PresentationError::MissingFact)?;
-    let [annotation] = diagnostic.related.as_slice() else {
+    let message = diagnostic
+        .reason
+        .message(expected, found)
+        .ok_or(PresentationError::Unsupported)?;
+    if diagnostic.related.is_empty() {
         return Err(PresentationError::MissingFact);
-    };
+    }
+    let (primary_message, primary_relationship) = diagnostic
+        .reason
+        .primary_message(found)
+        .ok_or(PresentationError::Unsupported)?;
     // Machine fact names belong to the semantic adapter, not the catalogue.
     // Both representations borrow the phase's original values.
     let expected_fact = Fact {
@@ -123,7 +128,7 @@ pub fn compile_type_diagnostic<'a>(
         kind: "code",
         value: FactValue::Text(found),
     };
-    let label = |span: Span, message, relationship, fact| {
+    let label = |span: Span, message, relationship, facts| {
         let source = sources
             .iter()
             .copied()
@@ -137,25 +142,33 @@ pub fn compile_type_diagnostic<'a>(
             span,
             message,
             relationship,
-            facts: vec![fact],
+            facts,
         })
     };
+    let mut related = Vec::with_capacity(diagnostic.related.len());
+    for (index, original) in diagnostic.related.iter().enumerate() {
+        let (message, relationship, expected) = diagnostic
+            .reason
+            .related_message(index, expected)
+            .ok_or(PresentationError::Unsupported)?;
+        related.push(label(
+            original.span(),
+            message,
+            relationship,
+            expected.map(|_| expected_fact).into_iter().collect(),
+        )?);
+    }
     Ok(CompileDiagnostic {
         reason: diagnostic.reason.to_string(),
         responsibility: "source",
-        message: Message::binding_initializer(expected, found),
+        message,
         primary: Some(label(
             diagnostic.primary.span(),
-            Message::initializer(found),
-            "initializer",
-            found_fact,
+            primary_message,
+            primary_relationship,
+            vec![found_fact],
         )?),
-        related: vec![label(
-            annotation.span(),
-            Message::binding_annotation(expected),
-            "binding_annotation",
-            expected_fact,
-        )?],
+        related,
         facts: vec![expected_fact, found_fact],
     })
 }

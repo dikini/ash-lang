@@ -292,6 +292,14 @@ localization language. Color is not required for completion.
   preempt. The batch passed 69 focused integration tests, warnings-denied
   Clippy, formatting and Markdown lint. There are now 102 message templates per
   locale. CLI defaults remain unchanged.
+- Common type presentation now covers definition results, primitive operands,
+  arguments, non-callable expressions and non-function equation signatures in
+  addition to binding initializers: six of 35 source type reasons. The owning
+  reason selects messages and causal relationships; the adapter preserves
+  expected/found facts and optional application context. Missing required
+  causes still fail explicitly. Sixty focused diagnostic, rendering, JSON and
+  catalogue tests passed, along with warnings-denied Clippy. Both catalogues
+  now contain 113 templates.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

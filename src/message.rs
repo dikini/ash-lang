@@ -144,6 +144,28 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A function body does not match its required result type.
+    type_definition_result => "type-definition-result" { expected: &'a str = "Int", found: &'a str = "Bool" },
+    /// A primitive operand must be Int.
+    type_operator_operand => "type-operator-operand" { found: &'a str = "Bool" },
+    /// An argument does not match the function's domain.
+    type_argument => "type-argument" { expected: &'a str = "Int", found: &'a str = "Bool" },
+    /// An application's function position has a non-function type.
+    type_not_applicable => "type-not-applicable" { found: &'a str = "Int" },
+    /// An equation's signature provides no function domain.
+    type_equation_signature => "type-equation-signature" { found: &'a str = "Int" },
+    /// The type at the causal source occurrence.
+    type_found => "type-found" { found: &'a str = "Bool" },
+    /// The signature requires this function result type.
+    type_result_annotation => "type-result-annotation" { expected: &'a str = "Int" },
+    /// The primitive operator requires integer operands.
+    type_operator_requirement => "type-operator-requirement" {},
+    /// The function requires this argument type.
+    type_function_domain => "type-function-domain" { expected: &'a str = "Int" },
+    /// The containing application supplies this argument or requires a function.
+    type_application => "type-application" {},
+    /// The equation head requires a function signature.
+    type_equation_head => "type-equation-head" {},
     /// The entry module must supply a local entry point.
     entry_missing_main => "entry-missing-main" {},
     /// The entry point cannot quantify type parameters.

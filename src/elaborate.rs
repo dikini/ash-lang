@@ -320,6 +320,81 @@ fn requires_pure_core_projection(
     Ok(false)
 }
 
+impl TypeReason {
+    pub(crate) fn message<'a>(
+        self,
+        expected: &'a str,
+        found: &'a str,
+    ) -> Option<crate::message::Message<'a>> {
+        use crate::message::Message;
+        Some(match self {
+            Self::BindingInitializer => Message::binding_initializer(expected, found),
+            Self::DefinitionResult => Message::type_definition_result(expected, found),
+            Self::OperatorOperand => Message::type_operator_operand(found),
+            Self::Argument => Message::type_argument(expected, found),
+            Self::NotApplicable => Message::type_not_applicable(found),
+            Self::EquationInterfaceNotFunction => Message::type_equation_signature(found),
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn primary_message(
+        self,
+        found: &str,
+    ) -> Option<(crate::message::Message<'_>, &'static str)> {
+        use crate::message::Message;
+        if self == Self::BindingInitializer {
+            return Some((Message::initializer(found), "initializer"));
+        }
+        let relationship = match self {
+            Self::DefinitionResult => "definition_result",
+            Self::OperatorOperand => "operator_operand",
+            Self::Argument => "argument",
+            Self::NotApplicable => "application_function",
+            Self::EquationInterfaceNotFunction => "equation_signature",
+            _ => return None,
+        };
+        Some((Message::type_found(found), relationship))
+    }
+
+    pub(crate) fn related_message(
+        self,
+        index: usize,
+        expected: &str,
+    ) -> Option<(crate::message::Message<'_>, &'static str, Option<&str>)> {
+        use crate::message::Message;
+        Some(match (self, index) {
+            (Self::BindingInitializer, 0) => (
+                Message::binding_annotation(expected),
+                "binding_annotation",
+                Some(expected),
+            ),
+            (Self::DefinitionResult, 0) => (
+                Message::type_result_annotation(expected),
+                "result_annotation",
+                Some(expected),
+            ),
+            (Self::OperatorOperand, 0) => (
+                Message::type_operator_requirement(),
+                "operator_requirement",
+                Some(expected),
+            ),
+            (Self::Argument, 0) => (
+                Message::type_function_domain(expected),
+                "function_domain",
+                Some(expected),
+            ),
+            (Self::Argument, 1) | (Self::NotApplicable, 0) => {
+                (Message::type_application(), "application", None)
+            }
+            (Self::EquationInterfaceNotFunction, 0) => {
+                (Message::type_equation_head(), "equation_head", None)
+            }
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for TypeReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
