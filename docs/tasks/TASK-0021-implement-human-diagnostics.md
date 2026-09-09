@@ -414,6 +414,17 @@ localization language. Color is not required for completion.
   unchanged. Type presentation covers 31 of 35 source reasons, with 167
   templates per locale. All 12 handler-related library tests, 116 focused
   integration tests and warnings-denied Clippy passed.
+- Effect-row presentation retains nine causes across the main elaborator and
+  deferred cleanup rows. Messages distinguish row union, infinite function
+  rows, function-row mismatch, undeclared function effects, cleanup inference,
+  unexpected cleanup effects, discard cleanup effects, deferred requirements
+  and ambiguous effect removal. Existing checks, work charges and legacy text
+  are unchanged. One producer-helper test covers all nine causes in both
+  locales; two source cases distinguish union from undeclared effects. Type
+  presentation covers 32 of 35 source reasons, with 176 templates per locale.
+  All 107 focused tests and warnings-denied Clippy passed.
+  Missing handled effects remain outstanding;
+  their two producers are in the cleanup-row submodule.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

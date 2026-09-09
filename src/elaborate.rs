@@ -701,6 +701,20 @@ enum TypeDiagnosticContext {
     EquationArity(EquationArityCause),
     HandlerCoverage(HandlerCoverageCause),
     CompletionOutside(CompletionOperation),
+    EffectRow(EffectRowCause),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EffectRowCause {
+    Union,
+    InfiniteFunction,
+    FunctionMismatch,
+    FunctionOutsideDeclared,
+    CleanupInference,
+    CleanupOutsideExpected,
+    DiscardCleanup,
+    CleanupRequirement,
+    Removal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -748,6 +762,52 @@ impl std::ops::DerefMut for TypeDiagnostic {
 
 impl TypeDiagnostic {
     pub(crate) fn source_message(&self) -> Option<TypeSourceMessage<'_>> {
+        if self.reason == TypeReason::AmbiguousEffectRow {
+            let TypeDiagnosticContext::EffectRow(cause) = self.context else {
+                return None;
+            };
+            let (message, failure) = match cause {
+                EffectRowCause::Union => (crate::message::Message::effect_row_union(), "union"),
+                EffectRowCause::CleanupRequirement => (
+                    crate::message::Message::effect_row_cleanup_requirement(),
+                    "cleanup-requirement",
+                ),
+                EffectRowCause::Removal => {
+                    (crate::message::Message::effect_row_removal(), "removal")
+                }
+                EffectRowCause::InfiniteFunction => (
+                    crate::message::Message::effect_row_infinite_function(),
+                    "infinite-function",
+                ),
+                EffectRowCause::FunctionMismatch => (
+                    crate::message::Message::effect_row_function_mismatch(),
+                    "function-mismatch",
+                ),
+                EffectRowCause::FunctionOutsideDeclared => (
+                    crate::message::Message::effect_row_function_outside_declared(),
+                    "function-outside-declared",
+                ),
+                EffectRowCause::CleanupInference => (
+                    crate::message::Message::effect_row_cleanup_inference(),
+                    "cleanup-inference",
+                ),
+                EffectRowCause::CleanupOutsideExpected => (
+                    crate::message::Message::effect_row_cleanup_outside_expected(),
+                    "cleanup-outside-expected",
+                ),
+                EffectRowCause::DiscardCleanup => (
+                    crate::message::Message::effect_row_discard_cleanup(),
+                    "discard-cleanup",
+                ),
+            };
+            return Some(TypeSourceMessage {
+                message,
+                relationship: "effect_row",
+                fact: Some(("row_failure", failure)),
+                fact_kind: "effect-row-failure",
+                minimum_related: 0,
+            });
+        }
         if self.reason == TypeReason::HandlerCoverage {
             let TypeDiagnosticContext::HandlerCoverage(cause) = self.context else {
                 return None;
@@ -9009,8 +9069,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         left.union_with_budget(&right, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
             .map_err(|_| {
-                inference_failure(
-                    TypeReason::AmbiguousEffectRow,
+                effect_row_failure(
+                    EffectRowCause::Union,
                     span,
                     "this strict expression has no principal effect-row union",
                 )
@@ -11039,14 +11099,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 UnificationFailure::Resource => {
                                     TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                                 }
-                                UnificationFailure::Infinite => inference_failure(
-                                    TypeReason::AmbiguousEffectRow,
+                                UnificationFailure::Infinite => effect_row_failure(
+                                    EffectRowCause::InfiniteFunction,
                                     effect_span,
                                     "this function would require an infinite latent effect row",
                                 ),
                                 UnificationFailure::Mismatch | UnificationFailure::Invariant => {
-                                    inference_failure(
-                                        TypeReason::AmbiguousEffectRow,
+                                    effect_row_failure(
+                                        EffectRowCause::FunctionMismatch,
                                         effect_span,
                                         "this function body does not match its latent effect row",
                                     )
@@ -11058,8 +11118,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         let weakened =
                             self.union_effects(&body.effects, &expected_effects, effect_span)?;
                         if !self.same_effect_rows(&weakened, &expected_effects)? {
-                            return Err(inference_failure(
-                                TypeReason::AmbiguousEffectRow,
+                            return Err(effect_row_failure(
+                                EffectRowCause::FunctionOutsideDeclared,
                                 effect_span,
                                 "this function body requests effects outside its declared row",
                             ));
@@ -11252,8 +11312,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         UnificationFailure::Resource => type_resource(),
                         UnificationFailure::Invariant => invalid_state(),
                         UnificationFailure::Infinite | UnificationFailure::Mismatch => {
-                            inference_failure(
-                                TypeReason::AmbiguousEffectRow,
+                            effect_row_failure(
+                                EffectRowCause::CleanupInference,
                                 span,
                                 "this cleanup action has no principal latent effect row",
                             )
@@ -11262,8 +11322,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } else {
                 let combined = self.union_effects(&expected, &inferred, span)?;
                 if !self.same_effect_rows(&combined, &expected)? {
-                    return Err(inference_failure(
-                        TypeReason::AmbiguousEffectRow,
+                    return Err(effect_row_failure(
+                        EffectRowCause::CleanupOutsideExpected,
                         span,
                         "this cleanup action requests effects outside its expected row",
                     ));
@@ -15619,8 +15679,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let weakened =
                 self.union_effects(&body.effects, &expected_effects, clause.body.span)?;
             if !self.same_effect_rows(&weakened, &expected_effects)? {
-                return Err(inference_failure(
-                    TypeReason::AmbiguousEffectRow,
+                return Err(effect_row_failure(
+                    EffectRowCause::FunctionOutsideDeclared,
                     clause.body.span,
                     "this function body requests effects outside its declared row",
                 ));
@@ -22656,6 +22716,16 @@ fn type_contains_unsolved_row_inference(
     Ok(false)
 }
 
+fn effect_row_failure(cause: EffectRowCause, span: Span, message: &str) -> TypeError {
+    TypeError::Source(Box::new(TypeDiagnostic {
+        diagnostic: Diagnostic::new(
+            TypeReason::AmbiguousEffectRow,
+            SourceLabel::new(span, message),
+        ),
+        context: TypeDiagnosticContext::EffectRow(cause),
+    }))
+}
+
 fn inference_failure(reason: TypeReason, span: Span, message: &str) -> TypeError {
     TypeError::source(Diagnostic::new(reason, SourceLabel::new(span, message)))
 }
@@ -22666,8 +22736,8 @@ fn capture_failure(
 ) -> TypeError {
     use crate::core::capture::Failure;
     match failure {
-        Failure::CleanupRow { source, .. } => inference_failure(
-            TypeReason::AmbiguousEffectRow,
+        Failure::CleanupRow { source, .. } => effect_row_failure(
+            EffectRowCause::DiscardCleanup,
             source,
             "discard effects differ from its owned cleanup actions",
         ),
@@ -23764,6 +23834,84 @@ mod tests {
             Ok(None)
         );
         assert_eq!(exact.used(), EXACT_WORK);
+    }
+
+    #[test]
+    fn effect_row_causes_render_without_legacy_prose() {
+        use crate::{
+            message::{Catalogue, Locale},
+            presentation::{compile_type_diagnostic, write_human, write_json},
+        };
+        let source = SourceFile::new("row.ash", "action").unwrap();
+        let span = source.span(ByteRange::new(0, 6).unwrap()).unwrap();
+        for (cause, name, explanation) in [
+            (
+                EffectRowCause::CleanupRequirement,
+                "cleanup-requirement",
+                "The cleanup effects do not satisfy the required effect row.",
+            ),
+            (
+                EffectRowCause::Removal,
+                "removal",
+                "Ash cannot determine the effect row remaining after this handler removes its exact effect instance.",
+            ),
+            (
+                EffectRowCause::Union,
+                "union",
+                "This expression combines effect rows that have no most general union.",
+            ),
+            (
+                EffectRowCause::InfiniteFunction,
+                "infinite-function",
+                "This function would require an infinite effect row.",
+            ),
+            (
+                EffectRowCause::FunctionMismatch,
+                "function-mismatch",
+                "This function body's effects do not match its function type.",
+            ),
+            (
+                EffectRowCause::FunctionOutsideDeclared,
+                "function-outside-declared",
+                "This function body requests effects outside its declared effect row.",
+            ),
+            (
+                EffectRowCause::CleanupInference,
+                "cleanup-inference",
+                "Ash cannot infer a most general effect row for this cleanup action.",
+            ),
+            (
+                EffectRowCause::CleanupOutsideExpected,
+                "cleanup-outside-expected",
+                "This cleanup action requests effects outside its expected effect row.",
+            ),
+            (
+                EffectRowCause::DiscardCleanup,
+                "discard-cleanup",
+                "The effects of this discard do not match the cleanup actions it owns.",
+            ),
+        ] {
+            let TypeError::Source(error) = effect_row_failure(cause, span, "ignored legacy prose")
+            else {
+                unreachable!()
+            };
+            let view = compile_type_diagnostic(&error, &[&source]).unwrap();
+            for locale in [Locale::English, Locale::Bulgarian] {
+                let mut output = Vec::new();
+                write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+                let text = String::from_utf8(output).unwrap();
+                assert!(!text.contains("ignored legacy prose"));
+                if locale == Locale::English {
+                    assert!(text.contains(explanation));
+                }
+            }
+            let mut output = Vec::new();
+            write_json(&mut output, &view).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(json["facts"][0]["name"], "row_failure");
+            assert_eq!(json["facts"][0]["value"], name);
+            assert_eq!(json["responsibility"], "source");
+        }
     }
 
     #[test]

@@ -1433,6 +1433,39 @@ fn handler_coverage_presentation_distinguishes_missing_and_duplicate_clauses() {
     }
 }
 
+#[test]
+fn effect_row_messages_distinguish_union_and_declared_effects() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    for (text, cause) in [
+        (
+            "effect First {\nread : Unit -> Int\n}\neffect Second {\nread : Unit -> Int\n}\nbad : Unit -> Int ! {First}\nbad () = perform Second.read ()\n",
+            "function-outside-declared",
+        ),
+        (
+            "effect Choice {\nchoose : Unit -> Int\n}\nambiguous<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {| R}\nambiguous action = {\nlet value = action ()\nvalue + perform Choice.choose ()\n}\n",
+            "union",
+        ),
+    ] {
+        let fixture = ModuleFixture::load("effect-row-message.ash", text);
+        let TypeError::Source(error) = check_module(fixture.resolve()).unwrap_err() else {
+            panic!("expected source error")
+        };
+        assert_eq!(error.reason, TypeReason::AmbiguousEffectRow);
+        let view = compile_type_diagnostic(&error, &[fixture.loaded().source()]).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            write_human(&mut Vec::new(), &view, &Catalogue::new(locale).unwrap()).unwrap();
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["facts"][0]["name"], "row_failure");
+        assert_eq!(json["facts"][0]["value"], cause);
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

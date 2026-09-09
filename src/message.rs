@@ -150,6 +150,24 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The cleanup effects do not satisfy the required effect row.
+    effect_row_cleanup_requirement => "effect-row-cleanup-requirement" {},
+    /// Ash cannot determine the effect row remaining after this handler removes its exact effect instance.
+    effect_row_removal => "effect-row-removal" {},
+    /// This expression combines effect rows that have no most general union.
+    effect_row_union => "effect-row-union" {},
+    /// This function would require an infinite effect row.
+    effect_row_infinite_function => "effect-row-infinite-function" {},
+    /// This function body's effects do not match its function type.
+    effect_row_function_mismatch => "effect-row-function-mismatch" {},
+    /// This function body requests effects outside its declared effect row.
+    effect_row_function_outside_declared => "effect-row-function-outside-declared" {},
+    /// Ash cannot infer a most general effect row for this cleanup action.
+    effect_row_cleanup_inference => "effect-row-cleanup-inference" {},
+    /// This cleanup action requests effects outside its expected effect row.
+    effect_row_cleanup_outside_expected => "effect-row-cleanup-outside-expected" {},
+    /// The effects of this discard do not match the cleanup actions it owns.
+    effect_row_discard_cleanup => "effect-row-discard-cleanup" {},
     /// An effect instance has the wrong number of type arguments.
     handler_argument_count => "handler-argument-count" {},
     /// An operation identity belongs to another effect declaration.
