@@ -316,6 +316,14 @@ localization language. Color is not required for completion.
   unchanged; reasons without a named subject do not invent one. The batch
   passed 1,232 library tests, 125 focused integration tests and warnings-denied
   Clippy. Both catalogues contain 122 templates. Runtime reporting is unchanged.
+- Duplicate exact effects now retain the first occurrence as a related label.
+  Human messages and JSON distinguish it from the repeated occurrence; a
+  positive fixture confirms that different type arguments remain allowed.
+  All 26 source-rejection resolver reasons now have presentation, with four
+  compiler resource/invariant categories still outstanding. The latter need
+  their specific causes retained, including the different identifier spaces
+  currently reported as binder exhaustion. Ninety focused tests and
+  warnings-denied Clippy passed. Both catalogues contain 124 templates.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

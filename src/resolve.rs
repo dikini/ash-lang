@@ -100,11 +100,16 @@ fn build_source_effect_row_with_provenance(
                 })?
                 == std::cmp::Ordering::Equal
             {
-                return Err(error(
+                let mut failure = error(
                     ResolveReason::DuplicateEffect,
                     written[index].1,
                     "this exact effect instance is already present in the written row",
+                );
+                failure.0.related.push(SourceLabel::new(
+                    written[earlier].1,
+                    "the first exact effect instance is here",
                 ));
+                return Err(failure);
             }
         }
     }
@@ -862,6 +867,12 @@ impl ResolveError {
 
     pub(crate) fn primary_message(&self) -> Option<(crate::message::Message<'_>, &'static str)> {
         match self.reason {
+            ResolveReason::DuplicateEffect => {
+                return Some((
+                    crate::message::Message::resolve_duplicate_effect(),
+                    "duplicate_effect_instance",
+                ));
+            }
             ResolveReason::EffectOperationShape => {
                 return Some((self.message()?, "effect_operation_signature"));
             }
@@ -921,6 +932,12 @@ impl ResolveError {
     ) -> Option<(crate::message::Message<'_>, &'static str)> {
         if index == 0 {
             match self.reason {
+                ResolveReason::DuplicateEffect => {
+                    return Some((
+                        crate::message::Message::first_effect_instance(),
+                        "first_effect_instance",
+                    ));
+                }
                 ResolveReason::EquationNameMismatch | ResolveReason::NewtypeConstructorName => {
                     return Some((
                         crate::message::Message::required_name_declaration(),
@@ -981,7 +998,9 @@ impl ResolveError {
             ResolveReason::ResumeOutsideClause => {
                 Some(("operation", "keyword", self.found.as_deref()?))
             }
-            ResolveReason::EffectOperationShape | ResolveReason::SealedProvider => None,
+            ResolveReason::EffectOperationShape
+            | ResolveReason::SealedProvider
+            | ResolveReason::DuplicateEffect => None,
             _ => Some(("name", "identifier", self.found.as_deref()?)),
         }
     }
@@ -1030,6 +1049,9 @@ impl ResolveError {
 
     pub(crate) fn message(&self) -> Option<crate::message::Message<'_>> {
         match self.reason {
+            ResolveReason::DuplicateEffect => {
+                return Some(crate::message::Message::resolve_duplicate_effect());
+            }
             ResolveReason::EffectOperationShape => {
                 return Some(crate::message::Message::resolve_operation_shape());
             }

@@ -144,6 +144,10 @@ macro_rules! messages {
 }
 
 messages! {
+    /// A written row repeats a canonically identical effect instance.
+    resolve_duplicate_effect => "resolve-duplicate-effect" {},
+    /// The first written occurrence of the same exact instance.
+    first_effect_instance => "first-effect-instance" {},
     /// An operation signature requires a pure outer arrow, with no explicit row.
     resolve_operation_shape => "resolve-operation-shape" {},
     /// Source implementations/evidence cannot introduce builtin resource providers.

@@ -716,6 +716,57 @@ fn resolver_effect_restrictions_render_the_actual_operation_and_import() {
     }
 }
 
+#[test]
+fn duplicate_effect_presentation_relates_both_exact_instances() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_resolve_diagnostic, write_human, write_json},
+    };
+    let text = "effect Read<A> {\nread : Unit -> A\n}\nprobe : Unit -> Unit ! {Read<Int>, Read<Int>}\nprobe () = ()\n";
+    let fixture = ModuleFixture::load("duplicate-effect.ash", text);
+    let failure = run_path(RunConfiguration {
+        entry: fixture.loaded().canonical_path().to_path_buf(),
+        roots: ModuleRoots::empty(),
+    })
+    .unwrap_err();
+    let Some(PipelineFailure::Resolution(error)) = failure.pipeline_failure() else {
+        panic!("{failure:?}")
+    };
+    assert_eq!(error.reason, ResolveReason::DuplicateEffect);
+    assert_eq!(error.related.len(), 1);
+    let sources: Vec<_> = failure.sources().iter().collect();
+    let view = compile_resolve_diagnostic(error, &sources).unwrap();
+    for locale in [Locale::English, Locale::Bulgarian] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Read<Int>"));
+        if locale == Locale::English {
+            assert!(
+                output
+                    .contains("This effect row contains the same effect instance more than once.")
+            );
+        }
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        json["labels"][0]["relationship"],
+        "duplicate_effect_instance"
+    );
+    assert_eq!(json["labels"][1]["relationship"], "first_effect_instance");
+    let occurrences: Vec<_> = text
+        .match_indices("Read<Int>")
+        .map(|(start, _)| start)
+        .collect();
+    assert_eq!(json["labels"][0]["byte_start"], occurrences[1]);
+    assert_eq!(json["labels"][1]["byte_start"], occurrences[0]);
+    let distinct = text.replacen("Read<Int>, Read<Int>", "Read<Int>, Read<Bool>", 1);
+    let distinct = ModuleFixture::load("distinct-effects.ash", &distinct);
+    assert!(resolve_module(distinct.loaded(), &[]).is_ok());
+}
+
 fn occurrence_range(text: &str, needle: &str, occurrence: usize) -> (u32, u32) {
     let start = text
         .match_indices(needle)
