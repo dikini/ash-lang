@@ -150,6 +150,14 @@ macro_rules! messages {
 }
 
 messages! {
+    /// An outward type or effect row retains a local nominal identity.
+    local_nominal_escape => "local-nominal-escape" {},
+    /// The scope that owns the escaping local nominal identity.
+    local_nominal_scope => "local-nominal-scope" {},
+    /// An outward value, type or effect retains a resource dependency.
+    resource_escape => "resource-escape" {},
+    /// The acquisition that owns the escaping resource dependency.
+    resource_acquisition => "resource-acquisition" {},
     /// A recursive function member requires a direct anonymous function.
     recursion_initializer => "recursion-initializer" {},
     /// A recursive data member requires a constructor root.

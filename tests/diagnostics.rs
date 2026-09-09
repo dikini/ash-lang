@@ -1181,6 +1181,47 @@ fn recursive_and_cleanup_messages_retain_every_causal_label() {
     }
 }
 
+#[test]
+fn escape_messages_relate_outward_dependencies_to_their_scope() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let resource = |body: &str| {
+        format!(
+            "import @builtin.cell as Cell\nmain : Unit -> Int\nmain () = {{\nlet escaped = resource cell<R> c = 41 {{\n{body}\n}}\n42\n}}\n"
+        )
+    };
+    for (reason, text, lead, relation) in [
+        (TypeReason::LocalNominalEscape, "main : Unit -> Int\nmain () = {\nlet escaped = {\nnewtype Hidden = Hidden(Int)\nHidden(1)\n}\n0\n}\n".to_owned(), "This type or effect row exposes a local nominal type outside its scope.", "local_nominal_scope"),
+        (TypeReason::ResourceEscape, resource("c"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+        (TypeReason::ResourceEscape, resource("let read_later : Unit -> Int ! {Cell.Ops<R>} = fn(ignored) {\nCell.read c\n}\nread_later"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+        (TypeReason::ResourceEscape, resource("let later : Unit -> Int = fn(ignored) {\nhandle (Cell.read c) with Cell.Ops<R> {\nread value => resume 42\nwrite value => resume ()\n}\n}\nlater"), "This value or computation depends on a resource that would be out of scope.", "resource_acquisition"),
+    ] {
+        let fixture = ModuleFixture::load("escape-message.ash", &text);
+        let failure = run_path(RunConfiguration { entry: fixture.loaded().canonical_path().to_path_buf(), roots: ModuleRoots::empty() }).unwrap_err();
+        let Some(PipelineFailure::Typing(TypeError::Source(error))) = failure.pipeline_failure() else { panic!("expected escape: {failure:?}"); };
+        assert_eq!(error.reason, reason);
+        let sources: Vec<_> = failure.sources().iter().collect();
+        let view = compile_type_diagnostic(error, &sources).unwrap();
+        for locale in [Locale::English, Locale::Bulgarian] {
+            let mut output = Vec::new();
+            write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+            if locale == Locale::English { assert!(String::from_utf8(output).unwrap().contains(lead)); }
+        }
+        let mut output = Vec::new();
+        write_json(&mut output, &view).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(json["responsibility"], "source");
+        assert_eq!(json["facts"], serde_json::json!([]));
+        assert_eq!(json["labels"].as_array().unwrap().len(), 2);
+        assert_eq!(json["labels"][0]["relationship"], "escaping_dependency");
+        assert_eq!(json["labels"][1]["relationship"], relation);
+        assert_eq!(json["labels"][1]["byte_start"], error.related[0].span().range().start());
+        assert_eq!(json["labels"][1]["byte_end"], error.related[0].span().range().end());
+    }
+}
+
 #[derive(Clone, Copy)]
 enum KindExpectationShape {
     Type,

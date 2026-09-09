@@ -367,6 +367,14 @@ localization language. Color is not required for completion.
   149 templates. All 119 focused diagnostic, catalogue, recursion, newtype
   and cleanup tests and warnings-denied Clippy passed. Source acceptance and
   runtime behavior remain unchanged.
+- Local nominal and resource escapes now relate the escaping dependency to
+  its nominal scope or resource acquisition. Resource wording covers both
+  exposed identities and stored dependencies hidden by a closure's ordinary
+  type. Four driver-level fixtures exercise local values, returned handles,
+  latent resource rows and identity-free closures with retained dependencies.
+  Type presentation covers 26 of 35 source reasons, with 153 templates per
+  locale. All 135 focused diagnostic, catalogue and resource-scope tests and
+  warnings-denied Clippy passed; no source or runtime behavior changed.
 - Foundation verification passed 1,225 library tests, five new integration
   tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
   and six rustdoc tests. The renderer fixture checks English and Bulgarian

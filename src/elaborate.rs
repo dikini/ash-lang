@@ -336,6 +336,10 @@ impl TypeReason {
         use crate::message::Message;
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
+            Self::LocalNominalEscape => {
+                (Message::local_nominal_escape(), "escaping_dependency", None)
+            }
+            Self::ResourceEscape => (Message::resource_escape(), "escaping_dependency", None),
             Self::UnsafeRecursiveInitializer => (
                 Message::recursion_initializer(),
                 "recursive_initializer",
@@ -411,7 +415,9 @@ impl TypeReason {
                 Self::UnsafeRecursiveInitializer
                 | Self::UnsafeRecursiveRoot
                 | Self::CleanupContext => 2,
-                Self::NewtypeRecursiveRepresentation => 1,
+                Self::NewtypeRecursiveRepresentation
+                | Self::LocalNominalEscape
+                | Self::ResourceEscape => 1,
                 _ => 0,
             },
         })
@@ -423,6 +429,10 @@ impl TypeReason {
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match (self, index) {
+            (Self::LocalNominalEscape, 0) => {
+                (Message::local_nominal_scope(), "local_nominal_scope")
+            }
+            (Self::ResourceEscape, 0) => (Message::resource_acquisition(), "resource_acquisition"),
             (Self::UnsafeRecursiveInitializer | Self::UnsafeRecursiveRoot, 0) => {
                 (Message::recursion_group(), "recursive_group")
             }
