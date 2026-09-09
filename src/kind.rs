@@ -225,6 +225,30 @@ pub enum KindFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KindInternalCause {
+    MissingCanonicalBinder,
+    ConflictingDeclarationBinder,
+    MissingDeclarationBinder,
+    SchemeInDetermination,
+    SchemeInMonotype,
+    EmptyMethodBinders,
+    MissingInterfaceKind,
+    EmptyInterfaceParameters,
+    MissingVariableKind,
+    ResourceIdentityKind,
+    DeterminantPosition,
+    SourceDeterminationKey,
+    SummaryDeterminationKey,
+    EffectArgumentKind,
+    EffectArgumentCount,
+    MissingRowEffect,
+    NonOwnerRowTail,
+    RowTailKind,
+    MissingRowBinderKind,
+    MissingRowInferenceKind,
+    ImplementationRowBinder,
+    PreflightArityChanged,
+    MethodRowBinder,
+    RowInferenceDetermination,
     ConstructorMovedProvenance,
     ConstructorOwner,
     PayloadCardinality,
@@ -297,6 +321,30 @@ enum KindInternalCause {
 impl KindInternalCause {
     fn name(self) -> &'static str {
         match self {
+            Self::MissingCanonicalBinder => "missing-canonical-binder",
+            Self::ConflictingDeclarationBinder => "conflicting-declaration-binder",
+            Self::MissingDeclarationBinder => "missing-declaration-binder",
+            Self::SchemeInDetermination => "scheme-in-determination",
+            Self::SchemeInMonotype => "scheme-in-monotype",
+            Self::EmptyMethodBinders => "empty-method-binders",
+            Self::MissingInterfaceKind => "missing-interface-kind",
+            Self::EmptyInterfaceParameters => "empty-interface-parameters",
+            Self::MissingVariableKind => "missing-variable-kind",
+            Self::ResourceIdentityKind => "resource-identity-kind",
+            Self::DeterminantPosition => "determinant-position",
+            Self::SourceDeterminationKey => "source-determination-key",
+            Self::SummaryDeterminationKey => "summary-determination-key",
+            Self::EffectArgumentKind => "effect-argument-kind",
+            Self::EffectArgumentCount => "effect-argument-count",
+            Self::MissingRowEffect => "missing-row-effect",
+            Self::NonOwnerRowTail => "non-owner-row-tail",
+            Self::RowTailKind => "row-tail-kind",
+            Self::MissingRowBinderKind => "missing-row-binder-kind",
+            Self::MissingRowInferenceKind => "missing-row-inference-kind",
+            Self::ImplementationRowBinder => "implementation-row-binder",
+            Self::PreflightArityChanged => "preflight-arity-changed",
+            Self::MethodRowBinder => "method-row-binder",
+            Self::RowInferenceDetermination => "row-inference-determination",
             Self::ConstructorMovedProvenance => "constructor-moved-provenance",
             Self::ConstructorOwner => "constructor-owner",
             Self::PayloadCardinality => "payload-cardinality",
@@ -368,6 +416,48 @@ impl KindInternalCause {
     }
     fn legacy(self) -> &'static str {
         match self {
+            Self::MissingCanonicalBinder => "a canonical type-binder kind is missing",
+            Self::ConflictingDeclarationBinder => {
+                "a declaration binder conflicts with its canonical registry record"
+            }
+            Self::MissingDeclarationBinder => {
+                "a declaration binder has no canonical registry record"
+            }
+            Self::SchemeInDetermination => "a rank-1 scheme entered global determination discovery",
+            Self::SchemeInMonotype => "a rank-1 scheme entered the resolved monotype kind judgment",
+            Self::EmptyMethodBinders => "a resolved explicit method binder list is empty",
+            Self::MissingInterfaceKind => {
+                "a resolved interface application has no canonical interface-kind entry"
+            }
+            Self::EmptyInterfaceParameters => "a resolved interface has no type parameters",
+            Self::MissingVariableKind => "a resolved type variable has no canonical kind",
+            Self::ResourceIdentityKind => "a resource identity must have kind Type",
+            Self::DeterminantPosition => {
+                "an authenticated determinant position is outside its complete application"
+            }
+            Self::SourceDeterminationKey => {
+                "an authenticated source determination has an invalid key"
+            }
+            Self::SummaryDeterminationKey => {
+                "an authenticated summary determination has an invalid key"
+            }
+            Self::EffectArgumentKind => "an effect row argument has the wrong canonical kind",
+            Self::EffectArgumentCount => "an effect row has the wrong canonical argument count",
+            Self::MissingRowEffect => "an effect row names no canonical checked declaration",
+            Self::NonOwnerRowTail => "an effect row references a non-owner tail",
+            Self::RowTailKind => "an effect-row tail does not have kind EffectRow",
+            Self::MissingRowBinderKind => "an effect-row tail has no canonical binder kind",
+            Self::MissingRowInferenceKind => "an effect-row tail has no fixed inference kind",
+            Self::ImplementationRowBinder => {
+                "an implementation owner cannot bind an EffectRow parameter"
+            }
+            Self::PreflightArityChanged => {
+                "an interface application changed arity between kind preflight passes"
+            }
+            Self::MethodRowBinder => "an interface method cannot bind an EffectRow parameter",
+            Self::RowInferenceDetermination => {
+                "row inference entered global determination discovery"
+            }
             Self::ConstructorMovedProvenance => {
                 "a constructor payload and its moved provenance disagree"
             }
@@ -507,6 +597,68 @@ impl KindInternalCause {
     }
     fn message(self) -> crate::message::Message<'static> {
         match self {
+            Self::MissingCanonicalBinder => {
+                crate::message::Message::kind_internal_missing_canonical_binder()
+            }
+            Self::ConflictingDeclarationBinder => {
+                crate::message::Message::kind_internal_conflicting_declaration_binder()
+            }
+            Self::MissingDeclarationBinder => {
+                crate::message::Message::kind_internal_missing_declaration_binder()
+            }
+            Self::SchemeInDetermination => {
+                crate::message::Message::kind_internal_scheme_in_determination()
+            }
+            Self::SchemeInMonotype => crate::message::Message::kind_internal_scheme_in_monotype(),
+            Self::EmptyMethodBinders => {
+                crate::message::Message::kind_internal_empty_method_binders()
+            }
+            Self::MissingInterfaceKind => {
+                crate::message::Message::kind_internal_missing_interface_kind()
+            }
+            Self::EmptyInterfaceParameters => {
+                crate::message::Message::kind_internal_empty_interface_parameters()
+            }
+            Self::MissingVariableKind => {
+                crate::message::Message::kind_internal_missing_variable_kind()
+            }
+            Self::ResourceIdentityKind => {
+                crate::message::Message::kind_internal_resource_identity_kind()
+            }
+            Self::DeterminantPosition => {
+                crate::message::Message::kind_internal_determinant_position()
+            }
+            Self::SourceDeterminationKey => {
+                crate::message::Message::kind_internal_source_determination_key()
+            }
+            Self::SummaryDeterminationKey => {
+                crate::message::Message::kind_internal_summary_determination_key()
+            }
+            Self::EffectArgumentKind => {
+                crate::message::Message::kind_internal_effect_argument_kind()
+            }
+            Self::EffectArgumentCount => {
+                crate::message::Message::kind_internal_effect_argument_count()
+            }
+            Self::MissingRowEffect => crate::message::Message::kind_internal_missing_row_effect(),
+            Self::NonOwnerRowTail => crate::message::Message::kind_internal_non_owner_row_tail(),
+            Self::RowTailKind => crate::message::Message::kind_internal_row_tail_kind(),
+            Self::MissingRowBinderKind => {
+                crate::message::Message::kind_internal_missing_row_binder_kind()
+            }
+            Self::MissingRowInferenceKind => {
+                crate::message::Message::kind_internal_missing_row_inference_kind()
+            }
+            Self::ImplementationRowBinder => {
+                crate::message::Message::kind_internal_implementation_row_binder()
+            }
+            Self::PreflightArityChanged => {
+                crate::message::Message::kind_internal_preflight_arity_changed()
+            }
+            Self::MethodRowBinder => crate::message::Message::kind_internal_method_row_binder(),
+            Self::RowInferenceDetermination => {
+                crate::message::Message::kind_internal_row_inference_determination()
+            }
             Self::ConstructorMovedProvenance => {
                 crate::message::Message::kind_internal_constructor_moved_provenance()
             }
@@ -1093,9 +1245,9 @@ impl<'a> KindEnvironments<'a> {
             if !binder_kind_is_admitted(&parameter.kind, false)
                 || !binder_kind_is_admitted(&source.kind, false)
             {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an implementation owner cannot bind an EffectRow parameter",
+                    KindInternalCause::ImplementationRowBinder,
                 ));
             }
             if parameter.id != source.id {
@@ -2339,12 +2491,12 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameters = effects.get(&instance.effect()).ok_or_else(|| {
-                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+                KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
             })?;
             if parameters.len() != instance.arguments().len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an effect row has the wrong canonical argument count",
+                    KindInternalCause::EffectArgumentCount,
                 ));
             }
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
@@ -2596,12 +2748,12 @@ impl<'a> KindEnvironments<'a> {
                 )
             })?;
             let parameters = effects.get(&instance.effect()).ok_or_else(|| {
-                KindFailure::internal(span, "an effect row names no canonical checked declaration")
+                KindFailure::internal_cause(span, KindInternalCause::MissingRowEffect)
             })?;
             if parameters.len() != instance.arguments().len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an effect row has the wrong canonical argument count",
+                    KindInternalCause::EffectArgumentCount,
                 ));
             }
             for (argument, parameter) in instance.arguments().iter().zip(parameters.iter()) {
@@ -2631,9 +2783,9 @@ impl<'a> KindEnvironments<'a> {
                     })?;
                 if !equal {
                     if provenance.is_none() {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             span,
-                            "an effect row argument has the wrong canonical kind",
+                            KindInternalCause::EffectArgumentKind,
                         ));
                     }
                     let diagnostic_budget = budget.resolved_budget(found.occurrence)?;
@@ -2691,21 +2843,21 @@ impl<'a> KindEnvironments<'a> {
         let fact = match tail.variable() {
             crate::types::EffectRowVariable::Rigid(identity) => {
                 if allowed_variables.is_some_and(|allowed| !allowed.contains(&identity)) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an effect row references a non-owner tail",
+                        KindInternalCause::NonOwnerRowTail,
                     ));
                 }
                 if let Some(visited) = visited_variables {
                     visited.insert(identity);
                 }
                 self.delta.get(&identity).ok_or_else(|| {
-                    KindFailure::internal(span, "an effect-row tail has no canonical binder kind")
+                    KindFailure::internal_cause(span, KindInternalCause::MissingRowBinderKind)
                 })?
             }
             crate::types::EffectRowVariable::Inference(identity) => {
                 self.omega.get(&identity).ok_or_else(|| {
-                    KindFailure::internal(span, "an effect-row tail has no fixed inference kind")
+                    KindFailure::internal_cause(span, KindInternalCause::MissingRowInferenceKind)
                 })?
             }
         };
@@ -2719,9 +2871,9 @@ impl<'a> KindEnvironments<'a> {
         if is_row {
             Ok(())
         } else {
-            Err(KindFailure::internal(
+            Err(KindFailure::internal_cause(
                 span,
-                "an effect-row tail does not have kind EffectRow",
+                KindInternalCause::RowTailKind,
             ))
         }
     }
@@ -2878,9 +3030,9 @@ impl<'a> KindEnvironments<'a> {
                                 visited.insert(*identity);
                             }
                             let mut fact = *self.delta.get(identity).ok_or_else(|| {
-                                KindFailure::internal(
+                                KindFailure::internal_cause(
                                     span,
-                                    "a resolved type variable has no canonical kind",
+                                    KindInternalCause::MissingVariableKind,
                                 )
                             })?;
                             authenticate_kind_descendants_with_ledger(
@@ -3179,9 +3331,9 @@ impl<'a> KindEnvironments<'a> {
                                     KindInternalCause::LinkedValueType,
                                 ));
                             }
-                            return Err(KindFailure::internal(
+                            return Err(KindFailure::internal_cause(
                                 span,
-                                "a rank-1 scheme entered the resolved monotype kind judgment",
+                                KindInternalCause::SchemeInMonotype,
                             ));
                         }
                     }
@@ -3594,7 +3746,7 @@ pub(crate) fn canonical_type_variable_kind<'a>(
     registry
         .type_variable(identity)
         .map(|parameter| &parameter.kind)
-        .ok_or_else(|| KindFailure::internal(span, "a canonical type-binder kind is missing"))
+        .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::MissingCanonicalBinder))
 }
 
 /// Checks every resolved type boundary before a resolved module is published.
@@ -3641,9 +3793,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
             )
         })?;
         if interface.parameters.is_empty() {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 interface.span,
-                "a resolved interface has no type parameters",
+                KindInternalCause::EmptyInterfaceParameters,
             ));
         }
         if !interface_determination_is_total(interface, budget)? {
@@ -4046,9 +4198,9 @@ fn authenticate_imported_environments<'a>(
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in method.type_parameters() {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         parameter.origin.primary_span(),
-                        "an interface method cannot bind an EffectRow parameter",
+                        KindInternalCause::MethodRowBinder,
                     ));
                 }
                 environments.insert_declared(
@@ -4179,9 +4331,9 @@ fn check_interface<'a>(
         )
     })?;
     if interface.parameters.is_empty() {
-        return Err(KindFailure::internal(
+        return Err(KindFailure::internal_cause(
             interface.span,
-            "a resolved interface has no type parameters",
+            KindInternalCause::EmptyInterfaceParameters,
         ));
     }
     if !interface_determination_is_total(interface, budget)? {
@@ -4191,9 +4343,9 @@ fn check_interface<'a>(
     for method in &interface.methods {
         if method.has_explicit_type_parameters && method.type_parameters.is_empty() {
             charge_lookup_attempt(method.span, budget)?;
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 method.span,
-                "a resolved explicit method binder list is empty",
+                KindInternalCause::EmptyMethodBinders,
             ));
         }
         authenticate_owner_parameters(registry, &method.type_parameters, budget)?;
@@ -4201,9 +4353,9 @@ fn check_interface<'a>(
             environments.install_owner_parameters(&interface.parameters, budget)?;
             for parameter in &method.type_parameters {
                 if !binder_kind_is_admitted(&parameter.kind, false) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         parameter.origin.primary_span(),
-                        "an interface method cannot bind an EffectRow parameter",
+                        KindInternalCause::MethodRowBinder,
                     ));
                 }
                 environments.insert_declared(
@@ -4288,10 +4440,7 @@ fn authenticate_interface_application<'application, 'kind>(
         .iota
         .get(&application.interface.id)
         .ok_or_else(|| {
-            KindFailure::internal(
-                application.span,
-                "a resolved interface application has no canonical interface-kind entry",
-            )
+            KindFailure::internal_cause(application.span, KindInternalCause::MissingInterfaceKind)
         })?;
     if application.arguments.len() != expected.parameters.len() {
         return Ok(None);
@@ -4358,9 +4507,9 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                  budget: &mut TypeWorkBudget| {
         let application = authenticate_interface_application(application, environments, budget)?
             .ok_or_else(|| {
-                KindFailure::internal(
+                KindFailure::internal_cause(
                     application.span,
-                    "an interface application changed arity between kind preflight passes",
+                    KindInternalCause::PreflightArityChanged,
                 )
             })?;
         check_interface_application_kinds(application, environments, budget)
@@ -4630,9 +4779,9 @@ fn collect_type_variables(
             Type::EffectfulFunction(domain, codomain) => {
                 if let Some(tail) = codomain.effects().tail() {
                     let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
-                        return Err(KindFailure::internal(
+                        return Err(KindFailure::internal_cause(
                             span,
-                            "row inference entered global determination discovery",
+                            KindInternalCause::RowInferenceDetermination,
                         ));
                     };
                     if !contains_type_variable_with_budget(output, identity, span, budget)? {
@@ -4658,9 +4807,9 @@ fn collect_type_variables(
                 push_determination_work(&mut work, domain, span, budget)?;
             }
             Type::Forall(_, _) => {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "a rank-1 scheme entered global determination discovery",
+                    KindInternalCause::SchemeInDetermination,
                 ));
             }
             Type::Int | Type::Bool | Type::Unit | Type::Inference(_) | Type::Nominal(_) => {}
@@ -4739,9 +4888,9 @@ fn requirement_has_undetermined_variable(
                 }
             }
             if next != determination.determinant.parameters.len() {
-                return Err(KindFailure::internal(
+                return Err(KindFailure::internal_cause(
                     span,
-                    "an authenticated source determination has an invalid key",
+                    KindInternalCause::SourceDeterminationKey,
                 ));
             }
         }
@@ -4755,9 +4904,9 @@ fn requirement_has_undetermined_variable(
                     )
                 })?;
                 if previous.is_some_and(|previous| previous >= position) {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "an authenticated summary determination has an invalid key",
+                        KindInternalCause::SummaryDeterminationKey,
                     ));
                 }
                 previous = Some(position);
@@ -4783,12 +4932,9 @@ fn requirement_argument_has_undetermined_variable(
     determined: &[TypeVariableId],
     budget: &mut TypeWorkBudget,
 ) -> Result<bool, KindFailure> {
-    let argument = arguments.get(position).ok_or_else(|| {
-        KindFailure::internal(
-            span,
-            "an authenticated determinant position is outside its complete application",
-        )
-    })?;
+    let argument = arguments
+        .get(position)
+        .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::DeterminantPosition))?;
     let mut variables = Vec::new();
     collect_type_variables(&argument.ty, argument.span, &mut variables, budget)?;
     for identity in variables {
@@ -4877,10 +5023,7 @@ fn authenticate_owner_parameters(
     for parameter in parameters {
         let span = parameter.origin.primary_span();
         let canonical = registry.type_variable(parameter.id).ok_or_else(|| {
-            KindFailure::internal(
-                span,
-                "a declaration binder has no canonical registry record",
-            )
+            KindFailure::internal_cause(span, KindInternalCause::MissingDeclarationBinder)
         })?;
         let same_kind =
             same_kind_with_budget(&canonical.kind, &parameter.kind, budget).map_err(|()| {
@@ -4894,9 +5037,9 @@ fn authenticate_owner_parameters(
             || canonical.origin.primary_span() != span
             || !same_kind
         {
-            return Err(KindFailure::internal(
+            return Err(KindFailure::internal_cause(
                 span,
-                "a declaration binder conflicts with its canonical registry record",
+                KindInternalCause::ConflictingDeclarationBinder,
             ));
         }
     }
@@ -5054,9 +5197,9 @@ fn check_expression_work<'a>(
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
                 if resource.identity.kind != Kind::Type {
-                    return Err(KindFailure::internal(
+                    return Err(KindFailure::internal_cause(
                         span,
-                        "a resource identity must have kind Type",
+                        KindInternalCause::ResourceIdentityKind,
                     ));
                 }
                 environments.extend_owner_parameters(parameters, budget)?;
@@ -5638,6 +5781,30 @@ mod tests {
             KindInternalCause::DuplicateBinder,
             KindInternalCause::OwnerEffectRow,
             KindInternalCause::MissingOwnerBinder,
+            KindInternalCause::MissingCanonicalBinder,
+            KindInternalCause::ConflictingDeclarationBinder,
+            KindInternalCause::MissingDeclarationBinder,
+            KindInternalCause::SchemeInDetermination,
+            KindInternalCause::SchemeInMonotype,
+            KindInternalCause::EmptyMethodBinders,
+            KindInternalCause::MissingInterfaceKind,
+            KindInternalCause::EmptyInterfaceParameters,
+            KindInternalCause::MissingVariableKind,
+            KindInternalCause::ResourceIdentityKind,
+            KindInternalCause::DeterminantPosition,
+            KindInternalCause::SourceDeterminationKey,
+            KindInternalCause::SummaryDeterminationKey,
+            KindInternalCause::EffectArgumentKind,
+            KindInternalCause::EffectArgumentCount,
+            KindInternalCause::MissingRowEffect,
+            KindInternalCause::NonOwnerRowTail,
+            KindInternalCause::RowTailKind,
+            KindInternalCause::MissingRowBinderKind,
+            KindInternalCause::MissingRowInferenceKind,
+            KindInternalCause::ImplementationRowBinder,
+            KindInternalCause::PreflightArityChanged,
+            KindInternalCause::MethodRowBinder,
+            KindInternalCause::RowInferenceDetermination,
             KindInternalCause::ConstructorMovedProvenance,
             KindInternalCause::ConstructorOwner,
             KindInternalCause::PayloadCardinality,

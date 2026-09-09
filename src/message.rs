@@ -150,6 +150,54 @@ macro_rules! messages {
 }
 
 messages! {
+    /// The compiler has no canonical kind for a type binder.
+    kind_internal_missing_canonical_binder => "kind-internal-missing-canonical-binder" {},
+    /// The compiler retained a declaration binder that conflicts with its canonical registry record.
+    kind_internal_conflicting_declaration_binder => "kind-internal-conflicting-declaration-binder" {},
+    /// The compiler has no canonical registry record for a declaration binder.
+    kind_internal_missing_declaration_binder => "kind-internal-missing-declaration-binder" {},
+    /// The compiler passed a polymorphic scheme to global determination discovery, which requires a monotype.
+    kind_internal_scheme_in_determination => "kind-internal-scheme-in-determination" {},
+    /// The compiler passed a polymorphic scheme to resolved monotype kind checking.
+    kind_internal_scheme_in_monotype => "kind-internal-scheme-in-monotype" {},
+    /// The compiler retained an empty explicit method binder list.
+    kind_internal_empty_method_binders => "kind-internal-empty-method-binders" {},
+    /// The compiler has no canonical interface-kind entry for a resolved interface application.
+    kind_internal_missing_interface_kind => "kind-internal-missing-interface-kind" {},
+    /// The compiler retained a resolved interface without type parameters.
+    kind_internal_empty_interface_parameters => "kind-internal-empty-interface-parameters" {},
+    /// The compiler has no canonical kind for a resolved type variable.
+    kind_internal_missing_variable_kind => "kind-internal-missing-variable-kind" {},
+    /// The compiler retained a resource identity whose kind is not Type.
+    kind_internal_resource_identity_kind => "kind-internal-resource-identity-kind" {},
+    /// The compiler retained a determinant position outside its complete interface application.
+    kind_internal_determinant_position => "kind-internal-determinant-position" {},
+    /// The compiler retained an invalid determination key in authenticated source data.
+    kind_internal_source_determination_key => "kind-internal-source-determination-key" {},
+    /// The compiler retained an invalid determination key in an authenticated summary.
+    kind_internal_summary_determination_key => "kind-internal-summary-determination-key" {},
+    /// The compiler retained an effect-row argument with the wrong canonical kind.
+    kind_internal_effect_argument_kind => "kind-internal-effect-argument-kind" {},
+    /// The compiler retained an effect-row instance with the wrong canonical argument count.
+    kind_internal_effect_argument_count => "kind-internal-effect-argument-count" {},
+    /// The compiler retained an effect row referring to an effect without a canonical checked declaration.
+    kind_internal_missing_row_effect => "kind-internal-missing-row-effect" {},
+    /// The compiler retained an effect-row tail that is not bound by its owner.
+    kind_internal_non_owner_row_tail => "kind-internal-non-owner-row-tail" {},
+    /// The compiler retained an effect-row tail whose kind is not EffectRow.
+    kind_internal_row_tail_kind => "kind-internal-row-tail-kind" {},
+    /// The compiler has no canonical binder kind for an effect-row tail.
+    kind_internal_missing_row_binder_kind => "kind-internal-missing-row-binder-kind" {},
+    /// The compiler has no fixed inference kind for an effect-row tail.
+    kind_internal_missing_row_inference_kind => "kind-internal-missing-row-inference-kind" {},
+    /// The compiler retained an EffectRow parameter on an implementation owner that cannot bind one.
+    kind_internal_implementation_row_binder => "kind-internal-implementation-row-binder" {},
+    /// The compiler observed different interface-application argument counts between kind preflight passes.
+    kind_internal_preflight_arity_changed => "kind-internal-preflight-arity-changed" {},
+    /// The compiler retained an EffectRow parameter on an interface method that cannot bind one.
+    kind_internal_method_row_binder => "kind-internal-method-row-binder" {},
+    /// The compiler encountered row inference during global determination discovery.
+    kind_internal_row_inference_determination => "kind-internal-row-inference-determination" {},
     /// The compiler retained constructor payload provenance that disagrees with the moved payload.
     kind_internal_constructor_moved_provenance => "kind-internal-constructor-moved-provenance" {},
     /// The compiler retained a canonical constructor owned by a different nominal type.
