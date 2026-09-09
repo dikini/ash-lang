@@ -62,9 +62,26 @@ localization language. Color is not required for completion.
 - The task-owned [execution plan](human-diagnostics-execution-plan.md) records
   the test-first implementation and verification sequence.
 - Compiler repair is complete and recorded separately. Diagnostic presentation
-  implementation has not started.
+  implementation has started in `.worktree/human-diagnostics` from `0b376b8`.
 - The reviewed plan separates compile-time and runtime reporting and begins
   with one end-to-end compile-time example before broad migration.
+- The initial binding-initializer path borrows existing expected/found facts
+  and causal spans. It has English/Bulgarian messages, human/short rendering
+  and JSON with distinct initializer and annotation relationships. The CLI
+  default and runtime reporter remain unchanged.
+- Foundation review caught presentation-derived JSON facts and a separate
+  message-test inventory. A failing JSON-independence regression drove semantic
+  fact separation; a private declaration macro now derives the typed messages,
+  formatting arguments and exhaustive catalogue examples together.
+- Slice 1 remains in progress. Driver-owned source retention and final slice
+  review are outstanding; current rendering tests retain the loaded graph.
+  Broad phase migration, internal causes, runtime formats and CLI integration
+  remain later slices. No diagnostic implementation is merged into main.
+- Foundation verification passed 1,225 library tests, five new integration
+  tests, 45 existing diagnostic tests, ten source tests, warnings-denied Clippy
+  and six rustdoc tests. The renderer fixture checks English and Bulgarian
+  human/short output. Followup review confirmed both foundation findings were
+  resolved. These checks do not replace the final workspace gate.
 
 ## Verification
 
