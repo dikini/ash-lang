@@ -479,6 +479,91 @@ fn annotated_output_row_supplies_the_lacks_fact_for_one_requested_effect() {
     assert!(effects.tail().is_some());
 }
 
+#[test]
+fn generic_callback_respects_result_row_tail_exclusions() {
+    let prefix = concat!(
+        "effect Bonus {\namount : Unit -> Int\n}\n",
+        "add_bonus<R : EffectRow> : (Int -> Int ! {| R}, Int) -> Int ! {Bonus | R}\n",
+        "add_bonus (function, value) = (function value) + (perform Bonus.amount ())\n",
+        "increment : Int -> Int\nincrement value = value + 1\n",
+        "score : Int -> Int ! {Bonus}\nscore points = points + perform Bonus.amount ()\n",
+    );
+    for (callback, accepted) in [("increment", true), ("score", false)] {
+        let source = format!(
+            "{prefix}\nmain : Unit -> Int\nmain () = handle (add_bonus ({callback}, 40)) with Bonus {{\namount ignored => resume 2\n}}\n"
+        );
+        let result = try_check_source(&source);
+        assert_eq!(result.is_ok(), accepted, "callback {callback}: {result:?}");
+        if let Err(error) = result {
+            assert!(
+                matches!(
+                    error,
+                    ash::elaborate::TypeError::Source(_) | ash::elaborate::TypeError::Mismatch(_)
+                ),
+                "expected source rejection: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn handled_callback_exclusions_qualify_declared_result_rows() {
+    check_source(concat!(
+        "effect Read<A> {\nread : Unit -> A\n}\n",
+        "relay<E : EffectRow> : (Unit -> Int ! {Read<Int> | E}) -> Int ! {| E}\n",
+        "relay action = handle (action ()) with Read<Int> {\nread ignored => resume 42\n}\n",
+        "explicit<E : EffectRow> : (Unit -> Int ! {Read<Int> | E}) -> Int ! {| E}\n",
+        "explicit action = {\n",
+        "let local : (Unit -> Int ! {Read<Int> | E}) -> Int ! {| E} = fn(callback) {\n",
+        "handle (callback ()) with Read<Int> {\nread ignored => resume 42\n}\n}\n",
+        "local action\n}\n",
+    ));
+}
+
+#[test]
+fn row_exclusions_preserve_distinct_instances_and_open_forwarding() {
+    check_source(concat!(
+        "effect Read<A> {\nread : Unit -> A\n}\n",
+        "with_read<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Read<Int> | R}\n",
+        "with_read action = action () + perform Read<Int>.read ()\n",
+        "read_bool : Unit -> Int ! {Read<Bool>}\n",
+        "read_bool () = {\nlet ignored = perform Read<Bool>.read ()\n1\n}\n",
+        "used : Unit -> Int ! {Read<Int>, Read<Bool>}\nused () = with_read(read_bool)\n",
+        "forward<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {Read<Int> | R}\n",
+        "forward action = with_read(action)\n",
+        "relay<R : EffectRow> : (Unit -> Int ! {| R}) -> Int ! {| R}\n",
+        "relay action = action ()\n",
+        "ordinary : Unit -> Int ! {Read<Bool>}\nordinary () = relay(read_bool)\n",
+    ));
+}
+
+#[test]
+fn row_exclusions_substitute_effect_instance_type_arguments() {
+    let prefix = concat!(
+        "effect Read<A> {\nread : Unit -> A\n}\n",
+        "with_read<A, R : EffectRow> : (Unit -> A ! {| R}) -> A ! {Read<A> | R}\n",
+        "with_read action = {\nlet ignored = action ()\nperform Read<A>.read ()\n}\n",
+        "pure : Unit -> Int\npure () = 1\n",
+        "read_int : Unit -> Int ! {Read<Int>}\nread_int () = perform Read<Int>.read ()\n",
+    );
+    for (callback, accepted) in [("pure", true), ("read_int", false)] {
+        let source = format!(
+            "{prefix}\nused : Unit -> Int ! {{Read<Int>}}\nused () = with_read({callback})\n"
+        );
+        let result = try_check_source(&source);
+        assert_eq!(result.is_ok(), accepted, "callback {callback}: {result:?}");
+        if let Err(error) = result {
+            assert!(
+                matches!(
+                    error,
+                    ash::elaborate::TypeError::Source(_) | ash::elaborate::TypeError::Mismatch(_)
+                ),
+                "expected source rejection: {error:?}"
+            );
+        }
+    }
+}
+
 fn handler_source(clause_body: &str) -> String {
     format!(
         "effect Choice {{\nchoose : Unit -> Int\n}}\n\nmain : Unit -> Int\nmain () = handle (perform Choice.choose ()) with Choice {{\nchoose ignored => {clause_body}\n}}\n"

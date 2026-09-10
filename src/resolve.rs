@@ -200,6 +200,25 @@ fn build_source_effect_row_with_provenance(
             )
         },
     )?;
+    if tail.is_some() {
+        // Source-row exclusions repeat the known instances, so their type
+        // arguments retain the same source provenance in the lacks positions.
+        budget.charge(root_count).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument provenance exceeded its type-work budget",
+            )
+        })?;
+        roots.try_reserve_exact(root_count).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "effect-argument provenance could not reserve storage",
+            )
+        })?;
+        roots.extend_from_within(..);
+    }
     Ok((row, roots.into_boxed_slice()))
 }
 

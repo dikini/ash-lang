@@ -16295,11 +16295,13 @@ mod tests {
         check(&measured).unwrap();
         let exact = measured.type_work.get();
         assert_eq!(
-            measured
+            written.tail().unwrap().lacks(),
+            subset.tail().unwrap().lacks()
+        );
+        assert!(
+            !measured
                 .effect_row_subset_charged(&invalid, &written, node)
-                .unwrap_err()
-                .reason(),
-            ValidationReason::EffectRow
+                .unwrap()
         );
         let short = Validator::new(&program, &[&file]);
         short

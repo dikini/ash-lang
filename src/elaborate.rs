@@ -125,6 +125,8 @@ pub enum TypeReason {
     /// Stored resource dependency proof is not available in this increment.
     /// An effect-row union has no unqualified principal result.
     AmbiguousEffectRow,
+    /// A row substitution contains an instance excluded from its tail.
+    EffectRowExclusion,
     /// A handler body does not request the exact handled instance.
     MissingHandledEffect,
     /// The target lacks a declared single endomorphic publication API.
@@ -337,6 +339,11 @@ impl TypeReason {
         use crate::message::Message;
         let uncovered = witness.map(|value| ("uncovered_value", value));
         let (message, relationship, fact) = match self {
+            Self::EffectRowExclusion => (
+                Message::effect_row_exclusion(),
+                "excluded_effect_requirement",
+                None,
+            ),
             Self::HookApi => (Message::hook_api(), "hook_api", None),
             Self::MissingHandledEffect => {
                 (Message::missing_handled_effect(), "handled_effect", None)
@@ -435,6 +442,9 @@ impl TypeReason {
     ) -> Option<(crate::message::Message<'static>, &'static str)> {
         use crate::message::Message;
         Some(match (self, index) {
+            (Self::EffectRowExclusion, 0) => {
+                (Message::effect_row_exclusion_contract(), "expected_type")
+            }
             (Self::LocalNominalEscape, 0) => {
                 (Message::local_nominal_scope(), "local_nominal_scope")
             }
@@ -566,6 +576,7 @@ impl fmt::Display for TypeReason {
             Self::LocalNominalEscape => formatter.write_str("type.local-nominal-escape"),
             Self::ResourceEscape => formatter.write_str("type.resource-escape"),
             Self::AmbiguousEffectRow => formatter.write_str("effect.row-union-ambiguous"),
+            Self::EffectRowExclusion => formatter.write_str("effect.row-exclusion"),
             Self::MissingHandledEffect => formatter.write_str("effect.handler-missing-input"),
             Self::HookApi => formatter.write_str("type.hook-api"),
             Self::HandlerCoverage => formatter.write_str("effect.handler-coverage"),
@@ -2414,6 +2425,7 @@ pub struct CoreElaborator<F: CoreLoweringFamily> {
     generated_type_variables: GeneratedTypeVariableRegistry,
     inference_solutions: InferenceSolutionMap,
     row_inference_solutions: RowInferenceSolutionMap,
+    row_inference_obligations: RowInferenceSolutionMap,
     cleanup_rows: cleanup_rows::CleanupRows,
     authenticated_inference_solutions: HashSet<InferenceVariableId>,
     deferred_local_nominal_escapes: Vec<(NominalTypeId, InferenceVariableId, Span)>,
@@ -2699,6 +2711,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
@@ -2799,6 +2812,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
@@ -2866,6 +2880,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
@@ -3314,6 +3329,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             generated_type_variables: GeneratedTypeVariableRegistry::default(),
             inference_solutions: InferenceSolutionMap::default(),
             row_inference_solutions: RowInferenceSolutionMap::default(),
+            row_inference_obligations: RowInferenceSolutionMap::default(),
             cleanup_rows: cleanup_rows::CleanupRows::default(),
             authenticated_inference_solutions: HashSet::new(),
             deferred_local_nominal_escapes: Vec::new(),
@@ -4449,6 +4465,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 if !self.authenticated_inference_solutions.insert(*variable) {
                     self.inference_solutions.remove_and_discard(*variable);
                     self.row_inference_solutions.remove(*variable);
+                    self.row_inference_obligations.remove(*variable);
                     return Err(invalid_state());
                 }
                 generalized.push((binder, kind));
@@ -4461,6 +4478,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 for variable in variables.iter().take(generalized.len()) {
                     self.inference_solutions.remove_and_discard(*variable);
                     self.row_inference_solutions.remove(*variable);
+                    self.row_inference_obligations.remove(*variable);
                     self.authenticated_inference_solutions.remove(variable);
                 }
                 self.generated_type_variables.truncate(generated_marker);
@@ -4468,6 +4486,168 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Err(error)
             }
         }
+    }
+
+    fn qualify_scheme_row_replacements(
+        &mut self,
+        ty: &Type,
+        replacements: &HashMap<TypeVariableId, Type>,
+        row_replacements: &mut HashMap<TypeVariableId, EffectRow>,
+        include_free: bool,
+    ) -> Result<(), TypeError> {
+        // The common first-order pure arrow has no row contract to collect.
+        // This fixed-size shape check avoids a second work queue for it.
+        let atomic = |ty: &Type| {
+            matches!(
+                ty,
+                Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Nominal(_)
+                    | Type::Variable(_)
+                    | Type::Inference(_)
+            )
+        };
+        if atomic(ty)
+            || matches!(ty, Type::Function(domain, codomain) if atomic(domain) && atomic(codomain))
+        {
+            return Ok(());
+        }
+        let mut exclusions: HashMap<_, Vec<_>> = HashMap::new();
+        let mut pending = Vec::new();
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        pending.try_reserve(1).map_err(|_| type_resource())?;
+        pending.push(ty);
+        while let Some(ty) = pending.pop() {
+            if let Type::EffectfulFunction(_, codomain) = ty {
+                self.type_work
+                    .charge(codomain.effects.known().len().saturating_add(
+                        codomain.effects.tail().map_or(0, |tail| tail.lacks().len()),
+                    ))
+                    .map_err(|()| type_resource())?;
+            }
+            let mut push = |ty| -> Result<(), TypeError> {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                pending.try_reserve(1).map_err(|_| type_resource())?;
+                pending.push(ty);
+                Ok(())
+            };
+            match ty {
+                Type::Tuple(elements) => {
+                    for element in elements {
+                        push(element)?;
+                    }
+                }
+                Type::Application(left, right) | Type::Function(left, right) => {
+                    push(left)?;
+                    push(right)?;
+                }
+                Type::EffectfulFunction(domain, codomain) => {
+                    push(domain)?;
+                    push(&codomain.value)?;
+                    for instance in codomain.effects.known().iter().chain(
+                        codomain
+                            .effects
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    ) {
+                        for argument in instance.arguments() {
+                            push(argument)?;
+                        }
+                    }
+                    if let Some(tail) = codomain.effects.tail()
+                        && !tail.lacks().is_empty()
+                        && let EffectRowVariable::Rigid(binder) = tail.variable()
+                        && (include_free || row_replacements.contains_key(&binder))
+                    {
+                        self.type_work
+                            .charge(tail.lacks().len().saturating_add(1))
+                            .map_err(|()| type_resource())?;
+                        exclusions.try_reserve(1).map_err(|_| type_resource())?;
+                        let retained = exclusions.entry(binder).or_default();
+                        retained
+                            .try_reserve(tail.lacks().len())
+                            .map_err(|_| type_resource())?;
+                        retained.extend(tail.lacks());
+                    }
+                }
+                // Nested schemes bind their own variables.
+                Type::Forall(_, _)
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
+            }
+        }
+        let mut qualified = Vec::new();
+        self.type_work
+            .charge(exclusions.len())
+            .map_err(|()| type_resource())?;
+        qualified
+            .try_reserve(exclusions.len())
+            .map_err(|_| type_resource())?;
+        for (binder, lacks) in exclusions {
+            let variable = row_replacements
+                .get(&binder)
+                .and_then(EffectRow::tail)
+                .map_or(EffectRowVariable::rigid(binder), |tail| tail.variable());
+            let row = rebuild_effect_row_with_budget(
+                std::iter::empty(),
+                Some(variable),
+                lacks,
+                |argument, budget| {
+                    substitute_type_and_row_variables_with(
+                        argument,
+                        replacements,
+                        row_replacements,
+                        |cells| budget.charge(cells),
+                        || (),
+                    )?
+                    .map_err(|_| ())
+                },
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?;
+            qualified.push((binder, row));
+        }
+        for (binder, row) in qualified {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            row_replacements
+                .try_reserve(1)
+                .map_err(|_| type_resource())?;
+            row_replacements.insert(binder, row);
+        }
+        Ok(())
+    }
+
+    fn qualify_checking_type(&mut self, ty: &mut ProvenancedTypeOwner) -> Result<(), TypeError> {
+        let replacements = HashMap::new();
+        let mut rows = HashMap::new();
+        self.qualify_scheme_row_replacements(&ty.ty, &replacements, &mut rows, true)?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let qualified = substitute_type_and_row_variables_with(
+            &ty.ty,
+            &replacements,
+            &rows,
+            |cells| self.type_work.charge(cells),
+            || (),
+        )
+        .map_err(|()| type_resource())?
+        .map_err(|_| invalid_state())?;
+        ty.replace_type(qualified);
+        if !ty.provenance.aligns(&ty.ty) {
+            let provenance = match ty.provenance.span() {
+                Some(span) => self.at_span_provenance(&ty.ty, span)?,
+                None => self.unknown_provenance(&ty.ty)?,
+            };
+            ty.set_provenance(provenance);
+        }
+        Ok(())
     }
 
     fn instantiate(
@@ -4530,6 +4710,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 };
                 replacements.insert(*binder, argument.clone());
                 arguments.push(argument);
+            }
+            // A row binder has one exclusion contract across the whole scheme,
+            // including occurrences in callback domains and result rows.
+            if !row_replacements.is_empty() {
+                self.qualify_scheme_row_replacements(
+                    &fact.ty,
+                    &replacements,
+                    &mut row_replacements,
+                    false,
+                )?;
+                for ((binder, _), argument) in fact
+                    .quantified
+                    .iter()
+                    .filter(|(_, kind)| matches!(kind, Kind::EffectRow))
+                    .zip(&mut row_arguments)
+                {
+                    *argument = clone_effect_row_with_budget(
+                        &row_replacements[binder],
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?;
+                }
             }
             let instantiated = substitute_type_and_row_variables_with(
                 &fact.ty,
@@ -4643,6 +4845,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                                     SelectionFailure::TypeResource
                                                 }
                                                 UnificationFailure::Mismatch
+                                                | UnificationFailure::RowExclusion
                                                 | UnificationFailure::Infinite
                                                 | UnificationFailure::Invariant => {
                                                     SelectionFailure::InvalidState
@@ -4690,6 +4893,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
+                            | UnificationFailure::RowExclusion
                             | UnificationFailure::Infinite
                             | UnificationFailure::Invariant => SelectionFailure::InvalidState,
                         }),
@@ -4727,6 +4931,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             let actual = IterativeTypeOwner::new(Type::Tuple(actual));
             match self.unify(&expected, &actual) {
                 Ok(()) => {}
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(obligation_span, Some(source_span)));
+                }
                 Err(UnificationFailure::Kind { context, span }) => {
                     return Err(TypeError::Internal(ElaborationFailure::Kind {
                         context,
@@ -4816,6 +5023,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                                     SelectionFailure::TypeResource
                                                 }
                                                 UnificationFailure::Mismatch
+                                                | UnificationFailure::RowExclusion
                                                 | UnificationFailure::Infinite
                                                 | UnificationFailure::Invariant => {
                                                     SelectionFailure::InvalidState
@@ -4865,6 +5073,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
+                            | UnificationFailure::RowExclusion
                             | UnificationFailure::Infinite
                             | UnificationFailure::Invariant => SelectionFailure::InvalidState,
                         }),
@@ -4909,6 +5118,15 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         {
             match self.unify(method_argument, rigid_argument) {
                 Ok(()) => {}
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(
+                        check
+                            .site()
+                            .argument_span()
+                            .unwrap_or(check.site().occurrence_span()),
+                        None,
+                    ));
+                }
                 Err(UnificationFailure::Kind { context, span }) => {
                     return Err(TypeError::Internal(ElaborationFailure::Kind {
                         context,
@@ -5274,6 +5492,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             }
                             UnificationFailure::Resource => SelectionFailure::TypeResource,
                             UnificationFailure::Mismatch
+                            | UnificationFailure::RowExclusion
                             | UnificationFailure::Infinite
                             | UnificationFailure::Invariant => SelectionFailure::InvalidState,
                         }),
@@ -6174,6 +6393,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Ok(()) => {}
                 Err(
                     UnificationFailure::Mismatch
+                    | UnificationFailure::RowExclusion
                     | UnificationFailure::Infinite
                     | UnificationFailure::Invariant,
                 ) => {
@@ -6199,6 +6419,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         &mut self,
         expected: &InterfaceApplication,
         actual: &InterfaceApplication,
+        span: Span,
     ) -> Result<(), TypeError> {
         if expected.interface() != actual.interface()
             || expected.arguments().len() != actual.arguments().len()
@@ -6208,6 +6429,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
             match self.unify(expected, actual) {
                 Ok(()) => {}
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(span, None));
+                }
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
                 }
@@ -6276,7 +6500,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
                     };
-                    self.unify_interface_applications(target_application, application)?;
+                    self.unify_interface_applications(
+                        target_application,
+                        application,
+                        origin.primary_span(),
+                    )?;
                     let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
                     same_type_with_budget(&current_domain, &argument.ty, &mut self.type_work)
                         .map_err(|()| {
@@ -6294,7 +6522,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     let Some(application) = argument.adapter_application.as_ref() else {
                         return Err(invalid_state());
                     };
-                    self.unify_interface_applications(target_application, application)?;
+                    self.unify_interface_applications(
+                        target_application,
+                        application,
+                        origin.primary_span(),
+                    )?;
                     let current_domain = IterativeTypeOwner::new(self.zonk(domain)?);
                     self.authenticated_adapter_scheme_matches(
                         &current_domain,
@@ -6312,6 +6544,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         } else {
             match self.unify(domain, &argument.ty) {
                 Ok(()) => {}
+                Err(UnificationFailure::RowExclusion) => {
+                    return Err(row_exclusion_error(origin.primary_span(), None));
+                }
                 Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                     return Err(invalid_state());
                 }
@@ -7075,6 +7310,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
                     }
                     UnificationFailure::Mismatch
+                    | UnificationFailure::RowExclusion
                     | UnificationFailure::Infinite
                     | UnificationFailure::Invariant => invalid_state(),
                 }),
@@ -7103,6 +7339,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn zonk_effect_row(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        self.try_zonk_effect_row(row)?.map_err(|_| invalid_state())
+    }
+
+    fn zonk_effect_row_arguments(&mut self, row: &EffectRow) -> Result<EffectRow, TypeError> {
+        self.type_work
+            .charge(
+                row.known()
+                    .len()
+                    .saturating_add(row.tail().map_or(0, |tail| tail.lacks().len())),
+            )
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
         let mut arguments: HashMap<*const Type, IterativeTypeOwner> = HashMap::new();
         for member in row
             .known()
@@ -7120,26 +7367,32 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 arguments.insert(argument as *const Type, zonked);
             }
         }
-        let mut current = row
-            .map_type_arguments_with_budget(
-                |argument, _| {
-                    Ok::<Type, ()>(
-                        arguments
-                            .remove(&(argument as *const Type))
-                            .expect("each row argument was zonked once")
-                            .into_inner(),
-                    )
-                },
-                &mut self.type_work,
-            )
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        row.map_type_arguments_with_budget(
+            |argument, _| {
+                Ok::<Type, ()>(
+                    arguments
+                        .remove(&(argument as *const Type))
+                        .expect("each row argument was zonked once")
+                        .into_inner(),
+                )
+            },
+            &mut self.type_work,
+        )
+        .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn try_zonk_effect_row(
+        &mut self,
+        row: &EffectRow,
+    ) -> Result<Result<EffectRow, EffectRowError>, TypeError> {
+        let mut current = self.zonk_effect_row_arguments(row)?;
         let mut visited = HashSet::new();
         loop {
             let Some(tail) = current.tail() else {
-                return Ok(current);
+                return Ok(Ok(current));
             };
             let EffectRowVariable::Inference(identity) = tail.variable() else {
-                return Ok(current);
+                return Ok(Ok(current));
             };
             let fact = self
                 .inference_variables
@@ -7151,7 +7404,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 return Err(invalid_state());
             }
             let Some(solution) = self.row_inference_solutions.get(&identity) else {
-                return Ok(current);
+                return Ok(Ok(current));
             };
             self.type_work
                 .charge(1)
@@ -7164,14 +7417,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             {
                 return Err(invalid_state());
             }
-            current = current
+            let solution = clone_effect_row_with_budget(solution, &mut self.type_work)
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let solution = self.zonk_effect_row_arguments(&solution)?;
+            let substituted = current
                 .substitute_tail_once_with_budget(
                     EffectRowVariable::inference(identity),
-                    solution,
+                    &solution,
                     &mut self.type_work,
                 )
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?
-                .map_err(|_| invalid_state())?;
+                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            current = match substituted {
+                Ok(row) => row,
+                Err(error) => return Ok(Err(error)),
+            };
         }
     }
 
@@ -7186,8 +7445,50 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 
     fn pure_core_type(&mut self, ty: &Type) -> Result<Type, TypeError> {
+        if F::ALLOWS_EFFECTFUL_TYPES {
+            let (parameters, body) = match ty {
+                Type::Forall(parameters, body) => (Some(parameters), body.as_ref()),
+                _ => (None, ty),
+            };
+            let replacements = HashMap::new();
+            let mut rows = HashMap::new();
+            self.qualify_scheme_row_replacements(body, &replacements, &mut rows, true)?;
+            if !rows.is_empty() {
+                let qualified = IterativeTypeOwner::new(
+                    substitute_type_and_row_variables_with(
+                        body,
+                        &replacements,
+                        &rows,
+                        |cells| self.type_work.charge(cells),
+                        || (),
+                    )
+                    .map_err(|()| type_resource())?
+                    .map_err(|_| invalid_state())?,
+                );
+                return if let Some(parameters) = parameters {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    let parameters =
+                        clone_kinded_type_parameters_with_budget(parameters, &mut self.type_work)
+                            .map_err(|()| type_resource())?;
+                    Ok(Type::Forall(
+                        parameters.into_boxed_slice(),
+                        Box::new(qualified.into_inner()),
+                    ))
+                } else {
+                    Ok(qualified.into_inner())
+                };
+            }
+        }
         F::project_type(ty, &mut self.type_work)
             .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))
+    }
+
+    fn core_type_from_precharged(&mut self, ty: &Type) -> Result<Type, TypeError> {
+        if F::ALLOWS_EFFECTFUL_TYPES {
+            self.pure_core_type(ty)
+        } else {
+            project_type_from_precharged::<F>(ty, &mut self.type_work).map_err(|()| type_resource())
+        }
     }
 
     fn pure_core_scheme(&mut self, fact: &TypeFact) -> Result<Type, TypeError> {
@@ -7199,8 +7500,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 && !requires_pure_core_projection(&fact.ty, None)
                     .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?)
         {
-            let body = clone_type_with_budget(&fact.ty, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+            let body = if F::ALLOWS_EFFECTFUL_TYPES {
+                self.pure_core_type(&fact.ty)?
+            } else {
+                self.clone_type(&fact.ty)?
+            };
             if fact.quantified.is_empty() {
                 return Ok(body);
             }
@@ -7275,8 +7579,17 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             .map_err(|()| UnificationFailure::Resource)?
             .map_err(|error| match error {
                 EffectRowError::Infinite => UnificationFailure::Infinite,
-                EffectRowError::Ambiguous | EffectRowError::Missing => UnificationFailure::Mismatch,
+                EffectRowError::Missing => UnificationFailure::RowExclusion,
+                EffectRowError::Ambiguous => UnificationFailure::Mismatch,
             })?;
+        if !lacks.is_empty() {
+            self.type_work
+                .charge(1)
+                .map_err(|()| UnificationFailure::Resource)?;
+            self.row_inference_obligations
+                .try_reserve(1)
+                .map_err(|_| UnificationFailure::Resource)?;
+        }
         self.type_work
             .charge(3)
             .map_err(|()| UnificationFailure::Resource)?;
@@ -7298,10 +7611,47 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         if !self.authenticated_inference_solutions.insert(variable) {
             self.row_inference_solutions.remove(variable);
+            self.row_inference_obligations.remove(variable);
             return Err(UnificationFailure::Invariant);
         }
         inserted.push(variable);
-        Ok(())
+        if !lacks.is_empty()
+            && self
+                .row_inference_obligations
+                .insert_unique(variable, occurrence)
+                .is_err()
+        {
+            return Err(UnificationFailure::Invariant);
+        }
+        self.validate_row_inference_obligations()
+    }
+
+    fn validate_row_inference_obligations(&mut self) -> Result<(), UnificationFailure> {
+        // Closed solutions still depend on type variables in their original
+        // exclusions. Check them before any later zonk assumes authentication.
+        let obligations = std::mem::take(&mut self.row_inference_obligations);
+        let result = (|| {
+            for row in obligations.values() {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| UnificationFailure::Resource)?;
+                self.try_zonk_effect_row(row)
+                    .map_err(|error| match error {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted) => {
+                            UnificationFailure::Resource
+                        }
+                        _ => UnificationFailure::Invariant,
+                    })?
+                    .map_err(|error| match error {
+                        EffectRowError::Infinite => UnificationFailure::Infinite,
+                        EffectRowError::Missing => UnificationFailure::RowExclusion,
+                        EffectRowError::Ambiguous => UnificationFailure::Mismatch,
+                    })?;
+            }
+            Ok(())
+        })();
+        self.row_inference_obligations = obligations;
+        result
     }
 
     #[allow(
@@ -7328,6 +7678,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             for variable in inserted_rows.drain(..).rev() {
                 self.row_inference_solutions.remove(variable);
+                self.row_inference_obligations.remove(variable);
                 self.authenticated_inference_solutions.remove(&variable);
             }
             self.inference_variables.truncate(inference_marker);
@@ -7453,7 +7804,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                 break 'candidate;
                             }
                             Ok(())
-                            | Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
+                            | Err(
+                                UnificationFailure::Mismatch
+                                | UnificationFailure::Infinite
+                                | UnificationFailure::RowExclusion,
+                            ) => {
                                 self.rollback_cleanup_rows(cleanup_marker);
                                 self.rollback_unification_to(
                                     inserted_types,
@@ -7732,6 +8087,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             for variable in inserted_rows.drain(..).rev() {
                 self.row_inference_solutions.remove(variable);
+                self.row_inference_obligations.remove(variable);
                 self.authenticated_inference_solutions.remove(&variable);
             }
             self.inference_variables.truncate(inference_marker);
@@ -7755,6 +8111,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         for variable in inserted_rows.drain(row_marker..).rev() {
             self.row_inference_solutions.remove(variable);
+            self.row_inference_obligations.remove(variable);
             self.authenticated_inference_solutions.remove(&variable);
         }
         self.inference_variables.truncate(inference_marker);
@@ -7935,6 +8292,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             return Err(UnificationFailure::Invariant);
                         }
                         inserted.push(variable);
+                        self.validate_row_inference_obligations()?;
                     }
                     (Type::Int, Type::Int)
                     | (Type::Bool, Type::Bool)
@@ -8062,6 +8420,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 let exposed = Type::Function(Box::new(domain), Box::new(codomain));
                 self.unify(&expected_ty, &exposed)
                     .map_err(|failure| match failure {
+                        UnificationFailure::RowExclusion => {
+                            row_exclusion_error(span, expected.provenance.span())
+                        }
                         UnificationFailure::Infinite => inference_failure(
                             TypeReason::InfiniteType,
                             span,
@@ -8094,6 +8455,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<(), TypeError> {
         match self.unify(&operand.ty, &Type::Int) {
             Ok(()) => Ok(()),
+            Err(UnificationFailure::RowExclusion) => {
+                Err(row_exclusion_error(operand_span, Some(operator_span)))
+            }
             Err(UnificationFailure::Mismatch) => {
                 let found = IterativeTypeOwner::new(self.zonk(&operand.ty)?);
                 let mut diagnostic = Diagnostic::new(
@@ -8134,6 +8498,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     ) -> Result<Type, TypeError> {
         match self.unify(expected, required) {
             Ok(()) => self.zonk(required),
+            Err(UnificationFailure::RowExclusion) => Err(row_exclusion_error(span, None)),
             Err(UnificationFailure::Mismatch) => {
                 let expected = IterativeTypeOwner::new(self.zonk(expected)?);
                 Err(pattern_mismatch(span, &expected, &self.registry))
@@ -9806,6 +10171,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         ));
         match self.unify(&expected, &callback) {
             Ok(()) => Ok(()),
+            Err(UnificationFailure::RowExclusion) => {
+                Err(row_exclusion_error(span, Some(target_span)))
+            }
             Err(UnificationFailure::Mismatch | UnificationFailure::Infinite) => {
                 Err(check_mismatch(
                     CheckKind::General,
@@ -11339,6 +11707,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     if expected_is_inference {
                         self.unify_effect_rows(&expected_effects, &body.effects)
                             .map_err(|failure| match failure {
+                                UnificationFailure::RowExclusion => {
+                                    row_exclusion_error(effect_span, None)
+                                }
                                 UnificationFailure::Kind { context, span } => {
                                     TypeError::Internal(ElaborationFailure::Kind { context, span })
                                 }
@@ -11555,6 +11926,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             {
                 self.unify_effect_rows(&expected, &inferred)
                     .map_err(|failure| match failure {
+                        UnificationFailure::RowExclusion => row_exclusion_error(span, None),
                         UnificationFailure::Kind { context, span } => {
                             TypeError::Internal(ElaborationFailure::Kind { context, span })
                         }
@@ -12202,7 +12574,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } => match &expression.kind {
                 ResolvedExprKind::Function(function) => {
                     let expected = ProvenancedTypeOwner::new(expected);
-                    let expected = self.expose_expected_function(expected, expression.span)?;
+                    let mut expected = self.expose_expected_function(expected, expression.span)?;
+                    self.qualify_checking_type(&mut expected)?;
                     let (domain_ty, codomain_ty) =
                         clone_function_parts_with_budget(&expected.ty, &mut self.type_work)
                             .map_err(|()| {
@@ -12290,6 +12663,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 match self.unify(&synthesized.ty, &expected.ty) {
                     Ok(()) => {}
+                    Err(UnificationFailure::RowExclusion) => {
+                        return Err(row_exclusion_error(span, expected.provenance.span()));
+                    }
                     Err(UnificationFailure::Infinite) => {
                         return Err(inference_failure(
                             TypeReason::InfiniteType,
@@ -13237,6 +13613,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 Type::function_computation(domain, ComputationType::new(codomain, effects));
             self.unify(&function_ty, &exposed)
                 .map_err(|failure| match failure {
+                    UnificationFailure::RowExclusion => row_exclusion_error(function_span, None),
                     UnificationFailure::Infinite => inference_failure(
                         TypeReason::InfiniteType,
                         function_span,
@@ -15041,10 +15418,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .binders
                     .try_reserve(1)
                     .map_err(|_| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                let core_expected =
-                    project_type_from_precharged::<F>(&expected, &mut self.type_work).map_err(
-                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                    )?;
+                let core_expected = self.core_type_from_precharged(&expected)?;
                 let typed = self.builder.resolved_binder(
                     binder.id,
                     core_expected,
@@ -15156,8 +15530,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
         };
         debug_assert!(!rebuild_expected);
-        let core_expected = project_type_from_precharged::<F>(&expected, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_expected = self.core_type_from_precharged(&expected)?;
         Ok(CheckedPattern {
             pattern: CorePattern::new(core_expected, Origin::Source(pattern.span), kind),
             inference_changed,
@@ -15340,8 +15713,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             _ => return Err(constructor_mismatch(whole_pattern.span)),
         };
-        let core_expected = project_type_from_precharged::<F>(&expected, &mut self.type_work)
-            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        let core_expected = self.core_type_from_precharged(&expected)?;
         Ok(CheckedPattern {
             pattern: CorePattern::new(
                 core_expected,
@@ -15578,11 +15950,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ty: source_binder_type,
                     provenance: domain_provenance,
                 } = domain.into_inner();
-                let binder_type =
-                    project_type_from_precharged::<F>(&source_binder_type, &mut self.type_work)
-                        .map_err(|()| {
-                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
-                        })?;
+                let binder_type = self.core_type_from_precharged(&source_binder_type)?;
                 let binder = self.builder.resolved_binder(
                     source_binder.id,
                     binder_type,
@@ -15699,7 +16067,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         presentation: Origin,
     ) -> Result<Box<EquationsProgress<'a>>, TypeError> {
         let presentation = OriginOwner::new(presentation);
-        let function_type = ProvenancedTypeOwner::new(function_type);
+        let mut function_type = ProvenancedTypeOwner::new(function_type);
+        self.qualify_checking_type(&mut function_type)?;
         let Some(first) = equations.first() else {
             return Err(invalid_state());
         };
@@ -22336,6 +22705,7 @@ fn clone_function_parts_with_budget(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum UnificationFailure {
     Mismatch,
+    RowExclusion,
     Infinite,
     Resource,
     Invariant,
@@ -23063,6 +23433,23 @@ fn type_contains_unsolved_row_inference(
         }
     }
     Ok(false)
+}
+
+fn row_exclusion_error(span: Span, contract: Option<Span>) -> TypeError {
+    let mut diagnostic = Diagnostic::new(
+        TypeReason::EffectRowExclusion,
+        SourceLabel::new(
+            span,
+            "this computation requires an effect excluded from the row tail",
+        ),
+    );
+    if let Some(contract) = contract {
+        diagnostic.related.push(SourceLabel::new(
+            contract,
+            "this type requires the row-tail exclusion",
+        ));
+    }
+    TypeError::source(diagnostic)
 }
 
 fn effect_row_failure(cause: EffectRowCause, span: Span, message: &str) -> TypeError {
@@ -35065,6 +35452,82 @@ mod tests {
             crate::types::EffectId::new(ModuleId::from(source.id()), 0),
             Box::new([]),
         )
+    }
+
+    #[test]
+    fn row_exclusion_rechecks_solution_arguments_and_rolls_back_type_conflicts() {
+        let span = row_test_span("row-exclusion-arguments.ash");
+        let mut elaborator = Elaborator::new();
+        let argument = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+        let open = elaborator.fresh_effect_row(span).unwrap();
+        let effect = row_test_effect("row-exclusion-read.ash");
+        let member = |ty| crate::types::EffectInstance::new(effect.effect(), Box::new([ty]));
+        let constrained = EffectRow::with_tail(
+            Box::new([]),
+            open.tail().unwrap().variable(),
+            Box::new([member(Type::Int)]),
+        );
+        let solution = EffectRow::singleton(member(argument.clone()));
+        elaborator
+            .unify_effect_rows(&constrained, &solution)
+            .unwrap();
+        assert!(matches!(
+            elaborator.unify(&argument, &Type::Int),
+            Err(UnificationFailure::RowExclusion)
+        ));
+        assert_eq!(elaborator.zonk(&argument).unwrap(), argument);
+        elaborator.unify(&argument, &Type::Bool).unwrap();
+        assert_eq!(
+            elaborator.zonk_effect_row(&constrained).unwrap(),
+            EffectRow::singleton(member(Type::Bool))
+        );
+    }
+
+    #[test]
+    fn retained_row_exclusion_validation_is_exact_atomic_and_retryable() {
+        let span = row_test_span("row-exclusion-budget.ash");
+        let member = |ty| {
+            crate::types::EffectInstance::new(
+                crate::types::EffectId::new(ModuleId::new(93), 0),
+                Box::new([ty]),
+            )
+        };
+        let fixture = || {
+            let mut elaborator = Elaborator::new();
+            let argument = elaborator.fresh_inference(&Kind::Type, span).unwrap();
+            let open = elaborator.fresh_effect_row(span).unwrap();
+            let constrained = EffectRow::with_tail(
+                Box::new([]),
+                open.tail().unwrap().variable(),
+                Box::new([member(Type::Int)]),
+            );
+            let solution = EffectRow::singleton(member(argument.clone()));
+            elaborator
+                .unify_effect_rows(&constrained, &solution)
+                .unwrap();
+            (elaborator, argument, constrained)
+        };
+        let (mut calibration, argument, _) = fixture();
+        calibration.type_work = TypeWorkBudget::unbounded();
+        calibration.unify(&argument, &Type::Bool).unwrap();
+        let exact = calibration.type_work.used();
+        let (mut retry, argument, constrained) = fixture();
+        retry.type_work = TypeWorkBudget::with_limit(exact - 1);
+        assert_eq!(
+            retry.unify(&argument, &Type::Bool),
+            Err(UnificationFailure::Resource)
+        );
+        assert!(retry.inference_solutions.is_empty());
+        assert_eq!(retry.row_inference_solutions.len(), 1);
+        assert_eq!(retry.row_inference_obligations.len(), 1);
+        retry.type_work = TypeWorkBudget::with_limit(exact);
+        retry.unify(&argument, &Type::Bool).unwrap();
+        assert_eq!(retry.type_work.used(), exact);
+        retry.type_work = TypeWorkBudget::default();
+        assert_eq!(
+            retry.zonk_effect_row(&constrained).unwrap(),
+            EffectRow::singleton(member(Type::Bool))
+        );
     }
 
     #[test]

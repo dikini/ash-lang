@@ -2991,7 +2991,11 @@ impl<'a> KindEnvironments<'a> {
         'a: 'environment,
     {
         let mut roots = argument_roots.map(<[usize]>::iter);
-        for instance in row.known() {
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
             budget.charge(1).map_err(|()| {
                 KindFailure::resource(
                     span,
