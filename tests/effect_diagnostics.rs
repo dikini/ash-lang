@@ -59,6 +59,72 @@ fn typing_reason(source: &str) -> TypeReason {
     }
 }
 
+#[test]
+fn excluded_callback_reports_the_row_contract_in_both_locales_and_json() {
+    use ash::{
+        message::{Catalogue, Locale},
+        presentation::{compile_type_diagnostic, write_human, write_json},
+    };
+    let source = concat!(
+        "effect Bonus {\namount : Unit -> Int\n}\n",
+        "add_bonus<R : EffectRow> : (Int -> Int ! {| R}, Int) -> Int ! {Bonus | R}\n",
+        "add_bonus (function, value) = function value + perform Bonus.amount ()\n",
+        "score : Int -> Int ! {Bonus}\nscore value = value + perform Bonus.amount ()\n",
+        "main : Unit -> Int\nmain () = handle (add_bonus (score, 40)) with Bonus {\n",
+        "amount ignored => resume 2\n}\n",
+    );
+    let fixture = TempModule::write(source);
+    let graph = load_module_graph(&fixture.0, &ModuleRoots::empty()).unwrap();
+    let loaded = graph
+        .modules()
+        .iter()
+        .find(|module| module.id() == graph.entry())
+        .unwrap();
+    let TypeError::Source(error) = check_module(resolve_module(loaded, &[]).unwrap()).unwrap_err()
+    else {
+        panic!("expected a source exclusion diagnostic");
+    };
+    assert_eq!(error.reason, TypeReason::EffectRowExclusion);
+    let view = compile_type_diagnostic(&error, &[loaded.source()]).unwrap();
+    for (locale, explanation) in [
+        (
+            Locale::English,
+            "This computation requires an effect excluded from the row tail.",
+        ),
+        (
+            Locale::Bulgarian,
+            "Това изчисление изисква ефект, изключен от опашката на реда.",
+        ),
+    ] {
+        let mut output = Vec::new();
+        write_human(&mut output, &view, &Catalogue::new(locale).unwrap()).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.starts_with(explanation), "{output}");
+        assert!(output.contains("Bonus | R"), "{output}");
+        assert!(output.contains("score, 40"), "{output}");
+        assert!(!output.contains("<effect:"), "{output}");
+        assert!(!output.contains("?row"), "{output}");
+    }
+    let mut output = Vec::new();
+    write_json(&mut output, &view).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(json["reason"], "effect.row-exclusion");
+    assert_eq!(json["responsibility"], "source");
+    assert_eq!(
+        json["labels"][0]["relationship"],
+        "excluded_effect_requirement"
+    );
+    assert_eq!(json["labels"][1]["relationship"], "expected_type");
+    assert_eq!(
+        json["labels"][0]["byte_start"],
+        error.primary.span().range().start()
+    );
+    assert_eq!(
+        json["labels"][1]["byte_start"],
+        error.related[0].span().range().start()
+    );
+}
+
 fn assert_owned_discard_runs(source: &str) {
     let fixture = TempModule::write(source);
     let observation = ash::driver::run_path(ash::driver::RunConfiguration {

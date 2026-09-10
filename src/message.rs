@@ -1237,6 +1237,8 @@ messages! {
     effect_row_removal => "effect-row-removal" {},
     /// This expression combines effect rows that have no most general union.
     effect_row_union => "effect-row-union" {},
+    effect_row_exclusion => "effect-row-exclusion" {},
+    effect_row_exclusion_contract => "effect-row-exclusion-contract" {},
     /// This function would require an infinite effect row.
     effect_row_infinite_function => "effect-row-infinite-function" {},
     /// This function body's effects do not match its function type.

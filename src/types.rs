@@ -1311,18 +1311,18 @@ pub(crate) fn effect_row_from_canonical_source_parts_with_budget<B: TypeWorkMete
     tail: Option<EffectRowVariable>,
     budget: &mut B,
 ) -> Result<EffectRow, B::Error> {
+    if let Some(variable) = tail {
+        return rebuild_effect_row_with_budget(
+            known.iter(),
+            Some(variable),
+            known.iter(),
+            clone_type_with_budget,
+            budget,
+        );
+    }
     budget.charge(1)?;
     let known = known.into_boxed_slice();
-    let tail = if let Some(variable) = tail {
-        budget.charge(1)?;
-        Some(EffectRowTail {
-            variable,
-            lacks: Box::new([]),
-        })
-    } else {
-        None
-    };
-    Ok(EffectRow { known, tail })
+    Ok(EffectRow { known, tail: None })
 }
 
 pub(crate) fn compare_effect_instances_with_budget<B: TypeWorkMeter>(
@@ -3057,12 +3057,33 @@ fn substitute_type_and_row_variables<E>(
                     |_| allocation_error(),
                 )?;
                 let effects = if let Some((target, replacement)) = shape.replacement {
-                    let substituted = effects.substitute_tail_once_with_budget_and_failure(
-                        target,
-                        replacement,
-                        charge,
-                        |_| allocation_error(),
-                    )?;
+                    let substituted = if replacement.known.is_empty()
+                        && replacement
+                            .tail
+                            .as_ref()
+                            .is_some_and(|tail| tail.variable == target)
+                    {
+                        rebuild_effect_row_with_budget_and_failure(
+                            effects.known.iter(),
+                            Some(target),
+                            effects
+                                .tail
+                                .iter()
+                                .flat_map(|tail| tail.lacks.iter())
+                                .chain(replacement.tail.iter().flat_map(|tail| tail.lacks.iter())),
+                            |argument, budget| clone_type_with_budget(argument, budget),
+                            charge,
+                            |_| allocation_error(),
+                        )
+                        .map(Ok)?
+                    } else {
+                        effects.substitute_tail_once_with_budget_and_failure(
+                            target,
+                            replacement,
+                            charge,
+                            |_| allocation_error(),
+                        )?
+                    };
                     match substituted {
                         Ok(effects) => effects,
                         Err(error) => return Ok(Err(error)),
@@ -5151,6 +5172,54 @@ mod tests {
             .expect("the row-queue thread should start")
             .join()
             .expect("partial row-queue reconstruction must be disposed iteratively");
+    }
+
+    #[test]
+    fn row_identity_substitution_adds_exclusions_without_admitting_recursion() {
+        let binder = TypeVariableId::new(0);
+        let variable = EffectRowVariable::rigid(binder);
+        let member = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([Type::Int]));
+        let row = EffectRow::open(variable, Box::new([]));
+        let source =
+            Type::function_computation(Type::Unit, ComputationType::new(Type::Int, row.clone()));
+        let replacement = EffectRow::open(variable, Box::new([member.clone()]));
+        let substituted = substitute_type_and_row_variables_with(
+            &source,
+            &HashMap::new(),
+            &HashMap::from([(binder, replacement.clone())]),
+            |_| Ok::<(), ()>(()),
+            || (),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            substituted.function_view().unwrap().effects().unwrap(),
+            &replacement
+        );
+        let recursive = effect_row_from_owned_parts_with_budget(
+            vec![member],
+            Some((variable, Vec::new())),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(
+            row.substitute_tail_once_with_budget(
+                variable,
+                &recursive,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Ok(Err(EffectRowError::Infinite))
+        );
+        assert_eq!(
+            substitute_type_and_row_variables_with(
+                &source,
+                &HashMap::new(),
+                &HashMap::from([(binder, recursive)]),
+                |_| Ok::<(), ()>(()),
+                || (),
+            ),
+            Ok(Err(EffectRowError::Infinite))
+        );
     }
 
     #[test]

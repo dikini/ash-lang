@@ -622,10 +622,18 @@ execution has no source-level unhandled-operation outcome.
 Effect declaration and resolution failures use `effect.operation-shape`,
 `effect.unknown`, `effect.kind`, `effect.duplicate`, and
 `effect.resume-outside-clause`. Effect-row and handler checking failures use
-`effect.row-union-ambiguous`, `effect.handler-missing-input`,
+`effect.row-union-ambiguous`, `effect.row-exclusion`, `effect.handler-missing-input`,
 `effect.handler-coverage`, `effect.handler-refutable-pattern`,
 `effect.resume-not-consumed`, `effect.resume-already-consumed`, and
 `effect.resume-capture`.
+
+`effect.row-exclusion` means that a row substitution would insert an effect
+instance forbidden by the tail's existing exclusions. For example, a signature
+containing `{Bonus | R}` excludes `Bonus` from every occurrence of `R`, including
+a callback's row. Human output explains the exclusion; JSON identifies the
+offending requirement as `excluded_effect_requirement` and, when available,
+the expected type as `expected_type`. Exclusion uses exact instances, including
+their type arguments.
 
 An otherwise well-formed hook target that lacks exactly one declared
 `publish : P -> P` operation reports `type.hook-api`. Callback mismatches use

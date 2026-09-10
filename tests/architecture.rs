@@ -747,6 +747,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::CheckedSchemeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate.rs::CheckedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.row_inference_solutions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CoreElaborator.row_inference_obligations", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.cleanup_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/cleanup_rows.rs::CleanupRows.equalities", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/cleanup_rows.rs::CleanupRows.equations", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
