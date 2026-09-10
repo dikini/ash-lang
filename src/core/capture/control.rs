@@ -1436,6 +1436,25 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        let mut state = state;
+        if state.abandoned.is_some() {
+            // Discard provenance supplies diagnostics for unfinished clauses and
+            // handlers removed during cleanup. Once none remain reachable, it
+            // cannot affect later control. Keeping it would distinguish every
+            // completed discard history in all subsequent computations.
+            charge(budget, state.heap.len())?;
+            if !state.heap.iter().any(|edge| {
+                matches!(
+                    edge.frame,
+                    Frame::Clause {
+                        consumed: false,
+                        ..
+                    } | Frame::RemovedHandler { .. }
+                )
+            }) {
+                state.abandoned = None;
+            }
+        }
         charge(budget, state.heap.len() + 1)?;
         if visited.contains(&state) {
             return Ok(());
@@ -3212,6 +3231,258 @@ mod tests {
             Err(Failure::Resource)
         ));
         run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+    }
+
+    #[test]
+    fn discard_provenance_retains_live_owners_and_precharges_wide_scans() {
+        let event = Event {
+            code: 8,
+            label: 9,
+            unknown: false,
+            port: Some(10),
+        };
+        for old in [false, true] {
+            for frame in [
+                Frame::Clause {
+                    handler: 1,
+                    ordinal: 0,
+                    owner: 2,
+                    context: 3,
+                    value_context: 4,
+                    capture: Address::End,
+                    capture_context: 5,
+                    clause_context: 6,
+                    event,
+                    consumed: false,
+                },
+                Frame::RemovedHandler {
+                    code: 1,
+                    context: 3,
+                    value_context: 4,
+                },
+            ] {
+                let address = Address::Slot {
+                    region: Region::Active,
+                    site: frame.site(),
+                    allocation_context: frame.allocation_context(),
+                    old,
+                };
+                let mut pending = VecDeque::new();
+                let mut visited = HashSet::new();
+                for port in [10, 20] {
+                    Analysis::enqueue_normalized(
+                        State {
+                            position: Position { code: 3, next: 0 },
+                            context: 3,
+                            value_context: 4,
+                            stack: address,
+                            heap: vec![Edge {
+                                address,
+                                frame,
+                                next: Address::Empty,
+                            }],
+                            abandoned: Some((
+                                7,
+                                Event {
+                                    port: Some(port),
+                                    ..event
+                                },
+                            )),
+                        },
+                        &mut pending,
+                        &mut visited,
+                        &mut TypeWorkBudget::default(),
+                    )
+                    .unwrap();
+                }
+                assert_eq!(pending.len(), 2);
+                assert!(pending.iter().all(|state| state.abandoned.is_some()));
+            }
+        }
+        for width in [1, 4096] {
+            let mut heap = Vec::new();
+            for code in 0..width {
+                let frame = Frame::Registration {
+                    code,
+                    context: 0,
+                    value_context: 0,
+                };
+                heap.push(Edge {
+                    address: Address::Slot {
+                        region: Region::Active,
+                        site: frame.site(),
+                        allocation_context: 0,
+                        old: false,
+                    },
+                    frame,
+                    next: if code + 1 == width {
+                        Address::Empty
+                    } else {
+                        Address::Slot {
+                            region: Region::Active,
+                            site: Site::Registration(code + 1),
+                            allocation_context: 0,
+                            old: false,
+                        }
+                    },
+                });
+            }
+            let state = State {
+                position: Position { code: 3, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: heap[0].address,
+                heap,
+                abandoned: Some((7, event)),
+            };
+            let run = |budget: &mut TypeWorkBudget| {
+                let input = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();
+                let mut pending = VecDeque::new();
+                let mut visited = HashSet::new();
+                Analysis::enqueue_normalized(input, &mut pending, &mut visited, budget)?;
+                Ok::<_, Failure>((pending, visited))
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            let expected = run(&mut measured).unwrap();
+            assert_eq!(expected.0[0].abandoned, None);
+            assert_eq!(expected.0[0].heap, state.heap);
+            assert_eq!(
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+                expected
+            );
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+                expected
+            );
+            let mut pending = VecDeque::new();
+            let mut visited = HashSet::new();
+            let mut short = TypeWorkBudget::with_limit(width - 1);
+            assert!(matches!(
+                Analysis::enqueue_normalized(state, &mut pending, &mut visited, &mut short),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(short.used(), 0);
+            assert!(pending.is_empty() && visited.is_empty());
+        }
+    }
+
+    #[test]
+    fn captured_discard_diagnostic_owner_survives_history_normalization() {
+        let event = Event {
+            code: 8,
+            label: 9,
+            unknown: false,
+            port: Some(10),
+        };
+        let owner = Frame::RemovedHandler {
+            code: 1,
+            context: 2,
+            value_context: 3,
+        };
+        let capture = Address::Slot {
+            region: Region::Closing(7, 8),
+            site: owner.site(),
+            allocation_context: 3,
+            old: true,
+        };
+        let closing = Frame::Closing {
+            code: 7,
+            site: Site::Closing(7, false),
+            context: 2,
+            value_context: 3,
+            capture: Some(capture),
+            event,
+        };
+        let stack = Address::Slot {
+            region: Region::Active,
+            site: closing.site(),
+            allocation_context: 3,
+            old: false,
+        };
+        let mut pending = VecDeque::new();
+        let mut visited = HashSet::new();
+        Analysis::enqueue(
+            State {
+                position: Position { code: 0, next: 0 },
+                context: 2,
+                value_context: 3,
+                stack,
+                heap: vec![
+                    Edge {
+                        address: stack,
+                        frame: closing,
+                        next: Address::Empty,
+                    },
+                    Edge {
+                        address: capture,
+                        frame: owner,
+                        next: Address::End,
+                    },
+                ],
+                abandoned: Some((7, event)),
+            },
+            &mut pending,
+            &mut visited,
+            &mut TypeWorkBudget::default(),
+        )
+        .unwrap();
+        assert_eq!(pending[0].heap.len(), 2);
+        assert_eq!(pending[0].abandoned, Some((7, event)));
+    }
+
+    #[test]
+    fn completed_discard_histories_join_before_later_computations() {
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut pending = VecDeque::new();
+            let mut visited = HashSet::new();
+            for port in [None, Some(10), Some(20)] {
+                Analysis::enqueue_normalized(
+                    State {
+                        position: Position { code: 3, next: 0 },
+                        context: 4,
+                        value_context: 5,
+                        stack: Address::Empty,
+                        heap: Vec::new(),
+                        abandoned: port.map(|port| {
+                            (
+                                7,
+                                Event {
+                                    code: 8,
+                                    label: 9,
+                                    unknown: false,
+                                    port: Some(port),
+                                },
+                            )
+                        }),
+                    },
+                    &mut pending,
+                    &mut visited,
+                    budget,
+                )?;
+            }
+            Ok::<_, Failure>((pending, visited))
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        let expected = run(&mut measured).unwrap();
+        assert_eq!(expected.0.len(), 1);
+        assert_eq!(expected.1.len(), 1);
+        assert_eq!(expected.0[0].abandoned, None);
+        assert_eq!(
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap(),
+            expected
+        );
     }
 
     #[test]
