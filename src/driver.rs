@@ -1536,11 +1536,13 @@ mod tests {
         // contributes 149 cells; linked-evidence validation contributes 1660.
         // Shared type-clone preflights remove 24 checking cells in the base
         // and 12 in each importer, without changing retained type work.
+        // Omitting constructor control calls removes five capture-metadata
+        // admission cells from each of the four importers.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_134, 1_697, 2_286, 2_849, 3_438, 3_993, 4_587, 5_572, 5_988, 6_137, 7_797,
+            0, 1, 1_134, 1_692, 2_281, 2_839, 3_428, 3_978, 4_572, 5_552, 5_968, 6_117, 7_777,
         ];
         const EXACT_CONSTRAINT_WORK: usize =
-            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12);
+            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12) - 4 * 5;
         let source = relational_interface_graph_source();
         let directory = source
             .0

@@ -874,6 +874,25 @@ fn same_effect(
     }
 }
 
+// Constructor application retains its operand evaluation and value graph. It
+// cannot request, capture, or invoke source code after that operand returns.
+fn constructor_value<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    mut id: usize,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    loop {
+        charge(budget, 1)?;
+        match F::pure(&nodes[id].kind) {
+            Some(PureExprKind::Value(PureValue::Constructor(_))) => return Ok(true),
+            Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
+                id = index(application.function());
+            }
+            _ => return Ok(false),
+        }
+    }
+}
+
 fn compile<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     values: &[Value],
@@ -989,7 +1008,9 @@ fn compile<F: CoreOperationFamily>(
                     sequence
                         .push(index(F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?) + 1);
                 }
-                if let PureComputation::Apply(application) = pure {
+                if let PureComputation::Apply(application) = pure
+                    && !constructor_value(nodes, index(application.function()), budget)?
+                {
                     let actual = index(application.function());
                     graph
                         .types
@@ -1488,16 +1509,11 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     let (mut graph, roots) = compile(nodes, &values, &imported, operation, &mut data, budget)?;
     graph.data = Some(Arc::new(data));
     if let Some(rows) = rows {
-        let mut analysis = Analysis::new(&graph, budget)?;
-        analysis.infer_cleanup_rows = true;
-        analysis.check(&roots, budget)?;
-        *rows = std::mem::take(&mut analysis.cleanup_rows);
+        *rows = cleanup_requirements(&graph, &roots, budget)?;
     } else {
         if has_discard {
-            let mut analysis = Analysis::new(&graph, budget)?;
-            analysis.infer_cleanup_rows = true;
-            analysis.check(&roots, budget)?;
-            check_cleanup_rows(nodes, operation, &analysis.cleanup_rows, budget)?;
+            let requirements = cleanup_requirements(&graph, &roots, budget)?;
+            check_cleanup_rows(nodes, operation, &requirements, budget)?;
         }
         check_control_roots(&graph, roots, budget)?;
     }
@@ -1513,6 +1529,29 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
         });
     }
     Ok(summaries)
+}
+
+// Keep solver storage out of the graph-construction caller's stack frame.
+fn cleanup_requirements(
+    graph: &SummaryGraph,
+    roots: &[usize],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CleanupRequirement>, Failure> {
+    charge(budget, graph.code.len())?;
+    // Only Cleanup nodes contribute inferred close rows. The complete graph
+    // includes imported callable bodies; absence proves the empty row without
+    // another control fixed point. Safety and row authentication still run.
+    if !graph
+        .code
+        .iter()
+        .any(|code| matches!(code, Control::Cleanup { .. }))
+    {
+        return Ok(Vec::new());
+    }
+    let mut analysis = Analysis::new(graph, budget)?;
+    analysis.infer_cleanup_rows = true;
+    analysis.check(roots, budget)?;
+    Ok(std::mem::take(&mut analysis.cleanup_rows))
 }
 
 fn check_cleanup_rows<F: CoreOperationFamily>(
@@ -2034,6 +2073,74 @@ mod tests {
                 crate::eval::Value::Unit
             ));
         }
+    }
+
+    #[test]
+    fn empty_cleanup_query_charges_the_complete_graph_before_returning() {
+        for width in [1, 4096] {
+            let graph = SummaryGraph {
+                effects: true,
+                data: None,
+                callables: vec![],
+                types: TypeArguments(vec![]),
+                code: (0..width).map(|_| Control::Return).collect(),
+            };
+            assert!(matches!(
+                cleanup_requirements(&graph, &[0], &mut TypeWorkBudget::with_limit(width - 1)),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(width);
+                assert!(
+                    cleanup_requirements(&graph, &[0], &mut exact)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(exact.used(), width);
+            }
+        }
+    }
+
+    #[test]
+    fn no_cleanup_graph_still_rejects_a_forged_nonempty_discard_row() {
+        use super::super::EffectExprKind;
+        let (mut core, _, _, _) = checked_core();
+        let operation: fn(&EffectExprKind) -> Option<&EffectOperation> = |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        };
+        assert!(
+            !core
+                .nodes
+                .iter()
+                .any(|node| matches!(operation(&node.kind), Some(EffectOperation::Cleanup(_))))
+        );
+        let row = core
+            .nodes
+            .iter()
+            .find(|node| matches!(operation(&node.kind), Some(EffectOperation::Request(_))))
+            .unwrap();
+        let row = crate::types::clone_effect_row_with_budget(
+            &row.effects,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        let discard = core
+            .nodes
+            .iter_mut()
+            .find(|node| matches!(operation(&node.kind), Some(EffectOperation::Discard(_))))
+            .unwrap();
+        discard.effects = row;
+        assert!(matches!(
+            check_nodes(
+                &core.nodes,
+                &[],
+                &[],
+                operation,
+                &mut TypeWorkBudget::default()
+            ),
+            Err(Failure::CleanupRow { .. })
+        ));
     }
 
     #[test]
