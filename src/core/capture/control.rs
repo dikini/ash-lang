@@ -1546,11 +1546,20 @@ impl<'a> Analysis<'a> {
                         }
                         if let Some(child) = children.get(ordinal).copied() {
                             let mut next = state;
+                            // Pure trailing work has no continuation control. Keeping a
+                            // Next frame here multiplies recursive capture states.
+                            let mut following = ordinal + 1;
+                            while children.get(following).is_some_and(|child| {
+                                matches!(self.graph.code[*child], Control::Return)
+                            }) {
+                                charge(budget, 1)?;
+                                following += 1;
+                            }
                             let position = Position {
                                 code,
-                                next: ordinal + 1,
+                                next: following,
                             };
-                            if ordinal + 1 < children.len() {
+                            if following < children.len() {
                                 next.push(
                                     Frame::Next {
                                         position,
@@ -1564,7 +1573,7 @@ impl<'a> Analysis<'a> {
                                 code: child,
                                 next: 0,
                             };
-                            if ordinal + 1 < children.len() {
+                            if following < children.len() {
                                 Self::enqueue(next, &mut pending, &mut visited, budget)?;
                             } else {
                                 Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
@@ -2737,49 +2746,53 @@ impl<'a> Analysis<'a> {
             }
             let last = selected.prefix.last_mut().ok_or(Failure::Invalid)?;
             *last = selected.boundary;
-            let continuation =
-                if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
-                    // A recent address denotes one occurrence. Consuming it is
-                    // a move, not a fresh allocation of all its ordinary frames.
-                    let address = Address::Slot {
-                        region: Region::Active,
-                        site: selected.boundary.frame.site(),
-                        allocation_context: match selected.boundary.address {
-                            Address::Slot {
-                                allocation_context, ..
-                            } => allocation_context,
-                            _ => return Err(Failure::Invalid),
-                        },
-                        old: false,
-                    };
-                    let mut rename = HashMap::new();
-                    rename.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    rename.insert(address, address.older());
-                    next.rename(&rename, budget)?;
-                    let mut rename_owner = HashMap::new();
-                    rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    rename_owner.insert(selected.boundary.address, address);
-                    charge(budget, next.heap.len())?;
-                    for edge in &mut next.heap {
-                        if edge.address == selected.boundary.address {
-                            edge.frame = selected.boundary.frame;
-                        }
-                    }
-                    next.rename(&rename_owner, budget)?;
-                    next.stack
-                } else {
-                    next.copy_segment(
-                        state.stack,
-                        &selected.prefix,
-                        Some(selected.boundary),
-                        selected.boundary.next,
-                        // The rebound older prefix must not retain the live
-                        // original prefix's tail. Repeated completions at this
-                        // fixed site still join conservatively within a region.
-                        Region::Completion(state.position.code, owner),
-                        budget,
-                    )?
+            let continuation = if resume && selected.prefix.len() == 1 {
+                // Tail resume has no remaining clause computation. Its
+                // consumed owner is an empty return step, not an outside
+                // completion obligation. Keep the captured owners intact.
+                selected.boundary.next
+            } else if matches!(selected.boundary.address, Address::Slot { old: false, .. }) {
+                // A recent address denotes one occurrence. Consuming it is
+                // a move, not a fresh allocation of all its ordinary frames.
+                let address = Address::Slot {
+                    region: Region::Active,
+                    site: selected.boundary.frame.site(),
+                    allocation_context: match selected.boundary.address {
+                        Address::Slot {
+                            allocation_context, ..
+                        } => allocation_context,
+                        _ => return Err(Failure::Invalid),
+                    },
+                    old: false,
                 };
+                let mut rename = HashMap::new();
+                rename.try_reserve(1).map_err(|_| Failure::Resource)?;
+                rename.insert(address, address.older());
+                next.rename(&rename, budget)?;
+                let mut rename_owner = HashMap::new();
+                rename_owner.try_reserve(1).map_err(|_| Failure::Resource)?;
+                rename_owner.insert(selected.boundary.address, address);
+                charge(budget, next.heap.len())?;
+                for edge in &mut next.heap {
+                    if edge.address == selected.boundary.address {
+                        edge.frame = selected.boundary.frame;
+                    }
+                }
+                next.rename(&rename_owner, budget)?;
+                next.stack
+            } else {
+                next.copy_segment(
+                    state.stack,
+                    &selected.prefix,
+                    Some(selected.boundary),
+                    selected.boundary.next,
+                    // The rebound older prefix must not retain the live
+                    // original prefix's tail. Repeated completions at this
+                    // fixed site still join conservatively within a region.
+                    Region::Completion(state.position.code, owner),
+                    budget,
+                )?
+            };
             next.stack = continuation;
             if resume {
                 // The capture reference may have been aged by copying the
@@ -2965,6 +2978,126 @@ mod tests {
         ));
         for _ in 0..2 {
             run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        }
+    }
+
+    #[test]
+    fn tail_resume_preserves_captured_resource_and_outside_live_clause() {
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![],
+            types: TypeArguments(vec![]),
+            code: vec![Control::Return],
+        };
+        for old in [false, true] {
+            let run = |budget: &mut TypeWorkBudget| {
+                let address = |site, region| Address::Slot {
+                    region,
+                    site,
+                    allocation_context: 0,
+                    old,
+                };
+                let inner = address(Site::Clause(3, false), Region::Active);
+                let outer = address(Site::Clause(9, false), Region::Active);
+                let captured = address(Site::Resource(7), Region::Capture(0, 0));
+                let event = Event {
+                    code: 0,
+                    label: 0,
+                    unknown: false,
+                    port: None,
+                };
+                let clause = |owner, capture| Frame::Clause {
+                    handler: 0,
+                    ordinal: 0,
+                    owner,
+                    context: 0,
+                    value_context: 0,
+                    capture,
+                    capture_context: 0,
+                    clause_context: 0,
+                    event,
+                    consumed: false,
+                };
+                let mut state = State {
+                    position: Position { code: 0, next: 0 },
+                    context: 0,
+                    value_context: 0,
+                    stack: inner,
+                    abandoned: None,
+                    heap: vec![
+                        Edge {
+                            address: inner,
+                            frame: clause(3, captured),
+                            next: outer,
+                        },
+                        Edge {
+                            address: outer,
+                            frame: clause(9, Address::End),
+                            next: Address::Empty,
+                        },
+                        Edge {
+                            address: captured,
+                            frame: Frame::Resource {
+                                code: 7,
+                                context: 0,
+                                value_context: 0,
+                                focused: true,
+                            },
+                            next: Address::End,
+                        },
+                    ],
+                };
+                state.normalize(budget)?;
+                let mut pending = VecDeque::new();
+                Analysis::new(&graph, budget)?.completed(
+                    state,
+                    3,
+                    true,
+                    &mut pending,
+                    &mut HashSet::new(),
+                    budget,
+                )?;
+                let resumed = pending.pop_front().unwrap();
+                assert_eq!(resumed.heap.len(), 2);
+                let (resources, _) = selections(
+                    &resumed,
+                    resumed.stack,
+                    |frame| Ok((matches!(frame, Frame::Resource { code: 7, .. }), true)),
+                    budget,
+                )?;
+                assert_eq!(resources.len(), 1);
+                let (owners, escaped) = selections(
+                    &resumed,
+                    resumed.stack,
+                    |frame| {
+                        Ok((
+                            matches!(
+                                frame,
+                                Frame::Clause {
+                                    owner: 9,
+                                    consumed: false,
+                                    ..
+                                }
+                            ),
+                            true,
+                        ))
+                    },
+                    budget,
+                )?;
+                assert_eq!(owners.len(), 1);
+                assert!(escaped);
+                Ok::<(), Failure>(())
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            run(&mut measured).unwrap();
+            assert!(matches!(
+                run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            }
         }
     }
 

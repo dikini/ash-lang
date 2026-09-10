@@ -1081,3 +1081,66 @@ fn acquisition_supplies_a_generic_helper_through_a_facade() {
 fn resource_rows_are_recomputed_inside_an_enclosing_handler_clause() {
     Tree::new().check("import @builtin.cell as Cell\neffect Ask {\nask : Unit -> Int\n}\nmain : Unit -> Int\nmain () = resource cell<A> a = 1 {\nhandle ({\nlet answer = perform Ask.ask ()\nlet _ = Cell.write (a, answer)\nCell.read a\n}) with Ask {\nask ignored => resource cell<B> b = 41 {\nresume (Cell.read b)\n}\n}\n}\n").unwrap();
 }
+
+#[test]
+fn two_recursive_calls_under_resource_handler() {
+    let source = r#"import @builtin.cell as Cell
+
+effect Ask {
+    value : Unit -> Int
+}
+
+request : Int -> Int ! {Ask}
+request value = match value == 0 {
+    true => perform Ask.value ()
+    false => {
+        let left = request 0
+        let right = request 0
+        left + right
+    }
+}
+
+main : Unit -> Int
+main () = resource cell<R> counter = 0 {
+    handle (request 0) with Ask {
+        value () => resume 0
+    }
+}
+"#;
+    for control in [
+        source.to_owned(),
+        source.replace("resource cell<R> counter = 0", ""),
+        source.replace("let right = request 0", "let right = 0"),
+    ] {
+        assert_check(Tree::new().check(&control), None);
+    }
+}
+
+#[test]
+fn recursive_constructor_results_under_resource_handler() {
+    let source = r#"import @builtin.cell as Cell
+
+type Tree = Leaf(Int)
+    | Fork(Tree, Tree)
+effect Ask {
+    value : Unit -> Int
+}
+label : Tree -> Tree ! {Ask}
+label (Leaf(value)) = Leaf(perform Ask.value ())
+label (Fork(left, right)) = {
+    let new_left = label left
+    let new_right = label right
+    Fork(new_left, new_right)
+}
+number : Tree -> Tree
+number tree = resource cell<R> counter = 0 {
+    handle (label tree) with Ask {
+        value () => resume (Cell.read counter)
+    }
+}
+
+main : Unit -> (Tree, Tree)
+main () = (number (Fork(Leaf(0), Leaf(0))), number (Fork(Leaf(0), Leaf(0))))
+"#;
+    assert_check(Tree::new().check(source), None);
+}

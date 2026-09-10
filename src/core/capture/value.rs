@@ -1463,6 +1463,7 @@ struct Slot {
 enum Transition {
     Root(usize),
     Call(usize),
+    Invoke(usize, usize), // Call expression and callee expression, both static graph IDs.
     Dispatch(usize, usize, usize),
     Focus,
     Restore(usize, usize, usize),
@@ -1763,8 +1764,9 @@ impl<'a> Analysis<'a> {
         for atom in copy_slice(&self.slots[function].atoms, budget)? {
             match atom {
                 Atom::Closure(target, _) => {
+                    let context =
+                        self.context(context, Transition::Invoke(expression, target), budget)?;
                     let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
-                    let context = self.context(context, Transition::Call(expression), budget)?;
                     targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                     targets.push((target, context));
                 }
@@ -2024,7 +2026,14 @@ impl<'a> Analysis<'a> {
     ) -> Result<usize, Failure> {
         let path = &self.contexts[parent];
         charge(budget, path.len() + 1)?;
-        let repeated = path.iter().position(|site| *site == call);
+        // Preserve separate entry call sites, but join recursive arguments and
+        // captures at the existing callee entry. Enumerating permutations of
+        // recursive call sites multiplies equivalent control histories.
+        let repeated = path.iter().position(|site| match (site, call) {
+            (Transition::Root(target), Transition::Invoke(_, callee))
+            | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => *target == callee,
+            _ => *site == call,
+        });
         let mut context = copy_slice(
             &path[..repeated.map_or(path.len(), |index| index + 1)],
             budget,
@@ -2257,8 +2266,11 @@ impl<'a> Analysis<'a> {
                             if parameters.len() != actual.len() {
                                 return Err(Failure::Invalid);
                             }
-                            let invoked =
-                                self.context(context, Transition::Call(expression), budget)?;
+                            let invoked = self.context(
+                                context,
+                                Transition::Invoke(expression, target),
+                                budget,
+                            )?;
                             for (&parameter, &argument) in parameters.iter().zip(&actual) {
                                 let parameter = self.slot(parameter, invoked, budget)?;
                                 self.edge(parameter, argument, budget)?;
@@ -3047,6 +3059,46 @@ mod tests {
             for _ in 0..2 {
                 run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
             }
+        }
+    }
+
+    #[test]
+    fn recursive_callee_contexts_join_calls_but_keep_distinct_entries() {
+        let graph = graph(vec![Expr::Scalar]);
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let first = analysis.context(0, Transition::Invoke(1, 10), budget)?;
+            let second = analysis.context(0, Transition::Invoke(2, 10), budget)?;
+            assert_ne!(first, second);
+            let mutual = analysis.context(first, Transition::Invoke(3, 20), budget)?;
+            for site in [4, 5] {
+                assert_eq!(
+                    analysis.context(mutual, Transition::Invoke(site, 10), budget)?,
+                    first
+                );
+                assert_eq!(
+                    analysis.context(second, Transition::Invoke(site, 10), budget)?,
+                    second
+                );
+            }
+            let root = analysis.context(0, Transition::Root(10), budget)?;
+            assert_eq!(
+                analysis.context(root, Transition::Invoke(6, 10), budget)?,
+                root
+            );
+            let focus = analysis.context(0, Transition::Focus, budget)?;
+            let fresh = analysis.context(focus, Transition::Invoke(1, 10), budget)?;
+            assert_ne!(fresh, first);
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        for _ in 0..2 {
+            run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
         }
     }
 
