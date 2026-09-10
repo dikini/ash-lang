@@ -59,6 +59,109 @@ fn module_named<'a>(graph: &'a ModuleGraph, file_name: &str) -> &'a LoadedModule
 }
 
 #[test]
+fn opaque_newtype_named_and_scheme_routes_merge_without_exposing_constructors() {
+    for declaration in ["pub opaque newtype", "pub opaque type", "pub newtype"] {
+        for import in [
+            "import tickets as Tickets",
+            "import tickets (Ticket, issue)",
+            "import tickets (issue, Ticket)",
+            "import facade (Ticket, issue)",
+            "import reverse (issue, Ticket)",
+            "import facade as Tickets",
+            "import names (Ticket)\nimport operations (issue)",
+            "import operations (issue)\nimport names (Ticket)",
+            "import tickets as Tickets\nimport facade as Facade",
+            "import tickets (Ticket, Envelope, issue)",
+            "import tickets (Envelope, Ticket, issue)",
+            "import tickets as Tickets\nimport envelopes as Envelopes",
+        ] {
+            let tree = ModuleTree::create();
+            tree.write("tickets.ash", &format!(
+                "{declaration} Ticket = Ticket(Int)\npub issue : Int -> Ticket\nissue value = Ticket(value)\npub type Envelope = Envelope(Ticket)\n"
+            ));
+            tree.write("facade.ash", "pub import tickets (Ticket, issue)\n");
+            tree.write("reverse.ash", "pub import tickets (issue, Ticket)\n");
+            tree.write("names.ash", "pub import tickets (Ticket)\n");
+            tree.write("operations.ash", "pub import tickets (issue)\n");
+            tree.write("envelopes.ash", "pub import tickets (Envelope)\n");
+            for call in [false, true] {
+                let expression = if !call {
+                    "42"
+                } else if import.contains("as Tickets") {
+                    "{\nlet ignored = Tickets.issue 42\n42\n}"
+                } else {
+                    "{\nlet ignored = issue 42\n42\n}"
+                };
+                let entry = tree.write(
+                    "entry.ash",
+                    &format!("{import}\nmain : Unit -> Int\nmain () = {expression}\n"),
+                );
+                let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+                    .arg(&entry)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{declaration}, {import}, call={call}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(output.stdout, b"42 : Int\n");
+                assert!(output.stderr.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn opaque_newtype_combined_import_keeps_constructor_rejection_source_owned() {
+    for import in [
+        "import tickets (Ticket, issue)",
+        "import tickets (issue, Ticket)",
+        "import facade (Ticket, issue)",
+        "import tickets as Tickets",
+    ] {
+        let tree = ModuleTree::create();
+        tree.write("tickets.ash", "pub opaque newtype Ticket = Ticket(Int)\npub issue : Int -> Ticket\nissue value = Ticket(value)\n");
+        tree.write("facade.ash", "pub import tickets (Ticket, issue)\n");
+        let constructor = if import.contains("as Tickets") {
+            "Tickets.Ticket"
+        } else {
+            "Ticket"
+        };
+        let entry = tree.write("entry.ash", &format!("{import}\nmain : Unit -> Int\nmain () = {{\nlet ignored = {constructor}(42)\n42\n}}\n"));
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+            .args(["--message-format", "json"])
+            .arg(&entry)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{import}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let diagnostic: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(diagnostic["reason"], "resolve.opaque-constructor");
+        assert_eq!(diagnostic["responsibility"], "source");
+        let human = std::process::Command::new(env!("CARGO_BIN_EXE_ash"))
+            .args(["--message-format", "human", "--locale", "en"])
+            .arg(&entry)
+            .output()
+            .unwrap();
+        assert_eq!(human.status.code(), Some(1));
+        assert!(human.stdout.is_empty());
+        let message = String::from_utf8(human.stderr).unwrap();
+        assert!(message.contains(
+            "The constructor `Ticket` belongs to an opaque type and is not accessible here."
+        ));
+        assert!(message.contains("The inaccessible declaration is here."));
+        assert!(message.contains("reason: resolve.opaque-constructor"));
+        assert!(!message.contains("resolve.internal-state"));
+    }
+}
+
+#[test]
 fn module_newtype_identity_survives_facade_reexport() {
     let tree = ModuleTree::create();
     let entry = tree.write("entry.ash", "import facade (UserId)\n");
