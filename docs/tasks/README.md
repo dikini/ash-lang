@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0032: Repair Effect Row Tail Exclusions](TASK-0032-repair-effect-row-tail-exclusions.md)
+No active tasks.
