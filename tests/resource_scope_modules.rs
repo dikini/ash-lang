@@ -312,3 +312,103 @@ fn direct_and_facade_paths_share_one_builtin_identity() {
     );
     check(&graph);
 }
+
+#[test]
+fn repeated_imported_hook_pipeline_forgets_completed_discard_histories() {
+    let tree = Tree::new();
+    // Reduced from ash-doc's repeated-hook-pipeline case: payload tagging,
+    // normalization branching, and trace construction are unnecessary.
+    tree.write(
+        "pipeline.ash",
+        r#"pub type Request = Request(Int)
+pub type Steps = End
+    | Step(Int, Steps)
+
+pub type Result = Delivered(Request)
+    | Rejected
+
+effect Pipeline {
+    publish : Request -> Request
+}
+
+effect Policy {
+    check : Request -> Unit
+}
+
+effect Trace {
+    stage : Int -> Unit
+}
+
+normalize : Request -> Request ! {Trace}
+normalize (Request(priority)) = {
+    let ignored = perform Trace.stage 1
+    Request(1)
+}
+
+check_policy : Request -> Request ! {Policy, Trace}
+check_policy request = {
+    let ignored = perform Trace.stage 2
+    let ignored = perform Policy.check request
+    request
+}
+
+enrich : Request -> Request ! {Trace}
+enrich (Request(priority)) = {
+    let ignored = perform Trace.stage 3
+    Request(priority)
+}
+
+publish_and_deliver : Request -> Result ! {Pipeline, Trace}
+publish_and_deliver request = {
+    let transformed = perform Pipeline.publish request
+    let ignored = perform Trace.stage 4
+    Delivered(transformed)
+}
+
+pipeline : Bool -> Result ! {Policy, Trace}
+pipeline include_enrichment = hook Pipeline {
+    register Pipeline normalize {
+        register Pipeline check_policy {
+            match include_enrichment {
+                true => register Pipeline enrich {
+                    publish_and_deliver (Request(0))
+                }
+                false => publish_and_deliver (Request(0))
+            }
+        }
+    }
+}
+
+pub run : (Bool, Bool) -> (Result, Steps)
+run (allow, include_enrichment) = handle {
+    let result = handle (pipeline include_enrichment) with Policy {
+        check request => match allow {
+            true => resume ()
+            false => {
+                let ignored = discard
+                Rejected
+            }
+        }
+    }
+    (result, End)
+} with Trace {
+    stage digit => {
+        resume ()
+    }
+}
+"#,
+    );
+    let entry = tree.write("entry.ash", r#"import @demo.pipeline as Pipeline
+main : Unit -> ((Pipeline.Result, Pipeline.Steps), (Pipeline.Result, Pipeline.Steps), (Pipeline.Result, Pipeline.Steps))
+main () = (Pipeline.run (true, true), Pipeline.run (false, true), Pipeline.run (true, false))
+"#);
+    let result = ash::driver::run_path(ash::driver::RunConfiguration {
+        entry,
+        roots: ModuleRoots::new([("demo", tree.0.clone())]).unwrap(),
+    })
+    .expect("three finite pipeline calls fit the ordinary work budget");
+    assert_eq!(
+        result.value().to_string(),
+        "((Delivered(Request(1)), End), (Rejected, End), (Delivered(Request(1)), End))"
+    );
+}
