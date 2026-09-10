@@ -5567,7 +5567,7 @@ impl Resolver {
         span: crate::source::Span,
     ) -> Result<(), ResolveError> {
         for id in nominal_identities.identities() {
-            let existing = self.imported.nominal(*id).ok_or_else(|| {
+            let existing = self.imported.canonical_nominal_fact(*id).ok_or_else(|| {
                 error(
                     ResolveReason::InternalState,
                     span,
@@ -5685,6 +5685,12 @@ impl Resolver {
                     problem: "extra",
                 }));
             }
+            let candidate = crate::resolved::ImportedNominalFactRef {
+                representation: canonical_representation.map(|(representation, _)| representation),
+                representation_provenance: canonical_representation
+                    .map(|(_, provenance)| provenance),
+                ..candidate
+            };
             let prepared = self
                 .imported
                 .prepare_nominal_merge(candidate, &mut self.type_work, &mut self.constraint_work)
@@ -5836,17 +5842,7 @@ impl Resolver {
         let mut foreign_validated = Vec::<ValidatedImportedNominalMerge<'_>>::new();
         let mut owner_metadata_observed = false;
         for id in nominal_identities.identities() {
-            let candidate = summary.nominal_fact(*id).ok_or_else(|| {
-                error(
-                    ResolveReason::InternalState,
-                    span,
-                    "an exported constructor references missing nominal metadata",
-                )
-                .with_context(ResolveContext::WorkState {
-                    part: "constructor-nominal-metadata",
-                    problem: "missing",
-                })
-            })?;
+            let candidate = Self::scheme_nominal_fact(summary, *id, span)?;
             if *id == owner.id {
                 owner_metadata_observed = true;
                 if owner_was_retained {
@@ -5857,7 +5853,7 @@ impl Resolver {
                         )
                         .map_err(|failure| imported_nominal_merge_error(failure, span))?;
                 }
-            } else if let Some(existing) = self.imported.nominal(*id) {
+            } else if let Some(existing) = self.imported.canonical_nominal_fact(*id) {
                 let matches = same_imported_nominal_closure_with_constraint_budget(
                     existing,
                     candidate,
@@ -12449,6 +12445,90 @@ mod tests {
                     && fact.constructors.is_empty()
             }));
         }
+
+        let summary = summary();
+        let retain_named = |resolver: &mut Resolver| {
+            resolver.retain_imported_nominal(
+                summary.nominal("Token").expect("the named export exists"),
+                &summary,
+                Some("Token"),
+                span,
+                &mut HashSet::new(),
+            )
+        };
+        measured.type_work = TypeWorkBudget::default();
+        measured.constraint_work = InterfaceConstraintBudget::default();
+        retain_named(&mut measured).expect("the hidden closure can gain opaque source access");
+        let promotion_work = measured.type_work.used();
+        let promotion_constraints = measured.constraint_work.used();
+        for short_type in [true, false] {
+            let mut retry = Resolver::new(ModuleId::new(9_093));
+            retry.retain_type_nominals(&scheme, &summary, span).unwrap();
+            retry.type_work = TypeWorkBudget::with_limit(promotion_work - usize::from(short_type));
+            retry.constraint_work = InterfaceConstraintBudget::with_limit(
+                promotion_constraints - usize::from(!short_type),
+            );
+            let error =
+                retain_named(&mut retry).expect_err("one missing work cell rejects promotion");
+            assert_eq!(
+                error.reason,
+                if short_type {
+                    ResolveReason::TypeResourceExhausted
+                } else {
+                    ResolveReason::ConstraintResourceExhausted
+                }
+            );
+            let retained = retry.imported.nominal(owner).unwrap();
+            assert_eq!(retained.access, ImportedTypeAccess::Hidden);
+            assert_eq!(retained.representation, Some(Type::Int));
+            assert!(retry.imported.canonical_representation(owner).is_none());
+            retry.type_work = TypeWorkBudget::with_limit(promotion_work);
+            retry.constraint_work = InterfaceConstraintBudget::with_limit(promotion_constraints);
+            retain_named(&mut retry).expect("an exact retry completes promotion");
+            let retained = retry.imported.nominal(owner).unwrap();
+            assert_eq!(retained.access, ImportedTypeAccess::Opaque);
+            assert!(retained.representation.is_none());
+            assert!(retained.representation_provenance.is_none());
+            assert!(retained.constructors.is_empty());
+            assert_eq!(
+                retry
+                    .imported
+                    .canonical_nominal_fact(owner)
+                    .unwrap()
+                    .representation,
+                Some(&Type::Int)
+            );
+        }
+
+        // Canonical comparison must still reject altered representation or
+        // provenance, including when the source projection withholds both.
+        let different_provenance = ResolvedTypeProvenance::new(
+            vec![ResolvedTypeProvenanceNode::Fact(
+                source.span(ByteRange::new(0, 4).unwrap()).unwrap(),
+            )],
+            0,
+        );
+        let canonical = Resolver::scheme_nominal_fact(&summary, owner, span).unwrap();
+        for candidate in [
+            crate::resolved::ImportedNominalFactRef {
+                representation: Some(&Type::Bool),
+                ..canonical
+            },
+            crate::resolved::ImportedNominalFactRef {
+                representation_provenance: Some(&different_provenance),
+                ..canonical
+            },
+        ] {
+            measured.type_work = TypeWorkBudget::default();
+            measured.constraint_work = InterfaceConstraintBudget::default();
+            let error = measured
+                .retain_scheme_nominal_fact(candidate, span)
+                .expect_err("different canonical facts cannot merge through an opaque projection");
+            assert_eq!(error.reason, ResolveReason::InternalState);
+        }
+        measured
+            .retain_type_nominals(&scheme, &summary, span)
+            .expect("the unchanged canonical scheme still merges after rejected candidates");
     }
 
     #[test]

@@ -4207,6 +4207,35 @@ impl ImportedFacts {
         self.nominals.get(&id)
     }
 
+    /// Canonical linkage view; never use this to grant source constructor access.
+    pub(crate) fn canonical_nominal_fact(
+        &self,
+        id: NominalTypeId,
+    ) -> Option<ImportedNominalFactRef<'_>> {
+        let fact = self.nominal(id)?;
+        let canonical = self.canonical_representation(id);
+        Some(ImportedNominalFactRef {
+            id: fact.id,
+            declaration_kind: fact.declaration_kind,
+            parameter_count: fact.parameter_count,
+            constructor_count: fact.constructor_count,
+            parameters: &fact.parameters,
+            representation: fact
+                .representation
+                .as_ref()
+                .or_else(|| canonical.map(|fact| &fact.representation)),
+            representation_provenance: fact
+                .representation_provenance
+                .as_ref()
+                .or_else(|| canonical.map(|fact| &fact.provenance)),
+            constructors: &fact.constructors,
+            access: fact.access,
+            display_spelling: fact.display_spelling.as_deref(),
+            display_is_private: fact.display_is_private,
+            origin: &fact.origin,
+        })
+    }
+
     pub(crate) fn canonical_representation(
         &self,
         id: NominalTypeId,
@@ -4459,11 +4488,10 @@ impl ImportedFacts {
         }
         let candidate = validated.candidate;
         let existing = self
-            .nominals
-            .get(&candidate.id)
+            .canonical_nominal_fact(candidate.id)
             .ok_or(ImportedNominalMergeFailure::Conflict)?;
         let parameters_match = same_summary_resolved_type_variables_with_constraint_budget(
-            &existing.parameters,
+            existing.parameters,
             candidate.parameters,
             constraint_work,
         )
@@ -4479,7 +4507,7 @@ impl ImportedFacts {
         if !parameters_match {
             return Err(ImportedNominalMergeFailure::Conflict);
         }
-        let representations_match = match (&existing.representation, candidate.representation) {
+        let representations_match = match (existing.representation, candidate.representation) {
             (None, None) => true,
             (Some(existing), Some(candidate)) => {
                 same_type_with_constraint_budget(existing, candidate, constraint_work)
@@ -4488,7 +4516,7 @@ impl ImportedFacts {
             (None, Some(_)) | (Some(_), None) => false,
         };
         let representation_provenance_matches = match (
-            &existing.representation_provenance,
+            existing.representation_provenance,
             candidate.representation_provenance,
         ) {
             (None, None) => true,
@@ -4503,7 +4531,7 @@ impl ImportedFacts {
             (None, Some(_)) | (Some(_), None) => false,
         };
         let origins_match =
-            same_origin_with_constraint_budget(&existing.origin, candidate.origin, constraint_work)
+            same_origin_with_constraint_budget(existing.origin, candidate.origin, constraint_work)
                 .map_err(|failure| match failure {
                     ResolvedBuildFailure::ConstraintResource => {
                         ImportedNominalMergeFailure::ConstraintResource
@@ -4515,8 +4543,8 @@ impl ImportedFacts {
                         ImportedNominalMergeFailure::Kind(context)
                     }
                 })?;
-        let defining_display_conflict = existing.display_is_private
-            && existing.display_spelling.as_deref() != candidate.display_spelling;
+        let defining_display_conflict =
+            existing.display_is_private && existing.display_spelling != candidate.display_spelling;
         if !representations_match
             || !representation_provenance_matches
             || !origins_match
@@ -4575,12 +4603,23 @@ impl ImportedFacts {
                     .map(try_clone_string)
                     .transpose()
                     .map_err(|_| ImportedNominalMergeFailure::TypeResource)?;
-                let representation = candidate
+                // Canonical metadata authenticates the merge, but an opaque
+                // source projection retains it only in the linkage sidecar.
+                let source_candidate = ImportedNominalFactRef {
+                    representation: candidate
+                        .representation
+                        .filter(|_| candidate.access != ImportedTypeAccess::Opaque),
+                    representation_provenance: candidate
+                        .representation_provenance
+                        .filter(|_| candidate.access != ImportedTypeAccess::Opaque),
+                    ..candidate
+                };
+                let representation = source_candidate
                     .representation
                     .map(|representation| clone_type_with_budget(representation, type_work))
                     .transpose()
                     .map_err(|()| ImportedNominalMergeFailure::TypeResource)?;
-                let representation_provenance = candidate.representation_provenance.cloned();
+                let representation_provenance = source_candidate.representation_provenance.cloned();
                 Ok(PreparedImportedNominalMerge {
                     action: Some(PreparedImportedNominalAction::Insert(ImportedNominalFact {
                         representation_provenance,
@@ -4693,6 +4732,12 @@ impl ImportedFacts {
                     .ok_or(ImportedNominalMergeFailure::Conflict)?;
                 if let Some(access) = access {
                     existing.access = access;
+                    if access == ImportedTypeAccess::Opaque {
+                        if let Some(representation) = existing.representation.take() {
+                            discard_type_iteratively(representation);
+                        }
+                        existing.representation_provenance = None;
+                    }
                 }
                 if let Some(constructors) = constructors {
                     existing.constructors = constructors;
@@ -4737,6 +4782,12 @@ impl ImportedFacts {
                         .expect("a validated nominal update retains its destination");
                     if let Some(access) = access {
                         existing.access = access;
+                        if access == ImportedTypeAccess::Opaque {
+                            if let Some(representation) = existing.representation.take() {
+                                discard_type_iteratively(representation);
+                            }
+                            existing.representation_provenance = None;
+                        }
                     }
                     if let Some(constructors) = constructors {
                         existing.constructors = constructors;
@@ -8023,7 +8074,7 @@ fn same_imported_global_fact_with_optional_nominal_observer(
 }
 
 pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
-    left: &ImportedNominalFact,
+    left: ImportedNominalFactRef<'_>,
     right: ImportedNominalFactRef<'_>,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
@@ -8031,7 +8082,7 @@ pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     let defining_spelling_matches =
-        !left.display_is_private || left.display_spelling.as_deref() == right.display_spelling;
+        !left.display_is_private || left.display_spelling == right.display_spelling;
     // Access belongs to the selected import route, not the defining nominal
     // fact. Comparing a hidden signature closure must not downgrade or reject
     // the source access already retained through a different route.
@@ -8042,20 +8093,20 @@ pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
         || left.parameters.len() != right.parameters.len()
         || (!left.constructors.is_empty()
             && !right.constructors.is_empty()
-            && left.constructors.as_ref() != right.constructors)
+            && left.constructors != right.constructors)
         || left.display_is_private != right.display_is_private
         || !defining_spelling_matches
     {
         return Ok(false);
     }
-    let representations_match = match (&left.representation, right.representation) {
+    let representations_match = match (left.representation, right.representation) {
         (None, None) => true,
         (Some(left), Some(right)) => same_type_with_constraint_budget(left, right, constraint_work)
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?,
         _ => false,
     };
     let representation_provenance_matches = match (
-        &left.representation_provenance,
+        left.representation_provenance,
         right.representation_provenance,
     ) {
         (None, None) => true,
@@ -8079,7 +8130,7 @@ pub(crate) fn same_imported_nominal_closure_with_constraint_budget(
             return Ok(false);
         }
     }
-    same_origin_with_constraint_budget(&left.origin, right.origin, constraint_work)
+    same_origin_with_constraint_budget(left.origin, right.origin, constraint_work)
 }
 
 #[cfg(test)]
