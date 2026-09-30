@@ -164,6 +164,11 @@ remain separate targets. A small first example does not reduce the final scope.
   structural request-footprint extension is the next bounded C2.4/C4.1 batch.
   The complete fixture and scope remain unchanged; no `Program` completion is
   claimed.
+- D9's standalone `SourcePlainSuffixTransport` passed fresh independent
+  compilation and review. Static request footprints and receiver checks derive
+  the inserted suffix's pending checks, including resumed and discarded owner
+  contexts. The actual plain frame is retained, with ordinary/unwind behavior
+  distinguished. Declaration-recipe integration remains in progress.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |

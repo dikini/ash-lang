@@ -489,3 +489,14 @@ The next extension must transport a consuming prefix across a pending plain
 suffix using static request footprints and receiver checks. Full `Program`
 construction, the actual graph-translation bridge and general admission remain
 open.
+
+[SourcePlainSuffixTransport.lean](SourcePlainSuffixTransport.lean) supplies the
+standalone transport needed by D9. `plain_suffix_admission` constructs checking
+for a consuming prefix followed by a suffix from the prefix's current check,
+the suffix's structural request footprint and finite operation checks at the
+actual receiver. It transports selected handlers and owners, retained captures,
+resume restoration and discard waiting contexts while retaining the actual plain
+frame. The inserted suffix executes during ordinary return and is skipped during
+unwind. No constructor takes successful future execution or a future `Pending`
+proof. Fresh independent compilation and review pass with standard axioms only;
+declaration-recipe integration and full initial admission remain open.

@@ -356,6 +356,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledHandlerSelection.
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledHandlerTransport.olean" SourceScheduledHandlerTransport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledHandlerAdaptation.olean" SourceScheduledHandlerAdaptation.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledAdaptationCompilation.olean" SourceScheduledAdaptationCompilation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/SourcePlainSuffixTransport.olean" SourcePlainSuffixTransport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledCapturePrep.olean" SourceScheduledCapturePrep.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledClauses.olean" SourceScheduledClauses.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceScheduledSourceInterfaces.olean" SourceScheduledSourceInterfaces.lean
