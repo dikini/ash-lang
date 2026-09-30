@@ -796,3 +796,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreBuiltinSignatures.olean" Cor
 lean -DwarningAsError=true -o "$proof_build_dir/CoreExportedAdmission.olean" CoreExportedAdmission.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableChecks.olean" CoreCallableChecks.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreHigherOrderSupport.olean" CoreHigherOrderSupport.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphAdmission.olean" CoreGraphAdmission.lean

@@ -34,6 +34,15 @@ bodies can therefore require different annotations at the same declared port.
 `OperationRows` fixes decorations for that same rich pair. Downward erasure does
 not construct a common authenticated refinement for those payloads.
 
+The same constraint also occurs without operations. A stored higher-order
+helper has one rich parameter type; the existing beta theorem substitutes at
+that same type. A branch requires both arms to have one rich result, and an
+operation result fixes the refinement expected by its resume and caller
+continuations. The existing theorems are universally stated over a chosen
+refinement, but this does not make a stored callable or continuation parametric
+over different refinements. A repair confined to operation inputs would leave
+these C2.1 obligations unresolved.
+
 The [retained obstruction](direct-effects/one-shot/CoreHigherOrderSupport.lean)
 establishes the unchanged-port failure for the selected cell-retaining closure.
 It does not establish impossibility for all translations. A candidate interface
@@ -48,7 +57,10 @@ does not justify removing calls.
 Any bounded prototype must first cover two differently structured pure closures
 at one operation key and a freshly acquired cell retained through that key. It
 must preserve the exact declared signature and reject a dependent payload sent
-outside its resource owner. Retain the prototype only if it supplies these
+outside its resource owner. Before generalizing it, check the same closures
+through one ordinary apply helper and a branch that returns either closure;
+record higher-order result and continuation obligations explicitly. Retain the
+prototype only if it supplies these
 checks without future-success assumptions and identifies how it reaches the
 existing M4 admission boundary. These are proof-interface experiments toward
 current Ash semantics, not a language change or a reduction of the task's

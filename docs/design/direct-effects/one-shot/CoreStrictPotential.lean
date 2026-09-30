@@ -152,13 +152,19 @@ def traversalReady (graph : CoreSyntax.Graph) (state : CoreMachine.State) : Bool
 
 /-- Named administrative witnesses are the only users of unchanged-target
 progress here; both interpretations share one exact target configuration. -/
-structure SilentWitness (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+structure SilentMapped (graph : CoreSyntax.Graph)
+    (beforeOwners afterOwners : CoreTranslation.OwnerMap) (beforeMaps afterMaps : List MappedFrame)
     (before after : CoreMachine.State) (target : Configuration) : Prop where
   core : CoreMachine.next graph before = .stepped after
   decreasing : potential graph after < potential graph before
   permitted : traversalReady graph before = true
-  current : ComponentRel graph owners before target
-  successor : ComponentRel graph owners after target
+  current : ComponentMapped graph beforeOwners beforeMaps before target
+  successor : ComponentMapped graph afterOwners afterMaps after target
+
+abbrev SilentWitness (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+    (before after : CoreMachine.State) (target : Configuration) : Prop :=
+  SilentMapped graph owners owners (uniformFrames owners before.frames)
+    (uniformFrames owners after.frames) before after target
 
 theorem unchanged_silent_rejected (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
     (state : CoreMachine.State) (target : Configuration) :
@@ -177,7 +183,7 @@ private theorem single_flattened (frame : PlainFrameRel graph owners heap core p
     (ready : ClosedValue code) (tail : PushedRel graph owners heap cores target) (scope : Scope) :
     OrdinaryStackRel graph owners heap (core :: cores) code scope
       (plain.context.plug code) plain.scope target :=
-  ⟨[core], cores, rfl, .cons frame ready .nil, tail⟩
+  ⟨[(owners, core)], uniformFrames owners cores, rfl, .cons frame ready .nil, tail⟩
 
 theorem application_entry_same_target {base : CoreMachine.State}
     (ordered : Postorder graph) (known : graph.node site = some node)
@@ -210,8 +216,8 @@ theorem application_entry_same_target {base : CoreMachine.State}
   have stack := single_flattened frame ready tail plain.scope
   simp only [context, Context.plug] at stack
   exact ⟨next, decrease, (by simp [traversalReady, known, kind]),
-    ⟨_, plain.scope, .evaluate translated saved, pushed_only tail⟩,
-    ⟨_, plain.scope, .evaluate ft fs, stack⟩⟩
+    component_uniform ⟨_, plain.scope, .evaluate translated saved, pushed_only tail⟩,
+    component_uniform ⟨_, plain.scope, .evaluate ft fs, stack⟩⟩
 
 theorem application_argument_same_target {base : CoreMachine.State}
     (translated : CoreTranslation.translateFuel graph fuel owners argument = .ok rawArgument)
@@ -237,8 +243,8 @@ theorem application_argument_same_target {base : CoreMachine.State}
   have ats := single_flattened af ready tail after.scope
   simp only [bc, Context.plug] at bs
   simp only [ac, Context.plug, scope] at ats
-  exact ⟨next, decrease, rfl, ⟨_, runtimeScope, .returned function, bs⟩,
-    ⟨_, before.scope, .evaluate translated saved, ats⟩⟩
+  exact ⟨next, decrease, rfl, component_uniform ⟨_, runtimeScope, .returned function, bs⟩,
+    component_uniform ⟨_, before.scope, .evaluate translated saved, ats⟩⟩
 
 theorem tuple_entry_same_target {base : CoreMachine.State}
     (ordered : Postorder graph) (known : graph.node site = some node)
@@ -272,8 +278,8 @@ theorem tuple_entry_same_target {base : CoreMachine.State}
   have stack := single_flattened frame ready tail plain.scope
   simp only [context, Context.plug] at stack
   exact ⟨next, decrease, (by simp [traversalReady, known, kind]),
-    ⟨_, plain.scope, .evaluate translated wholeSaved, pushed_only tail⟩,
-    ⟨_, plain.scope, .evaluate lt leftSaved, stack⟩⟩
+    component_uniform ⟨_, plain.scope, .evaluate translated wholeSaved, pushed_only tail⟩,
+    component_uniform ⟨_, plain.scope, .evaluate lt leftSaved, stack⟩⟩
 
 theorem tuple_right_same_target {base : CoreMachine.State}
     (translated : CoreTranslation.translateFuel graph fuel owners right = .ok rawRight)
@@ -299,8 +305,136 @@ theorem tuple_right_same_target {base : CoreMachine.State}
   have ats := single_flattened af ready tail after.scope
   simp only [bc, Context.plug] at bs
   simp only [ac, Context.plug, scope] at ats
-  exact ⟨next, decrease, rfl, ⟨_, runtimeScope, .returned left, bs⟩,
-    ⟨_, before.scope, .evaluate translated saved, ats⟩⟩
+  exact ⟨next, decrease, rfl, component_uniform ⟨_, runtimeScope, .returned left, bs⟩,
+    component_uniform ⟨_, before.scope, .evaluate translated saved, ats⟩⟩
+
+theorem application_entry_same_target_mapped {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .apply function argument)
+    (ft : CoreTranslation.translateFuel graph fuel owners function = .ok rawFunction)
+    (argTranslated : CoreTranslation.translateFuel graph fuel owners argument = .ok rawArgument)
+    (saved : EnvCloses graph owners base.heap environment
+      (.app rawFunction rawArgument) (.app functionCode argumentCode))
+    (ready : ClosedValue functionCode)
+    (plain : PlainData) (context : plain.context = .appFunction argumentCode)
+    (tail : PushedWithMaps graph base.heap annotations target) :
+    SilentMapped graph owners owners annotations ((owners, .applyFunction argument environment) :: annotations)
+      { base with control := .evaluate site environment, frames := (framesOf annotations) }
+      { base with control := .evaluate function environment, frames := .applyFunction argument environment :: (framesOf annotations), observations := base.observations ++ [.entered site] }
+      ⟨.app functionCode argumentCode, plain.scope, target⟩ := by
+  obtain ⟨next, decrease⟩ := application_entry_decreases (base := base) ordered known kind (framesOf annotations)
+  obtain ⟨fs, ars⟩ := saved.app_components
+  have translated : CoreTranslation.translateFuel graph (fuel + 1) owners site =
+      .ok (.app rawFunction rawArgument) := by
+    cases node with
+    | mk original type effects source nodeKind =>
+      cases kind
+      simp only [CoreTranslation.translateFuel, CoreTranslation.requireNode, known]
+      change (do pure (Code.app (← CoreTranslation.translateFuel graph fuel owners function)
+        (← CoreTranslation.translateFuel graph fuel owners argument))) = _
+      rw [ft, argTranslated]; rfl
+  have frame : PlainFrameRel graph owners base.heap (.applyFunction argument environment) plain := by
+    change FrameRel graph owners base.heap _ plain.context
+    rw [context]; exact .applyFunction argTranslated ars
+  have stack := prepend_mapped frame ready (pushed_mapped tail) plain.scope
+  simp only [context, Context.plug] at stack
+  exact ⟨next, decrease, (by simp [traversalReady, known, kind]),
+    ⟨rfl, _, plain.scope, .evaluate translated saved, pushed_mapped tail⟩,
+    ⟨rfl, _, plain.scope, .evaluate ft fs, stack⟩⟩
+
+theorem application_argument_same_target_mapped {base : CoreMachine.State}
+    (translated : CoreTranslation.translateFuel graph fuel savedOwners argument = .ok rawArgument)
+    (saved : EnvCloses graph savedOwners base.heap environment rawArgument argumentCode)
+    (function : ValueRel graph owners base.heap functionValue functionCode)
+    (ready : ClosedValue argumentCode)
+    (before after : PlainData)
+    (bc : before.context = .appFunction argumentCode)
+    (ac : after.context = .appArgument functionCode) (scope : after.scope = before.scope)
+    (tail : PushedWithMaps graph base.heap annotations target) (runtimeScope : Scope) :
+    SilentMapped graph owners savedOwners ((savedOwners, .applyFunction argument environment) :: annotations) ((savedOwners, .applyArgument functionValue) :: annotations)
+      { base with control := .returned functionValue, frames := .applyFunction argument environment :: (framesOf annotations) }
+      { base with control := .evaluate argument environment, frames := .applyArgument functionValue :: (framesOf annotations) }
+      ⟨.app functionCode argumentCode, before.scope, target⟩ := by
+  obtain ⟨next, decrease⟩ := application_argument_decreases (graph := graph) base (framesOf annotations)
+  have bf : PlainFrameRel graph savedOwners base.heap (.applyFunction argument environment) before := by
+    change FrameRel graph savedOwners base.heap _ before.context
+    rw [bc]; exact .applyFunction translated saved
+  have af : PlainFrameRel graph savedOwners base.heap (.applyArgument functionValue) after := by
+    change FrameRel graph savedOwners base.heap _ after.context
+    rw [ac]; exact .applyArgument (function.owner_transport savedOwners)
+  have bs := prepend_mapped bf function.closed (pushed_mapped tail) runtimeScope
+  have ats := prepend_mapped af ready (pushed_mapped tail) after.scope
+  simp only [bc, Context.plug] at bs
+  simp only [ac, Context.plug, scope] at ats
+  exact ⟨next, decrease, rfl, ⟨rfl, _, runtimeScope, .returned function, bs⟩,
+    ⟨rfl, _, before.scope, .evaluate translated saved, ats⟩⟩
+
+theorem tuple_entry_same_target_mapped {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .tuple [left, right])
+    (lt : CoreTranslation.translateFuel graph fuel owners left = .ok rawLeft)
+    (rt : CoreTranslation.translateFuel graph fuel owners right = .ok rawRight)
+    (wholeSaved : EnvCloses graph owners base.heap environment
+      (.pair rawLeft rawRight) (.pair leftCode rightCode))
+    (leftSaved : EnvCloses graph owners base.heap environment rawLeft leftCode)
+    (rightSaved : EnvCloses graph owners base.heap environment rawRight rightCode)
+    (ready : ClosedValue leftCode)
+    (plain : PlainData) (context : plain.context = .pairLeft rightCode)
+    (tail : PushedWithMaps graph base.heap annotations target) :
+    SilentMapped graph owners owners annotations ((owners, .tupleLeft right environment) :: annotations)
+      { base with control := .evaluate site environment, frames := (framesOf annotations) }
+      { base with control := .evaluate left environment, frames := .tupleLeft right environment :: (framesOf annotations), observations := base.observations ++ [.entered site] }
+      ⟨.pair leftCode rightCode, plain.scope, target⟩ := by
+  obtain ⟨next, decrease⟩ := tuple_entry_decreases (base := base) ordered known kind (framesOf annotations)
+  have translated : CoreTranslation.translateFuel graph (fuel + 1) owners site =
+      .ok (.pair rawLeft rawRight) := by
+    cases node with
+    | mk original type effects source nodeKind =>
+      cases kind
+      simp only [CoreTranslation.translateFuel, CoreTranslation.requireNode, known]
+      change (do pure (Code.pair (← CoreTranslation.translateFuel graph fuel owners left)
+        (← CoreTranslation.translateFuel graph fuel owners right))) = _
+      rw [lt, rt]; rfl
+  have frame : PlainFrameRel graph owners base.heap (.tupleLeft right environment) plain := by
+    change FrameRel graph owners base.heap _ plain.context
+    rw [context]; exact .tupleLeft rt rightSaved
+  have stack := prepend_mapped frame ready (pushed_mapped tail) plain.scope
+  simp only [context, Context.plug] at stack
+  exact ⟨next, decrease, (by simp [traversalReady, known, kind]),
+    ⟨rfl, _, plain.scope, .evaluate translated wholeSaved, pushed_mapped tail⟩,
+    ⟨rfl, _, plain.scope, .evaluate lt leftSaved, stack⟩⟩
+
+theorem tuple_right_same_target_mapped {base : CoreMachine.State}
+    (translated : CoreTranslation.translateFuel graph fuel savedOwners right = .ok rawRight)
+    (saved : EnvCloses graph savedOwners base.heap environment rawRight rightCode)
+    (left : ValueRel graph owners base.heap leftValue leftCode)
+    (ready : ClosedValue rightCode)
+    (before after : PlainData)
+    (bc : before.context = .pairLeft rightCode)
+    (ac : after.context = .pairRight leftCode) (scope : after.scope = before.scope)
+    (tail : PushedWithMaps graph base.heap annotations target) (runtimeScope : Scope) :
+    SilentMapped graph owners savedOwners ((savedOwners, .tupleLeft right environment) :: annotations) ((savedOwners, .tupleRight leftValue) :: annotations)
+      { base with control := .returned leftValue, frames := .tupleLeft right environment :: (framesOf annotations) }
+      { base with control := .evaluate right environment, frames := .tupleRight leftValue :: (framesOf annotations) }
+      ⟨.pair leftCode rightCode, before.scope, target⟩ := by
+  obtain ⟨next, decrease⟩ := tuple_right_decreases (graph := graph) base (framesOf annotations)
+  have bf : PlainFrameRel graph savedOwners base.heap (.tupleLeft right environment) before := by
+    change FrameRel graph savedOwners base.heap _ before.context
+    rw [bc]; exact .tupleLeft translated saved
+  have af : PlainFrameRel graph savedOwners base.heap (.tupleRight leftValue) after := by
+    change FrameRel graph savedOwners base.heap _ after.context
+    rw [ac]; exact .tupleRight (left.owner_transport savedOwners)
+  have bs := prepend_mapped bf left.closed (pushed_mapped tail) runtimeScope
+  have ats := prepend_mapped af ready (pushed_mapped tail) after.scope
+  simp only [bc, Context.plug] at bs
+  simp only [ac, Context.plug, scope] at ats
+  exact ⟨next, decrease, rfl, ⟨rfl, _, runtimeScope, .returned left, bs⟩,
+    ⟨rfl, _, before.scope, .evaluate translated saved, ats⟩⟩
+
+#print axioms application_entry_same_target_mapped
+#print axioms application_argument_same_target_mapped
+#print axioms tuple_entry_same_target_mapped
+#print axioms tuple_right_same_target_mapped
 
 namespace Examples
 open CoreMachineExamples

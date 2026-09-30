@@ -18,17 +18,23 @@ theorem ordinary_prepend (frame : PlainFrameRel graph owners heap core plain)
       result resultScope target) (runtimeScope : Scope) :
     OrdinaryStackRel graph owners heap (core :: cores) code runtimeScope result resultScope target := by
   obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := tail
-  exact ⟨core :: flatPrefix, suffix, by simp [split], .cons frame ready flattened, pushed⟩
+  exact ⟨(owners, core) :: flatPrefix, suffix, by simpa [uniformFrames] using congrArg ((owners, core) :: ·) split, .cons frame ready flattened, pushed⟩
 
 /-- Exact allowed-family guard and strict common potential preclude generic
 unchanged-target progress. Both interpretations share the same configuration. -/
-structure TransportWitness (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+structure TransportMapped (graph : CoreSyntax.Graph)
+    (beforeOwners afterOwners : CoreTranslation.OwnerMap) (beforeMaps afterMaps : List MappedFrame)
     (before after : CoreMachine.State) (target : Configuration) : Prop where
   permitted : CoreAdministrativeSteps.ready graph before = true
   core : CoreMachine.next graph before = .stepped after
   decreasing : potential graph after < potential graph before
-  current : ComponentRel graph owners before target
-  successor : ComponentRel graph owners after target
+  current : ComponentMapped graph beforeOwners beforeMaps before target
+  successor : ComponentMapped graph afterOwners afterMaps after target
+
+abbrev TransportWitness (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+    (before after : CoreMachine.State) (target : Configuration) : Prop :=
+  TransportMapped graph owners owners (uniformFrames owners before.frames)
+    (uniformFrames owners after.frames) before after target
 
 /-- Value-node entry preserves heap and frames by its actual permitted next
 transition. These equalities are conclusions, not successor-state premises. -/
@@ -68,8 +74,8 @@ theorem value_entry
   have successorStack : OrdinaryStackRel graph owners after.heap after.frames code scope result resultScope target := by
     rw [heap, frames]; exact stack
   exact ⟨witness.permitted, witness.core, administrative_potential witness,
-    ⟨code, scope, current, stack⟩,
-    ⟨code, scope, by rw [returned]; exact .returned related, successorStack⟩⟩
+    component_uniform ⟨code, scope, current, stack⟩,
+    component_uniform ⟨code, scope, by rw [returned]; exact .returned related, successorStack⟩⟩
 
 /-- Tuple allocation consumes one ready flattened frame and transports the
 remaining mixed stack through append-only heap extension. Further ready pair
@@ -96,8 +102,123 @@ theorem tuple_allocation {base : CoreMachine.State}
   obtain ⟨value, control, related⟩ := witness.returned
   have afterStack := stack.heap_weaken extension
   exact ⟨witness.permitted, witness.core, administrative_potential witness,
-    ⟨rightCode, runtimeScope, .returned right, beforeStack⟩,
-    ⟨.pair leftCode rightCode, plain.scope, by rw [control]; exact .returned related, afterStack⟩⟩
+    component_uniform ⟨rightCode, runtimeScope, .returned right, beforeStack⟩,
+    component_uniform ⟨.pair leftCode rightCode, plain.scope, by rw [control]; exact .returned related, afterStack⟩⟩
+
+/-- Same current witness, arbitrary explicit frame annotations, and no future
+interpretation input. The current code map and every saved frame map persist. -/
+theorem value_entry_mapped
+    (witness : ValueWitness graph owners before after code)
+    (evaluating : before.control = .evaluate index environment)
+    (shape : before.frames = framesOf annotations)
+    (stack : OrdinaryWithMaps graph before.heap annotations code scope result resultScope target) :
+    TransportMapped graph owners owners annotations annotations before after ⟨result, resultScope, target⟩ := by
+  obtain ⟨heap, frames⟩ := value_entry_fields witness evaluating
+  have current : ControlRel graph owners before.heap before.control code := by
+    cases witness.current with
+    | evaluate control translated saved closed => rw [control]; exact .evaluate translated saved
+    | tuple control frames left right => rw [evaluating] at control; cases control
+  obtain ⟨value, returned, related⟩ := witness.returned
+  have afterStack : OrdinaryWithMaps graph after.heap annotations code scope result resultScope target := by
+    rw [heap]; exact stack
+  exact ⟨witness.permitted, witness.core, administrative_potential witness,
+    ⟨shape, code, scope, current, stack⟩,
+    ⟨frames.trans shape, code, scope, by rw [returned]; exact .returned related, afterStack⟩⟩
+
+theorem tuple_allocation_mapped {base : CoreMachine.State}
+    (left : ValueRel graph owners base.heap leftValue leftCode)
+    (right : ValueRel graph owners base.heap rightValue rightCode)
+    (plain : PlainData) (context : plain.context = .pairRight leftCode)
+    (stack : OrdinaryWithMaps graph base.heap annotations (.pair leftCode rightCode) plain.scope
+      result resultScope target) (runtimeScope : Scope) (frameOwners : CoreTranslation.OwnerMap) :
+    TransportMapped graph owners owners ((frameOwners, .tupleRight leftValue) :: annotations) annotations
+      { base with control := .returned rightValue, frames := .tupleRight leftValue :: framesOf annotations }
+      { base with control := .returned (.location base.heap.length), frames := framesOf annotations, heap := base.heap ++ [.pair leftValue rightValue] }
+      ⟨result, resultScope, target⟩ := by
+  obtain ⟨witness, extension, values, environments⟩ := CoreAdministrativeSteps.tuple_allocate left right (framesOf annotations)
+  have frame : PlainFrameRel graph frameOwners base.heap (.tupleRight leftValue) plain := by
+    change FrameRel graph frameOwners base.heap _ plain.context
+    rw [context]; exact .tupleRight (left.owner_transport frameOwners)
+  have tail : OrdinaryWithMaps graph base.heap annotations (plain.context.plug rightCode) plain.scope
+      result resultScope target := by simpa only [context, Context.plug] using stack
+  have beforeStack := prepend_mapped frame right.closed tail runtimeScope
+  obtain ⟨value, control, related⟩ := witness.returned
+  exact ⟨witness.permitted, witness.core, administrative_potential witness,
+    ⟨rfl, rightCode, runtimeScope, .returned right, beforeStack⟩,
+    ⟨rfl, .pair leftCode rightCode, plain.scope, by rw [control]; exact .returned related, stack.heap_weaken extension⟩⟩
+
+/-- A connected ordinary path. Beta enters the callable empty-map boundary;
+its actual integer entry shares the identical target, then the caller bind
+restores its explicitly saved map and supplied scope. Older annotations persist.
+This is a component path, not a reachable-state or PlainData authentication claim. -/
+theorem beta_admin_caller_bind {base : CoreMachine.State}
+    (function : ValueRel graph codeOwners base.heap (.closure parameter body captured)
+      (.lambda parameter (.integer integer)))
+    (argument : ValueRel graph codeOwners base.heap value argumentCode)
+    (known : graph.node body = some node) (kind : node.kind = .integer integer)
+    (translated : CoreTranslation.translateFuel graph fuel savedOwners continuation = .ok rawSuffix)
+    (saved : EnvCloses graph savedOwners base.heap caller
+      (.lambda binder rawSuffix) (.lambda binder suffix))
+    (ready : ClosedExcept binder suffix)
+    (applyPlain bindPlain : PlainData)
+    (applyContext : applyPlain.context = .appArgument (.lambda parameter (.integer integer)))
+    (bindContext : bindPlain.context = .bind binder suffix)
+    (older : PushedWithMaps graph base.heap annotations target)
+    (runtimeScope : Scope) (applyOwners : CoreTranslation.OwnerMap) :
+    let callerMaps := (savedOwners, CoreMachine.Frame.bind binder continuation caller) :: annotations
+    let entered := { base with control := .evaluate body (.binding parameter value captured), frames := framesOf callerMaps }
+    let returned := { entered with control := .returned (.integer integer), observations := base.observations ++ [.entered body] }
+    let finished := { returned with control := .evaluate continuation (.binding binder (.integer integer) caller), frames := framesOf annotations }
+    let bodyTarget : Configuration := ⟨.integer integer, .none, .push (.plain bindPlain) target⟩
+    ComponentMapped graph codeOwners ((applyOwners, .applyArgument (.closure parameter body captured)) :: callerMaps)
+      { base with control := .returned value, frames := .applyArgument (.closure parameter body captured) :: framesOf callerMaps }
+      ⟨.app (.lambda parameter (.integer integer)) argumentCode, applyPlain.scope, bodyTarget.stack⟩ ∧
+    CoreMachine.next graph { base with control := .returned value, frames := .applyArgument (.closure parameter body captured) :: framesOf callerMaps } = .stepped entered ∧
+    RawStep ⟨.app (.lambda parameter (.integer integer)) argumentCode, applyPlain.scope, bodyTarget.stack⟩ bodyTarget [] [] ∧
+    TransportMapped graph [] [] callerMaps callerMaps entered returned bodyTarget ∧
+    CoreMachine.next graph returned = .stepped finished ∧
+    RawStep bodyTarget ⟨.bind binder (.integer integer) suffix, bindPlain.scope, target⟩ [] [] ∧
+    RawStep ⟨.bind binder (.integer integer) suffix, bindPlain.scope, target⟩
+      ⟨suffix.subst binder (.integer integer), bindPlain.scope, target⟩ [] [] ∧
+    ComponentMapped graph savedOwners annotations finished
+      ⟨suffix.subst binder (.integer integer), bindPlain.scope, target⟩ := by
+  dsimp only
+  have callerFrame : PlainFrameRel graph savedOwners base.heap (.bind binder continuation caller) bindPlain := by
+    change FrameRel graph savedOwners base.heap _ bindPlain.context
+    rw [bindContext]; exact .bind translated saved ready
+  have callerTail := PushedWithMaps.cons callerFrame older
+  obtain ⟨before, betaNext, betaStep, betaAfter⟩ := beta_complete_mapped function argument
+    applyPlain applyContext callerTail runtimeScope applyOwners
+  obtain ⟨bodyFuel, rawBody, bodyTranslation, next, step, bodyClosed, original⟩ :=
+    CoreStrictSteps.application_complete function argument
+      (framesOf ((savedOwners, .bind binder continuation caller) :: annotations))
+      applyPlain.scope (.push (.plain bindPlain) target)
+  have rawEq : rawBody = .integer integer := by
+    cases bodyFuel with
+    | zero => simp [CoreTranslation.translateFuel] at bodyTranslation
+    | succ remaining =>
+      cases node with
+      | mk original type effects source nodeKind =>
+        cases kind
+        simp only [CoreTranslation.translateFuel, CoreTranslation.requireNode, known] at bodyTranslation
+        cases bodyTranslation; rfl
+  have exactClosed : EnvCloses graph [] base.heap (.binding parameter value captured)
+      (.integer integer) (.integer integer) := by
+    simpa only [rawEq, Code.subst] using bodyClosed
+  obtain ⟨entry, entryTranslation⟩ := CoreAdministrativeSteps.integer_evaluate
+    (base := { base with control := .evaluate body (.binding parameter value captured), frames := framesOf ((savedOwners, .bind binder continuation caller) :: annotations) })
+    known kind exactClosed (framesOf ((savedOwners, .bind binder continuation caller) :: annotations))
+  have transport := value_entry_mapped entry rfl rfl (pushed_mapped (scope := Execution.Scope.none) callerTail)
+  obtain ⟨returnBefore, returnNext, plug, bind, returnAfter⟩ := bind_return_mapped
+    (base := { base with control := .returned (.integer integer), frames := framesOf ((savedOwners, .bind binder continuation caller) :: annotations), observations := base.observations ++ [.entered body] })
+    translated saved ready (ValueRel.integer (owners := [])) bindPlain bindContext older Execution.Scope.none
+  exact ⟨before, betaNext, by simpa only [Code.subst] using betaStep,
+    transport, returnNext, plug, bind, returnAfter⟩
+
+#print axioms beta_admin_caller_bind
+
+#print axioms value_entry_mapped
+#print axioms tuple_allocation_mapped
 
 theorem unchanged_transport_rejected (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
     (state : CoreMachine.State) (target : Configuration) :

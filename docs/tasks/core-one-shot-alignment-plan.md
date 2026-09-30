@@ -68,9 +68,10 @@ relation. Its focused examples and the opt-in snapshots taken by Rust's actual
    removing that unused binding requires the nonrecursion evidence. This value
    relation is locally verified; reachable configurations must supply its static
    premises and preserve the heap relation. Callable reentry exposed a limit of
-   the current uniform owner-map parameter. Repair callable interpretation at
-   its lexical capability barrier, then retain distinct maps for saved ordinary
-   code. Do not reset legal clause bindings or remove duplicate-owner validation.
+   the earlier uniform owner-map parameter. Callable interpretation now uses its
+   lexical capability barrier, and explicit per-frame maps survive body entry
+   and caller return. Authenticate these maps for reachable states. Do not reset
+   legal clause bindings or remove duplicate-owner validation.
 2. Relate strict evaluation contexts, source handlers, live and consumed clause
    owners, and nested captures. Reverse Rust's outermost-first frame vectors
    exactly once. Assign handler, cleanup and ticket ghost identities to dynamic

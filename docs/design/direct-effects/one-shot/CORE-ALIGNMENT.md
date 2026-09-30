@@ -339,10 +339,11 @@ independent of the caller map. `ComponentWithMaps` separates the current code's
 map from the saved-frame map, and generic beta enters the empty callable map
 while preserving the caller continuation. The boundary example now proves this
 actual beta transition and positive representation under a colliding caller map.
-Individual saved-frame maps, post-beta traversal and initial/reachable relation
-construction remain open. Existing translator checks and legal clause bindings
-are unchanged. Fresh independent compilation of all eight affected/dependent
-modules and the retained Rust reentry fixture pass.
+The per-frame extension below carries this boundary through ordinary body steps
+and caller return. Initial/reachable relation construction remains open. Existing
+translator checks and legal clause bindings are unchanged. Fresh independent
+compilation of the original eight affected/dependent modules and the retained
+Rust reentry fixture pass.
 
 [CoreCallableChecks.lean](CoreCallableChecks.lean) constructs the exact callable
 certificate used by that relation from finite Core graph data. It checks the
@@ -431,6 +432,23 @@ remain related. The same family guard and strict potential rule out an unchanged
 source state. A nested tuple example checks both allocations over a saved caller
 binding. Traversal of arbitrary mixed prefixes and effect frames remain open.
 Fresh independent compilation and statement review pass with standard axioms.
+
+`PushedWithMaps`, `FlattenedWithMaps` and `OrdinaryWithMaps` now give each saved
+frame an explicit map; the earlier uniform relations are abbreviations of these
+same judgments. `ComponentMapped` checks that the supplied annotations project
+to the actual Core frame list. Traversal pushes the current map with a saved
+frame, restores that frame's map when returning to its operand, and preserves
+older annotations. Value entry and tuple allocation retain their family guard,
+identical target and shared decreasing potential across these separate maps.
+
+`beta_admin_caller_bind` composes actual Core beta, integer-body entry and caller
+bind return. It derives the body interpretation from the current callable,
+keeps the target fixed during the ranked body step, and takes positive target
+beta, plug and bind steps. The saved caller map and supplied scope are restored
+without an empty-map restriction; older annotations persist. It assumes neither
+the desired successor interpretation nor future validity. This is ordinary
+component correspondence: authentication of `PlainData`, reachable maps,
+remaining phase cases and effect-frame correspondence are still open.
 
 ### Closing projection component
 
@@ -626,8 +644,27 @@ the actual cell receiver; independent accounting discharges the read there.
 Fresh independent compilation and statement review pass with standard axioms.
 This local construction assumes the issued cell and typed lexical environment;
 it does not construct the whole exported resource/binding chain or an initial
-`Program` for the graph. A static graph derivation that supplies these premises
-and generalizes the ordinary constructors is the next C2 obligation.
+`Program` for the graph. The following static derivation generalizes its ordinary
+constructors; constructing that derivation from validated metadata remains a C2
+obligation.
+
+[CoreGraphAdmission.lean](CoreGraphAdmission.lean) supplies a separate graph-indexed
+static derivation and constructs source typing and row authentication from it.
+The ordinary rules cover literals, variables, lambdas, application, binding,
+binary pairs, Boolean branches, Unit matches and singleton nonrecursive entry
+wrappers; exact operation requests are also covered. The translation theorem
+synchronizes that construction with actual fuel-bounded graph translation and
+resource instantiation. Core rows are compared as sets; function bodies may use
+a subset of their original declared allowance. Source/Auth judgments and future
+execution are not inputs to this compiler.
+
+Concrete derivations construct the exported getter, setter and write applications
+for 7, 99 and 11 using actual graph indices and typed lexical environments. These
+remain partial graph admission: the current grammar does not construct handler,
+resume/discard, cleanup or resource-entry nodes. Conditional binding extensions
+around those nodes leave their premises explicit. The static derivation still
+needs to be constructed from validated Core metadata in general; this is not an
+executable complete Core validator or an initial `Program` for the exported root.
 
 ### Initial-admission interface repair
 

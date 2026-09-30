@@ -11,27 +11,56 @@ No full simulation theorem or future configuration validity is assumed. -/
 namespace Ash.OneShot.CoreStrictStack
 open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames
 
-inductive PushedRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
-    (heap : Heap) : List CoreMachine.Frame → Stack → Prop where
-  | nil : PushedRel graph owners heap [] .nil
-  | cons (frame : PlainFrameRel graph owners heap core plain)
-      (tail : PushedRel graph owners heap cores target) :
-      PushedRel graph owners heap (core :: cores) (.push (.plain plain) target)
+abbrev MappedFrame := CoreTranslation.OwnerMap × CoreMachine.Frame
 
-inductive FlattenedRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
-    (heap : Heap) : List CoreMachine.Frame → Code → Scope → Code → Scope → Prop where
-  | nil : FlattenedRel graph owners heap [] code scope code scope
+def uniformFrames (owners : CoreTranslation.OwnerMap) (frames : List CoreMachine.Frame) : List MappedFrame :=
+  frames.map (fun frame => (owners, frame))
+def framesOf (frames : List MappedFrame) : List CoreMachine.Frame := frames.map Prod.snd
+
+@[simp] theorem framesOf_uniform (owners : CoreTranslation.OwnerMap) (frames : List CoreMachine.Frame) :
+    framesOf (uniformFrames owners frames) = frames := by
+  simp [framesOf, uniformFrames, List.map_map, Function.comp_def]
+@[simp] theorem framesOf_cons (map : CoreTranslation.OwnerMap) (frame : CoreMachine.Frame) (tail : List MappedFrame) :
+    framesOf ((map, frame) :: tail) = frame :: framesOf tail := rfl
+
+inductive PushedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) : List MappedFrame → Stack → Prop where
+  | nil : PushedWithMaps graph heap [] .nil
+  | cons (frame : PlainFrameRel graph owners heap core plain)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
+
+inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
+    List MappedFrame → Code → Scope → Code → Scope → Prop where
+  | nil : FlattenedWithMaps graph heap [] code scope code scope
   | cons (frame : PlainFrameRel graph owners heap core plain)
       (ready : ClosedValue code)
-      (tail : FlattenedRel graph owners heap cores (plain.context.plug code) plain.scope result resultScope) :
-      FlattenedRel graph owners heap (core :: cores) code scope result resultScope
+      (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
+      FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
 
-def OrdinaryStackRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+abbrev PushedRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap) (heap : Heap)
+    (cores : List CoreMachine.Frame) (target : Stack) : Prop :=
+  PushedWithMaps graph heap (uniformFrames owners cores) target
+abbrev FlattenedRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap) (heap : Heap)
+    (cores : List CoreMachine.Frame) (code : Code) (scope : Scope) (result : Code) (resultScope : Scope) : Prop :=
+  FlattenedWithMaps graph heap (uniformFrames owners cores) code scope result resultScope
+
+theorem PushedRel.nil : PushedRel graph owners heap [] .nil := PushedWithMaps.nil
+
+theorem PushedRel.cons (frame : PlainFrameRel graph owners heap core plain)
+    (tail : PushedRel graph owners heap cores target) :
+    PushedRel graph owners heap (core :: cores) (.push (.plain plain) target) :=
+  PushedWithMaps.cons frame tail
+
+def OrdinaryWithMaps (graph : CoreSyntax.Graph) (heap : Heap) (cores : List MappedFrame)
+    (code : Code) (scope : Scope) (result : Code) (resultScope : Scope) (target : Stack) : Prop :=
+  ∃ flatPrefix suffix, cores = flatPrefix ++ suffix ∧
+    FlattenedWithMaps graph heap flatPrefix code scope result resultScope ∧
+    PushedWithMaps graph heap suffix target
+
+abbrev OrdinaryStackRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
     (heap : Heap) (cores : List CoreMachine.Frame) (code : Code) (scope : Scope)
     (result : Code) (resultScope : Scope) (target : Stack) : Prop :=
-  ∃ flatPrefix suffix, cores = flatPrefix ++ suffix ∧
-    FlattenedRel graph owners heap flatPrefix code scope result resultScope ∧
-    PushedRel graph owners heap suffix target
+  OrdinaryWithMaps graph heap (uniformFrames owners cores) code scope result resultScope target
 
 inductive ControlRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
     (heap : Heap) : CoreMachine.Control → Code → Prop where
@@ -50,23 +79,32 @@ def ComponentWithMaps (graph : CoreSyntax.Graph)
     OrdinaryStackRel graph frameOwners state.heap state.frames code scope
       target.expression target.scope target.stack
 
-/-- The earlier component is the diagonal case. Different saved-frame maps
-remain open; this factor records only the callable/current-code boundary. -/
+/-- The earlier component is the uniform diagonal case. ComponentMapped below
+records supplied individual frame maps; reachable-map authentication stays open. -/
 abbrev ComponentRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
     (state : CoreMachine.State) (target : Configuration) : Prop :=
   ComponentWithMaps graph owners owners state target
 
-theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
-    (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target := by
+theorem PushedWithMaps.heap_weaken (related : PushedWithMaps graph heap cores target)
+    (extension : HeapExtends heap larger) : PushedWithMaps graph larger cores target := by
   induction related with
   | nil => exact .nil
   | cons frame tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ih
 
-theorem FlattenedRel.heap_weaken (related : FlattenedRel graph owners heap cores code scope result resultScope)
-    (extension : HeapExtends heap larger) : FlattenedRel graph owners larger cores code scope result resultScope := by
+theorem FlattenedWithMaps.heap_weaken
+    (related : FlattenedWithMaps graph heap cores code scope result resultScope)
+    (extension : HeapExtends heap larger) : FlattenedWithMaps graph larger cores code scope result resultScope := by
   induction related with
   | nil => exact .nil
   | cons frame ready tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ready ih
+
+theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
+    (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target :=
+  PushedWithMaps.heap_weaken related extension
+
+theorem FlattenedRel.heap_weaken (related : FlattenedRel graph owners heap cores code scope result resultScope)
+    (extension : HeapExtends heap larger) : FlattenedRel graph owners larger cores code scope result resultScope :=
+  FlattenedWithMaps.heap_weaken related extension
 
 theorem OrdinaryStackRel.heap_weaken
     (related : OrdinaryStackRel graph owners heap cores code scope result resultScope target)
@@ -77,7 +115,7 @@ theorem OrdinaryStackRel.heap_weaken
 
 theorem pushed_only (related : PushedRel graph owners heap cores target) :
     OrdinaryStackRel graph owners heap cores code scope code scope target :=
-  ⟨[], cores, rfl, .nil, related⟩
+  ⟨[], uniformFrames owners cores, rfl, .nil, related⟩
 
 /-- Flattening is structural reconstruction of one positive plug transition,
 not a zero-step execution rule. The runtime scope is explicit. -/
@@ -88,7 +126,7 @@ theorem flatten_one (frame : PlainFrameRel graph owners heap core plain)
       (plain.context.plug code) plain.scope target ∧
     RawStep ⟨code, scope, .push (.plain plain) target⟩
       ⟨plain.context.plug code, plain.scope, target⟩ [] [] :=
-  ⟨⟨[core], cores, rfl, .cons frame value.closed .nil, tail⟩,
+  ⟨⟨[(owners, core)], uniformFrames owners cores, rfl, .cons frame value.closed .nil, tail⟩,
     .plug plain code value.closed scope target⟩
 
 /-- A unit entry has one and the same whole target interpretation on both
@@ -134,6 +172,102 @@ theorem beta_complete {base : CoreMachine.State}
   simp only [context, Context.plug] at stack
   exact ⟨⟨argumentCode, runtimeScope, .returned argument, stack⟩, next, step,
     ⟨_, .none, .evaluate translated closed, pushed_only tail⟩⟩
+
+/-- Explicit supplied per-frame annotations. Full reachable-site authentication
+is separate; no maps are chosen existentially by this component predicate. -/
+def ComponentMapped (graph : CoreSyntax.Graph) (codeOwners : CoreTranslation.OwnerMap)
+    (annotations : List MappedFrame) (state : CoreMachine.State) (target : Configuration) : Prop :=
+  state.frames = framesOf annotations ∧ ∃ code scope,
+    ControlRel graph codeOwners state.heap state.control code ∧
+    OrdinaryWithMaps graph state.heap annotations code scope target.expression target.scope target.stack
+
+theorem OrdinaryWithMaps.heap_weaken
+    (related : OrdinaryWithMaps graph heap cores code scope result resultScope target)
+    (extension : HeapExtends heap larger) : OrdinaryWithMaps graph larger cores code scope result resultScope target := by
+  obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := related
+  exact ⟨flatPrefix, suffix, split, flattened.heap_weaken extension, pushed.heap_weaken extension⟩
+
+theorem ordinary_uniform
+    (related : OrdinaryStackRel graph owners heap cores code scope result resultScope target) :
+    OrdinaryWithMaps graph heap (uniformFrames owners cores) code scope result resultScope target := related
+
+theorem component_uniform (related : ComponentWithMaps graph codeOwners frameOwners state target) :
+    ComponentMapped graph codeOwners (uniformFrames frameOwners state.frames) state target := by
+  obtain ⟨code, scope, control, stack⟩ := related
+  exact ⟨by simp, code, scope, control, ordinary_uniform stack⟩
+
+theorem pushed_mapped (tail : PushedWithMaps graph heap cores target) :
+    OrdinaryWithMaps graph heap cores code scope code scope target := ⟨[], cores, rfl, .nil, tail⟩
+
+theorem prepend_mapped (frame : PlainFrameRel graph owners heap core plain)
+    (ready : ClosedValue code)
+    (tail : OrdinaryWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope target)
+    (scope : Scope) :
+    OrdinaryWithMaps graph heap ((owners, core) :: cores) code scope result resultScope target := by
+  obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := tail
+  exact ⟨(owners, core) :: flatPrefix, suffix, by simp [split], .cons frame ready flattened, pushed⟩
+
+theorem beta_complete_mapped {base : CoreMachine.State}
+    (function : ValueRel graph codeOwners base.heap (.closure parameter body saved) (.lambda parameter result))
+    (argument : ValueRel graph codeOwners base.heap value argumentCode)
+    (plain : PlainData) (context : plain.context = .appArgument (.lambda parameter result))
+    (tail : PushedWithMaps graph base.heap annotations target) (runtimeScope : Scope)
+    (frameOwners : CoreTranslation.OwnerMap) :
+    ComponentMapped graph codeOwners ((frameOwners, .applyArgument (.closure parameter body saved)) :: annotations)
+      { base with control := .returned value, frames := .applyArgument (.closure parameter body saved) :: framesOf annotations }
+      ⟨.app (.lambda parameter result) argumentCode, plain.scope, target⟩ ∧
+    CoreMachine.next graph { base with control := .returned value, frames := .applyArgument (.closure parameter body saved) :: framesOf annotations } =
+      .stepped { base with control := .evaluate body (.binding parameter value saved), frames := framesOf annotations } ∧
+    RawStep ⟨.app (.lambda parameter result) argumentCode, plain.scope, target⟩
+      ⟨result.subst parameter argumentCode, .none, target⟩ [] [] ∧
+    ComponentMapped graph [] annotations
+      { base with control := .evaluate body (.binding parameter value saved), frames := framesOf annotations }
+      ⟨result.subst parameter argumentCode, .none, target⟩ := by
+  obtain ⟨fuel, raw, translated, next, step, closed, original⟩ :=
+    CoreStrictSteps.application_complete function argument (framesOf annotations) plain.scope target
+  have frame : PlainFrameRel graph frameOwners base.heap (.applyArgument (.closure parameter body saved)) plain := by
+    change FrameRel graph frameOwners base.heap _ plain.context
+    rw [context]; exact .applyArgument (function.owner_transport frameOwners)
+  have stack := prepend_mapped frame argument.closed (pushed_mapped tail) runtimeScope
+  simp only [context, Context.plug] at stack
+  exact ⟨⟨rfl, argumentCode, runtimeScope, .returned argument, stack⟩, next, step,
+    ⟨rfl, _, .none, .evaluate translated closed, pushed_mapped tail⟩⟩
+
+/-- Completed caller bind restores that frame's saved lexical map and scope,
+with two actual positive target transitions and unchanged older annotations. -/
+theorem bind_return_mapped {base : CoreMachine.State}
+    (translated : CoreTranslation.translateFuel graph fuel savedOwners body = .ok rawBody)
+    (saved : EnvCloses graph savedOwners base.heap environment (.lambda parameter rawBody) (.lambda parameter suffix))
+    (ready : ClosedExcept parameter suffix)
+    (argument : ValueRel graph codeOwners base.heap value argumentCode)
+    (plain : PlainData) (context : plain.context = .bind parameter suffix)
+    (tail : PushedWithMaps graph base.heap annotations target) (runtimeScope : Scope) :
+    ComponentMapped graph codeOwners ((savedOwners, .bind parameter body environment) :: annotations)
+      { base with control := .returned value, frames := .bind parameter body environment :: framesOf annotations }
+      ⟨argumentCode, runtimeScope, .push (.plain plain) target⟩ ∧
+    CoreMachine.next graph { base with control := .returned value, frames := .bind parameter body environment :: framesOf annotations } =
+      .stepped { base with control := .evaluate body (.binding parameter value environment), frames := framesOf annotations } ∧
+    RawStep ⟨argumentCode, runtimeScope, .push (.plain plain) target⟩
+      ⟨.bind parameter argumentCode suffix, plain.scope, target⟩ [] [] ∧
+    RawStep ⟨.bind parameter argumentCode suffix, plain.scope, target⟩
+      ⟨suffix.subst parameter argumentCode, plain.scope, target⟩ [] [] ∧
+    ComponentMapped graph savedOwners annotations
+      { base with control := .evaluate body (.binding parameter value environment), frames := framesOf annotations }
+      ⟨suffix.subst parameter argumentCode, plain.scope, target⟩ := by
+  obtain ⟨next, bind, closed, sourceTranslated⟩ := CoreStrictSteps.bind_complete translated saved
+    (argument.owner_transport savedOwners) ready (framesOf annotations) plain.scope target
+  have frame : PlainFrameRel graph savedOwners base.heap (.bind parameter body environment) plain := by
+    change FrameRel graph savedOwners base.heap _ plain.context
+    rw [context]; exact .bind translated saved ready
+  have plug := RawStep.plug plain argumentCode argument.closed runtimeScope target
+  simp only [context, Context.plug] at plug
+  exact ⟨⟨rfl, argumentCode, runtimeScope, .returned argument, pushed_mapped (.cons frame tail)⟩,
+    next, plug, bind, ⟨rfl, _, plain.scope, .evaluate translated closed, pushed_mapped tail⟩⟩
+
+#print axioms bind_return_mapped
+
+#print axioms component_uniform
+#print axioms beta_complete_mapped
 
 /-- No rank can license an unchanged source state. There is no unrestricted
 zero-step constructor in the stack relation or administrative witness. -/

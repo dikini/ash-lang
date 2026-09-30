@@ -263,14 +263,41 @@ remain separate targets. A small first example does not reduce the final scope.
   change the supported fragment. The next comparison is independent retention
   versus proved capture erasure. This new leaf is independently verified;
   the next combined audit waits for the ordinary-stack edits to freeze.
+- `CoreGraphAdmission` now constructs source/authentication evidence and a
+  synchronized translation from a separate static graph derivation. Its ordinary
+  rules include binary pairs, both Boolean arm orders, Unit match and a checked
+  nonrecursive function wrapper. Concrete getter, setter and three write-site
+  derivations use the exported graph. The binding spine remains conditional on
+  handler41; handler, resume/discard, cleanup and resource constructors are not
+  yet present. The next batch must make resource environments, owner contracts,
+  worlds and lexical maps recursive indices before adding those cases.
+- The single ordinary-stack relation now carries explicit per-frame maps.
+  `beta_admin_caller_bind` composes actual beta, ranked integer entry and caller
+  return, restoring the saved map and supplied scope while preserving older
+  annotations. Generic value/tuple transport and covered application/tuple
+  traversal use the same relation and potential. This closes the identified
+  post-beta component gap, not reachable-state authentication or full simulation.
+- Fresh independent compilation and statement review passed for both batches.
+  The combined audit covers 793 modules, 10,881 exact dependency reports and
+  1,964 local links/anchors: six new or affected modules were freshly compiled,
+  and 787 unchanged verified source/report pairs were retained. Standard axioms,
+  source hashes, import order, trust, whitespace and artifact checks pass.
+  Changed-section Markdown lint passes. The full DN-0033 lint retains its 14
+  pre-existing line-length findings; comparison with the preceding revision
+  found no new lint finding.
+- The D4 interface review also identified fixed rich callable refinements in
+  ordinary higher-order helpers, branch results and operation outputs. The
+  design note now records these boundaries. A payload-indexed input prototype
+  alone would not resolve general higher-order admission; this changes the next
+  repair estimate from a local guard adjustment to a bounded interface experiment.
 
-| Package | Completed / identified | State | Outstanding | Dependency / next estimate |
-| --- | --- | --- | --- | --- |
-| C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
-| C2 | 0 / 4 | Normalized admission, exported getter admission and finite builtin compatibility verified | Full graph admission, authenticated metadata and general static compiler | Static graph derivation and callable certificates next, about 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Callable-map repair, executable certificate bridge, finite trace and strict components verified | Post-beta map-aware transitions, full configuration relation and simulation | Extend ordinary transport across the proved beta boundary next, about 1 active hour; full proof estimate unresolved |
-| C4 | 2 / 3 | D2 regressions and D8/D9 complete normalized admission verified; C4.1 reopened for D4 | Resolve higher-order retention while preserving exact operation signatures | Compare independent retention with justified capture erasure; next bounded decision about 1 active hour |
-| C5 | 0 / 4 | Product gate and 791-module combined audit passed | Integrated theorem and final scope audit | Depends on C2–C4 |
+| Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
+| --- | --- | --- | --- | --- | --- |
+| C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
+| C2 | 0 / 4 | Normalized admission and partial graph compiler independently verified | Full graph admission, metadata authentication, general compiler | Recursive resource/owner indices and effect constructors; higher-order refinement gap | Next effect-index batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Mapped ordinary transport and connected beta/body/caller path independently verified | Reachable maps/annotations, remaining ordinary phases, effect frames, full simulation | Static annotations and state/ownership relation | Next relation batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; C4.1 reopened for D4 | Resolve retained support and callable refinements without changing declared ports | Payload, helper, branch and output interfaces all need assessment | Bounded interface prototype about 2–4 hours; general repair unresolved |
+| C5 | 0 / 4 | Product gate and 793-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 
