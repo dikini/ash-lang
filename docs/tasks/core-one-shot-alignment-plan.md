@@ -40,8 +40,11 @@ kernel admission attempt exposed D8: a clause interface admitted independently
 chosen receiving tails that alias captured owners. The conditional
 closing-separation repair is verified, including its derivation from existing
 unwind ownership and uniqueness; resume-only outside demands remain permitted.
-Construct the complete fixture's `Program` before generalizing admission, then
-prove the bridge from exported Core translation to its normalized expression.
+The complete normalized fixture's `Program` now compiles, including the D9
+consuming-clause suffix extension. Direct admission of the exported getter
+closure and application is the next bounded step. Retain the actual helper,
+resource-handle and callback bindings when extending this construction to the
+whole graph; do not substitute normalized-source admission for graph admission.
 
 The independent `CoreMachine` now provides concrete configurations for the C3
 relation. Its focused examples and the opt-in snapshots taken by Rust's actual
@@ -53,7 +56,10 @@ relation. Its focused examples and the opt-in snapshots taken by Rust's actual
    A nonrecursive function template includes itself in Core's environment;
    removing that unused binding requires the nonrecursion evidence. This value
    relation is locally verified; reachable configurations must supply its static
-   premises and preserve the heap relation.
+   premises and preserve the heap relation. Callable reentry exposed a limit of
+   the current uniform owner-map parameter. Repair callable interpretation at
+   its lexical capability barrier, then retain distinct maps for saved ordinary
+   code. Do not reset legal clause bindings or remove duplicate-owner validation.
 2. Relate strict evaluation contexts, source handlers, live and consumed clause
    owners, and nested captures. Reverse Rust's outermost-first frame vectors
    exactly once. Assign handler, cleanup and ticket ghost identities to dynamic
@@ -68,11 +74,16 @@ relation. Its focused examples and the opt-in snapshots taken by Rust's actual
    intercepting cleanup registration, so the actual loop entry trace includes
    those nodes even though they bypass `dispatch_entry`. State which projection
    supplies observable results, cell operations and cleanup order; keep model
-   ghost labels separate from source-visible events.
+   ghost labels separate from source-visible events. Value entry, tuple allocation
+   and covered value-ready traversal now share a graph-derived decreasing
+   potential. Complete the remaining strict families and mixed-prefix cases
+   before extending the relation to effect frames.
 5. Compare structured Rust snapshots with this relation, retaining raw identity
    distinctions before any deterministic normalization. Successful preparation
    includes disposal checks during mutation. Keep failed execution prefixes
-   separate until their partial observations have been accounted for.
+   separate until their partial observations have been accounted for. The retained
+   91-snapshot kernel trace already checks 90 actual Core-model transitions; this
+   finite implementation bridge does not close general simulation.
 
 These are dependencies within C3.1–C3.5, not additional packages or a replacement
 for the general transition proof. Snapshot tests establish implementation
