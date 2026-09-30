@@ -403,19 +403,35 @@ remain separate targets. A small first example does not reduce the final scope.
   selected the newer global compiler and failed to load a dependency. The
   corrected build uses Lean 4.33.1. Trust, import order, whitespace and artifact
   checks pass. Product Rust remains unchanged since the 2,900-test gate.
-- The next bounded C4 checkpoint is contextual row refinement into actual
-  post-beta body admission. It transports current `Code`, its exact
-  `CodeChecked` certificate and same-root `Accounting.Run`, then reuses actual
-  authenticated substitution. Pre-beta application admission, heterogeneous
-  callable inputs/results and continuation transport remain separate work.
+- `CoreCallableRefinementTransport` passes fresh independent compilation and
+  review, including verification of all 436 transitive dependency source
+  hashes. Its eight reports use standard axioms only. It transports current
+  `Code`, its exact `CodeChecked` certificate and same-root `Accounting.Run`,
+  then constructs actual post-beta admission by authenticated substitution.
+  Identity, composition, pure-plan and pure-prefix constructors are included.
+  Pre-beta application admission, heterogeneous callable inputs/results and
+  continuation transport remain separate work.
+- The identical-root interface cannot cover arbitrary branching bodies:
+  accounting constructs a choice of requirement trees. DN-0033 now requires
+  the next bounded checkpoint to transport checked roots and disposal
+  annotations while preserving owner demand and the current budget. This
+  extends D4's existing obligation; it neither changes the supported fragment
+  nor adds an acceptance item.
+- The combined audit including contextual refinement passes for 805 registered
+  modules, 11,038 exact dependency reports and 1,984 local links or anchors.
+  The new leaf has fresh independent compilation evidence; all 804 baseline
+  source/report pairs are unchanged in the integration snapshot. Active resource
+  and cleanup work is excluded from that snapshot. Trust, import order,
+  whitespace and artifact checks pass; changed Markdown is clean except for
+  the same 14 pre-existing DN-0033 lint findings.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Handler41 and actual resource-body spine compiler integrated | Full graph admission, metadata authentication, general compiler | Resource constructor/root admission; higher-order refinement gap | Resource/root source batch 1–2 hours; full estimate unresolved |
 | C3 | 0 / 5 | Twenty-transition initial prefix and resource correspondence integrated | Reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Cleanup-registration batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; contextual refinement transport being implemented | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result and M4 preservation transport | Bounded post-beta checkpoint 45–75 minutes; full repair estimate unresolved |
-| C5 | 0 / 4 | Product gate and 804-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; post-beta contextual transport independently verified | Resolve retained support and callable refinements without changing declared ports | Checked-root transport for branching, lambda/application/result and M4 preservation transport | Next checked-root checkpoint about 1 hour; full repair estimate unresolved |
+| C5 | 0 / 4 | Product gate and 805-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

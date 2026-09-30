@@ -648,6 +648,27 @@ eight named reports. Old lambda/application/result judgments do not yet accept
 these private refinements, so whole-program admission and effectful callable
 contracts remain open.
 
+[CoreCallableRefinementTransport.lean](CoreCallableRefinementTransport.lean)
+constructs contextual transport for the exact `Code` certificate, its
+`CodeChecked` proof and unchanged-root accounting. Identity, composition,
+pure-plan refinement and a pure prefix before an arbitrary actual suffix are
+proved. Authenticated Unit substitution then constructs
+`SourceAdmission.Admitted` for each selected payload's actual body after beta,
+with the checked certificate, accounting and actual beta step. The two-body and
+retaining instances preserve declared ports and computed support. Receiver
+support checks remain independent: this result does not establish the complete
+M4 resource-access invariant. All eight reports pass fresh independent
+warnings-as-errors compilation with standard axioms only; all 436 transitive
+dependency source hashes match the verified baseline.
+
+This is still admission of the substituted body, not of the whole application.
+The old lambda guard and fixed rich input/result rules remain unchanged.
+Moreover, `Accounting.Run.choice` constructs a different requirement tree, so
+the identical-root interface does not cover arbitrary branches. The next
+DN-0033 checkpoint transports normal roots, disposal annotations and checked
+budgets together while preserving owner demand. Common helper, branch-result
+and continuation admission remain open.
+
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
 retain implementation evidence for this pressure. Independent Core validation

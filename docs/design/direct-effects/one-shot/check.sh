@@ -805,6 +805,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAllocationCorrespondence.ole
 lean -DwarningAsError=true -o "$proof_build_dir/CoreHigherOrderSupport.olean" CoreHigherOrderSupport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CorePayloadRefinement.olean" CorePayloadRefinement.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallablePlanRefinement.olean" CoreCallablePlanRefinement.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRefinementTransport.olean" CoreCallableRefinementTransport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreRefinementJoins.olean" CoreRefinementJoins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphCapabilities.olean" CoreGraphCapabilities.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphAdmission.olean" CoreGraphAdmission.lean

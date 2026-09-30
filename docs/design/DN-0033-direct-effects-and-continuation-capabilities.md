@@ -152,6 +152,31 @@ saved continuations accept the same declared contract while retaining each
 selected witness. Shared source judgments and M4 remain unchanged until those
 transport obligations are constructed.
 
+The contextual transport checkpoint now constructs post-beta admission for the
+three payloads and passes independent compilation. Its identical-root condition
+is useful for pure sequencing, but cannot cover even a choice between two pure
+bodies: `Accounting.Run.choice` constructs a choice of the two requirement
+trees. At the empty continuation, that tree differs from the pure contract's
+empty request. This is a representational restriction of the candidate
+interface, not an additional Core effect or owner consumption.
+
+The next bounded checkpoint must transport checked root requirements while
+preserving their owner-demand index and the current budget. Given a normal
+root, its `RowAnnotation`, and a check of `annotateDisposals` under the current
+store, receiver and phases, it must construct corresponding evidence for the
+actual root. Choosing between two alternatives checked against the same budget
+may concatenate their reported footprints; it must prove the concatenation is
+still within that budget rather than assert literal footprint equality.
+Require identity, composition, embedding of the existing identical-root
+refinement, and a choice constructor for two bodies refining one contract.
+Instantiate the choice with the existing Unit and sequenced-Unit bodies at an
+arbitrary continuation. Reuse `RowAnnotation.choice`,
+`RecursiveRequirements.Checked.choice` and structural disposal annotation.
+Retain this result only if it constructs those current certificates without
+future-state premises. It remains a prerequisite to changing callable value
+typing: common helper admission, returned closures, saved continuations and
+retained-resource transport are still open.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately
