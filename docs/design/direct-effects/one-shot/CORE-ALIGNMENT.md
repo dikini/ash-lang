@@ -681,6 +681,30 @@ the combined audit covers 834 registered modules and 11,348 exact dependency
 reports using standard axioms. Cleanup/close completion, general close-name and
 nested-ticket correspondence, and admission for these later states remain open.
 
+[CoreCleanupFinishPrefix.lean](CoreCleanupFinishPrefix.lean) and
+[CoreFinalPrefix.lean](CoreFinalPrefix.lean) extend the same initial chain through
+all 90 actual Core transitions. Cleanup completion matches a target cleanup
+finish followed by an explicit advance past the retained handler. The new
+`awaitingClose` relation requires returned Unit, the actual close-completion
+frame and its recursively related mapped tail. Close completion and both spent
+clause returns restore the saved callers from those same frame relations.
+
+The final caller writes 11, reads 11 and releases resource0. The proof derives
+both saved callable bodies from their reached environments, transports them
+through the second tuple allocation and proves each actual Core successor.
+Final observations are close start, cleanup start, write7, cleanup finish,
+close finish, write11, read11 and resource release. Both endpoints return integer
+11 with empty stacks. The target ledger creates resource0, cleanup0, tickets0/1
+and close0, and discharges all five; discharge order is recorded explicitly.
+A terminal negative theorem excludes an extra successful Core step.
+
+All eight affected modules pass independent warnings-as-errors compilation,
+including the admitted-discard consumer. The combined audit covers 838 modules
+and 11,395 exact standard-axiom reports, retaining 830 unchanged verified pairs.
+This completes the runtime relation for this finite example. Admission through
+its completion, general transition coverage, cleanup dispatch, close-name and
+nested-ticket correspondence remain separate obligations.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
@@ -938,6 +962,15 @@ standard-axiom reports. The combined audit covers 835 registered modules and
 11,355 exact reports, retaining 830 unchanged verified source/report pairs.
 Handler declaration/capture transport and changed-world saved-frame transport
 remain open; this checkpoint does not prove full M4 validity.
+
+Handler extension requires a different substitution statement. Substitution
+changes literal clause syntax, so it cannot preserve a handler plan indexed by
+the original clauses. The next proof must construct the substituted actual plan
+and rows, preserve the public contract and signature, and derive certification
+under the declaration policy's signature-congruence law. Existing substitution
+proofs cover the constructors present at this checkpoint; they do not establish
+that handler extension. This is an open C2/C4 proof obligation, not a failure of
+the established M4 theorems.
 
 The [clause-cell result fixture](fixtures/core-resume-clause-cell-closure.ash)
 adds a concrete receiving-context obligation. A request captures its caller

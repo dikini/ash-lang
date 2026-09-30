@@ -306,6 +306,14 @@ theorem cell_selection_exact : CoreMachine.findInterpreter graph (.cell (.activa
 theorem wrong_handle_rejected : CoreMachine.cellOperand [.pair (.handle 1) (.integer 7)] 1 (.location 0) = .ok (1,some 7) ∧
     CoreMachine.next graph { s62 with heap := [.pair (.handle 1) (.integer 7)] } = .rejected .invalidCellOperand := ⟨rfl,rfl⟩
 
+/-- The caller continuation is extracted from the SAME reached cell update,
+retaining both spent owners, saved lexical maps and the updated cell payload. -/
+theorem cell_write_parts : PushedWithMaps graph allocated closingTailMaps7
+    (.spent 1 .unit .none secondTail7) :=
+  .spent (first_capture_parts.1.heap_weaken allocation_extension)
+    (outside_write.heap_weaken allocation_extension).components.2.1
+
+#print axioms cell_write_parts
 /-- Allocation transport cannot authorize an unchanged running state. -/
 theorem unchanged_running_rejected : ¬ Administrative graph [] [] maps57 maps57 s58 s58 callTarget := by
   intro witness

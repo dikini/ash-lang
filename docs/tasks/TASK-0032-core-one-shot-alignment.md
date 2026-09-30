@@ -751,13 +751,31 @@ remain separate targets. A small first example does not reduce the final scope.
   11,359 exact reports, retaining 833 unchanged verified pairs. No new blocker or
   Rust implementation change arose; admitted cleanup/completion remains open.
 
+- `CoreCleanupFinishPrefix` and `CoreFinalPrefix` extend the same runtime chain
+  through all 90 actual Core transitions. The retained handler advances in an
+  explicit extra target event after cleanup completion. Close completion and
+  spent-clause returns recover the actual saved callers; the final caller writes
+  11, reads 11 and releases resource0. Result 11, empty stacks, exact observation
+  order, complete target discharge accounting and terminality are proved.
+- The new `awaitingClose` relation requires returned Unit, the actual close frame
+  and the same recursively related mapped tail. Eight affected modules pass
+  independent compilation, including admitted discard. The combined audit
+  covers 838 modules and 11,395 exact reports, retaining 830 unchanged verified
+  pairs. No Rust implementation changed. Admission for the completion suffix
+  and general simulation remain open.
+- Handler extension exposed a substitution statement limitation: actual clause
+  syntax changes, so the literal old handler plan cannot remain its index.
+  The next proof must construct and certify the substituted plan while retaining
+  the public contract and signature. This revises the earlier handler-entry
+  estimate; a bounded statement plan must precede implementation.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Sixty-three-transition cleanup cell-write prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Final runtime suffix batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Connected handler-entry checkpoint about 1–2 hours; changing-world transport still unresolved |
-| C5 | 0 / 4 | Admitted discard prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted stable cleanup/completion batch being scoped; total unresolved |
+| C3 | 0 / 5 | Full ninety-transition example independently verified | General transitions, reachable annotations, captured owners and ownership correspondence | Static annotations and general state relation | Finite runtime suffix complete; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Certified actual-plan substitution and saved-frame transport under restored world/context | Revised handler estimate awaits substitution statement plan; changing-world transport unresolved |
+| C5 | 0 / 4 | Admitted discard prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted completion to s67 about 1–2 hours; another hour to s90 if bounded; total unresolved |
 
 ## Verification
 

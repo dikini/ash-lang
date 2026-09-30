@@ -47,6 +47,10 @@ inductive Related (graph : CoreSyntax.Graph) : Point → Prop where
       (counter : state.nextClose = identity + 1) :
       Related graph ⟨state,.unwind scope (capturedTarget.append (.push (.closing identity scope) tail)),
         owners,tailMaps⟩
+  | awaitingClose (control : state.control = .returned .unit)
+      (frames : state.frames = .closeCompletion identity :: framesOf annotations)
+      (tail : PushedWithMaps graph state.heap annotations target) :
+      Related graph ⟨state,.unwind scope (.push (.closing identity callerScope) target),owners,annotations⟩
   | runningCleanup (carrier : CoreCleanupRunFrames.RunningTail graph state.heap physical lexical)
       (component : ComponentMapped graph owners annotations (CoreCleanupRunFrames.isolate state annotations) target)
       (frames : state.frames = framesOf annotations ++ physical) :
