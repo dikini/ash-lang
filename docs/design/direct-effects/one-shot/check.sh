@@ -784,3 +784,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAdministrativeSteps.olean" C
 lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictFrames.olean" CoreStrictFrames.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreObservation.olean" CoreObservation.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreObservedTrace.olean" CoreObservedTrace.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreTranslationFuel.olean" CoreTranslationFuel.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictStack.olean" CoreStrictStack.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictPotential.olean" CoreStrictPotential.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreTypeSupport.olean" CoreTypeSupport.lean

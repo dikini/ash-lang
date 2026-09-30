@@ -185,13 +185,30 @@ remain separate targets. A small first example does not reduce the final scope.
   whole application until Core completes argument evaluation. Static PlainData
   authentication and the whole-stack relation remain open.
 
+- The repaired grouped `cargo xtask verify` passed formatting, metadata, build,
+  Clippy, tests and documentation checks: 2,896 tests passed, none failed and two
+  explicit fixture-regeneration tests were ignored. The test-only exporter and
+  observer now use the architecture scanner's established `_tests.rs` convention.
+- A fresh full build of the 780 registered proof modules passed. The audit checked
+  10,740 exact dependency reports and 1,945 local links/anchors, with only standard
+  Lean axioms and no proof holes. Four subsequent modules passed independent
+  dependency builds before registration: `CoreTranslationFuel`, `CoreStrictStack`,
+  `CoreStrictPotential` and `CoreTypeSupport`. The additive audit then passed
+  for all 784 registered sources, 10,781 dependency reports and 1,949 local
+  links/anchors; it preserved the original 780 source hashes.
+- Fuel sufficiency now follows from the existing graph checker. Type decoration
+  preserves exact request rows and adds explicit retention data. The mixed-stack
+  component and one graph-derived potential cover the proved value-ready
+  application/tuple traversal cases. General admission, annotation authentication,
+  reachable-state phase discipline and complete simulation remain open.
+
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
-| C2 | 0 / 4 | Syntax/export and interface repair locally verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Closing projection, independent machine, value relation and Rust snapshots locally verified | Reachable configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
+| C2 | 0 / 4 | Syntax/export, fuel, type support and interface repairs verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
+| C3 | 0 / 5 | Finite Rust trace, strict steps, stack components and shared potential verified | Reachable configuration relation, transitions and observations | Mixed-stack and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
 | C4 | 2 / 3 locally complete | D2 verified; D8/D9 evidence repairs and M4 endpoints verified | Complete kernel admission to close discrepancy resolution | C2; kernel Program batch about 1–2 active hours |
-| C5 | 0 / 4 | Current product gate rerunning after verified test-file layout repair | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
+| C5 | 0 / 4 | Product and 780-module proof gates passed; four new modules separately verified | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification
 

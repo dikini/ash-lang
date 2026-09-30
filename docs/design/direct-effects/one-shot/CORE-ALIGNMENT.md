@@ -373,6 +373,25 @@ focus/return and rejection of premature value-argument focus. Static
 authentication of supplied `PlainData`, the whole-stack relation and integration
 of flattened value-ready frames remain open.
 
+[CoreStrictStack.lean](CoreStrictStack.lean) composes a contiguous inner prefix
+of reconstructed contexts with ordinary pushed frames. Ranked Unit entry keeps
+one identical target configuration; completed beta takes a positive target step
+and retains the outer stack. The lexical examples prove actual transitions from
+supplied states, not initial-state reachability. A reconstructed application is
+not a value, so another outer frame cannot extend that flattened prefix. This is
+a representation discipline whose preservation still needs phase/focus proofs.
+
+[CoreStrictPotential.lean](CoreStrictPotential.lean) supplies one structural
+potential for the covered administrative cases. Node costs follow the checked
+graph's strict postorder; frame weights include saved operand costs. Actual
+application and tuple traversal strictly decrease this potential while preserving
+one identical target configuration when the target operand is already a value.
+The potential also decreases for every earlier `ValueWitness`. An explicit
+family guard excludes effect transitions, and an unchanged state cannot supply
+a witness. Bind/match traversal, arbitrary mixed-prefix transport and complete
+ordinary simulation remain open. Fresh independent compilation and statement
+review of both modules pass with standard axioms only.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
@@ -464,6 +483,26 @@ are retained data, not authenticated static judgments. Fuel exhaustion is an
 explicit error; shape checking has not yet been proved to supply sufficient
 fuel. No initial admission or execution correspondence follows from this syntax
 component alone. Independent warnings-as-errors compilation passed.
+
+### Translation budget and type support
+
+[CoreTranslationFuel.lean](CoreTranslationFuel.lean) proves that successful
+translation returns the same code under any larger fuel budget. It extracts
+strict postorder directly from the existing `checkShape` implementation and
+proves that the public `nodes.length + 1` budget cannot exhaust fuel on a checked
+graph. Owner resolution, cleanup shape and recursive-initializer checks may still
+reject syntax. This is not a typing or admission theorem.
+
+[CoreTypeSupport.lean](CoreTypeSupport.lean) decorates the supported structural
+Core types with finite retained-resource annotations. Erasure recovers the exact
+Core type, including every nested function's unchanged request row. Decoration
+adds only the supplied retention lists. Lexical resource realization reuses
+`Instantiation.TypeRealizes` and its existing resource lemmas. Examples include
+a pure function retaining a cell, nested functions/products, resource shadowing,
+and malformed or unsupported input rejection. Authenticating retention against
+actual captures, typing Core expressions and constructing source admission remain
+open. Both modules passed fresh independent compilation and review with standard
+axioms only.
 
 ### Actual Core export
 
