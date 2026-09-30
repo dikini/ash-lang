@@ -178,7 +178,7 @@ theorem Link.endpoints (link : Link graph before after) : Related graph before �
   | runningAdministration carrier witness beforeFrames afterFrames core =>
       obtain ⟨before,after,heap,_⟩ := witness.components
       exact ⟨.runningCleanup carrier before beforeFrames,
-        .runningCleanup (heap.symm ▸ carrier) after afterFrames⟩
+        .runningCleanup (carrier.heap_weaken heap) after afterFrames⟩
 
 theorem Link.core_next (link : Link graph before after) : CoreMachine.next graph before.state = .stepped after.state := by
   cases link with

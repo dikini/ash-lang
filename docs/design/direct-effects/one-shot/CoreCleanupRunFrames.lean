@@ -48,13 +48,19 @@ inductive Administrative (graph : CoreSyntax.Graph) (beforeOwners afterOwners : 
   | value (witness : CoreAdministrativeTransport.TransportMapped graph beforeOwners afterOwners beforeMaps afterMaps
       (isolate before beforeMaps) (isolate after afterMaps) target)
       (heap : after.heap = before.heap) : Administrative graph beforeOwners afterOwners beforeMaps afterMaps before after target
+  | allocation (witness : CoreAdministrativeTransport.TransportMapped graph beforeOwners afterOwners beforeMaps afterMaps
+      (isolate before beforeMaps) (isolate after afterMaps) target)
+      (extension : HeapExtends before.heap after.heap) :
+      Administrative graph beforeOwners afterOwners beforeMaps afterMaps before after target
 
 theorem Administrative.components (witness : Administrative graph bo ao bm am before after target) :
     ComponentMapped graph bo bm (isolate before bm) target ∧
-    ComponentMapped graph ao am (isolate after am) target ∧ after.heap = before.heap ∧
+    ComponentMapped graph ao am (isolate after am) target ∧ HeapExtends before.heap after.heap ∧
     potential graph (isolate after am) < potential graph (isolate before bm) := by
   cases witness with
-  | traversal proof heap | value proof heap => exact ⟨proof.current,proof.successor,heap,proof.decreasing⟩
+  | traversal proof heap | value proof heap =>
+      exact ⟨proof.current,proof.successor,(by rw [heap]; exact fun _ _ known => known),proof.decreasing⟩
+  | allocation proof extension => exact ⟨proof.current,proof.successor,extension,proof.decreasing⟩
 
 theorem potential_splice (beforeFrames : before.frames = framesOf bm ++ physical)
     (afterFrames : after.frames = framesOf am ++ physical)

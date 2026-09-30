@@ -660,6 +660,27 @@ for the callback's actual request. All four affected modules pass fresh
 independent compilation with standard axioms. Callback cell write and completion,
 general dispatch authentication and M4 admission remain open.
 
+[CoreCellWriteFrames.lean](CoreCellWriteFrames.lean) and
+[CoreCleanupWritePrefix.lean](CoreCleanupWritePrefix.lean) extend the same chain
+to 63 actual Core transitions. The reached callback body determines its setter,
+pair operands and exact cell request. Tuple allocation supplies a proved heap
+extension; the retained running tail transports through that extension. Each
+administrative step still has a strict decrease and an actual full Core step.
+
+The selected update reconstructs the outside stack from its existing frame
+interpretations. It preserves the captured cleanup, lexical handler, spent
+tickets and both pending suffixes while changing cell0 from 0 to 7. The actual
+Core nearest-interpreter equation and target cell update agree for this request.
+A negative actual-step equation rejects a mismatched handle. This does not
+establish general cleanup dispatch correspondence.
+
+The same initial chain proves one write of 7 and one cleanup start, with neither
+cleanup nor close completed. Its target ledger remains unchanged from discard.
+All six affected modules pass fresh independent warnings-as-errors compilation;
+the combined audit covers 834 registered modules and 11,348 exact dependency
+reports using standard axioms. Cleanup/close completion, general close-name and
+nested-ticket correspondence, and admission for these later states remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

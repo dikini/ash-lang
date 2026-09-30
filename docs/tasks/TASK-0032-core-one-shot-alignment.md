@@ -710,13 +710,28 @@ remain separate targets. A small first example does not reduce the final scope.
   Active handler/owner migration and callback-write edits are excluded. No Rust
   code changed.
 
+- `CoreCellWriteFrames` and `CoreCleanupWritePrefix` extend the same runtime
+  chain to 63 actual Core transitions. The reached callback determines the
+  setter and pair operands; named tuple allocation supplies the heap extension.
+  The cell update derives the changed outside stack from the existing captured
+  relation, retaining the lexical handler and all pending/spent frames.
+- Exact actual-step equations establish the selected cell0 write and reject a
+  mismatched handle. Write7 and cleanup start each occur once; cleanup and close
+  are still unfinished, and the target ownership ledger is unchanged. Six
+  affected modules pass independent warnings-as-errors compilation; the combined
+  audit covers 834 modules and 11,348 exact dependency reports, retaining 828
+  unchanged verified source/report pairs. Active admission files are excluded.
+- A simplifier loop in dependent spent-frame decomposition was resolved with
+  explicit extracted answer/scope equations and bounded rewrites. No proof
+  limit increase, new axiom or Rust implementation change was required.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted second-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Fifty-one-transition cleanup callback-entry prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Callback cell-write batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Sixty-three-transition cleanup cell-write prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Cleanup/close completion next; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and connected callable cell-reply checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Registry/indexing then connected handler-entry checkpoints about one hour each; full repair unresolved |
-| C5 | 0 / 4 | Admitted second-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted discard batch being scoped; total unresolved |
+| C5 | 0 / 4 | Admitted second-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted discard batch in progress, 1–2 hours; total unresolved |
 
 ## Verification
 
