@@ -563,13 +563,28 @@ remain separate targets. A small first example does not reduce the final scope.
   snapshot. No Rust code changed. The next runtime batch starts at the same
   reached state and connects the second request and capture.
 
+- `CoreAdmittedCleanupPrefix` extends the same admitted handler prefix to
+  actual s24: 24 Core transitions and 11 target events, with every intermediate
+  target admitted. Cleanup registration supplies the selected action data;
+  identity0 freshness follows from the issued resource0 ledger. The final
+  world/history are `[0]`, issued owners are `[resource 0, cleanup 0]` and
+  nothing is completed. The callback remains delayed. `CoreReadyBindings`
+  factors the repeated lambda-binding composition without changing the prior
+  wrapper statements or choosing fixed source annotations.
+- All six affected modules pass fresh independent compilation. The combined
+  cleanup-admission audit covers 820 registered modules and 11,211 exact
+  dependency reports, retaining 814 unchanged verified source/report pairs.
+  Active callable admission and second-capture work is excluded. Rust remains
+  unchanged. The next admitted-state batch connects first capture using the
+  same chosen action, handler and resource answer.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted handler prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits effectful source and M4 migration |
-| C3 | 0 / 5 | Thirty-five-transition first-resume prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Second-request/capture batch estimate under review; full estimate unresolved |
+| C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits effectful source and M4 migration |
+| C3 | 0 / 5 | Thirty-five-transition first-resume prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Second-request/capture batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs verified; ordinary contract-source gate independently verified | Migrate effectful callable evidence and retained support through M4 | Effectful authenticated source and M4 current/pending/coherent migration | Effectful source checkpoint 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted handler-entry prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted cleanup-registration prefix 1–2 hours; total unresolved |
+| C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch being scoped; total unresolved |
 
 ## Verification
 

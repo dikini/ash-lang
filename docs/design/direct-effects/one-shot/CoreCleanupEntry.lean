@@ -1,5 +1,6 @@
 import CoreHandlerPrefix
 import CoreCleanupFrames
+import CoreReadyBindings
 
 /-! Actual cleanup registration preserves delayed execution. Its callback/body
 interpretations come from one current lexical derivation. This does not assert
@@ -141,30 +142,12 @@ private theorem callback_binding { base : CoreMachine.State} {site initializer b
     EnvCloses graph [] base.heap (.binding binder (.closure parameter fnBody environment) environment)
       (raw body) (suffix.subst binder initializerCode) ∧
     RawStep before.target after.target [] [] := by
-  dsimp only
-  obtain ⟨initSaved, bodySaved⟩ := bind_components current
-  have entry := bind_entry_same_target ordered known kind it bt current closed ready plain context tail
-  rw [fnRaw] at initSaved
-  obtain ⟨valueWitness, translated⟩ := CoreAdministrativeSteps.lambda_evaluate
-    (base := { base with observations := base.observations ++ [.entered site] })
-    fnKnown fnKind ft certificate initSaved closed (.bind binder body environment :: framesOf outerMaps)
-  have frame : PlainFrameRel graph [] base.heap (.bind binder body environment) plain :=
-    by
-      change FrameRel graph [] base.heap _ plain.context
-      rw [context]; exact .bind bt bodySaved ready
-  have stack := prepend_mapped frame closed (pushed_mapped tail) Execution.Scope.none
-  simp only [context, Context.plug] at stack
-  have transport := value_entry_mapped valueWitness rfl rfl stack
-  obtain ⟨value, equal, related⟩ := valueWitness.returned
-  have valueEqual : value = .closure parameter fnBody environment := by
-    exact CoreMachine.Control.returned.inj equal.symm
-  cases valueEqual
-  obtain ⟨beforeReturn, next, plug, bind, afterReturn⟩ := bind_return_mapped
-    (base := { base with observations := base.observations ++ [.entered site] ++ [.entered initializer] })
-    bt bodySaved ready related plain context tail Execution.Scope.none
-  rw [plainScope] at entry transport bind afterReturn
-  exact ⟨.next (.traversal entry) (.next (.value transport)
-    (.last (.positive transport.successor next (.one bind) afterReturn))), bodySaved.beta_argument related, bind⟩
+  have result := CoreReadyBindings.lambda_binding_mapped
+    (base := base) (owners := []) (annotations := outerMaps) (target := bodyTarget.stack)
+    (binder := ⟨binder, (node initializer).type⟩) (parameter := ⟨parameter, parameterType⟩)
+    ordered known kind fnKnown fnKind it bt ft fnRaw certificate current closed ready plain context tail
+  rw [plainScope] at result
+  exact result
 
 
 def callbackCode : Code := close2 (raw 13)

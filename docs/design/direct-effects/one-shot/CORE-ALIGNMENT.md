@@ -1006,7 +1006,7 @@ identifies its machine with the runtime relation's actual root target.
 `finite_prefix` applies existing M4 progress to this admitted source. It does
 not identify the resulting trace with the fixed Core execution. The following
 prefix modules connect source-selected successor metadata incrementally;
-cleanup registration and capture still need this admitted-state connection. All 23 dependency reports pass
+capture and subsequent execution still need this admitted-state connection. All 23 dependency reports pass
 fresh independent compilation with standard axioms; 475 dependency sources
 match the integrated baseline. General metadata authentication and higher-order
 admission remain open.
@@ -1020,8 +1020,8 @@ proof throughout the relation. No successor validity is an input. The endpoint
 has resource world `[0]`, empty handler history, issued ledger `[resource 0]`
 and nothing completed. Initial public translation is tied to the same exported
 root. All seven reports pass independent compilation with standard axioms.
-The next module supplies the handler-installation connection; cleanup
-registration and capture still need the same admitted-state evidence.
+The following modules supply handler installation and cleanup registration;
+capture still needs the same admitted-state evidence.
 
 [CoreAdmittedHandlerPrefix.lean](CoreAdmittedHandlerPrefix.lean) extends that
 same admitted prefix to actual handler41/body29 after 20 Core transitions and
@@ -1038,6 +1038,24 @@ is `[resource 0]` and nothing is completed. No future validity or successful
 execution is assumed. Fresh independent compilation passes for all 169 modules
 affected by the shared endpoint factor and for this new leaf. The proof stops
 before callback binding and cleanup registration.
+
+[CoreAdmittedCleanupPrefix.lean](CoreAdmittedCleanupPrefix.lean) extends the
+same admitted handler prefix through callback binding and cleanup registration,
+reaching actual s24 after 24 Core transitions and 11 target events. It preserves
+the same source-selected resource answer, handler and result frame. Registration
+obtains its `ActionData` from the admitted allocating transition; identity0 is
+fresh in the current issued ledger `[resource 0]`. Only the resulting identity,
+callback and scope equations synchronize Core's cleanup boundary. The callback
+remains delayed.
+
+Every intermediate Core point again relates to a constructed valid snapshot.
+The final world/history are `[0]`, issued owners are `[resource 0, cleanup 0]`
+and no owner is completed. Source preservation supplies action ports and effects;
+no fixed handler answer or desired successor invariant is assumed.
+[CoreReadyBindings.lean](CoreReadyBindings.lean) shares the three-step lambda
+binding proof across handler and callback setup, with arbitrary mapped tails.
+All six affected modules pass fresh independent compilation with standard
+axioms. Capture and later execution still require the admitted-state connection.
 
 ### Initial-admission interface repair
 
@@ -1124,6 +1142,7 @@ endpoint. Fresh independent warnings-as-errors compilation and statement review
 pass, with standard axioms only.
 
 This completes the normalized admission checkpoint for D8/D9. It does not connect
-the exported 55-node graph to that normalized source: helper closures, handle and
-callback bindings, and the entry wrapper still require authenticated static
-transport or direct admission. General Core admission and simulation remain open.
+the exported 55-node graph to that normalized source. `CoreGraphProgram` above
+instead constructs direct admission for the actual exported root, including its
+helper closures, bindings and entry wrapper. General Core admission and
+simulation remain open.
