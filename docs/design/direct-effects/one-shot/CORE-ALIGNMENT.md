@@ -287,6 +287,23 @@ The relation takes no future-execution premise. Resource activations currently
 use matching numeric identities; simulation must choose the same fresh identity
 in the existing calculus allocation request and prove its freshness.
 
+### Completed strict redexes
+
+[CoreStrictSteps.lean](CoreStrictSteps.lean) connects completed application,
+bind and Boolean selection to positive calculus steps. Each theorem records the
+actual independent Core successor, one ordinary `RawStep`, and the successor's
+lexical closing relation. Closed substitution commutation in `CoreValueRelation`
+proves that the supplied argument takes precedence over captured bindings and
+retains its resource activation under outer resource instantiation.
+
+Fresh independent compilation passes with standard axioms only. Examples cover
+lexical capture, the self-inclusive nonrecursive entry template, parameter and
+resource shadowing, bind and both Boolean arm orders. Bind retains an explicit
+current `ClosedExcept` premise. Core and target stack tails remain arbitrary,
+unchanged parameters; these theorems do not yet relate whole configurations or
+construct the required static premises from Core validation. No discard rule is
+used.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard

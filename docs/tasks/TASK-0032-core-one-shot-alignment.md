@@ -109,8 +109,8 @@ remain separate targets. A small first example does not reduce the final scope.
   argument: consuming saved owner demand can change a suffix request's protection
   bit. The negative row-certificate witness and a conditional separation repair
   component both passed independent compilation. Existing unwind ownership and
-  uniqueness derive the new condition for disposing captures. Integration into
-  the clause interface is underway; resume-only external demands remain
+  uniqueness derive the new condition for disposing captures. The condition is
+  now integrated into the clause interface; resume-only external demands remain
   unrestricted. The intended kernel fragment has not been reduced.
 - C4.1 is reopened for D8's experimental admission repair. C4.2/C4.3 retain the
   locally verified D2 regressions and will be extended with the repair. The
@@ -146,12 +146,18 @@ remain separate targets. A small first example does not reduce the final scope.
   checks template expansion and shadowing. It retains finite closure closedness
   and nonrecursion evidence that static Core admission must still construct.
   Full configuration and transition correspondence remain open.
+- `CoreStrictSteps` and the required lexical substitution lemmas passed fresh
+  independent compilation and statement review. Completed application, bind and
+  Boolean selection have actual Core successors, positive ordinary calculus
+  steps and related lexical results. Both stack tails remain explicit and
+  unchanged; their relation is still a separate obligation. The modules use
+  standard axioms only and are registered in `check.sh`.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Syntax/export and interface repair locally verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Closing projection, independent machine and Rust snapshots locally verified | Value/configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
+| C3 | 0 / 5 | Closing projection, independent machine, value relation and Rust snapshots locally verified | Reachable configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
 | C4 | 2 / 3 locally complete | D2 verified; D8 interface repair and M4 endpoints verified | Check repair in complete kernel admission | C2; about 1–2 active hours |
 | C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
@@ -171,4 +177,5 @@ completed milestones.
 
 ## Deviations
 
-None. Exact fragment and transition inventories remain C1 work.
+No scope change. The C1 fragment and transition inventories remain the acceptance
+boundary for C2–C5; verified components do not replace their full coverage.

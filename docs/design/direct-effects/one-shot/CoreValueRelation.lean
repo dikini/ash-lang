@@ -311,6 +311,131 @@ theorem EnvCloses.resource_lookup
     ∃ key, environment.resourceKey name = some key ∧ output = .resourceRef (.activation key) :=
   related.resource_lookup_at name rfl closed
 
+/-- Closed values are unchanged by ordinary substitution. -/
+theorem closed_subst (closed : ClosedValue code) (name : Nat) (replacement : Code) :
+    code.subst name replacement = code :=
+  ScopedTyping.subst_absent code name replacement (ScopedTyping.closedValue_no_variable closed)
+
+mutual
+/-- Distinct lexical substitutions commute when both inserted values are closed.
+    This joins the existing single-substitution operations; it is not a new
+    source translator or an evaluation assumption. -/
+theorem subst_commute (code : Code) (first second : Nat) (left right : Code)
+    (leftClosed : ClosedValue left) (rightClosed : ClosedValue right)
+    (different : first ≠ second) :
+    (code.subst first left).subst second right = (code.subst second right).subst first left := by
+  cases code with
+  | unit | boolean | integer | resourceRef | discard => rfl
+  | «variable» name =>
+      by_cases a : first = name <;> by_cases b : second = name
+      · exact False.elim (different (a.trans b.symm))
+      · simp [Code.subst, a, b, closed_subst leftClosed]
+      · simp [Code.subst, a, b, closed_subst rightClosed]
+      · simp [Code.subst, a, b]
+  | pair a b | app a b | cleanup a b | resource _ a b =>
+      simp only [Code.subst, subst_commute a first second left right leftClosed rightClosed different,
+        subst_commute b first second left right leftClosed rightClosed different]
+  | lambda parameter body =>
+      by_cases a : first = parameter <;> by_cases b : second = parameter <;>
+        simp [Code.subst, a, b, subst_commute body first second left right leftClosed rightClosed different]
+  | bind parameter initializer body =>
+      simp only [Code.subst, subst_commute initializer first second left right leftClosed rightClosed different]
+      by_cases a : first = parameter <;> by_cases b : second = parameter <;>
+        simp [a, b,
+          subst_commute body first second left right leftClosed rightClosed different]
+  | branch condition yes no =>
+      simp only [Code.subst, subst_commute condition first second left right leftClosed rightClosed different,
+        subst_commute yes first second left right leftClosed rightClosed different,
+        subst_commute no first second left right leftClosed rightClosed different]
+  | perform effect operation operand | resume operation operand =>
+      simp only [Code.subst, subst_commute operand first second left right leftClosed rightClosed different]
+  | handle effect body clauses =>
+      simp only [Code.subst, subst_commute body first second left right leftClosed rightClosed different,
+        clauses_subst_commute clauses first second left right leftClosed rightClosed different]
+
+theorem clauses_subst_commute (clauses : Clauses) (first second : Nat) (left right : Code)
+    (leftClosed : ClosedValue left) (rightClosed : ClosedValue right)
+    (different : first ≠ second) :
+    (clauses.subst first left).subst second right = (clauses.subst second right).subst first left := by
+  cases clauses with
+  | nil => rfl
+  | cons operation parameter ticket body rest =>
+      simp only [Clauses.subst, clauses_subst_commute rest first second left right leftClosed rightClosed different]
+      by_cases a : first = parameter <;> by_cases b : second = parameter <;>
+        simp [a, b,
+          subst_commute body first second left right leftClosed rightClosed different]
+end
+
+/-- Closing a lambda and then supplying a closed argument agrees with closing
+    its raw body after parameter substitution, through every lexical entry. -/
+theorem EnvCloses.lambda_argument_at
+    (related : EnvCloses graph owners heap environment source target) :
+    ∀ parameter body result argument, source = .lambda parameter body → target = .lambda parameter result →
+      ClosedValue argument → EnvCloses graph owners heap environment
+        (body.subst parameter argument) (result.subst parameter argument) := by
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  | unit | boolean | integer | handle | location | closure => trivial
+  | empty =>
+      intro parameter body result argument sourceEq targetEq closed
+      have same : body = result := by simpa [sourceEq] using targetEq
+      subst result
+      exact .empty
+  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+      intro parameter body result argument sourceEq targetEq closed
+      apply EnvCloses.binding replacement
+      by_cases same : binder = parameter
+      · have unchanged : (body.subst parameter argument).subst binder valueCode = body.subst parameter argument := by
+          rw [same]
+          exact ScopedTyping.subst_absent _ _ _ (body.subst_removes_variable _ _
+            (ScopedTyping.closedValue_no_variable closed))
+        rw [unchanged]
+        exact ihTail parameter body result argument (by simp [sourceEq, Code.subst, same]) targetEq closed
+      · rw [subst_commute body parameter binder argument valueCode closed replacement.closed (Ne.symm same)]
+        exact ihTail parameter (body.subst binder valueCode) result argument
+          (by simp [sourceEq, Code.subst, same]) targetEq closed
+  | @resource rest output binder key code tail ihTail =>
+      intro parameter body result argument sourceEq targetEq closed
+      apply EnvCloses.resource
+      rw [Code.instantiation_subst _ _ _ _ closed.2.1]
+      exact ihTail parameter (body.instantiate (Instantiation.Environment.empty.bind binder key)) result argument
+        (by simp only [sourceEq, Code.instantiate]) targetEq closed
+  | @templateUnused binder rest code output functionParameter functionBody absent tail ihTail =>
+      intro parameter body result argument sourceEq targetEq closed
+      have stillAbsent : Dependency.variable binder ∉ (body.subst parameter argument).dependencies := by
+        intro member
+        rcases List.mem_append.mp (ScopedTyping.substitution_bound_for_closed_value body parameter closed member) with old | inserted
+        · apply absent
+          simpa only [sourceEq, Code.dependencies] using old
+        · exact ScopedTyping.closedValue_no_variable closed inserted
+      exact .templateUnused stillAbsent (ihTail parameter body result argument sourceEq targetEq closed)
+  | @templateExpand fuel functionBody bodyCode functionParameter binder rest valueCode output code translated nonrecursive replacement valueClosed tail ihReplacement ihTail =>
+      intro parameter body result argument sourceEq targetEq closed
+      apply EnvCloses.templateExpand translated nonrecursive replacement valueClosed
+      by_cases same : binder = parameter
+      · have unchanged : (body.subst parameter argument).subst binder valueCode = body.subst parameter argument := by
+          rw [same]
+          exact ScopedTyping.subst_absent _ _ _ (body.subst_removes_variable _ _
+            (ScopedTyping.closedValue_no_variable closed))
+        rw [unchanged]
+        exact ihTail parameter body result argument (by simp [sourceEq, Code.subst, same]) targetEq closed
+      · rw [subst_commute body parameter binder argument valueCode closed valueClosed (Ne.symm same)]
+        exact ihTail parameter (body.subst binder valueCode) result argument
+          (by simp [sourceEq, Code.subst, same]) targetEq closed
+
+theorem EnvCloses.beta_argument
+    (environment : EnvCloses graph owners heap saved (.lambda parameter body) (.lambda parameter result))
+    (argument : ValueRel graph owners heap value argumentCode) :
+    EnvCloses graph owners heap (.binding parameter value saved) body (result.subst parameter argumentCode) :=
+  .binding argument (environment.lambda_argument_at _ _ _ _ rfl rfl argument.closed)
+
+theorem ValueRel.closure_view
+    (related : ValueRel graph owners heap (.closure parameter body saved) (.lambda parameter result)) :
+    ∃ fuel rawBody, CoreTranslation.translateFuel graph fuel owners body = .ok rawBody ∧
+      EnvCloses graph owners heap saved (.lambda parameter rawBody) (.lambda parameter result) ∧
+      ClosedValue (.lambda parameter result) := by
+  cases related with
+  | closure translated environment closed => exact ⟨_, _, translated, environment, closed⟩
+
 namespace Examples
 open CoreMachineExamples
 
@@ -417,6 +542,9 @@ theorem changed_integer_rejected : ¬ ValueRel lexicalClosure [] [] (.integer 17
 
 end Examples
 
+#print axioms subst_commute
+#print axioms EnvCloses.beta_argument
+#print axioms ValueRel.closure_view
 #print axioms ValueRel.closed
 #print axioms ValueRel.heap_weaken
 #print axioms EnvCloses.heap_weaken

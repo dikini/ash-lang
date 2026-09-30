@@ -37,20 +37,23 @@ and worker file ownership follow C1 findings; no speculative parallel writes.
 
 The finite graph translator and actual Rust exporter are retained. The first
 kernel admission attempt exposed D8: a clause interface admitted independently
-chosen receiving tails that alias captured owners. Finish the conditional
-closing-separation repair and construct the complete fixture's `Program` before
-generalizing admission. Derive the condition from existing unwind ownership and
-uniqueness; resume-only outside demands remain permitted.
+chosen receiving tails that alias captured owners. The conditional
+closing-separation repair is verified, including its derivation from existing
+unwind ownership and uniqueness; resume-only outside demands remain permitted.
+Construct the complete fixture's `Program` before generalizing admission, then
+prove the bridge from exported Core translation to its normalized expression.
 
 The independent `CoreMachine` now provides concrete configurations for the C3
-relation. Verify its successful transitions and the opt-in snapshots taken by
-Rust's actual `run_loop`, then connect these representations in this order:
+relation. Its focused examples and the opt-in snapshots taken by Rust's actual
+`run_loop` are locally verified. Connect these representations in this order:
 
 1. Relate scalar values, resource keys, tuple locations and closures to scoped
    calculus values. Heap lookup must preserve binary products. Closure lookup
    must preserve the captured environment suffix and resource instantiation.
    A nonrecursive function template includes itself in Core's environment;
-   removing that unused binding requires the nonrecursion evidence.
+   removing that unused binding requires the nonrecursion evidence. This value
+   relation is locally verified; reachable configurations must supply its static
+   premises and preserve the heap relation.
 2. Relate strict evaluation contexts, source handlers, live and consumed clause
    owners, and nested captures. Reverse Rust's outermost-first frame vectors
    exactly once. Assign handler, cleanup and ticket ghost identities to dynamic
