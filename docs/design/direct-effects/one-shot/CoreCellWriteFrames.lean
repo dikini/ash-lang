@@ -6,7 +6,7 @@ import CoreUnwindRelation
 Only the selected cell is updated; retained lexical handlers are not erased.
 Annotations and target-world freshness remain separate obligations. -/
 namespace Ash.OneShot.CoreCellWriteFrames
-open ScopedExpressions
+open ScopedExpressions Instantiation
 open Syntax (Dependency)
 open ScopedExecution CoreValueRelation CoreStrictFrames CoreStrictStack CoreEffectFrames
   CoreCleanupRunFrames CoreCaptureEntry
@@ -105,9 +105,48 @@ theorem running_empty_parts (related : CoreUnwindRelation.Related graph point)
       have same := LexicalUnwind.Machine.eval.inj machine
       exact ⟨_,_,_,carrier,by simpa [framesOf] using frames,same.symm,parts.2,parts.1⟩
 
+set_option linter.unusedSimpArgs false in
+/-- A target miss certifies the actual Core nearest-selector miss. In
+particular a cell boundary is never passed for its matching cell effect. -/
+theorem PushCarrier.cell_selector_miss (related : PushCarrier graph owners heap core frame)
+    (miss : frame.erase.target ≠ some requested)
+    (next : CoreMachine.findInterpreter graph (freezeEffect requested) outside =
+      .ok (.cell cut)) :
+    CoreMachine.findInterpreter graph (freezeEffect requested) (core :: outside) =
+      .ok (.cell {cut with inside := core :: cut.inside}) := by
+  cases related with
+  | ordinary related =>
+      rename_i plain
+      change FrameRel graph owners heap core plain.context at related
+      generalize contextEq : plain.context = context at related
+      cases related <;> simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | initializer related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | request related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | resume related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | cleanup related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | boundary related =>
+      cases related with
+      | @handler site node handlerId effect body clauses fuel rawBody rawClauses saved data known kind translated header =>
+          have actual := handle_effect_at header _ _ _ _ _ _ rfl rfl
+          have different : freezeEffect requested ≠ freezeEffect data.effectInst := by
+            intro same
+            apply miss
+            simp only [ExecFrame.erase, HandlerData.erase, Frame.target]
+            exact congrArg some (freeze_effect_injective same).symm
+          simp only [CoreMachine.findInterpreter, known, kind, actual]
+          simp [different, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+      | @cell site node identity handle initializer body key payload scope answer known kind =>
+          have different : freezeEffect requested ≠ Effect.cell (.activation key) := by
+            intro same
+            apply miss
+            simp only [ExecFrame.erase, Frame.target]
+            exact congrArg some (freeze_effect_injective same).symm
+          simp [CoreMachine.findInterpreter, different, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+
+
 /-- A selected target cell update over current Core frame interpretations.
-The new stack is constructed from those same interpretations. Actual Core
-nearest selection is checked separately for the concrete callback below. -/
+The new stack is constructed from those same interpretations. Dormant captures
+are retained unchanged and are not searched by the active selector. -/
 inductive WriteCut (graph : CoreSyntax.Graph) (heap : Heap) (identity : Nat) (old new : Int) :
     List MappedFrame → Stack → List MappedFrame → Stack → Prop where
   | hit (known : graph.node site = some node)
@@ -121,6 +160,14 @@ inductive WriteCut (graph : CoreSyntax.Graph) (heap : Heap) (identity : Nat) (ol
       (next : WriteCut graph heap identity old new before beforeTarget after afterTarget) :
       WriteCut graph heap identity old new ((owners,core)::before) (.push targetFrame beforeTarget)
         ((owners,core)::after) (.push targetFrame afterTarget)
+  | live (header : CoreRequestFrames.OwnerHeader graph owners heap handler owner occurrence data)
+      (captured : PushedWithMaps graph heap capturedMaps capturedTarget)
+      (next : WriteCut graph heap identity old new before beforeTarget after afterTarget) :
+      WriteCut graph heap identity old new
+        ((owners,.clauseBoundary handler owner occurrence ticket (some (framesOf capturedMaps)))::before)
+        (.live ticket operationResult data.answer capturedTarget data.scope beforeTarget)
+        ((owners,.clauseBoundary handler owner occurrence ticket (some (framesOf capturedMaps)))::after)
+        (.live ticket operationResult data.answer capturedTarget data.scope afterTarget)
   | spent (header : CoreRequestFrames.OwnerHeader graph owners heap handler owner occurrence data)
       (next : WriteCut graph heap identity old new before beforeTarget after afterTarget) :
       WriteCut graph heap identity old new ((owners,.clauseBoundary handler owner occurrence ticket none)::before)
@@ -133,6 +180,7 @@ theorem WriteCut.components (cut : WriteCut graph heap identity old new before b
   induction cut with
   | hit known kind tail => exact ⟨.boundary (.cell known kind) tail,.boundary (.cell known kind) tail,.hit⟩
   | push frame miss next ih => exact ⟨frame.prepend ih.1,frame.prepend ih.2.1,.push miss ih.2.2⟩
+  | live header captured next ih => exact ⟨.live header captured ih.1,.live header captured ih.2.1,.live ih.2.2⟩
   | spent header next ih => exact ⟨.spent header ih.1,.spent header ih.2.1,.spent ih.2.2⟩
 
 theorem WriteCut.heap_weaken (cut : WriteCut graph heap identity old new before beforeTarget after afterTarget)
@@ -149,7 +197,47 @@ theorem WriteCut.heap_weaken (cut : WriteCut graph heap identity old new before 
         | cleanup frame => exact .cleanup (frame.heap_weaken extension)
         | boundary frame => exact .boundary (frame.heap_weaken extension)
       exact .push largerFrame miss ih
+  | live header captured next ih => exact .live (header.heap_weaken extension) (captured.heap_weaken extension) ih
   | spent header next ih => exact .spent (header.heap_weaken extension) ih
+
+set_option linter.unusedSimpArgs false in
+/-- The structural cut derives the actual nearest cell, with identical active
+prefix and outside tail before/after. No selector equation is an input. -/
+theorem WriteCut.realizes (cut : WriteCut graph heap identity old new before beforeTarget after afterTarget) :
+    ∃ inside site outside,
+      framesOf before = inside ++ .resourceBoundary site identity old :: outside ∧
+      framesOf after = inside ++ .resourceBoundary site identity new :: outside ∧
+      CoreMachine.findInterpreter graph (.cell (.activation identity)) (framesOf before) =
+        .ok (.cell ⟨inside,site,identity,old,outside⟩) := by
+  induction cut with
+  | @hit site node resource binder initializer body maps target owners scope answer known kind tail =>
+      exact ⟨[],site,framesOf maps,rfl,rfl,by simp only [framesOf_cons,CoreMachine.findInterpreter]; simp⟩
+  | @push owners core targetFrame before beforeTarget after afterTarget frame miss next ih =>
+      obtain ⟨inside,site,outside,beforeEq,afterEq,selector⟩ := ih
+      exact ⟨core::inside,site,outside,by simp only [framesOf_cons,beforeEq,List.cons_append],
+        by simp only [framesOf_cons,afterEq,List.cons_append],PushCarrier.cell_selector_miss frame miss selector⟩
+  | @live owners handler owner occurrence data capturedMaps capturedTarget before beforeTarget after afterTarget ticket operationResult header captured next ih =>
+      obtain ⟨inside,site,outside,beforeEq,afterEq,selector⟩ := ih
+      exact ⟨.clauseBoundary handler owner occurrence ticket (some (framesOf capturedMaps))::inside,site,outside,
+        by simp only [framesOf_cons,beforeEq,List.cons_append],
+        by simp only [framesOf_cons,afterEq,List.cons_append],by
+          simp [framesOf_cons,CoreMachine.findInterpreter,selector,Bind.bind,Except.bind,Pure.pure,Except.pure]⟩
+  | @spent owners handler owner occurrence data before beforeTarget after afterTarget ticket header next ih =>
+      obtain ⟨inside,site,outside,beforeEq,afterEq,selector⟩ := ih
+      exact ⟨.clauseBoundary handler owner occurrence ticket none::inside,site,outside,
+        by simp only [framesOf_cons,beforeEq,List.cons_append],
+        by simp only [framesOf_cons,afterEq,List.cons_append],by
+          simp [framesOf_cons,CoreMachine.findInterpreter,selector,Bind.bind,Except.bind,Pure.pure,Except.pure]⟩
+
+/-- Reading does not change either active stack or dormant captures. -/
+theorem WriteCut.unchanged (cut : WriteCut graph heap identity old old before beforeTarget after afterTarget) :
+    before = after ∧ beforeTarget = afterTarget := by
+  induction cut with
+  | hit known kind tail => exact ⟨rfl,rfl⟩
+  | push frame miss next ih | spent header next ih =>
+      rcases ih with ⟨rfl,rfl⟩; exact ⟨rfl,rfl⟩
+  | live header captured next ih =>
+      rcases ih with ⟨rfl,rfl⟩; exact ⟨rfl,rfl⟩
 
 /-- Preserve the same captured cleanup, delayed lexical environment, projection
 and retained handlers while updating only its current outside cell. -/
@@ -176,6 +264,9 @@ theorem running_write
     .push (by simp [ExecFrame.erase,Frame.target])
       (retainedMiss _ _ (.push (by simp [ExecFrame.erase,Frame.target,closeFrame]) outside.components.2.2))⟩
 
+#print axioms PushCarrier.cell_selector_miss
+#print axioms WriteCut.realizes
+#print axioms WriteCut.unchanged
 #print axioms WriteCut.components
 #print axioms WriteCut.heap_weaken
 #print axioms running_write

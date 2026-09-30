@@ -717,8 +717,8 @@ These are general transition lemmas, with current structural evidence as
 premises. They assume neither callback success nor a future related or valid
 state. A non-Unit callback result is proved rejected and cannot supply a
 successful Core step. The outside stack must have an ordinary mapped
-interpretation; nested running cleanup, arbitrary callback execution, dispatch
-and normal cleanup cell updates still need their correspondence proofs. The relation
+interpretation; nested running cleanup, arbitrary callback execution and general
+cleanup dispatch still need their correspondence proofs. The relation
 `Related` alone is not a general preservation theorem; `Link.positive` requires
 both endpoint relations, which these two lemmas construct.
 
@@ -727,6 +727,26 @@ including the existing discarded-cleanup and admitted-discard consumers. The
 combined audit covers 839 modules and 11,400 exact standard-axiom reports,
 retaining 829 unchanged verified pairs. This closes the two normal-cleanup
 transition components of C3.2, not its complete simulation obligation.
+
+[CoreCellSteps.lean](CoreCellSteps.lean) proves actual cell read/write completion
+from the current request, operand and mapped nearest-cell cut. The cut derives
+Core selection and the exact physical stack update, including active clause
+frames whose dormant captures remain unchanged. Operand decoding follows from
+the same value relation; reads preserve both stacks, and writes update only the
+selected cell. Each theorem constructs the actual Core successor, a positive
+lexical transition and both endpoint interpretations.
+
+Immediate requests above a normal cleanup completion frame also preserve the
+same arbitrary saved value and delayed action. These corollaries require an
+ordinary mapped outside stack. Arbitrary callback prefixes, nested running
+cleanup and projected-handler dispatch remain open, as does deriving the current
+structural witnesses from general static admission. No future relation, selector
+equation or operand equation is assumed.
+
+Five affected modules pass independent warnings-as-errors compilation. The
+combined audit covers 840 modules and 11,412 exact standard-axiom reports,
+retaining 835 unchanged verified pairs. These are general C3.2 components;
+they do not complete admission or the full simulation theorem.
 
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource

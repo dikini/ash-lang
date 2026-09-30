@@ -789,13 +789,25 @@ remain separate targets. A small first example does not reduce the final scope.
   The connected handler/caller checkpoint must pass before that repair is
   integrated. Initial admission remains a separate static construction.
 
+- The next C3.2 batch proves generic actual cell read/write completion.
+  `CoreCellSteps` derives effect instantiation, operand decoding and nearest
+  selection from the same current witnesses, then constructs both endpoint
+  interpretations and positive target transitions. `WriteCut.live` preserves
+  dormant captures while updating the active outside cell.
+- Immediate normal-cleanup-tail corollaries preserve arbitrary saved values and
+  delayed actions. Five affected modules pass independent compilation; the
+  combined audit covers 840 modules and 11,412 exact reports, retaining 835
+  unchanged verified pairs. Arbitrary callback prefixes, nested running cleanup,
+  projected-handler dispatch and static authentication remain open. This batch
+  adds no example variant or Rust implementation change.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Full runtime example and generic normal-cleanup start/finish independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Normal-cleanup batch complete; next general batch requires a bounded statement; total unresolved |
+| C3 | 0 / 5 | Full runtime example, generic normal cleanup and cell transitions independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Cell-transition batch complete; next general batch requires a bounded statement; total unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Certified actual-plan substitution and saved-frame transport under restored world/context | Connected substituted-handler/caller checkpoint active, about 1–1.5 hours; capture and changing-world transport remain |
-| C5 | 0 / 4 | Admitted discard prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted completion to s67 about 1–2 hours; another hour to s90 if bounded; total unresolved |
+| C5 | 0 / 4 | Admitted discard independently verified; admitted completion through s67 locally verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Remaining admitted suffix to s90 about 45–60 minutes, then independent review; total unresolved |
 
 ## Verification
 

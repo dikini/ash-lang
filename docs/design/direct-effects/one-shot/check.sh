@@ -816,6 +816,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreNormalCleanupSteps.olean" Co
 lean -DwarningAsError=true -o "$proof_build_dir/CoreDiscardPrefix.olean" CoreDiscardPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupRunPrefix.olean" CoreCleanupRunPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCellWriteFrames.olean" CoreCellWriteFrames.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCellSteps.olean" CoreCellSteps.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupWritePrefix.olean" CoreCleanupWritePrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupFinishPrefix.olean" CoreCleanupFinishPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreFinalPrefix.olean" CoreFinalPrefix.lean
