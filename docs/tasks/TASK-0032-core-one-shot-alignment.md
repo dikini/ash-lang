@@ -983,13 +983,93 @@ remain separate targets. A small first example does not reduce the final scope.
   open. The grouped rebuild passes for 18 affected modules, with 831 unchanged
   verified pairs: 849 registered modules and 11,467 exact reports. No finite
   example or Rust behavior was added.
+- The next C3.2 batch reuses existing callback component proofs through suffix
+  extension. Review of every Core evaluator case found that a successful step
+  preserves its outcome when the same physical suffix is appended to both
+  endpoint stacks: successful owner/interpreter lookup only extends the selected
+  outside tail, leaving captures and discard fuel unchanged. Terminal and
+  rejected outcomes do not have this property. The bounded implementation must
+  prove this law, heap extension and guarded target-step extension, then derive
+  both running-cleanup endpoints and exact ledgers from existing isolated
+  component witnesses. A general beta-under-running-cleanup theorem supplies the
+  required connection; no new finite example is planned. The two-leaf batch is
+  estimated at 2–3 active hours in parallel with C4 and does not address requests
+  whose selection enters the appended tail, freshness or admission.
+- The C4 consumer review confirms the smallest remaining connection:
+  changed-plan substitution with signature equality, hereditary support,
+  saved-frame plugging, then actual handler capture. Existing clause-row
+  substitution and declaration-policy transport avoid a new annotation walker.
+  A bounded interface review also checks whether the corrected current-tail
+  refinement admits the existing internally handled-request case across code,
+  support checking and accounting before further migration relies on it.
+- The C4 formation checkpoint now passes independent pinned compilation:
+  source certification, world extension and authenticated current lambda
+  specialization produce three reports using only `propext` and `Quot.sound`.
+  All 441 imported source/artifact pairs remained unchanged. This verifies the
+  full-receiver bind/declaration constructors and selection of the same private
+  body, rows and refinement through hereditary evidence. The full admission file
+  remains uncompiled work in progress beyond this prefix. Changed-plan
+  substitution and supported-source preservation are now the active 60–90
+  minute checkpoint; no connected handler-admission result is claimed.
+- Supported-source integration keeps aggregate syntax support separate from the
+  hereditary receiver. A handler may have empty expression dependencies while
+  its formal-argument clause bound includes a resource. The finite lexical
+  environment must agree with the existing support environment, and the site
+  must authenticate its full current receiver for saved-bind input coverage.
+  Canonical construction therefore consumes the same source's hereditary
+  evidence instead of deriving it from aggregate bounds alone.
+- The current-tail refinement review found a constructor route for the existing
+  private immediate-resume handler's code and support checking. Its accounting
+  witness still requires fresh-owner identity for an arbitrary current waiting
+  root and transport through two empty requirement prefixes. A bounded parallel
+  implementation will prove these facts and the complete concrete refinement in
+  one leaf. Neither helper becomes an additional interface premise. The full
+  positive witness remains unproved; no new fixture family or policy index is
+  authorized by this check.
+- The complete minimal refinement witness is estimated at 60–90 active minutes
+  in parallel with substitution. Its current-root argument must follow from the
+  accounting waiting derivation and fresh-owner provenance. Review recommends
+  reusing `LocalOwner` directly if its discharge transport avoids a duplicate
+  structural predicate. The witness still must prove all three refinement fields.
+- The C5 endpoint review confirms direct reuse of M4's raw-trace ownership and
+  terminal-accounting results once correspondence supplies actual lexical events
+  and the initial ledger. Each event requires creation freshness against issued
+  history; current accounted chains establish multiplicities but do not derive
+  that freshness. General admission must still connect the common callable
+  source to the complete preserved state. No existing M4 theorem is weakened or
+  treated as proving those missing connections.
+- Local implementation checkpoints now compile for successful Core-step suffix
+  extension and for fresh-owner identity over an arbitrary current accounting
+  waiting root. The latter uses one private structural predicate after direct
+  dependent elimination proved awkward; it adds no checked-root, uniqueness or
+  future-state premise. Parent statement review found no additional semantic
+  assumption. Both remain unregistered pending their connected batch outputs:
+  callback beta under an arbitrary running tail and the full three-field
+  positive handler refinement, respectively.
+
+- The connected C3 suffix batch now passes independent pinned compilation.
+  `CoreSuffixSplice` covers every successful Core step and derives heap extension;
+  target extension preserves the ordinary guard and exact event lists.
+  `CoreRunningSplice.beta_running` constructs application correspondence under
+  an arbitrary retained cleanup tail from current component witnesses. The same
+  transition supplies accounting. The grouped result contains 851 registered
+  modules and 11,487 exact reports, with two fresh and 849 unchanged pairs.
+  This completes the bounded batch within its estimate. Dispatch into the
+  retained tail, nested callback/unwind coverage, readiness and freshness remain
+  separate C3 obligations.
+- The minimal private-handler refinement now passes the worker's pinned gate for
+  all three fields: code, checked support and arbitrary caller accounting. Its
+  six reports use only standard axioms; no additional interface premise was
+  introduced. The leaf is frozen for parent review and remains unregistered
+  until the connected C4 admission batch. This establishes nonvacuity of the
+  corrected interface, not general higher-order admission.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Resource/cleanup projection and strict-focus components independently verified | General callback lifting, exact dispatch, state/ownership correspondence | Static readiness and annotation authentication | Cleanup batch complete; full estimate awaits general readiness/dispatch connection |
-| C4 | 2 / 3 | Common owner-source checkpoint integrated; current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Substitution/support checkpoint 60–90 active minutes after formation checks; remainder awaits connected gate |
+| C3 | 0 / 5 | Resource/cleanup projection, strict focus and callback suffix/beta components integrated | General callback lifting, exact dispatch, state/ownership correspondence | Static readiness and annotation authentication | Suffix/beta batch complete; next estimate awaits readiness/dispatch boundary review |
+| C4 | 2 / 3 | Common owner-source checkpoint integrated; formation, current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Substitution/support checkpoint 60–90 active minutes; remainder awaits connected gate |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

@@ -853,3 +853,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedResumePrefix.olean" 
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedSecondCapturePrefix.olean" CoreAdmittedSecondCapturePrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedDiscardPrefix.olean" CoreAdmittedDiscardPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCompletionPrefix.olean" CoreAdmittedCompletionPrefix.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreSuffixSplice.olean" CoreSuffixSplice.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreRunningSplice.olean" CoreRunningSplice.lean

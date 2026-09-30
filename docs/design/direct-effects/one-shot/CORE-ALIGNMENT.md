@@ -877,6 +877,24 @@ unchanged verified pairs: 849 registered modules and 11,467 exact reports. The
 two new leaves add 13 standard-only reports. Existing consumers receive only
 the additive carrier cases; the completed finite example is unchanged.
 
+[CoreSuffixSplice](CoreSuffixSplice.lean) proves that every successful Core
+transition extends by the same physical stack suffix, and derives heap extension
+from that transition. Target raw and guarded lexical transitions extend by the
+same lexical suffix with identical created and discharged event lists.
+[CoreRunningSplice](CoreRunningSplice.lean) uses these laws to construct both
+running-cleanup endpoints from existing isolated component witnesses. Its
+`beta_running` theorem derives the isolated application witnesses from current
+closure, argument, saved-frame and prefix relations under an arbitrary retained
+cleanup tail. Accounting uses the same transition witness. Neither theorem
+assumes callback success or a future related state.
+
+The two leaves pass independent pinned compilation with 20 standard-only reports.
+The grouped result contains 851 registered modules and 11,487 exact reports,
+including 849 unchanged verified pairs. Dispatch selecting into the appended
+tail, nested callback/unwind coverage, general readiness and creation freshness
+remain open. This batch establishes reuse for covered evaluation transitions;
+it does not close general simulation or admission.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
