@@ -839,3 +839,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCleanupPrefix.olean"
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCapturePrefix.olean" CoreAdmittedCapturePrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedResumePrefix.olean" CoreAdmittedResumePrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedSecondCapturePrefix.olean" CoreAdmittedSecondCapturePrefix.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedDiscardPrefix.olean" CoreAdmittedDiscardPrefix.lean

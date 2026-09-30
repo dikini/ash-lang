@@ -1258,7 +1258,7 @@ Every intermediate Core point relates to a constructed admitted snapshot. The
 world/history and issued ledger remain unchanged, completed owners become
 `[ticket 0]`, and the resume, disposal and annotated stores remove owner0. Ticket
 rights remain unchanged. Fresh independent warnings-as-errors compilation and
-all six dependency reports pass with standard axioms. Its metadata endpoint
+all seven dependency reports pass with standard axioms. Its metadata endpoint
 retains the already-derived focus context/scope and handler identity/clauses;
 the original theorem remains a wrapper with the same statement.
 
@@ -1276,9 +1276,27 @@ events match one Core return-bind transition. The final world/history are `[0]`,
 issued owners are `[resource 0, cleanup 0, ticket 0, ticket 1]` and completed owners
 are `[ticket 0]`. The post-resume frame and spent ticket0 remain outside the new
 capture, which retains the armed cleanup and handler. All three affected modules
-pass fresh independent compilation with standard axioms. Admission through
-discard and cleanup, general metadata authentication and higher-order admission
-remain open.
+pass fresh independent compilation with standard axioms. The following endpoint
+connects that same admitted state through discard.
+
+[CoreAdmittedDiscardPrefix.lean](CoreAdmittedDiscardPrefix.lean) extends the
+same source-selected second capture to actual s45: 45 Core transitions and 22
+calculus events. It retains both capture epochs' symbolic rows, selected ports,
+authenticated saved owner maps, cleanup, handler and pending frames. The current
+false branch is preserved before constructing `Allocating.Request.discard`.
+Fresh close0 follows from the actual issued ledger. Event inversion determines
+owner1 and the exact retained lexical unwind stack; the physical projection
+comes from the same mapped owner cut.
+
+Every intermediate Core point remains related to an admitted snapshot. The
+final world/history stay `[0]`; issued owners are
+`[resource 0, cleanup 0, ticket 0, ticket 1, close 0]` and completed owners are
+`[ticket 1, ticket 0]`. All three stores remove owner1, with ticket rights
+unchanged. The existing owner-head decomposition is public and reused without
+changing its statement. Three affected modules pass independent compilation;
+the combined audit covers 836 registered modules and 11,359 exact standard-axiom
+reports. Admission through cleanup/completion, general metadata authentication
+and higher-order admission remain open.
 
 ### Initial-admission interface repair
 

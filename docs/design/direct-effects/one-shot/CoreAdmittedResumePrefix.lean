@@ -62,7 +62,7 @@ private theorem translation_unique {owners : CoreTranslation.OwnerMap} {rawCode 
   have two := CoreTranslationFuel.success_mono graph otherFuel (max fuel otherFuel) owners index otherRaw (Nat.le_max_right _ _) second
   exact Except.ok.inj (one.symm.trans two)
 
-private theorem owner_head_pushed {owners : CoreTranslation.OwnerMap}
+theorem owner_head_pushed {owners : CoreTranslation.OwnerMap}
     (related : OrdinaryWithMaps graph heap ((owners,.clauseBoundary handler owner occurrence ticket capture) :: rest)
       code scope result resultScope target) :
     code = result ∧ scope = resultScope ∧
@@ -560,3 +560,5 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.admittedResumePrefix
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.admittedResumePrefix_metadata
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.owner_head_pushed
