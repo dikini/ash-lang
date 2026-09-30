@@ -603,6 +603,24 @@ with standard axioms. Generic scope coherence and annotation authentication
 remain obligations; this extension does not establish M4 validity, the second
 capture, discard or cleanup execution.
 
+[CoreSecondCapture.lean](CoreSecondCapture.lean) continues the same reached
+resume state through five more actual Core transitions, reaching the second
+clause with argument false after 40 transitions from the initial graph. It
+recovers the pending bind's saved code from the preceding relation, restores
+its empty owner map and scope, then reuses exact request and capture proofs.
+Ticket1 captures pending write99, armed cleanup27 and handler41; post-resume
+write11, spent ticket0, the getter and cell remain outside. The target ledger
+creates `[resource 0, cleanup 0, ticket 0, ticket 1]` and discharges `[ticket 0]`.
+Nearest-owner lookup selects ticket1; outside lookup still rejects spent0.
+The observations show that callback27 has not entered. All 11 reports pass
+fresh independent compilation with standard axioms.
+
+This prefix still ends in ordinary evaluation. The next discard connection must
+use `LexicalUnwind.Machine` and its explicit unwind transitions: that machine
+excludes the old plan-based `ScopedExecution.RawStep.discard`. Relating Core's
+projected closing frames to retained lexical handlers, callback execution and
+its eventual scope exits remains a C3 obligation.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

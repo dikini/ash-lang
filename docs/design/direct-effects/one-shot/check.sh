@@ -809,6 +809,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreHandlerPrefix.olean" CoreHan
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupEntry.olean" CoreCleanupEntry.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCaptureEntry.olean" CoreCaptureEntry.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreResumeEntry.olean" CoreResumeEntry.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreSecondCapture.olean" CoreSecondCapture.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAllocationCorrespondence.olean" CoreAllocationCorrespondence.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreHigherOrderSupport.olean" CoreHigherOrderSupport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CorePayloadRefinement.olean" CorePayloadRefinement.lean

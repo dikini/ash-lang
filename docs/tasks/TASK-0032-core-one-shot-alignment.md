@@ -596,11 +596,24 @@ remain separate targets. A small first example does not reduce the final scope.
   evidence; 820 unchanged verified source/report pairs are retained. Active
   first-capture admission and second-capture runtime work is excluded.
 
+- `CoreSecondCapture` extends the same initial related execution to 40 actual
+  Core transitions. Ticket1 captures the pending write99, armed cleanup27 and
+  handler41; write11, spent ticket0 and the getter/cell remain outside. Its
+  creation ledger adds ticket1 and its discharge ledger remains `[ticket 0]`.
+  Exact nearest-owner selection and delayed callback observations are proved.
+  All 11 reports pass fresh independent compilation.
+- The combined second-capture audit covers 823 registered modules and 11,247
+  exact dependency reports, retaining 822 unchanged verified source/report
+  pairs. The following closing batch must use the current lexical unwind
+  machine, which excludes the old plan-based raw discard. Its relation must
+  account for Core's projected handler frames and the calculus's retained
+  lexical scopes. This is existing C3 coverage, not a new fragment exclusion.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Thirty-five-transition first-resume prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Second-request/capture batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Forty-transition second-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Lexical discard/closing-entry batch being scoped; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Next connected-invariant batch being scoped; full repair estimate unresolved |
 | C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch 1–2 hours; total unresolved |
 
