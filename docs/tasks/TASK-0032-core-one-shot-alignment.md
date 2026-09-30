@@ -1146,11 +1146,33 @@ remain separate targets. A small first example does not reduce the final scope.
   estimate. User-handler capture, nested running completions and the general
   simulation obligations remain open; C3 stays at 0/5.
 
+- The next C3 scope review selects nested normal cleanup. A structural
+  `RunningTail.append` case can combine the existing normal carrier with an
+  enclosing running tail, without repeating saved-value or cleanup fields.
+  The connected batch must derive actual start and Unit completion, both related
+  endpoints, exact observations and the same cleanup discharge. Existing
+  successful-step suffix laws and normal cleanup proofs supply the execution
+  evidence. Nineteen registered consumers require an affected build. The batch
+  is estimated at 1.5–2.5 active hours alongside C4. User-handler capture and
+  completing a projected inner callback into unwind remain outside this
+  increment, within the existing general C3 obligations.
+
+- Nested normal cleanup start and finish now pass independent pinned compilation
+  with all 19 existing consumers. Structural tail composition retains the same
+  delayed cleanup, arbitrary saved value, mapped pending prefix and enclosing
+  tail. Actual Unit completion restores the saved value and scope, records the
+  exact finish observation and discharges that cleanup in the same transition
+  witness. Callback beta reuses the existing theorem. The grouped result contains
+  853 registered modules and 11,503 exact reports: 20 fresh and 833 unchanged
+  verified pairs. The batch completed ahead of its 1.5–2.5 hour estimate through
+  direct proof reuse. General user capture, nested dispatch and projected inner
+  unwind remain open; C3 remains 0/5.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Projected builtin read/write, resource/cleanup projection and callback suffix/beta components integrated | User capture, nested running cleanup, general state/ownership correspondence | Static readiness and annotation authentication | Builtin batch complete within its 1–2 hour bound; user capture/nested running remain unestimated |
+| C3 | 0 / 5 | Nested normal cleanup, projected builtin read/write and callback suffix/beta components integrated | User capture, nested dispatch/projected unwind, general state/ownership correspondence | Static readiness and annotation authentication | Nested normal batch complete; next bounded review must estimate remaining capture and unwind carriers |
 | C4 | 2 / 3 | Common owner-source checkpoint integrated; formation, current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Transform independently checked; source/support 60–90 min; frame/site/capture 60–90 min; saved-support restoration unestimated |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 

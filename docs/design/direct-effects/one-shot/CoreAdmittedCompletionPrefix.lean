@@ -717,8 +717,7 @@ private theorem ordinary40 (related : CoreUnwindRelation.Related graph
       cases physical with
       | nil => rfl
       | cons head tail => simp only [List.length_cons] at lengths; omega
-    rw [empty] at carrier
-    cases carrier
+    exact False.elim (carrier.nonempty empty)
 
 private def move (snapshot : Snapshot operations) (machine : LexicalUnwind.Machine) (completed : List Owner) : Snapshot operations :=
   {snapshot with run := ⟨⟨machine,snapshot.run.execution.issued,completed⟩,snapshot.run.tickets⟩}
@@ -945,8 +944,7 @@ private theorem ordinary67 (related : CoreUnwindRelation.Related graph (w67 d)) 
       cases physical with
       | nil => rfl
       | cons head tail => simp only [List.length_cons] at lengths; omega
-    rw [empty] at carrier
-    cases carrier
+    exact False.elim (carrier.nonempty empty)
 
 private theorem canonicalGetterSaved : EnvCloses graph [] [] methodsEnv
     (.lambda 12 (raw 44)) (.lambda 12 (close2 (raw 44))) := by

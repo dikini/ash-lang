@@ -910,6 +910,21 @@ reports, including 851 unchanged verified pairs. User-handler capture into the
 retained tail, nested running completions, general admission and creation
 freshness remain open.
 
+[CoreNestedCleanupSteps](CoreNestedCleanupSteps.lean) reuses normal cleanup start
+and finish under an enclosing running tail. `RunningTail.append` retains both
+authenticated physical tails and their lexical stacks. Start saves an arbitrary
+related value; actual Unit completion restores that value and its recorded scope.
+Both theorems derive actual Core execution, a positive target step and both full
+related endpoints. Observations record exactly the corresponding start or finish;
+completion accounting uses the same witness and discharges that cleanup once.
+Existing callback beta correspondence applies to the composed tail unchanged.
+
+Independent pinned compilation passes for all 20 affected modules. The grouped
+result contains 853 registered modules and 11,503 exact reports, retaining 833
+unchanged verified pairs. Two existing empty-tail eliminations now use the proved
+nonempty property. User-handler capture, dispatch selecting into nested tails,
+and projected inner completion into unwind remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

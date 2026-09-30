@@ -42,10 +42,23 @@ inductive RunningTail (graph : CoreSyntax.Graph) (heap : Heap) : List CoreMachin
       RunningTail graph heap
         (.cleanupCompletion data.identity .unit :: physical ++ .closeCompletion coreClose :: framesOf outsideMaps)
         (.push (.unwinding data) (lexical.append (.push (.closing targetClose closeScope) outsideTarget)))
+  /-- Two authenticated tails compose without forgetting either physical
+  completion or lexical scope. This alone does not lift unwind-mode progress. -/
+  | append (left : RunningTail graph heap leftPhysical leftLexical)
+      (right : RunningTail graph heap rightPhysical rightLexical) :
+      RunningTail graph heap (leftPhysical ++ rightPhysical) (leftLexical.append rightLexical)
+
+/-- Every running carrier retains an actual completion frame. -/
+theorem RunningTail.nonempty (related : RunningTail graph heap physical lexical) : physical ≠ [] := by
+  induction related with
+  | normal | projected | retainedProjected => simp
+  | append left right ihLeft ihRight =>
+      intro empty
+      exact ihLeft (List.append_eq_nil_iff.mp empty).1
 
 theorem RunningTail.heap_weaken (related : RunningTail graph heap physical lexical)
     (extension : HeapExtends heap larger) : RunningTail graph larger physical lexical := by
-  cases related with
+  induction related with
   | normal delayed saved outside =>
       exact .normal (delayed.heap_weaken extension) (saved.heap_weaken extension)
         (outside.heap_weaken extension)
@@ -54,6 +67,7 @@ theorem RunningTail.heap_weaken (related : RunningTail graph heap physical lexic
         (retained.heap_weaken extension) (outside.heap_weaken extension) projection
   | retainedProjected delayed residual outside =>
       exact .retainedProjected (delayed.heap_weaken extension) (residual.heap_weaken extension) (outside.heap_weaken extension)
+  | append left right ihLeft ihRight => exact .append ihLeft ihRight
 
 def isolate (state : CoreMachine.State) (annotations : List MappedFrame) : CoreMachine.State :=
   { state with frames := framesOf annotations }
@@ -94,6 +108,7 @@ theorem potential_splice (beforeFrames : before.frames = framesOf bm ++ physical
   simp only [List.map_append,List.sum_append]
   omega
 
+#print axioms RunningTail.nonempty
 #print axioms RunningTail.heap_weaken
 #print axioms Administrative.components
 #print axioms potential_splice
