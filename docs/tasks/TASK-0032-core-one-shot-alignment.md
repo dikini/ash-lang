@@ -225,6 +225,11 @@ remain separate targets. A small first example does not reduce the final scope.
   it does not change the supported fragment or claim a runtime discrepancy.
   Its additive audit passes across 788 registered sources, 10,821 dependency
   reports and 1,954 local links/anchors, preserving the previous 787 hashes.
+- `CoreBuiltinSignatures` passed fresh independent compilation and review.
+  Every supplied cell entry is checked, primitive enrichment retains the whole
+  table, and exact port erasure constructs existing builtin compatibility.
+  The initial-example comparison is explicitly restricted to one finite domain.
+  Functional operation enrichment and Rust registry authentication remain open.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |

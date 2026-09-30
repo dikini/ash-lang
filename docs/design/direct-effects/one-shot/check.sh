@@ -792,3 +792,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreKernelProgram.olean" CoreKer
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdministrativeTransport.olean" CoreAdministrativeTransport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreOperationSignatures.olean" CoreOperationSignatures.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreOwnerMapBoundary.olean" CoreOwnerMapBoundary.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreBuiltinSignatures.olean" CoreBuiltinSignatures.lean

@@ -540,8 +540,23 @@ tree. Aliased keys must have equal ports, and conflicting aliases are rejected.
 Callable retention annotations do not affect the resulting declared port, while
 reference identities and nested function request rows remain exact. Independent
 compilation and review pass. Authenticating these inputs against the Rust
-registry, builtin cell compatibility and enriched admission operations remain
-open; a supplied declaration table is not validated Core evidence.
+registry and constructing enriched callable operations remain open; a supplied
+declaration table is not validated Core evidence.
+
+[CoreBuiltinSignatures.lean](CoreBuiltinSignatures.lean) checks every cell entry
+against the actual read and write signatures, including the cell reference in
+the ordinary operand. It retains the complete finite table and rejects malformed
+entries even behind earlier duplicates. For primitive, product and reference
+ports, checked enrichment constructs `SourcePlannedTyping.Operations`; erasing
+it gives exactly the accepted port lookup, and the existing builtin compatibility
+judgment follows. A comparison with `CoreInitialExample` proves equality on an
+explicit finite domain, without adding signatures for other activations.
+
+Functional ports remain part of the wider target fragment. This partial helper
+rejects them because their dependency, footprint and plan evidence is not present
+in a declaration port. The builtin checker itself preserves user functional ports.
+Fresh independent compilation, positive/negative cases and statement review pass
+with standard axioms only.
 
 ### Actual Core export
 
