@@ -891,14 +891,13 @@ checks. Wrong input, result and operation keys are rejected, as is a false empty
 support bound for an effectful closure retaining a cell. All 25 reports pass
 fresh independent compilation with only `propext` and `Quot.sound`.
 
-This is an indexed source checkpoint, not an enclosing handler's admission or
-an operation-response preservation theorem. Handler, resource, cleanup and
-owner constructors still need extension. The fixed owner field currently uses
-legacy contracts and is unused by these constructors; common callable
-input/answer contracts must reach both operation results and live/spent pending
-continuations. The experimental modules import existing M4 machinery, so direct
-import back into that machinery would form a cycle. The integration plan must
-resolve that dependency and connect the new current and saved-source evidence;
+This indexed source checkpoint does not establish enclosing handler admission
+or operation-response preservation. The subsequent owner-source extension below
+adds resume/discard typing; handler, resource and cleanup constructors still
+need extension. Common callable input/answer contracts must also reach live/spent
+pending continuations. The experimental modules import existing M4 machinery,
+so direct import back into that machinery would form a cycle. The companion
+interface must connect current and saved-source evidence to M4's guarantees;
 conditional beta transport alone does not replace the M4 invariant.
 
 [CoreCallableContractExecution.lean](CoreCallableContractExecution.lean) now
@@ -919,8 +918,26 @@ applies generic focus, cell reply, plug and bind in one actual raw trace, derivi
 the endpoint `Site` from that predecessor. Both modules pass fresh independent
 warnings-as-errors compilation; all 18 reports use only `propext` and
 `Quot.sound`. This fixed-world plain/cell companion leaves full M4 validity,
-user-handler replies, common owner input/answer contracts, capture/resume/discard,
-cleanup and resource-exit preservation open.
+user-handler replies, capture/resume/discard execution, cleanup and resource-exit
+preservation open.
+
+[CoreCallableContractRegistries.lean](CoreCallableContractRegistries.lean) now
+separates immutable operation contracts and ticket policy from common owner
+contracts. Both continuation endpoints retain common callable contracts. Owner
+insertion preserves the immutable registry and commutes with legacy erasure.
+The same `Source` judgment is indexed by owner tables and resource worlds;
+resume/discard constructors and the structural source inductions use those
+indices. Substitution preserves the actual private bodies and their plans.
+
+Scoped erasure now requires the actual `EffectScope`; the empty-scope wrapper
+remains available. The old all-expression empty-demand statement is replaced by
+`value_demand`, requiring an actual value. The lower source projection covers
+both owner operations. Existing example theorem statements are unchanged.
+Five affected modules pass independent warnings-as-errors compilation with 50
+standard-axiom reports. The combined audit covers 835 registered modules and
+11,355 exact reports, retaining 830 unchanged verified source/report pairs.
+Handler declaration/capture transport and changed-world saved-frame transport
+remain open; this checkpoint does not prove full M4 validity.
 
 The [clause-cell result fixture](fixtures/core-resume-clause-cell-closure.ash)
 adds a concrete receiving-context obligation. A request captures its caller

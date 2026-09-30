@@ -307,9 +307,9 @@ admitted enclosing handler or prove handler response. Wrong signatures and
 false support bounds are rejected. This retains the candidate for migration,
 without completing general admission.
 
-The owner registry still uses legacy contracts and is unused by this checkpoint.
-It must adopt common input/answer contracts together with operation results and
-live/spent pending interfaces. There is also a module dependency boundary:
+That checkpoint retained legacy owner contracts. Common input/answer contracts
+must also reach operation results and live/spent pending interfaces. There is
+a module dependency boundary:
 these experimental modules transitively import `SourceScheduledCleanupInterfaces`.
 Importing them back into that file would create a cycle. The next integration
 must factor the required definitions or justify a generalized companion
@@ -341,18 +341,29 @@ the current world. The returned value's actual support discharges that bound,
 independently of its declared function port. The builtin reply obtains its
 result contract from the same exact global operation key and its receiver from
 the physical cell update. User-handler replies, callable operation results,
-common owner contracts, capture/resume/discard, cleanup and resource-exit support
-remain required subsequent integration work. The full M4 invariant and general
+capture/resume/discard execution, cleanup and resource-exit support remain
+required subsequent integration work. The full M4 invariant and general
 Core admission remain open.
 
-The next handler checkpoint extends the same experimental source and pending
-judgments. An immutable registry fixes operation contracts and ticket policy;
-the common owner registry and resource world become recursive indices, allowing
-fresh owner insertion and later resource acquisition. Owner contracts retain
-both common input and answer contracts, together with their existing demand,
-row, permission and effect information. Handler, resume and discard source rules
-must preserve structural substitution, actual-plan certification and scoped
-lower typing.
+The [owner-source checkpoint](direct-effects/one-shot/CoreCallableContractRegistries.lean)
+now supplies an immutable operation/policy registry and common continuation
+input/answer contracts. The same experimental source uses owner tables and the
+resource world as recursive indices. Resume and discard source rules retain
+lexical owner resolution, capabilities and scalar requirements. Structural
+substitution, actual-plan certification and lower typing cover both rules;
+private callable bodies and common public contracts remain separate.
+
+Two earlier theorem scopes change with these constructors: `erase_at` requires
+the actual ticket-scope interpretation, with `erase` retained for empty scope;
+`value_demand` proves empty immediate demand for actual values, replacing the
+old claim for all expressions. Five affected modules pass independent
+warnings-as-errors compilation, with 50 standard-axiom reports. Existing finite
+example statements are unchanged. This establishes the registry/source
+checkpoint, not handler admission or full M4 preservation.
+
+The next checkpoint extends that same source mutually with clause offers and
+declarations, then adds handler/live/spent pending interfaces. Actual clauses
+must retain private source evidence under the inserted common owner contract.
 
 The bounded execution gate constructs a checked fixed-world handler request and
 its selected clause entry. One callable-result operation contract must admit

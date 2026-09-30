@@ -12,7 +12,7 @@ open SourceDependencyAnnotations (Dependencies RowAnnotation)
 open SourceDependencyChecks.Lexical (ReturnHints)
 open RecursiveRequirements (Requirements Checked)
 open CoreCallableContractSource (Contract Environment sequenceRows)
-open CoreCallableContractAdmission (Globals Source Supported)
+open CoreCallableContractAdmission (Globals Source Supported IndexedSource)
 open SourceScheduledCleanupInterfaces.Lexical.Recursive
 open SourceScheduledCleanupInterfaces.Lexical.Recursive (annotateDisposals)
 open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows
@@ -37,8 +37,10 @@ variable [DeclarationPolicy]
 /-- Constructive lower scalar/type/effect source, useful at the M4 progress
 consumer. This deliberately does not project into legacy Source/Auth. -/
 theorem Source.lower (source : Source globals outward world allowed scope environment code contract demand requirements plan rows) :
-    SourceTemplates.Expression (lowerOperations globals) globals.policy globals.owners.erase.erase world allowed scope
+    SourceTemplates.Expression (lowerOperations globals) globals.policy globals.owners.legacy.erase.erase world allowed scope
       (lowerEnvironment environment) code contract.value.erase.erase demand requirements := by
+  rcases globals with ⟨operations, policy, owners⟩
+  dsimp only [Source, CoreCallableContractAdmission.Globals.registry] at source ⊢
   induction source with
   | unit => exact .stable .unit
   | boolean => exact .stable .boolean
@@ -52,7 +54,14 @@ theorem Source.lower (source : Source globals outward world allowed scope enviro
   | app function argument admitted publicCertified ihF ihA => exact .app ihF ihA admitted
   | bind initial body ihI ihB => exact .bind ihI (by simpa using ihB)
   | branch condition yes no same ihC ihY ihN => exact .branch ihC ihY ihN same
-  | perform known admitted operand formed ih => exact .perform (by simp [lowerOperations, known]) admitted ih formed
+  | perform known admitted operand formed ih =>
+      dsimp only at known
+      exact .perform (by simp [lowerOperations, known]) admitted ih formed
+
+  | resume known resolved permission operand admitted formed ih =>
+      exact .resume (CoreCallableContractRegistries.Owners.known_lower known) resolved permission ih admitted formed
+  | discard known resolved permission unprotected admitted =>
+      exact .discard (CoreCallableContractRegistries.Owners.known_lower known) resolved permission unprotected admitted
 
 /-- The actual saved bind suffix, including private recursive bodies and a
 finite lexical support entry for the eventual value. That entry is independent
@@ -80,7 +89,7 @@ theorem FrameSource.plug
     (closed : ClosedValue value) :
     CoreCallableContractAdmission.Supported globals outward world allowed data.scope Environment.empty ScopedPorts.Support.empty
       (body.subst parameter value) output demand requirements plan rows bodyBound ∧ Certified outward world plan :=
-  ⟨frame.bodySource.substitution valueSource closed, frame.bodySource.source.certified⟩
+  ⟨frame.bodySource.substitution valueSource closed, (IndexedSource.certified frame.bodySource.source)⟩
 
 /-- The bounded chain covers actual plain and cell frames, with common
 contracts at every boundary. Handler and owner frames need additional cases. -/
@@ -164,7 +173,7 @@ structure Site (globals : Globals) (outward : List Instance) (world : List Nat) 
   bounded : row ⊆ budget
 
 theorem Site.certified (site : Site globals outward world allowed actions phases budget ambient installations expression runtimeScope stack result final context root) :
-    Certified outward world site.plan := site.current.source.certified
+    Certified outward world site.plan := (IndexedSource.certified site.current.source)
 
 /-- Runtime port annotations erase to the same common declared contract.
 Retained support is deliberately checked in separate lexical fields. -/
@@ -273,10 +282,12 @@ private callable bodies remain in the recursive source witness. -/
 theorem Source.value_silent {dependencies : Dependencies} {plan : Plan dependencies} {rows : Rows (signature plan)}
     (source : Source globals outward world allowed scope environment value contract demand requirements plan rows)
     (isValue : value.IsValue) : dependencies.Silent := by
+  rcases globals with ⟨operations, policy, owners⟩
+  dsimp only [Source, CoreCallableContractAdmission.Globals.registry] at source ⊢
   induction source with
   | unit | boolean | integer | reference | lambda | purePair => exact .pure
   | pair left right ihL ihR => exact .sequence (ihL isValue.1) (ihR isValue.2)
-  | «variable» | app | bind | branch | perform => cases isValue
+  | «variable» | app | bind | branch | perform | resume | discard => cases isValue
 
 /-- Bind consumes the actual closed value and substitutes into the same
 recursive body witness. Current support bounds both operand and suffix. -/
@@ -347,7 +358,7 @@ theorem Site.plug_bind
           have supported := current.support.resources member
           exact accepts identity (current.issued supported) (received supported)
         · intro name; simp [ScopedPorts.Support.empty]
-      have valueSource := (current.source.value_summary closed.1).value_allowed closed.1 allowed data.scope
+      have valueSource := ((IndexedSource.value_summary current.source) closed.1).value_allowed closed.1 allowed data.scope
       have valueSupported : CoreCallableContractAdmission.Supported globals outward world allowed data.scope Environment.empty
           ScopedPorts.Support.empty value input [] (.request [] []) .pure Rows.pure inputBound :=
         ⟨valueSource, valueSupport, frame.inputIssued⟩

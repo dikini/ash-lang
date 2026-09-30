@@ -725,12 +725,25 @@ remain separate targets. A small first example does not reduce the final scope.
   explicit extracted answer/scope equations and bounded rewrites. No proof
   limit increase, new axiom or Rust implementation change was required.
 
+- `CoreCallableContractRegistries` separates immutable operations/policy from
+  common owner input/answer contracts. The same recursive source is indexed by
+  owners and resource worlds, with resume/discard constructors and constructive
+  substitution, certification and lower typing. Owner insertion preserves the
+  registry and commutes with erasure; private callable bodies remain retained.
+- Scoped `erase_at` replaces unrestricted empty-ticket erasure; `erase` remains
+  for empty scope. `value_demand` requires an actual value, replacing the former
+  all-expression statement. Existing finite example statements are unchanged.
+  All five affected modules pass independent warnings-as-errors compilation,
+  with 50 standard-axiom reports. The combined audit covers 835 modules and
+  11,355 exact dependency reports, retaining 830 unchanged verified pairs.
+  Handler capture and changing-world support transport remain open.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted second-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Sixty-three-transition cleanup cell-write prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Cleanup/close completion next; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and connected callable cell-reply checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Registry/indexing then connected handler-entry checkpoints about one hour each; full repair unresolved |
+| C3 | 0 / 5 | Sixty-three-transition cleanup cell-write prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Final runtime suffix batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Connected handler-entry checkpoint about 1–2 hours; changing-world transport still unresolved |
 | C5 | 0 / 4 | Admitted second-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted discard batch in progress, 1–2 hours; total unresolved |
 
 ## Verification

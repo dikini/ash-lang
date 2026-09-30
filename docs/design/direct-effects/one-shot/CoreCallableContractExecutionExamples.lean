@@ -46,7 +46,7 @@ private theorem actionFormed : ScopedPorts.InWorld world action.port := by
   exact List.Subset.refl _
 
 private theorem run_source : Source globals outward world [effect] scope environment run .integer [] operationReq operationPlan operationRows :=
-  .perform (by simp [globals]) (by simp) (.reference (by simp [world])) (by change [] ⊆ world; intro identity member; cases member)
+  .perform (by simp [globals, Globals.registry]) (by simp) (.reference (by simp [world])) (by change [] ⊆ world; intro identity member; cases member)
 
 omit [DeclarationPolicy] in
 private theorem operation_outward : RecursiveOutward.Outward operationReq (some [request]) := by

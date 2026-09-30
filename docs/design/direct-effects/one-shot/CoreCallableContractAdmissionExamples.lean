@@ -39,7 +39,7 @@ private theorem actionFormed : ScopedPorts.InWorld world action.port := by
   intro identity member; cases member
 
 private theorem run_source : Source globals outward world [effect] scope environment run .unit [] operationReq operationPlan operationRows :=
-  .perform (by simp [globals]) (by simp) .unit (by change [] ⊆ world; intro identity member; cases member)
+  .perform (by simp [globals, Globals.registry]) (by simp) .unit (by change [] ⊆ world; intro identity member; cases member)
 
 omit [DeclarationPolicy] in
 private theorem operation_outward : RecursiveOutward.Outward operationReq (some [request]) := by
@@ -99,16 +99,16 @@ theorem exact_operation : globals.operations effect 0 = some (Contract.unit, Con
 /-- The fixed registry cannot be reselected by a request constructor. -/
 theorem wrong_result_rejected : ¬ Source globals outward world [effect] scope environment run .boolean demand requirements plan rows := by
   intro source
-  obtain ⟨input, known⟩ := source.request_contract
-  simp [globals] at known
+  obtain ⟨input, known⟩ := (IndexedSource.request_contract source)
+  simp [globals, Globals.registry] at known
 
 /-- The same exact key cannot accept an integer where Unit is declared. -/
 theorem wrong_input_rejected :
     ¬ Source globals outward world [effect] scope environment
       (.perform (Instantiation.freezeEffect effect) 0 (.integer 7)) .unit demand requirements plan rows := by
   intro source
-  obtain ⟨input, operandDemand, operandReq, operandDeps, operandPlan, operandRows, known, operand⟩ := source.request_operand
-  simp [globals] at known
+  obtain ⟨input, operandDemand, operandReq, operandDeps, operandPlan, operandRows, known, operand⟩ := (IndexedSource.request_operand source)
+  simp [globals, Globals.registry] at known
   subst input
   cases operand
 
@@ -117,8 +117,8 @@ theorem wrong_key_rejected :
     ¬ Source globals outward world [effect] scope environment
       (.perform (Instantiation.freezeEffect effect) 1 .unit) output demand requirements plan rows := by
   intro source
-  obtain ⟨input, known⟩ := source.request_contract
-  simp [globals] at known
+  obtain ⟨input, known⟩ := (IndexedSource.request_contract source)
+  simp [globals, Globals.registry] at known
 
 /-- Closed substitution retains recursive private plans and their actual
 certification for both payloads, not just their ordinary ports. -/
@@ -132,8 +132,8 @@ theorem helper_substitutions :
     simp [simple, run, effect, ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies, Instantiation.freezeEffect, Instantiation.Effect.freeNames]
   have sequencedClosed : ClosedValue sequenced := by
     simp [sequenced, run, effect, ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies, Syntax.without, Instantiation.freezeEffect, Instantiation.Effect.freeNames]
-  exact ⟨by simpa [helperBody, Code.subst] using body.closed_substitution simple_source simpleClosed,
-    by simpa [helperBody, Code.subst] using body.closed_substitution sequenced_source sequencedClosed, body.certified⟩
+  exact ⟨by simpa [helperBody, Code.subst] using (IndexedSource.closed_substitution body) simple_source simpleClosed,
+    by simpa [helperBody, Code.subst] using (IndexedSource.closed_substitution body) sequenced_source sequencedClosed, (IndexedSource.certified body)⟩
 
 
 omit [DeclarationPolicy] in
@@ -155,7 +155,7 @@ theorem both_bind (stack : Stack) :
       (.sequence callReq callReq) (.sequence callPlan callPlan) (sequenceRows callRows callRows) ∧
     Certified outward world (.sequence callPlan callPlan) ∧
     RawStep ⟨both, scope, stack⟩ ⟨bothBody.subst 10 helper, scope, stack⟩ [] [] :=
-  both_source.bind_step helper_closed (by
+  (IndexedSource.bind_step both_source) helper_closed (by
     simp [bothBody, simple, sequenced, run, effect, ClosedExcept, Code.dependencies, Syntax.without,
       Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources]) stack
 
@@ -197,7 +197,7 @@ theorem helper_beta (extra : Bool) (stack : Stack) :
       Source globals outward world [effect] .none Environment.empty (helperBody.subst 0 (payload extra)) .unit bodyDemand bodyReq actualPlan actualRows ∧
       Certified outward world actualPlan ∧ Refines helperRows actualRows ∧ RecursiveOutward.Outward bodyReq (some [request]) ∧
       RawStep ⟨.app helper (payload extra), scope, stack⟩ ⟨helperBody.subst 0 (payload extra), .none, stack⟩ [] [] :=
-  (helper_source (allowed := [effect])).beta payload_source payload_closed helper_closed stack
+  IndexedSource.beta (helper_source (allowed := [effect])) payload_source payload_closed helper_closed stack
 
 /-- Effect-boundary beta has actual source/certification and transports exact
 current certificates plus checked roots. No successor admission is a premise. -/
@@ -225,7 +225,7 @@ theorem helper_current (extra : Bool) (stack : Stack)
           SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.Accounting.Run world installations actualRows context actualRoot ∧
           CoreCallableRootRefinement.RootTransport root actualRoot ∧ SourceDependencyAnnotations.RowAnnotation actualRoot actualAnnotated ∧
           RecursiveRequirements.Checked entries receiving phases (SourceScheduledCleanupInterfaces.Lexical.Recursive.annotateDisposals actualAnnotated) actualRow ∧ actualRow ⊆ budget :=
-  (helper_source (allowed := [effect])).beta_current payload_source payload_closed helper_closed stack installations ambient actions phases budget
+  IndexedSource.beta_current (helper_source (allowed := [effect])) payload_source payload_closed helper_closed stack installations ambient actions phases budget
     context certificate certificateChecked root annotated run entries receiving row annotation check bounded
 
 private def payloadBody (extra : Bool) : Code := if extra then .bind 3 .unit run else run
@@ -256,9 +256,9 @@ theorem payload_current (extra : Bool) (stack : Stack)
           CoreCallableRootRefinement.RootTransport root actualRoot ∧ SourceDependencyAnnotations.RowAnnotation actualRoot actualAnnotated ∧
           RecursiveRequirements.Checked entries receiving phases (SourceScheduledCleanupInterfaces.Lexical.Recursive.annotateDisposals actualAnnotated) actualRow ∧ actualRow ⊆ budget := by
   cases extra
-  · exact (simple_source (allowed := [effect])).beta_current Source.unit ScopedExecution.Examples.unit_closed simple_closed stack
+  · exact IndexedSource.beta_current (simple_source (allowed := [effect])) Source.unit ScopedExecution.Examples.unit_closed simple_closed stack
       installations ambient actions phases budget context certificate certificateChecked root annotated run entries receiving row annotation check bounded
-  · exact (sequenced_source (allowed := [effect])).beta_current Source.unit ScopedExecution.Examples.unit_closed sequenced_closed stack
+  · exact IndexedSource.beta_current (sequenced_source (allowed := [effect])) Source.unit ScopedExecution.Examples.unit_closed sequenced_closed stack
       installations ambient actions phases budget context certificate certificateChecked root annotated run entries receiving row annotation check bounded
 
 #print axioms payload_current

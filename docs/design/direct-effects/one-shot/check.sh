@@ -823,6 +823,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallablePlanRefinement.olean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRefinementTransport.olean" CoreCallableRefinementTransport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRootRefinement.olean" CoreCallableRootRefinement.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableContractSource.olean" CoreCallableContractSource.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableContractRegistries.olean" CoreCallableContractRegistries.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableContractExamples.olean" CoreCallableContractExamples.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableContractAdmission.olean" CoreCallableContractAdmission.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableContractAdmissionExamples.olean" CoreCallableContractAdmissionExamples.lean
