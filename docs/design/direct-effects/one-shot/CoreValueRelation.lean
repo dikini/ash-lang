@@ -33,9 +33,17 @@ theorem heap_append (heap suffix : Heap) : HeapExtends heap (heap ++ suffix) := 
   rw [List.getElem?_append_left bounded]
   exact known
 
+/-- Explicit static callable bridge. The same raw body used by a successful
+ambient translation is certified to translate under the empty capability map.
+Validator/export construction of this certificate remains a separate obligation. -/
+structure CallableCertificate (graph : CoreSyntax.Graph) (parameter body : Nat) (rawBody : Code) : Prop where
+  site : ∃ index binder node, graph.node index = some node ∧
+    node.kind = .function binder body ∧ binder.id = parameter
+  emptyTranslation : ∃ fuel, CoreTranslation.translateFuel graph fuel [] body = .ok rawBody
+  noOuterTicket : ∀ ticket, Syntax.Dependency.ticket ticket ∉ (Code.lambda parameter rawBody).dependencies
+
 mutual
-inductive ValueRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
-    (heap : Heap) : MValue → Code → Prop where
+inductive ValueRel (graph : CoreSyntax.Graph) : CoreTranslation.OwnerMap → Heap → MValue → Code → Prop where
   | unit : ValueRel graph owners heap .unit .unit
   | boolean : ValueRel graph owners heap (.boolean value) (.boolean value)
   | integer : ValueRel graph owners heap (.integer value) (.integer value)
@@ -44,8 +52,9 @@ inductive ValueRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap
       (leftRelated : ValueRel graph owners heap left leftCode)
       (rightRelated : ValueRel graph owners heap right rightCode) :
       ValueRel graph owners heap (.location index) (.pair leftCode rightCode)
-  | closure (translated : CoreTranslation.translateFuel graph fuel owners body = .ok bodyCode)
-      (environment : EnvCloses graph owners heap saved (.lambda parameter bodyCode) closed)
+  | closure (translated : CoreTranslation.translateFuel graph fuel [] body = .ok bodyCode)
+      (callable : CallableCertificate graph parameter body bodyCode)
+      (environment : EnvCloses graph [] heap saved (.lambda parameter bodyCode) closed)
       (closedValue : ClosedValue closed) :
       ValueRel graph owners heap (.closure parameter body saved) closed
 
@@ -53,8 +62,7 @@ inductive ValueRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap
     closed values, so later outer substitutions cannot capture their names and
     outer resource instantiation cannot replace existing activation atoms.
     Arbitrary pending Code need not itself be a closed value. -/
-inductive EnvCloses (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
-    (heap : Heap) : MEnv → Code → Code → Prop where
+inductive EnvCloses (graph : CoreSyntax.Graph) : CoreTranslation.OwnerMap → Heap → MEnv → Code → Code → Prop where
   | empty : EnvCloses graph owners heap .empty code code
   | binding (related : ValueRel graph owners heap value valueCode)
       (tail : EnvCloses graph owners heap rest (code.subst binder valueCode) closed) :
@@ -66,21 +74,22 @@ inductive EnvCloses (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMa
       (tail : EnvCloses graph owners heap rest code closed) :
       EnvCloses graph owners heap (.functionTemplate binder parameter body rest) code closed
   | templateExpand
-      (translated : CoreTranslation.translateFuel graph fuel owners body = .ok bodyCode)
+      (translated : CoreTranslation.translateFuel graph fuel [] body = .ok bodyCode)
+      (callable : CallableCertificate graph parameter body bodyCode)
       (nonrecursive : Dependency.variable binder ∉ (Code.lambda parameter bodyCode).dependencies)
-      (replacement : EnvCloses graph owners heap rest (.lambda parameter bodyCode) valueCode)
+      (replacement : EnvCloses graph [] heap rest (.lambda parameter bodyCode) valueCode)
       (closedValue : ClosedValue valueCode)
       (tail : EnvCloses graph owners heap rest (code.subst binder valueCode) closed) :
       EnvCloses graph owners heap (.functionTemplate binder parameter body rest) code closed
 end
 
 theorem ValueRel.closed (related : ValueRel graph owners heap value code) : ClosedValue code := by
-  cases related with
+  induction related using ValueRel.rec (motive_2 := fun _ _ _ _ _ _ => True) with
   | unit | boolean | integer | handle =>
       simp [ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Instantiation.ResourceName.freeNames, Code.dependencies]
-  | location known left right =>
-      obtain ⟨leftValue, leftResources, leftDependencies⟩ := left.closed
-      obtain ⟨rightValue, rightResources, rightDependencies⟩ := right.closed
+  | location known left right ihLeft ihRight =>
+      obtain ⟨leftValue, leftResources, leftDependencies⟩ := ihLeft
+      obtain ⟨rightValue, rightResources, rightDependencies⟩ := ihRight
       refine ⟨⟨leftValue, rightValue⟩, ?_, ?_⟩
       · simp [Code.ResourceClosed, Code.freeNames, Code.ResourceClosed] at leftResources rightResources ⊢
         simp [leftResources, rightResources]
@@ -88,25 +97,26 @@ theorem ValueRel.closed (related : ValueRel graph owners heap value code) : Clos
         rcases List.mem_append.mp member with here | there
         · exact leftDependencies dependency here
         · exact rightDependencies dependency there
-  | closure translated environment closedValue => exact closedValue
+  | closure translated callable environment closedValue ih => exact closedValue
+  | empty | binding | resource | templateUnused | templateExpand => trivial
 
 /-- Later ordinary and resource bindings leave an inserted closed value intact. -/
 theorem EnvCloses.closed_identity (related : EnvCloses graph owners heap environment code output) :
     ClosedValue code → output = code := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty => intro closed; rfl
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro closed
       have unchanged := ScopedTyping.subst_absent code binder valueCode
         (ScopedTyping.closedValue_no_variable closed)
       exact (ihTail (unchanged.symm ▸ closed)).trans unchanged
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro closed
       have unchanged := Code.closed_instantiation_identity code (Instantiation.Environment.empty.bind binder key) closed.2.1
       exact (ihTail (unchanged.symm ▸ closed)).trans unchanged
   | templateUnused absent tail ihTail => exact ihTail
-  | @templateExpand fuel body bodyCode parameter binder rest valueCode output code translated nonrecursive replacement valueClosed tail ihReplacement ihTail =>
+  | @templateExpand fuel body bodyCode parameter binder heap rest valueCode owners output code translated callable nonrecursive replacement valueClosed tail ihReplacement ihTail =>
       intro closed
       have unchanged := ScopedTyping.subst_absent code binder valueCode
         (ScopedTyping.closedValue_no_variable closed)
@@ -116,36 +126,141 @@ theorem EnvCloses.closed_identity (related : EnvCloses graph owners heap environ
 theorem ValueRel.heap_weaken (related : ValueRel graph owners heap value code)
     (larger : HeapExtends heap next) : ValueRel graph owners next value code := by
   induction related using ValueRel.rec
-      (motive_2 := fun environment code output _ => EnvCloses graph owners next environment code output) with
-  | unit => exact .unit
-  | boolean => exact .boolean
-  | integer => exact .integer
-  | handle => exact .handle
-  | location known left right ihLeft ihRight => exact .location (larger _ _ known) ihLeft ihRight
-  | closure translated environment closed ihEnvironment => exact .closure translated ihEnvironment closed
-  | empty => exact .empty
-  | binding replacement tail ihReplacement ihTail => exact .binding ihReplacement ihTail
-  | resource tail ihTail => exact .resource ihTail
-  | templateUnused absent tail ihTail => exact .templateUnused absent ihTail
-  | templateExpand translated nonrecursive replacement closed tail ihReplacement ihTail =>
-      exact .templateExpand translated nonrecursive ihReplacement closed ihTail
+      (motive_2 := fun owners heap environment code output _ => ∀ next, HeapExtends heap next → EnvCloses graph owners next environment code output) generalizing next with
+  | unit =>
+      exact .unit
+  | boolean =>
+      exact .boolean
+  | integer =>
+      exact .integer
+  | handle =>
+      exact .handle
+  | location known left right ihLeft ihRight =>
+      exact .location (larger _ _ known) (@ihLeft next larger) (@ihRight next larger)
+  | closure translated callable environment closed ihEnvironment =>
+      exact .closure translated callable (@ihEnvironment next larger) closed
+  | empty =>
+      rename_i next larger
+      exact .empty
+  | binding replacement tail ihReplacement ihTail =>
+      rename_i next larger
+      exact .binding (@ihReplacement next larger) (@ihTail next larger)
+  | resource tail ihTail =>
+      rename_i next larger
+      exact .resource (@ihTail next larger)
+  | templateUnused absent tail ihTail =>
+      rename_i next larger
+      exact .templateUnused absent (@ihTail next larger)
+  | templateExpand translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
+      rename_i next larger
+      exact .templateExpand translated callable nonrecursive (@ihReplacement next larger) closed (@ihTail next larger)
 
 theorem EnvCloses.heap_weaken (related : EnvCloses graph owners heap environment code output)
     (larger : HeapExtends heap next) : EnvCloses graph owners next environment code output := by
   induction related using EnvCloses.rec
-      (motive_1 := fun value code _ => ValueRel graph owners next value code) with
-  | unit => exact .unit
-  | boolean => exact .boolean
-  | integer => exact .integer
-  | handle => exact .handle
-  | location known left right ihLeft ihRight => exact .location (larger _ _ known) ihLeft ihRight
-  | closure translated environment closed ihEnvironment => exact .closure translated ihEnvironment closed
-  | empty => exact .empty
-  | binding replacement tail ihReplacement ihTail => exact .binding ihReplacement ihTail
-  | resource tail ihTail => exact .resource ihTail
-  | templateUnused absent tail ihTail => exact .templateUnused absent ihTail
-  | templateExpand translated nonrecursive replacement closed tail ihReplacement ihTail =>
-      exact .templateExpand translated nonrecursive ihReplacement closed ihTail
+      (motive_1 := fun owners heap value code _ => ∀ next, HeapExtends heap next → ValueRel graph owners next value code) generalizing next with
+  | unit =>
+      rename_i next larger
+      exact .unit
+  | boolean =>
+      rename_i next larger
+      exact .boolean
+  | integer =>
+      rename_i next larger
+      exact .integer
+  | handle =>
+      rename_i next larger
+      exact .handle
+  | location known left right ihLeft ihRight =>
+      rename_i next larger
+      exact .location (larger _ _ known) (@ihLeft next larger) (@ihRight next larger)
+  | closure translated callable environment closed ihEnvironment =>
+      rename_i next larger
+      exact .closure translated callable (@ihEnvironment next larger) closed
+  | empty =>
+      exact .empty
+  | binding replacement tail ihReplacement ihTail =>
+      exact .binding (@ihReplacement next larger) (@ihTail next larger)
+  | resource tail ihTail =>
+      exact .resource (@ihTail next larger)
+  | templateUnused absent tail ihTail =>
+      exact .templateUnused absent (@ihTail next larger)
+  | templateExpand translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
+      exact .templateExpand translated callable nonrecursive (@ihReplacement next larger) closed (@ihTail next larger)
+
+/-- Values mean the same thing under any caller map. Callable translations
+and saved closing derivations remain at their certified empty barrier. -/
+theorem ValueRel.owner_transport (related : ValueRel graph owners heap value code)
+    (destination : CoreTranslation.OwnerMap) : ValueRel graph destination heap value code := by
+  induction related using ValueRel.rec
+    (motive_2 := fun owners heap environment code output _ => ∀ destination,
+      EnvCloses graph destination heap environment code output) generalizing destination with
+  | unit =>
+      exact .unit
+  | boolean =>
+      exact .boolean
+  | integer =>
+      exact .integer
+  | handle =>
+      exact .handle
+  | location known left right ihLeft ihRight =>
+      exact .location known (@ihLeft destination) (@ihRight destination)
+  | closure translated callable environment closed ihEnvironment =>
+      exact .closure translated callable environment closed
+  | empty =>
+      rename_i destination
+      exact .empty
+  | binding replacement tail ihReplacement ihTail =>
+      rename_i destination
+      exact .binding (@ihReplacement destination) (@ihTail destination)
+  | resource tail ihTail =>
+      rename_i destination
+      exact .resource (@ihTail destination)
+  | templateUnused absent tail ihTail =>
+      rename_i destination
+      exact .templateUnused absent (@ihTail destination)
+  | templateExpand translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
+      rename_i destination
+      exact .templateExpand translated callable nonrecursive replacement closed (@ihTail destination)
+
+/-- This transports raw lexical substitution evidence, not syntax translation
+between maps. Saved source-code translation maps must still be authenticated. -/
+theorem EnvCloses.owner_transport (related : EnvCloses graph owners heap environment code output)
+    (destination : CoreTranslation.OwnerMap) : EnvCloses graph destination heap environment code output := by
+  induction related using EnvCloses.rec
+    (motive_1 := fun owners heap value code _ => ∀ destination,
+      ValueRel graph destination heap value code) generalizing destination with
+  | unit =>
+      rename_i destination
+      exact .unit
+  | boolean =>
+      rename_i destination
+      exact .boolean
+  | integer =>
+      rename_i destination
+      exact .integer
+  | handle =>
+      rename_i destination
+      exact .handle
+  | location known left right ihLeft ihRight =>
+      rename_i destination
+      exact .location known (@ihLeft destination) (@ihRight destination)
+  | closure translated callable environment closed ihEnvironment =>
+      rename_i destination
+      exact .closure translated callable environment closed
+  | empty =>
+      exact .empty
+  | binding replacement tail ihReplacement ihTail =>
+      exact .binding (@ihReplacement destination) (@ihTail destination)
+  | resource tail ihTail =>
+      exact .resource (@ihTail destination)
+  | templateUnused absent tail ihTail =>
+      exact .templateUnused absent (@ihTail destination)
+  | templateExpand translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
+      exact .templateExpand translated callable nonrecursive replacement closed (@ihTail destination)
+
+#print axioms ValueRel.owner_transport
+#print axioms EnvCloses.owner_transport
 
 /-- Reuse the established lexical substitution/instantiation commutation law. -/
 theorem binding_instantiation (related : ValueRel graph owners heap value replacement)
@@ -161,10 +276,10 @@ theorem EnvCloses.lookup_at
     (related : EnvCloses graph owners heap environment code output)
     : ∀ name, code = .variable name → ClosedValue output →
       ∃ value, environment.lookup name = some value ∧ ValueRel graph owners heap value output := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty => intro name same closed; rw [same] at closed; cases closed.1
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro name same closed
       by_cases equal : binder = name
       · have substituted : code.subst binder valueCode = valueCode := by simp [same, Code.subst, equal]
@@ -174,13 +289,13 @@ theorem EnvCloses.lookup_at
       · have pending : code.subst binder valueCode = .variable name := by simp [same, Code.subst, equal]
         obtain ⟨found, known, valueRelated⟩ := ihTail name pending closed
         exact ⟨found, by simpa [CoreMachine.Environment.lookup, equal, Ne.symm equal] using known, valueRelated⟩
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro name same closed
       have pending : code.instantiate (Instantiation.Environment.empty.bind binder key) = .variable name := by
         simp [same, Code.instantiate]
       obtain ⟨found, known, valueRelated⟩ := ihTail name pending closed
       exact ⟨found, known, valueRelated⟩
-  | @templateUnused binder rest code output parameter body absent tail ihTail =>
+  | @templateUnused binder owners heap rest code output parameter body absent tail ihTail =>
       intro name same closed
       have different : binder ≠ name := by
         intro equal
@@ -189,7 +304,7 @@ theorem EnvCloses.lookup_at
         exact absent List.mem_cons_self
       obtain ⟨found, known, valueRelated⟩ := ihTail name same closed
       exact ⟨found, by simpa [CoreMachine.Environment.lookup, different, Ne.symm different] using known, valueRelated⟩
-  | @templateExpand fuel body bodyCode parameter binder rest valueCode output code translated nonrecursive replacement valueClosed tail ihReplacement ihTail =>
+  | @templateExpand fuel body bodyCode parameter binder heap rest valueCode owners output code translated callable nonrecursive replacement valueClosed tail ihReplacement ihTail =>
       intro name same closed
       by_cases equal : binder = name
       · have substituted : code.subst binder valueCode = valueCode := by simp [same, Code.subst, equal]
@@ -198,7 +313,7 @@ theorem EnvCloses.lookup_at
         refine ⟨.closure parameter body (.functionTemplate binder parameter body rest), ?_, ?_⟩
         · simp [CoreMachine.Environment.lookup, equal]
         · rw [resultEqual]
-          exact .closure translated (.templateUnused nonrecursive replacement) valueClosed
+          exact .closure translated callable (.templateUnused nonrecursive replacement) valueClosed
       · have pending : code.subst binder valueCode = .variable name := by simp [same, Code.subst, equal]
         obtain ⟨found, known, valueRelated⟩ := ihTail name pending closed
         exact ⟨found, by simpa [CoreMachine.Environment.lookup, equal, Ne.symm equal] using known, valueRelated⟩
@@ -214,19 +329,19 @@ theorem EnvCloses.lookup (related : EnvCloses graph owners heap environment (.va
 theorem EnvCloses.lambda_shape_at
     (related : EnvCloses graph owners heap environment code output) :
     ∀ parameter body, code = .lambda parameter body → ∃ result, output = .lambda parameter result := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty => intro parameter body same; exact ⟨body, same⟩
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro parameter body same
       exact ihTail parameter (if binder = parameter then body else body.subst binder valueCode)
         (by simp only [same, Code.subst])
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro parameter body same
       exact ihTail parameter (body.instantiate (Instantiation.Environment.empty.bind binder key))
         (by simp only [same, Code.instantiate])
   | templateUnused absent tail ihTail => exact ihTail
-  | @templateExpand fuel functionBody bodyCode functionParameter binder rest valueCode output code translated nonrecursive replacement closed tail ihReplacement ihTail =>
+  | @templateExpand fuel functionBody bodyCode functionParameter binder heap rest valueCode owners output code translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
       intro parameter body same
       exact ihTail parameter (if binder = parameter then body else body.subst binder valueCode)
         (by simp only [same, Code.subst])
@@ -235,7 +350,7 @@ theorem ValueRel.closure_shape
     (related : ValueRel graph owners heap (.closure parameter body environment) code) :
     ∃ result, code = .lambda parameter result := by
   cases related with
-  | closure translated saved closed => exact saved.lambda_shape_at _ _ rfl
+  | closure translated callable saved closed => exact saved.lambda_shape_at _ _ rfl
 
 /-- A lambda's own parameter masks a same-name saved ordinary binding. -/
 theorem EnvCloses.parameter_shadow
@@ -270,15 +385,15 @@ theorem EnvCloses.resource_lookup_at
     (related : EnvCloses graph owners heap environment code output) :
     ∀ name, code = .resourceRef (.bound name) → ClosedValue output →
       ∃ key, environment.resourceKey name = some key ∧ output = .resourceRef (.activation key) := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty => intro name same closed; rw [same] at closed; cases closed.1
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro name same closed
       have pending : code.subst binder valueCode = .resourceRef (.bound name) := by simp [same, Code.subst]
       obtain ⟨key, known, equal⟩ := ihTail name pending closed
       exact ⟨key, known, equal⟩
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro name same closed
       by_cases equal : binder = name
       · have instantiated : code.instantiate (Instantiation.Environment.empty.bind binder key) =
@@ -299,7 +414,7 @@ theorem EnvCloses.resource_lookup_at
       intro name same closed
       obtain ⟨key, known, equal⟩ := ihTail name same closed
       exact ⟨key, known, equal⟩
-  | @templateExpand fuel body bodyCode parameter binder rest valueCode output code translated nonrecursive replacement valueClosed tail ihReplacement ihTail =>
+  | @templateExpand fuel body bodyCode parameter binder heap rest valueCode owners output code translated callable nonrecursive replacement valueClosed tail ihReplacement ihTail =>
       intro name same closed
       have pending : code.subst binder valueCode = .resourceRef (.bound name) := by simp [same, Code.subst]
       obtain ⟨key, known, equal⟩ := ihTail name pending closed
@@ -373,14 +488,14 @@ theorem EnvCloses.lambda_argument_at
     ∀ parameter body result argument, source = .lambda parameter body → target = .lambda parameter result →
       ClosedValue argument → EnvCloses graph owners heap environment
         (body.subst parameter argument) (result.subst parameter argument) := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty =>
       intro parameter body result argument sourceEq targetEq closed
       have same : body = result := by simpa [sourceEq] using targetEq
       subst result
       exact .empty
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro parameter body result argument sourceEq targetEq closed
       apply EnvCloses.binding replacement
       by_cases same : binder = parameter
@@ -393,13 +508,13 @@ theorem EnvCloses.lambda_argument_at
       · rw [subst_commute body parameter binder argument valueCode closed replacement.closed (Ne.symm same)]
         exact ihTail parameter (body.subst binder valueCode) result argument
           (by simp [sourceEq, Code.subst, same]) targetEq closed
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro parameter body result argument sourceEq targetEq closed
       apply EnvCloses.resource
       rw [Code.instantiation_subst _ _ _ _ closed.2.1]
       exact ihTail parameter (body.instantiate (Instantiation.Environment.empty.bind binder key)) result argument
         (by simp only [sourceEq, Code.instantiate]) targetEq closed
-  | @templateUnused binder rest code output functionParameter functionBody absent tail ihTail =>
+  | @templateUnused binder owners heap rest code output functionParameter functionBody absent tail ihTail =>
       intro parameter body result argument sourceEq targetEq closed
       have stillAbsent : Dependency.variable binder ∉ (body.subst parameter argument).dependencies := by
         intro member
@@ -408,9 +523,9 @@ theorem EnvCloses.lambda_argument_at
           simpa only [sourceEq, Code.dependencies] using old
         · exact ScopedTyping.closedValue_no_variable closed inserted
       exact .templateUnused stillAbsent (ihTail parameter body result argument sourceEq targetEq closed)
-  | @templateExpand fuel functionBody bodyCode functionParameter binder rest valueCode output code translated nonrecursive replacement valueClosed tail ihReplacement ihTail =>
+  | @templateExpand fuel functionBody bodyCode functionParameter binder heap rest valueCode owners output code translated callable nonrecursive replacement valueClosed tail ihReplacement ihTail =>
       intro parameter body result argument sourceEq targetEq closed
-      apply EnvCloses.templateExpand translated nonrecursive replacement valueClosed
+      apply EnvCloses.templateExpand translated callable nonrecursive replacement valueClosed
       by_cases same : binder = parameter
       · have unchanged : (body.subst parameter argument).subst binder valueCode = body.subst parameter argument := by
           rw [same]
@@ -430,11 +545,11 @@ theorem EnvCloses.beta_argument
 
 theorem ValueRel.closure_view
     (related : ValueRel graph owners heap (.closure parameter body saved) (.lambda parameter result)) :
-    ∃ fuel rawBody, CoreTranslation.translateFuel graph fuel owners body = .ok rawBody ∧
-      EnvCloses graph owners heap saved (.lambda parameter rawBody) (.lambda parameter result) ∧
+    ∃ fuel rawBody, CoreTranslation.translateFuel graph fuel [] body = .ok rawBody ∧
+      EnvCloses graph [] heap saved (.lambda parameter rawBody) (.lambda parameter result) ∧
       ClosedValue (.lambda parameter result) := by
   cases related with
-  | closure translated environment closed => exact ⟨_, _, translated, environment, closed⟩
+  | closure translated callable environment closed => exact ⟨_, _, translated, environment, closed⟩
 
 /-- Decompose one closing derivation, retaining its exact lexical replacements. -/
 theorem EnvCloses.app_components_at
@@ -443,26 +558,26 @@ theorem EnvCloses.app_components_at
       source = .app rawFunction rawArgument → target = .app function argument →
       EnvCloses graph owners heap environment rawFunction function ∧
       EnvCloses graph owners heap environment rawArgument argument := by
-  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ _ _ => True) with
   | unit | boolean | integer | handle | location | closure => trivial
   | empty =>
       intro rf ra f a sourceEq targetEq
       have same : rf = f ∧ ra = a := by simpa [sourceEq] using targetEq
       rcases same with ⟨rfl, rfl⟩
       exact ⟨.empty, .empty⟩
-  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+  | @binding owners heap value valueCode rest output binder code replacement tail ihReplacement ihTail =>
       intro rf ra f a sourceEq targetEq
       obtain ⟨left, right⟩ := ihTail (rf.subst binder valueCode) (ra.subst binder valueCode) f a
         (by simp only [sourceEq, Code.subst]) targetEq
       exact ⟨.binding replacement left, .binding replacement right⟩
-  | @resource rest output binder key code tail ihTail =>
+  | @resource owners heap rest output binder key code tail ihTail =>
       intro rf ra f a sourceEq targetEq
       obtain ⟨left, right⟩ := ihTail
         (rf.instantiate (Instantiation.Environment.empty.bind binder key))
         (ra.instantiate (Instantiation.Environment.empty.bind binder key)) f a
         (by simp only [sourceEq, Code.instantiate]) targetEq
       exact ⟨.resource left, .resource right⟩
-  | @templateUnused binder rest code output parameter body absent tail ihTail =>
+  | @templateUnused binder owners heap rest code output parameter body absent tail ihTail =>
       intro rf ra f a sourceEq targetEq
       obtain ⟨left, right⟩ := ihTail rf ra f a sourceEq targetEq
       have absentLeft : Dependency.variable binder ∉ rf.dependencies := by
@@ -472,12 +587,12 @@ theorem EnvCloses.app_components_at
         intro member; apply absent
         simpa only [sourceEq, Code.dependencies] using List.mem_append_right rf.dependencies member
       exact ⟨.templateUnused absentLeft left, .templateUnused absentRight right⟩
-  | @templateExpand fuel body bodyCode parameter binder rest valueCode output code translated nonrecursive replacement closed tail ihReplacement ihTail =>
+  | @templateExpand fuel body bodyCode parameter binder heap rest valueCode owners output code translated callable nonrecursive replacement closed tail ihReplacement ihTail =>
       intro rf ra f a sourceEq targetEq
       obtain ⟨left, right⟩ := ihTail (rf.subst binder valueCode) (ra.subst binder valueCode) f a
         (by simp only [sourceEq, Code.subst]) targetEq
-      exact ⟨.templateExpand translated nonrecursive replacement closed left,
-        .templateExpand translated nonrecursive replacement closed right⟩
+      exact ⟨.templateExpand translated callable nonrecursive replacement closed left,
+        .templateExpand translated callable nonrecursive replacement closed right⟩
 
 theorem EnvCloses.app_components
     (related : EnvCloses graph owners heap environment (.app rawFunction rawArgument) (.app function argument)) :
@@ -490,11 +605,19 @@ theorem EnvCloses.app_components
 namespace Examples
 open CoreMachineExamples
 
+theorem lexical_certificate : CallableCertificate lexicalClosure 2 1 (.variable 1) := by
+  refine ⟨⟨2, ⟨2, .unit⟩, _, rfl, rfl, rfl⟩, ⟨1, rfl⟩, ?_⟩
+  intro ticket; simp [Code.dependencies, Syntax.without]
+
+theorem main_certificate : CallableCertificate entryWrapper 8 0 (.integer 17) := by
+  refine ⟨⟨1, ⟨8, .unit⟩, _, rfl, rfl, rfl⟩, ⟨1, rfl⟩, ?_⟩
+  intro ticket; simp [Code.dependencies, Syntax.without]
+
 /-- The existing lexical-closure graph's function reads 17 from its saved
     environment even when the caller shadows binder 1 with 99. -/
 theorem lexical_closure : ValueRel lexicalClosure [] []
     (.closure 2 1 (.binding 1 (.integer 17) .empty)) (.lambda 2 (.integer 17)) := by
-  refine .closure (fuel := 1) (bodyCode := .variable 1) rfl ?_ ?_
+  refine .closure (fuel := 1) (bodyCode := .variable 1) rfl lexical_certificate ?_ ?_
   · exact .binding .integer (by simpa [Code.subst] using (EnvCloses.empty
       (graph := lexicalClosure) (owners := []) (heap := []) (code := .lambda 2 (.integer 17))))
   · simp [ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies, Syntax.without]
@@ -536,7 +659,7 @@ theorem ordinary_shadow : EnvCloses lexicalClosure [] []
     closes over the finite tail; lookup's closure still retains the self suffix. -/
 theorem main_template : EnvCloses entryWrapper [] []
     (.functionTemplate 5 8 0 .empty) (.variable 5) (.lambda 8 (.integer 17)) := by
-  refine .templateExpand (fuel := 1) (bodyCode := .integer 17) rfl ?_ .empty ?_ ?_
+  refine .templateExpand (fuel := 1) (bodyCode := .integer 17) rfl main_certificate ?_ .empty ?_ ?_
   · simp [Code.dependencies, Syntax.without]
   · simp [ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies, Syntax.without]
   · simpa [Code.subst] using (EnvCloses.empty (graph := entryWrapper)

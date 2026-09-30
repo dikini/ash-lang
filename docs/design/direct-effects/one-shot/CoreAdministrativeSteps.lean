@@ -170,6 +170,7 @@ theorem variable_evaluate {base : CoreMachine.State}
 theorem lambda_evaluate {base : CoreMachine.State}
     (known : graph.node index = some node) (kind : node.kind = .function parameter body)
     (translated : CoreTranslation.translateFuel graph fuel owners body = .ok rawBody)
+    (callable : CallableCertificate graph parameter.id body rawBody)
     (environment : EnvCloses graph owners base.heap saved (.lambda parameter.id rawBody) target)
     (closed : ClosedValue target) (tail : List CoreMachine.Frame) :
     ValueWitness graph owners
@@ -185,8 +186,9 @@ theorem lambda_evaluate {base : CoreMachine.State}
         change (do pure (Code.lambda parameter.id (← CoreTranslation.translateFuel graph fuel owners body))) = _
         rw [translated]
         rfl
+  obtain ⟨emptyFuel, emptyTranslation⟩ := callable.emptyTranslation
   refine ⟨⟨?_, entry_ready known (by simp [kind, valueKind]) base saved tail, .evaluate rfl translation environment closed,
-    ⟨.closure parameter.id body saved, rfl, .closure translated environment closed⟩,
+    ⟨.closure parameter.id body saved, rfl, .closure emptyTranslation callable (environment.owner_transport []) closed⟩,
     entry_decreases known (by simp [kind, valueKind]) base saved (.closure parameter.id body saved) tail⟩, translation⟩
   · simp [CoreMachine.next, known, kind]
 
@@ -194,7 +196,7 @@ private theorem reference_value
     (related : ValueRel graph owners heap value (.resourceRef (.activation key))) : value = .handle key := by
   cases related with
   | handle => rfl
-  | closure translated environment closed =>
+  | closure translated callable environment closed =>
       obtain ⟨result, impossible⟩ := environment.lambda_shape_at _ _ rfl
       cases impossible
 

@@ -43,11 +43,18 @@ inductive ControlRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerM
 
 /-- Structural expression/ordinary-stack interpretation only. It does not
 assert target Valid, source reachability or annotation authentication. -/
-def ComponentRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+def ComponentWithMaps (graph : CoreSyntax.Graph)
+    (codeOwners frameOwners : CoreTranslation.OwnerMap)
     (state : CoreMachine.State) (target : Configuration) : Prop :=
-  ∃ code scope, ControlRel graph owners state.heap state.control code ∧
-    OrdinaryStackRel graph owners state.heap state.frames code scope
+  ∃ code scope, ControlRel graph codeOwners state.heap state.control code ∧
+    OrdinaryStackRel graph frameOwners state.heap state.frames code scope
       target.expression target.scope target.stack
+
+/-- The earlier component is the diagonal case. Different saved-frame maps
+remain open; this factor records only the callable/current-code boundary. -/
+abbrev ComponentRel (graph : CoreSyntax.Graph) (owners : CoreTranslation.OwnerMap)
+    (state : CoreMachine.State) (target : Configuration) : Prop :=
+  ComponentWithMaps graph owners owners state target
 
 theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
     (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target := by
@@ -116,9 +123,9 @@ theorem beta_complete {base : CoreMachine.State}
       .stepped { base with control := .evaluate body (.binding parameter value saved), frames := cores } ∧
     RawStep ⟨.app (.lambda parameter result) argumentCode, plain.scope, target⟩
       ⟨result.subst parameter argumentCode, .none, target⟩ [] [] ∧
-    ComponentRel graph owners { base with control := .evaluate body (.binding parameter value saved), frames := cores }
+    ComponentWithMaps graph [] owners { base with control := .evaluate body (.binding parameter value saved), frames := cores }
       ⟨result.subst parameter argumentCode, .none, target⟩ := by
-  obtain ⟨fuel, raw, translated, next, step, closed⟩ :=
+  obtain ⟨fuel, raw, translated, next, step, closed, originalArgument⟩ :=
     CoreStrictSteps.application_complete function argument cores plain.scope target
   have frame : PlainFrameRel graph owners base.heap (.applyArgument (.closure parameter body saved)) plain := by
     change FrameRel graph owners base.heap _ plain.context

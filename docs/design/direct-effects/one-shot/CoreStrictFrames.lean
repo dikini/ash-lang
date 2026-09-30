@@ -168,7 +168,8 @@ private def node (identity : Nat) (kind : CoreSyntax.Kind) : CoreSyntax.Node :=
 private def graph : CoreSyntax.Graph := ⟨[
   node 0 .unit,
   node 1 (.bind ⟨4, .unit⟩ 0 0),
-  node 2 (.apply 1 0)], 2⟩
+  node 2 (.apply 1 0),
+  ⟨3, .function .unit .unit [], [], none, .function ⟨2, .unit⟩ 0⟩], 2⟩
 private def base : CoreMachine.State := { control := .returned .unit }
 private def argumentPlain : PlainData :=
   ⟨.appFunction (.bind 4 .unit .unit), .none, .unit, .unit, [], rfl⟩
@@ -184,7 +185,10 @@ theorem return_nonvalue_argument (coreTail : List CoreMachine.Frame) (targetTail
       RawStep ⟨.lambda 2 .unit, .none, .push (.plain argumentPlain) targetTail⟩ middle [] [] ∧
       RawStep middle ⟨.bind 4 .unit .unit, .none, .push (.plain functionPlain) targetTail⟩ [] [] := by
   have closure : ValueRel graph [] base.heap (.closure 2 0 .empty) (.lambda 2 .unit) := by
-    exact .closure (fuel := 1) rfl .empty (by
+    have callable : CallableCertificate graph 2 0 .unit := by
+      refine ⟨⟨3, ⟨2, .unit⟩, _, rfl, rfl, rfl⟩, ⟨1, rfl⟩, ?_⟩
+      intro ticket; simp [Code.dependencies, Syntax.without]
+    exact .closure (fuel := 1) rfl callable .empty (by
       simp [ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies])
   obtain ⟨_, plug, focus, _⟩ := application_return_function
     (graph := graph) (owners := []) (base := base) (argument := 1)

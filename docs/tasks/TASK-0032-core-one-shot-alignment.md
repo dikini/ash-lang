@@ -237,14 +237,30 @@ remain separate targets. A small first example does not reduce the final scope.
   graph derivation and the full exported initial `Program` remain open.
   Both new leaves are registered; the next combined audit follows the in-flight
   shared value-relation repair rather than auditing a changing proof tree.
+- The lexical-value repair and all eight affected/dependent modules passed
+  fresh independent compilation and review. Callable values now use certified
+  empty capability maps; generic beta retains the caller's saved-frame map.
+  `CoreCallableChecks` constructs the exact certificate from executable graph
+  checks and feeds it into actual lambda entry. Post-beta administrative
+  transport, individual saved-frame maps and reachable-state construction remain
+  open; the new component does not close C3.1 or C3.2.
+- A retained higher-order resource fixture returns Unit in validated Rust when
+  an operation accepts and invokes a pure closure retaining a cell. The isolated
+  D4 support refinement still needs a justification preserving the operation's
+  declared input port. This remains within C2.3, without a new exclusion.
+- The combined audit passes for 791 registered modules, 10,851 exact dependency
+  reports and 1,958 local links/anchors. Eleven new or transitively affected
+  modules received fresh independent compilation; 780 unchanged source/report
+  pairs were retained from the verified snapshot. Source hashes, import order,
+  standard axioms, trust scan and artifact checks pass.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Normalized admission, exported getter admission and finite builtin compatibility verified | Full graph admission, authenticated metadata and general static compiler | Static graph derivation and callable certificates next, about 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Finite Rust trace, strict steps, mixed-stack value transport and shared potential verified | Reachable configuration relation, transitions and observations | Lexical owner scopes and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
+| C3 | 0 / 5 | Callable-map repair, executable certificate bridge, finite trace and strict components verified | Post-beta map-aware transitions, full configuration relation and simulation | Extend ordinary transport across the proved beta boundary next, about 1 active hour; full proof estimate unresolved |
 | C4 | 3 / 3 for identified repairs | D2 regressions and D8/D9 complete normalized admission verified | Maintain resolution as C2/C3 discover further obligations | No current demonstrated unresolved discrepancy |
-| C5 | 0 / 4 | Product gate, 788-module audit and two subsequent leaf builds passed | Shared-repair grouped audit, integrated theorem and final scope audit | Depends on C2–C4 |
+| C5 | 0 / 4 | Product gate and 791-module combined audit passed | Integrated theorem and final scope audit | Depends on C2–C4 |
 
 ## Verification
 

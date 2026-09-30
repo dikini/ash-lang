@@ -324,23 +324,35 @@ The relation takes no future-execution premise. Resource activations currently
 use matching numeric identities; simulation must choose the same fresh identity
 in the existing calculus allocation request and prove its freshness.
 
-[CoreOwnerMapBoundary.lean](CoreOwnerMapBoundary.lean) identifies a coverage gap
+[CoreOwnerMapBoundary.lean](CoreOwnerMapBoundary.lean) identified a coverage gap
 within D5. The retained [reentry fixture](CoreOwnerMapReentry.ash) returns Unit
 in the current validated Rust evaluator: a nonrecursive callable reenters its
 static handler while another activation is live. Separate finite graph proofs
 show that public root translation succeeds, but translating the callable under
-a colliding caller owner map fails at every fuel. Consequently the current
-fixed-map value relation cannot represent that callable under the caller map.
-This is a limitation of the relation, not a demonstrated Core runtime disagreement.
-Independent Lean compilation and the Rust CLI check pass.
+a colliding caller owner map fails at every fuel. The original fixed-map value
+relation consequently could not represent that callable; commit `48caa0d` retains
+that negative proof. This was a relation limitation, not a Core runtime disagreement.
 
-The required repair distinguishes each code component's lexical map from dynamic
-ticket activation. Callable barriers need an authenticated empty-map body;
-ordinary clause code must retain its own binding. The component records a static
-callable-site interface and positive/negative cases. Deriving that interface from
-validated Core and extending the value and saved-frame relations remain open.
-Neither removing duplicate-owner checks nor resetting all clause maps follows
-from this evidence.
+The repaired single value/environment relation certifies each callable's source
+site, empty-map body translation and absence of free tickets. Its meaning is
+independent of the caller map. `ComponentWithMaps` separates the current code's
+map from the saved-frame map, and generic beta enters the empty callable map
+while preserving the caller continuation. The boundary example now proves this
+actual beta transition and positive representation under a colliding caller map.
+Individual saved-frame maps, post-beta traversal and initial/reachable relation
+construction remain open. Existing translator checks and legal clause bindings
+are unchanged. Fresh independent compilation of all eight affected/dependent
+modules and the retained Rust reentry fixture pass.
+
+[CoreCallableChecks.lean](CoreCallableChecks.lean) constructs the exact callable
+certificate used by that relation from finite Core graph data. It checks the
+function site, empty-map translation and free-ticket absence. An ambient-map
+check compares the complete translated body with a sound structural equality
+checker. `checked_lambda_evaluate` feeds its result directly into the actual
+lambda-entry theorem. The exported getter supplies a concrete certificate.
+Environment closing and `ClosedValue` remain explicit current premises;
+authentication against Rust validation and construction for every reachable
+callable remain open. Independent compilation and statement review pass.
 
 ### Completed strict redexes
 
@@ -455,6 +467,16 @@ Core-row equality, arbitrary callable refinement or Rust closure correspondence.
 Independent review and warnings-as-errors compilation passed. The Program
 construction uses only `propext` and `Quot.sound`; its existing initial-state
 wrapper additionally depends on `Classical.choice`.
+
+The [passed pure closure](fixtures/core-cleanup-passed-pure-closure.ash) is a
+further D4 admission obligation: validated Rust returns Unit when a user operation
+accepts a pure closure retaining a live cell, invokes it and resumes. The declared
+operation instance has no resource argument. Adding the cell to the closure's
+request allowance alone changes its operation input port, so the isolated support
+refinement does not yet establish this case. General admission must justify a
+compatible support representation or capture erasure; neither follows from the
+successful Rust run. This remains higher-order support within C2.3, not an
+additional fragment exclusion or a demonstrated runtime disagreement.
 
 ### Runtime capacity boundary
 

@@ -1,4 +1,4 @@
-import CoreValueRelation
+import CoreStrictStack
 
 /-! Owner-map boundary evidence for TASK-0032, not a semantic discrepancy.
 
@@ -18,16 +18,16 @@ introduce a duplicateOwner collision unrelated to its lexical scope. Ordinary
 clause code still needs its own lexical owner binding. Dynamic Scope ticket
 bindings are distinct from these static translation maps.
 
-Proposed minimal later bridge: keep lexical OwnerMaps with current code and
-saved contexts; interpret a stored callable's body at its empty capability
-barrier, independently of the caller's current map. CallableBoundary below
-records graph-site, translation and free-ticket evidence for that interface.
-It does not prove validated inputs supply these facts. ValueRel's closure and
-EnvCloses's function-template branches would need to use the callable's map
-rather than force the caller's map throughout the mutual relation. Frame and
-configuration relations would retain each saved code's own authenticated map.
+The repaired ValueRel/EnvCloses interpreter now uses each callable's certified
+empty-map translation and closing derivation. Their owner_transport lemmas
+preserve raw lexical meaning across caller maps without transporting source
+translation. ComponentWithMaps factors the current code map from the saved
+ordinary-frame map; generic beta enters [] while retaining caller frame maps.
+CallableBoundary below supplies a finite instance of CallableCertificate.
 
-Required later proofs: validator/export establishes the callable barrier and
+Required later proofs: existing validate.rs ScopeRequirementKey/requirements_for
+analysis (function and recursive-member reject_resume_capture; clause own-resume
+removal and foreign-resume rejection) establishes the callable barrier and
 noncapture; root translation yields the corresponding empty-map callable body
 (or a static map-pruning theorem including duplicate-owner exclusions); lexical
 substitution/capture preserves the no-outer-ticket property; saved ordinary
@@ -47,6 +47,13 @@ structure CallableBoundary (graph : CoreSyntax.Graph) (site : Nat)
   body : ∃ fuel, translateFuel graph fuel [] body = .ok rawBody
   noOuterTicket : ∀ ticket, Syntax.Dependency.ticket ticket ∉
     (Code.lambda parameter.id rawBody).dependencies
+
+theorem CallableBoundary.certificate {graph : CoreSyntax.Graph} {sourceSite bodyIndex : Nat}
+    {argument : CoreSyntax.Binder} {raw : Code}
+    (boundary : CallableBoundary graph sourceSite argument bodyIndex raw) :
+    CoreValueRelation.CallableCertificate graph argument.id bodyIndex raw := by
+  obtain ⟨node, known, kind⟩ := boundary.site
+  exact ⟨⟨sourceSite, argument, node, known, kind, rfl⟩, boundary.body, boundary.noOuterTicket⟩
 
 namespace Examples
 open CoreTranslation.Examples
@@ -115,21 +122,42 @@ theorem callable_boundary : CallableBoundary callableGraph 4 ⟨9, .unit⟩ 3 ca
 /-- The empty-map callable interpretation really admits a closed lexical value. -/
 theorem callable_value : CoreValueRelation.ValueRel callableGraph [] []
     (.closure 9 3 .empty) (.lambda 9 callableBody) := by
-  exact .closure callable_component_empty .empty (by
+  exact .closure callable_component_empty callable_boundary.certificate .empty (by
     simp [ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames,
       Clauses.freeNames, callableBody, pureEffect, Instantiation.Effect.freeNames,
       Code.dependencies, Clauses.dependencies, effectAtoms, Instantiation.Effect.resources, Syntax.without])
 
-/-- The current fixed-map closure constructor cannot represent this callable
-under a colliding caller map at any fuel. This is relation pressure, not a
-counterexample to Core execution or validated source semantics. -/
-theorem caller_map_cannot_represent_callable (handler ticket : Nat) (code : Code) :
-    ¬ CoreValueRelation.ValueRel callableGraph [⟨handler, 4, ticket⟩] []
-      (.closure 9 3 .empty) code := by
-  intro related
-  cases related with
-  | closure translated environment closed =>
-    exact callable_collision_never_succeeds handler ticket _ _ translated
+/-- The repaired single interpreter represents the callable under a colliding
+caller map while preserving its own certified empty-map body interpretation. -/
+theorem caller_map_represents_callable (handler ticket : Nat) :
+    CoreValueRelation.ValueRel callableGraph [⟨handler, 4, ticket⟩] []
+      (.closure 9 3 .empty) (.lambda 9 callableBody) :=
+  callable_value.owner_transport _
+
+private def callerOwners : OwnerMap := [⟨7, 4, CoreTranslation.ticket callableGraph 4⟩]
+private def reentryBase : CoreMachine.State := { control := .returned .unit }
+private def reentryPlain : ScopedExecution.PlainData :=
+  ⟨.appArgument (.lambda 9 callableBody),
+    .ticket (CoreTranslation.ticket callableGraph 4) 99, .unit, .unit, [], rfl⟩
+
+/-- Actual completed beta from a supplied reentry component enters the empty
+callable map while keeping the caller's saved-frame map. No source reachability
+or whole dynamic-handler/configuration relation is asserted by this test. -/
+theorem callable_reentry_beta :
+    CoreStrictStack.ComponentRel callableGraph callerOwners
+      { reentryBase with frames := [.applyArgument (.closure 9 3 .empty)] }
+      ⟨.app (.lambda 9 callableBody) .unit, reentryPlain.scope, .nil⟩ ∧
+    CoreMachine.next callableGraph { reentryBase with frames := [.applyArgument (.closure 9 3 .empty)] } =
+      .stepped { reentryBase with control := .evaluate 3 (.binding 9 .unit .empty) } ∧
+    ScopedExecution.RawStep
+      ⟨.app (.lambda 9 callableBody) .unit, reentryPlain.scope, .nil⟩
+      ⟨callableBody.subst 9 .unit, .none, .nil⟩ [] [] ∧
+    CoreStrictStack.ComponentWithMaps callableGraph [] callerOwners
+      { reentryBase with control := .evaluate 3 (.binding 9 .unit .empty) }
+      ⟨callableBody.subst 9 .unit, .none, .nil⟩ :=
+  CoreStrictStack.beta_complete (base := reentryBase)
+    (callable_value.owner_transport callerOwners) CoreValueRelation.ValueRel.unit
+    reentryPlain rfl CoreStrictStack.PushedRel.nil Execution.Scope.none
 
 /-- Resetting every component map would lose legal clause completion. -/
 theorem clause_requires_lexical_binding :
@@ -156,7 +184,8 @@ end Examples
 #print axioms Examples.callable_collision_never_succeeds
 #print axioms Examples.callable_boundary
 #print axioms Examples.callable_value
-#print axioms Examples.caller_map_cannot_represent_callable
+#print axioms Examples.caller_map_represents_callable
+#print axioms Examples.callable_reentry_beta
 #print axioms Examples.clause_requires_lexical_binding
 #print axioms Examples.clause_with_lexical_binding
 #print axioms Examples.separate_dynamic_activations

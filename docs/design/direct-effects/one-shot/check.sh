@@ -794,3 +794,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreOperationSignatures.olean" C
 lean -DwarningAsError=true -o "$proof_build_dir/CoreOwnerMapBoundary.olean" CoreOwnerMapBoundary.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreBuiltinSignatures.olean" CoreBuiltinSignatures.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreExportedAdmission.olean" CoreExportedAdmission.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableChecks.olean" CoreCallableChecks.lean

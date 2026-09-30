@@ -18,13 +18,14 @@ def ApplicationWitness (graph : CoreSyntax.Graph) (owners : CoreTranslation.Owne
     (value : MValue) (argumentCode result : Code) (coreTail : List CoreMachine.Frame)
     (scope : Scope) (targetTail : Stack) : Prop :=
   ∃ fuel rawBody,
-    CoreTranslation.translateFuel graph fuel owners body = .ok rawBody ∧
+    CoreTranslation.translateFuel graph fuel [] body = .ok rawBody ∧
     CoreMachine.next graph { base with control := .returned value, frames := .applyArgument (.closure parameter body saved) :: coreTail } =
       .stepped { base with control := .evaluate body (.binding parameter value saved), frames := coreTail } ∧
     RawStep ⟨.app (.lambda parameter result) argumentCode, scope, targetTail⟩
       ⟨result.subst parameter argumentCode, .none, targetTail⟩ [] [] ∧
-    EnvCloses graph owners base.heap (.binding parameter value saved)
-      rawBody (result.subst parameter argumentCode)
+    EnvCloses graph [] base.heap (.binding parameter value saved)
+      rawBody (result.subst parameter argumentCode) ∧
+    ValueRel graph owners base.heap value argumentCode
 
 theorem application_complete {base : CoreMachine.State}
     (function : ValueRel graph owners base.heap (.closure parameter body saved) (.lambda parameter result))
@@ -34,7 +35,7 @@ theorem application_complete {base : CoreMachine.State}
   obtain ⟨fuel, rawBody, translated, environment, closed⟩ := function.closure_view
   exact ⟨fuel, rawBody, translated, rfl,
     .beta parameter result argumentCode scope targetTail argument.closed closed,
-    environment.beta_argument argument⟩
+    environment.beta_argument (argument.owner_transport []), argument⟩
 
 /-- Bind readiness is a property of the current closed suffix, not a premise
     about the successor. Its source derivation remains a static obligation. -/
