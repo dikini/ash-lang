@@ -645,13 +645,29 @@ remain separate targets. A small first example does not reduce the final scope.
   pairs. Active admitted-resume and higher-order files are excluded. No Rust
   code changed.
 
+- `CoreAdmittedResumePrefix` extends the same admitted capture to actual s35:
+  35 Core transitions and 16 target events, with Related and Admitted evidence
+  at every intermediate point. It retains the selected input contract and
+  symbolic rows, derives the caller frame from source focus, and determines
+  owner0 and the full restored stack from the actual current resume event.
+  Saved owner maps remain authenticated witnesses rather than being inferred
+  from physical-frame equality. The ledger completes ticket0; all three owner
+  stores remove owner0 while world/history, issued owners and rights remain
+  unchanged.
+- The combined admitted-resume audit covers 827 registered modules and 11,284
+  exact dependency reports, retaining 826 unchanged verified source/report
+  pairs. The new leaf passes fresh independent warnings-as-errors compilation.
+  Active higher-order and cleanup-execution files are excluded. No Rust code
+  changed. The next admitted-prefix batch must connect the same selected data
+  through second capture.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted first-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
+| C2 | 0 / 4 | Actual-root Program and admitted first-resume prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
 | C3 | 0 / 5 | Forty-five-transition lexical discard prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Cleanup application/beta batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted first-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-resume batch 1–2 hours; total unresolved |
+| C5 | 0 / 4 | Admitted first-resume prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted second-capture batch estimated after witness inspection; total unresolved |
 
 ## Verification
 

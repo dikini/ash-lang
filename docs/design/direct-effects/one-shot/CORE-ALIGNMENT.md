@@ -1154,9 +1154,24 @@ Every intermediate Core point relates to a constructed admitted snapshot. The
 final world/history are `[0]`, issued owners are
 `[resource 0, cleanup 0, ticket 0]`, and nothing is completed. The ticket rights
 are the actual clause's required actions. All 25 affected modules pass fresh
-independent compilation with standard axioms. Admission through first resume
-and later execution remains open, as do general metadata authentication and
-higher-order admission.
+independent compilation with standard axioms. The following construction extends
+the same admitted prefix through first resume.
+
+[CoreAdmittedResumePrefix.lean](CoreAdmittedResumePrefix.lean) reaches actual s35
+after 35 Core transitions and 16 target events. Branch selection retains the
+capture-selected data and symbolic resume/close rows. Source focus supplies the
+post-resume frame; the current resume event determines owner0 and the complete
+restored capture, caller frame, spent marker and outside spine. Saved owner maps
+come from the existing relation, with an exact physical-frame equality; physical
+frames alone do not determine those maps.
+
+Every intermediate Core point relates to a constructed admitted snapshot. The
+world/history and issued ledger remain unchanged, completed owners become
+`[ticket 0]`, and the resume, disposal and annotated stores remove owner0. Ticket
+rights remain unchanged. Fresh independent warnings-as-errors compilation and
+all five dependency reports pass with standard axioms. Admission through second
+capture and later execution, general metadata authentication and higher-order
+admission remain open.
 
 ### Initial-admission interface repair
 
