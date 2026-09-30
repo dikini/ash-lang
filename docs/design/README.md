@@ -92,6 +92,15 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 
 ### Effects and dynamic composition
 
+- [DN-0033: Direct Effects and Continuation Capabilities](DN-0033-direct-effects-and-continuation-capabilities.md)
+  — direct operational calculus, ordered interpretation frames, ownership and
+  continuation checks, mixed-handler derivations, and scoped async exploration.
+- [DN-0032: Algebra of Scoped Resource Composition](DN-0032-algebra-of-scoped-resource-composition.md)
+  — literature-based derivation of binding, resource/body composition,
+  provider interpretation and conditional lifetime laws.
+- [DN-0031: Resource Composition Concept Map](DN-0031-resource-composition-concept-map.md)
+  — maintained concept, identity, implementation-coverage and overlap maps for
+  the exploratory algebra of resources, effects, providers and handlers.
 - [Milestone closure evidence](effect-ash/milestone-closure-evidence.md) —
   combined conformance, downstream-pressure and simplification audit; final
   merged-main verification passed after signed integration.

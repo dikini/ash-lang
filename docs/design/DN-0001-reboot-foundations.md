@@ -659,6 +659,87 @@ The intended principle is:
 
 > The law is the obligation; testing attempts to falsify it; proof establishes it.
 
+### Search and exploration
+
+The future testing direction is to explore inputs and executions that make
+plausible faults observable. QuickCheck-style generation is one starting point.
+AFL-style coverage feedback could guide exploration, but coverage is only one
+signal. Even complete coverage under a chosen metric does not establish that a
+trace exposing a fault has been executed. Values, operation ordering, and state
+relationships can differ while exercising the same branches.
+
+Candidate feedback includes code coverage, boundary values, new state
+transitions, and domain-specific classifications. A case may remain useful even
+when it adds no code coverage. Passing results mean no counterexample was found
+within the recorded search and budget; they do not discharge the law or authorize
+compiler optimization.
+
+### Library composition and supporting capabilities
+
+Generators and search strategies appear to be library concerns. The architectural
+pressure is to support their definition and composition without committing to
+language syntax, a library API, or a particular search algorithm.
+
+A useful conceptual distinction is between constructing candidates and deciding
+which candidates to explore next. Composition could include:
+
+- constructing larger values from smaller generators, including choices that
+  depend on previously generated values or model state;
+- combining fresh generation, mutation of retained cases, boundary exploration,
+  and bounded enumeration;
+- allocating effort among strategies using observations from earlier runs.
+
+Adaptive exploration needs to retain state and consume execution feedback.
+Controllable, replayable generation choices could let a search strategy reuse a
+generator while changing how it explores those choices. Automatically derived
+generators could supply defaults, with libraries adding domain knowledge. These
+are capabilities to investigate, not a selected representation or protocol.
+
+Compiler or runtime support may be needed to collect observations; the policy
+using them can remain in a library. For tests of Ash programs, investigate
+coverage associated with Ash/Core execution sites: host coverage of the evaluator
+can emphasize interpreter machinery rather than distinguish branches in the
+tested program. Testing the evaluator itself has a different coverage target.
+
+### Evaluation pressures and open questions
+
+- Type-correct generation does not ensure semantic preconditions. Compare
+  construction of valid inputs with rejection and feedback-guided search; keep
+  discarded cases distinct from successful checks.
+- Preserve fresh exploration alongside adaptive search. Coverage can plateau
+  while relevant values and executions remain unexplored.
+- Replay must account for adaptive search history. Retained concrete cases or
+  generation choices may be needed beyond an initial random seed.
+- Shrinking should preserve the failure and its preconditions, without requiring
+  all coverage discovered during exploration to remain.
+- Effectful laws need explicit initial conditions and observations for comparing
+  executions. Search cannot supply a missing definition of equivalence.
+- Compare fault discovery under equal wall-clock budgets, including observation
+  overhead, rather than judging strategies by coverage alone. Historical
+  regressions and deliberately seeded faults could provide evidence, while their
+  selection may bias the comparison.
+
+No implementation or experiment is selected here. A later experiment should
+compare ordinary generation with guided alternatives on representative laws,
+including sparse preconditions, branch-heavy behavior, and algebraic properties
+where coverage provides little guidance.
+
+### Research references
+
+- Lampropoulos, Hicks, and Pierce,
+  [Coverage Guided, Property Based Testing](https://lemonidas.github.io/pdf/FuzzChick.pdf)
+  (2019): FuzzChick combines QuickChick with coverage feedback and type-aware
+  mutation. Its abstract-machine experiments show improved fault discovery for
+  sparse preconditions; carefully tuned handwritten generators can still do
+  better. This supports investigating guided search, not a general performance
+  claim for Ash.
+- Padhye et al.,
+  [Semantic Fuzzing with Zest](https://people.eecs.berkeley.edu/~ksen/papers/zest.pdf)
+  (2019): Zest mutates the parameters underlying QuickCheck-style generators and
+  uses coverage and input validity as feedback. Its structured Java benchmarks
+  provide an alternative to direct typed-value mutation. Neither approach is
+  selected for Ash.
+
 ---
 
 ## 16. Compiler use of laws
