@@ -548,11 +548,26 @@ remain separate targets. A small first example does not reduce the final scope.
   next-stage admission work is excluded from this snapshot. Rust remains
   unchanged since the 2,900-test product gate.
 
+- `CoreResumeFrames` and `CoreResumeEntry` extend the same runtime chain to
+  first resume completion after 35 actual Core transitions. The exact owner
+  cut restores the captured frames, caller frames, spent marker and outside
+  frames with their saved maps. The issued ledger remains
+  `[resource 0, cleanup 0, ticket 0]`; ticket0 is discharged once. Negative
+  proofs reject reusing it, searching dormant captures and unchanged-state
+  silent matching. Scope coherence and annotation authentication remain
+  explicit inputs, not claims of general reachable-state coverage.
+- The resume audit covers 818 registered modules and 11,206 exact dependency
+  reports. All 16 affected modules pass fresh independent warnings-as-errors
+  compilation; 802 unchanged verified source/report pairs are retained. Active
+  callable admission and cleanup admission work is excluded from the frozen
+  snapshot. No Rust code changed. The next runtime batch starts at the same
+  reached state and connects the second request and capture.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted handler prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits effectful source and M4 migration |
-| C3 | 0 / 5 | Twenty-eight-transition first-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | First-resume batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Thirty-five-transition first-resume prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Second-request/capture batch estimate under review; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs verified; ordinary contract-source gate independently verified | Migrate effectful callable evidence and retained support through M4 | Effectful authenticated source and M4 current/pending/coherent migration | Effectful source checkpoint 1–2 hours; full repair estimate unresolved |
 | C5 | 0 / 4 | Admitted handler-entry prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted cleanup-registration prefix 1–2 hours; total unresolved |
 

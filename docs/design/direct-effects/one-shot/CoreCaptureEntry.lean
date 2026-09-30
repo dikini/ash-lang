@@ -19,6 +19,7 @@ inductive PushCarrier (graph : CoreSyntax.Graph) (owners : CoreTranslation.Owner
   | ordinary (related : PlainFrameRel graph owners heap core plain) : PushCarrier graph owners heap core (.plain plain)
   | initializer (related : InitializerRel graph owners heap core plain) : PushCarrier graph owners heap core (.plain plain)
   | request (related : RequestRel graph owners heap core plain) : PushCarrier graph owners heap core (.plain plain)
+  | resume (related : CoreResumeFrames.ResumeRel graph owners heap core plain) : PushCarrier graph owners heap core (.plain plain)
   | cleanup (related : CleanupRel graph owners heap core data) : PushCarrier graph owners heap core (.armed data)
   | boundary (related : BoundaryRel graph owners heap core frame) : PushCarrier graph owners heap core frame
 
@@ -29,6 +30,7 @@ theorem PushCarrier.prepend (related : PushCarrier graph owners heap core frame)
   | ordinary related => exact .cons related tail
   | initializer related => exact .initializer related tail
   | request related => exact .request related tail
+  | resume related => exact .resume related tail
   | cleanup related => exact .cleanup related tail
   | boundary related => exact .boundary related tail
 
@@ -49,6 +51,7 @@ theorem PushCarrier.selector_miss (related : PushCarrier graph owners heap core 
       cases related <;> simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
   | initializer related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
   | request related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
+  | resume related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
   | cleanup related => cases related; simp [CoreMachine.findInterpreter, next, Bind.bind, Except.bind, Pure.pure, Except.pure]
   | boundary related =>
       cases related with
@@ -307,6 +310,12 @@ private theorem cleanup_head_pushed
         simpa using head.symm
       cases same
       cases frame
+  | @resume frameOwners core plain cores code scope result resultScope frame ready tail =>
+      have same : core = .cleanupBoundary action saved identity := by
+        have head := congrArg (fun xs => xs.head?.map Prod.snd) split
+        simpa using head.symm
+      cases same
+      cases frame
 
 private theorem current_guarded : EnvCloses graph [] [] callbackEnv (raw 24) guardedCode ∧
     PushedWithMaps graph [] r24.annotations guardedTarget.stack := by
@@ -377,6 +386,7 @@ private theorem pushed_head
   | cons relation tail => exact ⟨.ordinary relation,tail⟩
   | initializer relation tail => exact ⟨.initializer relation,tail⟩
   | request relation tail => exact ⟨.request relation,tail⟩
+  | resume relation tail => exact ⟨.resume relation,tail⟩
   | cleanup relation tail => exact ⟨.cleanup relation,tail⟩
   | boundary relation tail => exact ⟨.boundary relation,tail⟩
 
@@ -426,6 +436,20 @@ def clauseTarget : Configuration := ⟨firstClauseBody.subst 9 (.boolean true),.
   .live 0 .unit .unit capturedTarget .none (.push (.plain handlerPlain) cell)⟩
 def s28 : CoreMachine.State := { s27 with control := .evaluate 40 (.binding 9 (.boolean true) methodsEnv), frames := .clauseBoundary 0 0 0 0 (some (framesOf capturedMaps)) :: framesOf outsideMaps, nextOwner := 1, observations := s27.observations ++ [.captured 0 0] }
 def t28 : Point := ⟨s28,clauseTarget,clauseMaps,([], .clauseBoundary 0 0 0 0 (some (framesOf capturedMaps))) :: outsideMaps⟩
+
+/-- Exact saved annotation witnesses from the same selected cut used by
+capture. framesOf is not inverted to guess captured owner maps. -/
+theorem first_capture_parts : OwnerHeader graph [] [] 0 0 0 handlerData ∧
+    PushedWithMaps graph [] capturedMaps capturedTarget ∧
+    PushedWithMaps graph [] outsideMaps (.push (.plain handlerPlain) cell) := by
+  obtain ⟨_,_,_,captured,outside⟩ := selected_cut.realizes
+  have boundary := selected_cut.header
+  have header : OwnerHeader graph [] [] 0 0 0 handlerData :=
+    .selected (clause := ⟨0,.binder ⟨9,.boolean⟩,0,40⟩)
+      (rfl : graph.node 41 = some (node 41)) rfl (List.mem_cons_self) rfl boundary rfl firstSelection
+  exact ⟨header,captured,outside⟩
+
+#print axioms first_capture_parts
 
 private theorem capture : Link graph t27 t28 ∧ RawStep requestTarget clauseTarget [.ticket 0] [] := by
   have requestCarrier := perform_header_at focus_bind.2.1 _ _ _ _ _ rfl rfl

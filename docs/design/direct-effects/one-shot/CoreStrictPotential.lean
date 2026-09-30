@@ -8,7 +8,7 @@ unchanged-target progress. No effect transition is authorized by its weight.
 Translation, lexical interpretation, closed readiness and PlainData annotation
 obligations remain explicit current inputs. No whole simulation is claimed. -/
 namespace Ash.OneShot.CoreStrictPotential
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreStrictStack CoreRequestFrames
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreStrictStack CoreRequestFrames CoreResumeFrames
 
 /-- Reuse the frozen static postorder condition and checker extraction. -/
 abbrev Postorder := CoreTranslationFuel.Postorder
@@ -34,7 +34,7 @@ theorem cost_recurrence (ordered : Postorder graph)
 
 def frameWeight (graph : CoreSyntax.Graph) : CoreMachine.Frame → Nat
   | .applyFunction argument _ | .tupleLeft argument _ => nodeCost graph argument + 2
-  | .applyArgument _ | .tupleRight _ | .request _ _ _ => 1
+  | .applyArgument _ | .tupleRight _ | .request _ _ _ | .resume _ _ => 1
   | .bind _ body _ | .resourceInitializer _ _ _ body _ => nodeCost graph body + 1
   | .matchCases arms _ => (arms.map fun arm => nodeCost graph arm.body).sum + 1
   | _ => 0
@@ -159,7 +159,7 @@ def traversalReady (graph : CoreSyntax.Graph) (state : CoreMachine.State) : Bool
   match state.control with
   | .evaluate index _ => match graph.node index with
     | some node => match node.kind with
-      | .apply _ _ | .tuple [_, _] | .bind _ _ _ | .resource _ _ _ _ | .request _ _ _
+      | .apply _ _ | .tuple [_, _] | .bind _ _ _ | .resource _ _ _ _ | .request _ _ _ | .resume _ _ _ _
         | .matchCases _ [⟨.unit, _⟩]
         | .matchCases _ [⟨.boolean true, _⟩, ⟨.boolean false, _⟩]
         | .matchCases _ [⟨.boolean false, _⟩, ⟨.boolean true, _⟩] => true
@@ -501,6 +501,48 @@ theorem request_entry_same_target_mapped {base : CoreMachine.State}
 
 #print axioms request_entry_decreases
 #print axioms request_entry_same_target_mapped
+
+/-- Resume operand traversal is administrative; completion remains one
+positive consuming rule and cannot use this measure as an escape. -/
+theorem resume_entry_decreases {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .resume handler owner post operand) (tail : List CoreMachine.Frame) :
+    CoreMachine.next graph { base with control := .evaluate site environment, frames := tail } =
+      .stepped { base with control := .evaluate operand environment, frames := .resume handler owner :: tail, observations := base.observations ++ [.entered site] } ∧
+    potential graph { base with control := .evaluate operand environment, frames := .resume handler owner :: tail, observations := base.observations ++ [.entered site] } <
+      potential graph { base with control := .evaluate site environment, frames := tail } := by
+  have cost := cost_recurrence ordered known
+  simp only [kind,CoreSyntax.Kind.children,List.map_cons,List.map_nil,List.sum_cons,List.sum_nil] at cost
+  refine ⟨?_,?_⟩
+  · cases node with
+    | mk original type effects source nodeKind => cases kind; simp only [CoreMachine.next,known]
+  · simp only [potential,List.map_cons,List.sum_cons,frameWeight]
+    omega
+
+theorem resume_entry_same_target_mapped {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .resume handler owner post operand)
+    (translated : CoreTranslation.translateFuel graph fuel owners site = .ok (.resume binder raw))
+    (current : EnvCloses graph owners base.heap environment (.resume binder raw) (.resume binder code))
+    (ready : ClosedValue code) (plain : PlainData) (context : plain.context = .resume binder)
+    (older : PushedWithMaps graph base.heap annotations target) :
+    SilentMapped graph owners owners annotations ((owners,.resume handler owner) :: annotations)
+      { base with control := .evaluate site environment, frames := framesOf annotations }
+      { base with control := .evaluate operand environment, frames := .resume handler owner :: framesOf annotations, observations := base.observations ++ [.entered site] }
+      ⟨.resume binder code,plain.scope,target⟩ := by
+  obtain ⟨operandFuel,resolved,childTranslated⟩ := resume_translation_parts known kind translated
+  obtain ⟨_,child,marker⟩ := resume_components current
+  have frame : ResumeRel graph owners base.heap (.resume handler owner) plain :=
+    .operand known kind translated resolved marker context
+  have stack := prepend_resume frame ready (pushed_mapped older) plain.scope
+  simp only [context,Context.plug] at stack
+  obtain ⟨next,decrease⟩ := resume_entry_decreases (base := base) ordered known kind (framesOf annotations)
+  exact ⟨next,decrease,by simp [traversalReady,known,kind],
+    ⟨rfl,_,plain.scope,.evaluate translated current,pushed_mapped older⟩,
+    ⟨rfl,_,plain.scope,.evaluate childTranslated child,stack⟩⟩
+
+#print axioms resume_entry_decreases
+#print axioms resume_entry_same_target_mapped
 
 namespace Examples
 open CoreMachineExamples

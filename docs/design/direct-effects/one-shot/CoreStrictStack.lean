@@ -2,6 +2,7 @@ import CoreStrictFrames
 import CoreEffectFrames
 import CoreCleanupFrames
 import CoreRequestFrames
+import CoreResumeFrames
 
 /-! Bounded ordinary-stack components for TASK-0032.
 Only a contiguous inner prefix may be flattened. Each flattened hole must be
@@ -13,7 +14,7 @@ and discard have no relation constructors; exact live/spent owners, armed cleanu
 resource initializers are explicit constructors, never opaque related suffixes.
 No full simulation theorem or future configuration validity is assumed. -/
 namespace Ash.OneShot.CoreStrictStack
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames CoreCleanupFrames CoreRequestFrames
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames CoreCleanupFrames CoreRequestFrames CoreResumeFrames
 
 abbrev MappedFrame := CoreTranslation.OwnerMap × CoreMachine.Frame
 
@@ -44,6 +45,9 @@ inductive PushedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) : List MappedF
   | request (frame : RequestRel graph owners heap core plain)
       (tail : PushedWithMaps graph heap cores target) :
       PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
+  | resume (frame : ResumeRel graph owners heap core plain)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
   | live (header : OwnerHeader graph owners heap handler owner occurrence data)
       (captured : PushedWithMaps graph heap capturedMaps capturedTarget)
       (outside : PushedWithMaps graph heap outsideMaps outsideTarget) :
@@ -68,6 +72,10 @@ inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
       (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
       FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
   | request (frame : RequestRel graph owners heap core plain)
+      (ready : ClosedValue code)
+      (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
+      FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
+  | resume (frame : ResumeRel graph owners heap core plain)
       (ready : ClosedValue code)
       (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
       FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
@@ -129,6 +137,7 @@ theorem PushedWithMaps.heap_weaken (related : PushedWithMaps graph heap cores ta
   | boundary frame tail ih => exact .boundary (BoundaryRel.heap_weaken frame extension) ih
   | cleanup frame tail ih => exact .cleanup (CleanupRel.heap_weaken frame extension) ih
   | request frame tail ih => exact .request (RequestRel.heap_weaken frame extension) ih
+  | resume frame tail ih => exact .resume (ResumeRel.heap_weaken frame extension) ih
   | live header captured outside ihCaptured ihOutside =>
       exact .live (OwnerHeader.heap_weaken header extension) ihCaptured ihOutside
   | spent header outside ihOutside => exact .spent (OwnerHeader.heap_weaken header extension) ihOutside
@@ -141,6 +150,7 @@ theorem FlattenedWithMaps.heap_weaken
   | cons frame ready tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ready ih
   | initializer frame ready tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ready ih
   | request frame ready tail ih => exact .request (RequestRel.heap_weaken frame extension) ready ih
+  | resume frame ready tail ih => exact .resume (ResumeRel.heap_weaken frame extension) ready ih
 
 theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
     (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target :=
@@ -349,6 +359,7 @@ theorem application_flattening_barrier :
   cases related with
   | initializer frame ready tail => cases frame
   | request frame ready tail => cases frame
+  | resume frame ready tail => cases frame
   | cons frame ready tail =>
     rename_i plain
     have notValue : ¬ (plain.context.plug argument).IsValue := by
@@ -360,6 +371,7 @@ theorem application_flattening_barrier :
     | cons nextFrame nextReady remaining => exact notValue nextReady.1
     | initializer nextFrame nextReady remaining => exact notValue nextReady.1
     | request nextFrame nextReady remaining => exact notValue nextReady.1
+    | resume nextFrame nextReady remaining => exact notValue nextReady.1
 
 
 namespace Examples
@@ -432,4 +444,31 @@ theorem prepend_request (frame : RequestRel graph owners heap core plain)
     .request frame ready flattened, pushed⟩
 
 #print axioms prepend_request
+theorem prepend_resume (frame : ResumeRel graph owners heap core plain)
+    (ready : ClosedValue code)
+    (tail : OrdinaryWithMaps graph heap annotations (plain.context.plug code) plain.scope result resultScope target)
+    (runtimeScope : Scope) :
+    OrdinaryWithMaps graph heap ((owners, core) :: annotations) code runtimeScope result resultScope target := by
+  obtain ⟨flatPrefix,suffix,split,flattened,pushed⟩ := tail
+  exact ⟨(owners,core) :: flatPrefix,suffix,congrArg ((owners,core) :: ·) split,.resume frame ready flattened,pushed⟩
+
+/-- Append affects only the active outside spine. Dormant captures retain their
+exact interpretation instead of being flattened or appended themselves. -/
+theorem PushedWithMaps.append
+    (first : PushedWithMaps graph heap before target)
+    (second : PushedWithMaps graph heap after tail) :
+    PushedWithMaps graph heap (before ++ after) (target.append tail) := by
+  induction first with
+  | nil => exact second
+  | cons frame rest ih => exact .cons frame ih
+  | initializer frame rest ih => exact .initializer frame ih
+  | request frame rest ih => exact .request frame ih
+  | resume frame rest ih => exact .resume frame ih
+  | cleanup frame rest ih => exact .cleanup frame ih
+  | boundary frame rest ih => exact .boundary frame ih
+  | live header captured outside _ ih => exact .live header captured ih
+  | spent header outside ih => exact .spent header ih
+
+#print axioms prepend_resume
+#print axioms PushedWithMaps.append
 end Ash.OneShot.CoreStrictStack

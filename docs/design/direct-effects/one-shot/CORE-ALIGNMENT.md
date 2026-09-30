@@ -579,6 +579,30 @@ modules passes with standard axioms. Supplied annotations, reachable owner-map
 coherence, live-owner uniqueness and M4 capture validity remain obligations;
 this prefix does not prove resume, discard or cleanup execution.
 
+[CoreResumeFrames.lean](CoreResumeFrames.lean) derives resume operands and
+static owner resolution from the same translated expression and saved
+environment. Value-ready operand traversal decreases the existing strict
+potential; non-value operands take a positive target focus step.
+
+[CoreResumeEntry.lean](CoreResumeEntry.lean) relates the exact Core owner lookup
+to the target stack cut. A successful resume restores the captured prefix,
+then the caller's active frames, then the consumed owner marker and its outside
+frames. Captured owner maps are retained recursively. The successor relation
+is constructed from this cut and the returned value; its scope must resolve the
+resume binder to the selected dynamic ticket. A matching spent owner stops
+lookup, including when an older live occurrence exists. Dormant captures are
+not searched for a different owner.
+
+The same initial chain now reaches the first resume completion after 35 actual
+Core transitions. Its restored frames retain the pending second request,
+cleanup action27, handler41, post-resume write11, spent ticket0 and the outside
+getter/cell. The target ledger creates `[resource 0, cleanup 0, ticket 0]` and
+discharges `[ticket 0]`. Reusing ticket0 and unchanged-state silent matching are
+proved to reject. All 16 affected modules pass fresh independent compilation
+with standard axioms. Generic scope coherence and annotation authentication
+remain obligations; this extension does not establish M4 validity, the second
+capture, discard or cleanup execution.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
