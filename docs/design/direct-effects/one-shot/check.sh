@@ -774,3 +774,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreTranslation.olean" CoreTrans
 lean -DwarningAsError=true -o "$proof_build_dir/CoreExportedFixture.olean" CoreExportedFixture.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreInitialExample.olean" CoreInitialExample.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreClauseCoherence.olean" CoreClauseCoherence.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreMachine.olean" CoreMachine.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreMachineExamples.olean" CoreMachineExamples.lean

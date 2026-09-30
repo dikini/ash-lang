@@ -33,6 +33,47 @@ Acceptance: executable Core input, constructed admission, nonvacuous finite
 execution correspondence and explicit finite-capacity treatment. Final interfaces
 and worker file ownership follow C1 findings; no speculative parallel writes.
 
+### Remaining integration order
+
+The finite graph translator and actual Rust exporter are retained. The first
+kernel admission attempt exposed D8: a clause interface admitted independently
+chosen receiving tails that alias captured owners. Finish the conditional
+closing-separation repair and construct the complete fixture's `Program` before
+generalizing admission. Derive the condition from existing unwind ownership and
+uniqueness; resume-only outside demands remain permitted.
+
+The independent `CoreMachine` now provides concrete configurations for the C3
+relation. Verify its successful transitions and the opt-in snapshots taken by
+Rust's actual `run_loop`, then connect these representations in this order:
+
+1. Relate scalar values, resource keys, tuple locations and closures to scoped
+   calculus values. Heap lookup must preserve binary products. Closure lookup
+   must preserve the captured environment suffix and resource instantiation.
+   A nonrecursive function template includes itself in Core's environment;
+   removing that unused binding requires the nonrecursion evidence.
+2. Relate strict evaluation contexts, source handlers, live and consumed clause
+   owners, and nested captures. Reverse Rust's outermost-first frame vectors
+   exactly once. Assign handler, cleanup and ticket ghost identities to dynamic
+   occurrences; static node IDs cannot distinguish repeated activations.
+3. Relate discard projection and lexical unwind using the existing closing
+   order and route lemmas. Derive that retained lexical handlers cannot change
+   callback dispatch for admitted Core cleanup. Equal closing-item order alone
+   does not prove callback execution correspondence.
+4. Prove each transition match with an explicit rank for administrative steps.
+   In particular, Core evaluates literals and variables into return controls
+   where the calculus can already have a value. Internal `entered` observations
+   are not Rust's dispatch trace: Rust omits cleanup registration entries.
+   State which projection supplies observable results, cell operations and
+   cleanup order.
+5. Compare structured Rust snapshots with this relation, retaining raw identity
+   distinctions before any deterministic normalization. Successful preparation
+   includes disposal checks during mutation. Keep failed execution prefixes
+   separate until their partial observations have been accounted for.
+
+These are dependencies within C3.1–C3.5, not additional packages or a replacement
+for the general transition proof. Snapshot tests establish implementation
+evidence; they do not construct calculus validity or prove simulation.
+
 ## Increment 3: Generalize the declared fragment
 
 Generalize static translation by structural induction and runtime correspondence

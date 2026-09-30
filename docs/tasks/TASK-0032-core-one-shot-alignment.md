@@ -100,21 +100,38 @@ remain separate targets. A small first example does not reduce the final scope.
   and translate strict syntax with lexical owner mapping. Request, resource and
   cleanup equations and administrative-name separation are proved. Metadata
   authentication, fuel sufficiency and initial admission remain open.
-- The test-only Rust exporter is being implemented against an actual validated
-  graph. The independent Core machine is a separate worker batch; its step
-  definition must not assume calculus execution or validity.
+- The test-only Rust exporter and generated 55-node fixture passed seven focused
+  Rust tests, clippy and independent Lean kernel checks. Commit `83c9969` retains
+  them and the admission-gap evidence. The manifest remains data, not a static
+  authentication theorem. Actual-loop snapshots and the independent Core
+  machine are separate batches; neither may assume calculus validity.
 - The complete kernel admission fixture exposed a failed phase-transport
   argument: consuming saved owner demand can change a suffix request's protection
-  bit. A negative row-certificate witness is under construction. The admitted
-  fragment has not been reduced, and no calculus interface change is yet chosen.
+  bit. The negative row-certificate witness and a conditional separation repair
+  component both passed independent compilation. Existing unwind ownership and
+  uniqueness derive the new condition for disposing captures. Integration into
+  the clause interface is underway; resume-only external demands remain
+  unrestricted. The intended kernel fragment has not been reduced.
+- C4.1 is reopened for D8's experimental admission repair. C4.2/C4.3 retain the
+  locally verified D2 regressions and will be extended with the repair. The
+  local completed count therefore changes from 3/3 for D2 to 2/3 overall; this
+  records new work under the existing inventory, not a D2 regression.
+- The independent graph-based `CoreMachine` and its examples passed fresh
+  independent compilation. Named full-graph checks prove result 11 and writes
+  `[7, 11]`, with only `propext`; focused cases cover lexical environments,
+  exact selection, full-prefix resume, nested closing order and consumed-owner
+  rejection. The first `rfl` attempt was stopped for excessive memory use;
+  kernel-checked `decide` passes the same assertions. Both modules are registered
+  in `check.sh`. The general value/configuration relation and simulation remain
+  open, so C3's completed-deliverable count stays unchanged.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
-| C1 | 5 / 5 | Verified and reviewed | Retain findings at integration | Documentation integration pending |
-| C2 | 0 / 4 | Syntax and support constructions underway | General static compiler and full admission | First constructions: 1–2 active hours; total awaits fresh-owner clause compiler evidence |
-| C3 | 0 / 5 | Closing projection component verified | Complete state relation, transitions and observations | Depends on C2; full estimate unresolved |
-| C4 | 3 / 3 for currently demonstrated D2 | Implementation, review and full Rust gate complete | Product checkpoint; future C2/C3 discrepancies may add cases | Documentation integration pending |
-| C5 | 0 / 4 | Baseline and current product checks pass | Integrated theorem and final scope audit | Depends on C2–C4 |
+| C1 | 5 / 5 | Committed, verified and reviewed; D8 classified | Maintain findings through integration | Under 1 active hour for records |
+| C2 | 0 / 4 | Syntax/export components verified; admission repair underway | General static compiler and full admission | Current batch 1–2 active hours; generalization estimate unresolved |
+| C3 | 0 / 5 | Closing projection verified; independent machine underway | Complete state relation, transitions and observations | Machine/snapshot batch 1–2 active hours; full proof estimate unresolved |
+| C4 | 2 / 3 locally complete | D2 verified; C4.1 reopened for D8 | Integrate and verify experimental admission repair | C2; current repair about 1–2 active hours |
+| C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification
 

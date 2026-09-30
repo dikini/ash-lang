@@ -211,6 +211,32 @@ and owner completion need separate relations; ledger permutations alone do not
 establish order. Rust tests and exported examples remain implementation evidence,
 distinct from the general theorem about the formal Core model.
 
+### Independent Core machine
+
+[CoreMachine.lean](CoreMachine.lean) evaluates the finite Core graph directly.
+Its control, lexical environments, tuple heap, frame stack and nested captured
+segments are distinct from calculus configurations. It covers the declared
+ordinary constructs, singleton nonrecursive entry template, cells, handlers,
+resume, discard and cleanup. Successful `Step` is an equation for this machine's
+own `next` function; rejected and terminal outcomes cannot supply such a step.
+Storage and identities are mathematically unbounded. Successful correspondence
+with Rust's fallible preparation remains a separate obligation.
+
+[CoreMachineExamples.lean](CoreMachineExamples.lean) kernel-checks the actual
+exported graph: `exported_result` gives 11 and `exported_write_order` gives
+`[7, 11]`. Additional checks cover lexical closure lookup, repeated resource
+activations, nearest exact handler selection, missing-clause masking, complete
+capture restoration, consumed-owner rejection and nested structural closing
+order. Fresh independent compilation passed; the named result, write-order and
+non-step theorems report only `propext`.
+
+The first monolithic `rfl` check exhausted practical host memory and was stopped
+deliberately. Kernel-checked `decide` verifies the same full-graph assertions
+without that reduction cost; no native decision axiom is used. These examples
+do not prove graph admission, a general state relation or simulation. Dynamic
+occurrence counters are ghost metadata, and internal `entered` observations
+are not Rust's dispatch trace, which omits cleanup registration entries.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
