@@ -1417,3 +1417,504 @@ fn normalization_preserves_distinct_module_and_program_identities() {
         SnapshotError::ForeignProgram
     );
 }
+
+// This renderer reads the retained actual-loop data only. Frozen identities
+// come from the graph exporter; no model evaluator participates in generation.
+struct ObservationExporter<'a> {
+    identities: &'a crate::core::alignment_export::IdentityMaps,
+    entries: &'a [EntryRecord],
+}
+impl ObservationExporter<'_> {
+    fn list(items: impl IntoIterator<Item = String>) -> String {
+        format!("[{}]", items.into_iter().collect::<Vec<_>>().join(", "))
+    }
+    fn node(&self, node: &NodeReference) -> Result<usize, String> {
+        let raw = node
+            .raw
+            .ok_or("normalized node cannot be exported as actual data")?;
+        if raw.value() != node.original {
+            return Err("original node identity mismatch".into());
+        }
+        self.identities
+            .nodes
+            .get(&raw)
+            .copied()
+            .ok_or_else(|| "node absent from graph numbering".into())
+    }
+    fn binder(&self, binder: BinderId) -> Result<usize, String> {
+        self.identities
+            .binders
+            .get(&binder)
+            .copied()
+            .ok_or_else(|| "binder absent from graph numbering".into())
+    }
+    fn owner(&self, owner: ResumeId) -> Result<usize, String> {
+        self.identities
+            .owners
+            .get(&owner)
+            .copied()
+            .ok_or_else(|| "owner absent from graph numbering".into())
+    }
+    fn resource(&self, identity: TypeVariableId) -> Result<usize, String> {
+        self.identities
+            .resources
+            .get(&identity)
+            .copied()
+            .ok_or_else(|| "resource absent from graph numbering".into())
+    }
+    fn instantiation(&self, instantiation: &InstantiationRecord) -> Result<String, String> {
+        let mut bindings = instantiation
+            .0
+            .iter()
+            .map(|(identity, key)| Ok((self.resource(*identity)?, *key)))
+            .collect::<Result<Vec<_>, String>>()?;
+        bindings.sort_unstable();
+        Ok(Self::list(
+            bindings
+                .into_iter()
+                .map(|(name, key)| format!("({name}, {key})")),
+        ))
+    }
+    fn resource_argument(&self, ty: &Type) -> Result<String, String> {
+        match ty {
+            Type::Variable(identity) => Ok(format!("(.bound {})", self.resource(*identity)?)),
+            Type::Inference(key) => Ok(format!("(.activation {})", key.value())),
+            _ => Err("unsupported runtime effect argument".into()),
+        }
+    }
+    fn effect(&self, effect: &EffectInstance) -> Result<String, String> {
+        if let Some(api) = crate::resolved::ResourceApi::for_module(effect.effect().module()) {
+            if api.is_native_buffer() || effect.effect() != api.ops() {
+                return Err("unsupported runtime builtin effect".into());
+            }
+            let [argument] = effect.arguments() else {
+                return Err("cell effect arity".into());
+            };
+            return Ok(format!("(.cell {})", self.resource_argument(argument)?));
+        }
+        let id = self
+            .identities
+            .effects
+            .get(&effect.effect())
+            .ok_or("effect absent from graph numbering")?;
+        let args = effect
+            .arguments()
+            .iter()
+            .map(|ty| {
+                self.resource_argument(ty)
+                    .map(|resource| format!("(.resource {resource})"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(format!("(.user {id} {})", Self::list(args)))
+    }
+    fn operation_effect(&self, operation: crate::types::OperationId) -> Result<String, String> {
+        let effect = operation.owner();
+        if let Some(api) = crate::resolved::ResourceApi::for_module(effect.module()) {
+            if api.is_native_buffer() || effect != api.ops() {
+                return Err("unsupported trace builtin effect".into());
+            }
+            // EffectTrace stores declaration identities, not request arguments.
+            return Ok(".cell".into());
+        }
+        let id = self
+            .identities
+            .effects
+            .get(&effect)
+            .ok_or("trace effect absent from graph numbering")?;
+        Ok(format!("(.user {id})"))
+    }
+    fn environment(&self, environment: &EnvironmentRecord) -> Result<String, String> {
+        let mut entries = Vec::new();
+        let mut head = environment.head;
+        while let Some(index) = head {
+            let entry = self.entries.get(index).ok_or("environment reference")?;
+            let bindings = self.instantiation(&entry.instantiation)?;
+            entries.push(match &entry.kind {
+                EntryKind::Binding { binder, value } => format!(
+                    "(.binding {} {} {} {bindings})",
+                    self.binder(*binder)?,
+                    self.value(value)?,
+                    entry.visible_len
+                ),
+                EntryKind::Recursive { members } => {
+                    let [member] = members.as_slice() else {
+                        return Err("multiple function templates outside observed wrapper".into());
+                    };
+                    format!(
+                        "(.template {} {} {} {} {bindings})",
+                        self.binder(member.binder)?,
+                        self.binder(member.parameter)?,
+                        self.node(&member.body)?,
+                        entry.visible_len
+                    )
+                }
+            });
+            head = entry.parent;
+        }
+        Ok(format!(
+            "(.mk {} {} {})",
+            environment.len,
+            self.instantiation(&environment.instantiation)?,
+            Self::list(entries)
+        ))
+    }
+    fn value(&self, value: &ValueRecord) -> Result<String, String> {
+        Ok(match value {
+            ValueRecord::Unit => ".unit".into(),
+            ValueRecord::Boolean(value) => format!("(.boolean {value})"),
+            ValueRecord::Integer(value) => format!("(.integer ({value}))"),
+            ValueRecord::Handle(key) => format!("(.handle {key})"),
+            ValueRecord::Location(key) => format!("(.location {key})"),
+            ValueRecord::Closure {
+                parameter,
+                body,
+                program_root,
+                program_nodes,
+                environment,
+                ..
+            } => format!(
+                "(.closure {} {} {} {program_nodes} {})",
+                self.binder(*parameter)?,
+                self.node(body)?,
+                self.node(program_root)?,
+                self.environment(environment)?
+            ),
+        })
+    }
+    fn frames(&self, frames: &[FrameRecord]) -> Result<String, String> {
+        // Both ordinary and recursively captured vectors use Rust orientation.
+        Ok(Self::list(
+            frames
+                .iter()
+                .rev()
+                .map(|frame| self.frame(frame))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))
+    }
+    fn frame(&self, frame: &FrameRecord) -> Result<String, String> {
+        Ok(match frame {
+            FrameRecord::CloseCompletion => ".closeCompletion".into(),
+            FrameRecord::CleanupBoundary {
+                action,
+                environment,
+            } => format!(
+                "(.cleanupBoundary {} {})",
+                self.node(action)?,
+                self.environment(environment)?
+            ),
+            FrameRecord::CleanupCompletion { saved } => {
+                format!("(.cleanupCompletion {})", self.value(saved)?)
+            }
+            FrameRecord::ResourceInitializer { node, environment } => format!(
+                "(.resourceInitializer {} {})",
+                self.node(node)?,
+                self.environment(environment)?
+            ),
+            FrameRecord::ResourceBoundary { node, key, payload } => {
+                format!("(.resourceBoundary {} {key} ({payload}))", self.node(node)?)
+            }
+            FrameRecord::Bind {
+                binder,
+                body,
+                environment,
+            } => format!(
+                "(.bind {} {} {})",
+                self.binder(*binder)?,
+                self.node(body)?,
+                self.environment(environment)?
+            ),
+            FrameRecord::ApplyFunction {
+                argument,
+                caller_environment,
+            } => format!(
+                "(.applyFunction {} {})",
+                self.node(argument)?,
+                self.environment(caller_environment)?
+            ),
+            FrameRecord::ApplyArgument { function } => {
+                format!("(.applyArgument {})", self.value(function)?)
+            }
+            FrameRecord::Tuple {
+                elements,
+                next,
+                values,
+                environment,
+            } => format!(
+                "(.tuple {} {next} {} {})",
+                Self::list(
+                    elements
+                        .iter()
+                        .map(|node| self.node(node).map(|id| id.to_string()))
+                        .collect::<Result<Vec<_>, _>>()?
+                ),
+                Self::list(
+                    values
+                        .iter()
+                        .map(|value| self.value(value))
+                        .collect::<Result<Vec<_>, _>>()?
+                ),
+                self.environment(environment)?
+            ),
+            FrameRecord::Match { arms, environment } => {
+                let arms = arms
+                    .iter()
+                    .map(|arm| {
+                        let pattern = match &arm.pattern.kind {
+                            PatternKind::Unit => ".unit".into(),
+                            PatternKind::Boolean(value) => format!("(.boolean {value})"),
+                            PatternKind::Binder(_) => {
+                                return Err("binder match outside observed fixture".to_string());
+                            }
+                        };
+                        Ok(format!("⟨{pattern}, {}⟩", self.node(&arm.body)?))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                format!(
+                    "(.matchCases {} {})",
+                    Self::list(arms),
+                    self.environment(environment)?
+                )
+            }
+            FrameRecord::HandlerBoundary {
+                node,
+                effect,
+                environment,
+            } => format!(
+                "(.handlerBoundary {} {} {})",
+                self.node(node)?,
+                self.effect(effect)?,
+                self.environment(environment)?
+            ),
+            FrameRecord::Request {
+                node,
+                effect,
+                instantiation,
+            } => format!(
+                "(.request {} {} {})",
+                self.node(node)?,
+                self.effect(effect)?,
+                self.instantiation(instantiation)?
+            ),
+            FrameRecord::Resume { node } => format!("(.resume {})", self.node(node)?),
+            FrameRecord::ClauseBoundary {
+                handler,
+                owner,
+                continuation,
+            } => {
+                let capture = continuation
+                    .as_ref()
+                    .map(|frames| self.frames(frames).map(|frames| format!("(some {frames})")))
+                    .transpose()?
+                    .unwrap_or_else(|| "none".into());
+                format!(
+                    "(.clauseBoundary {} {} {capture})",
+                    handler.value(),
+                    self.owner(*owner)?
+                )
+            }
+        })
+    }
+    fn event(&self, event: &EffectTraceEvent) -> Result<String, String> {
+        Ok(match *event {
+            EffectTraceEvent::ResourceAcquired(key) => format!("(.acquired {key})"),
+            EffectTraceEvent::ResourceRead(key) => format!("(.read {key})"),
+            EffectTraceEvent::ResourceWritten(key) => format!("(.written {key})"),
+            EffectTraceEvent::ResourceReleased(key) => format!("(.released {key})"),
+            EffectTraceEvent::HandlerActivated(id) => format!("(.handlerActivated {})", id.value()),
+            EffectTraceEvent::Request(operation) => format!(
+                "(.request {} {})",
+                self.operation_effect(operation)?,
+                operation.operation()
+            ),
+            EffectTraceEvent::HandlerSelected(id) => format!("(.handlerSelected {})", id.value()),
+            EffectTraceEvent::ClauseEntered(id, operation) => format!(
+                "(.clauseEntered {} {} {})",
+                id.value(),
+                self.operation_effect(operation)?,
+                operation.operation()
+            ),
+            EffectTraceEvent::Resume(id) => format!("(.resumed {})", id.value()),
+            EffectTraceEvent::Discard(id) => format!("(.discarded {})", id.value()),
+            EffectTraceEvent::HandlerRestored(id) => format!("(.handlerRestored {})", id.value()),
+            EffectTraceEvent::ClauseReturned(id) => format!("(.clauseReturned {})", id.value()),
+        })
+    }
+    fn snapshot(&self, snapshot: &Snapshot) -> Result<String, String> {
+        let control = match &snapshot.control {
+            ControlRecord::Evaluate(node, environment) => format!(
+                "(.evaluate {} {})",
+                self.node(node)?,
+                self.environment(environment)?
+            ),
+            ControlRecord::Return(value) => format!("(.returned {})", self.value(value)?),
+            ControlRecord::Discard(handler, owner) => {
+                format!("(.discard {} {})", handler.value(), self.owner(*owner)?)
+            }
+        };
+        let heap = Self::list(
+            snapshot
+                .heap
+                .iter()
+                .map(|cell| {
+                    Ok(match cell {
+                        HeapRecord::Uninitialized => ".uninitialized".into(),
+                        HeapRecord::Alias(location) => format!("(.alias {location})"),
+                        HeapRecord::Pair(values) => format!(
+                            "(.pair {} {})",
+                            self.value(&values[0])?,
+                            self.value(&values[1])?
+                        ),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        );
+        let entered = Self::list(
+            snapshot
+                .entered
+                .iter()
+                .map(|node| self.node(node).map(|node| node.to_string()))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let effects = Self::list(
+            snapshot
+                .effects
+                .iter()
+                .map(|event| self.event(event))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        Ok(format!(
+            "{{ control := {control}, frames := {}, heap := {heap}, accounting := ⟨{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}⟩, entered := {entered}, effects := {effects} }}",
+            self.frames(&snapshot.frames)?,
+            snapshot.next_activation,
+            snapshot.captured_cells,
+            snapshot.live_resources,
+            snapshot.live_cleanups,
+            snapshot.live_registrations,
+            snapshot.next_registration,
+            snapshot.max_frame_depth,
+            snapshot.capture_limit,
+            snapshot.resource_limit,
+            snapshot.cleanup_limit,
+            snapshot.registration_limit,
+            snapshot.work_used,
+            snapshot.work_remaining
+        ))
+    }
+}
+
+fn export_actual_trace(
+    fixture: &crate::core::alignment_export::CompiledFixture,
+    trace: &Trace,
+) -> Result<String, String> {
+    if let Some(error) = trace.rejected {
+        return Err(format!("observer rejected: {error:?}"));
+    }
+    let identities = crate::core::alignment_export::identity_maps(fixture)?;
+    let snapshots = trace
+        .snapshots
+        .iter()
+        .map(|snapshot| {
+            ObservationExporter {
+                identities: &identities,
+                entries: &snapshot.environments,
+            }
+            .snapshot(snapshot)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut definitions = String::from(
+        "import CoreObservation\nimport CoreExportedFixture\n\n/-! Generated only from actual Rust run_loop boundaries of the validated\nrestored-clause-suffix fixture. Frozen numbering is shared with the graph exporter.\nThis finite successful trace is implementation evidence, not general simulation. -/\nnamespace Ash.OneShot.CoreObservedTrace\nopen CoreObservation\nset_option maxRecDepth 100000\nset_option maxHeartbeats 10000000\n\n",
+    );
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        definitions.push_str(&format!("def s{index} : Snapshot :=\n  {snapshot}\n\n"));
+    }
+    let last = snapshots
+        .len()
+        .checked_sub(1)
+        .ok_or("empty observed trace")?;
+    definitions.push_str(&format!(
+        "def actual : List Snapshot := {}\n\nexample : actual.length = {} := rfl\n\n",
+        ObservationExporter::list((0..snapshots.len()).map(|index| format!("s{index}"))),
+        snapshots.len()
+    ));
+    definitions.push_str(&format!(r#"def initialModel : CoreMachine.State := CoreMachine.initial CoreExportedFixture.graph
+
+/-- Every exported actual boundary has the stated structural/ownership relation;
+    every consecutive pair has one genuine independent-machine transition. -/
+theorem checked : checkTrace CoreExportedFixture.graph initialModel [] actual = true := by
+  decide +kernel
+
+theorem actual_steps : CheckedTrace CoreExportedFixture.graph initialModel [] actual {last} :=
+  checkTrace_sound _ _ _ _ checked
+
+theorem actual_result : s{last}.control = .returned (.integer 11) := rfl
+
+theorem actual_cell_order : actualCells s{last} =
+    [.acquired 0, .written 0, .written 0, .read 0, .released 0] := rfl
+
+theorem actual_write_values : writtenValues actual = [7, 11] := by decide +kernel
+
+theorem actual_cleanup_start_order : callbackStarts actual = [27] := by decide +kernel
+
+/-- One handler occurrence and two distinct owner tickets appear in the model;
+    they have no Rust fields. The checked replay keeps their full state and
+    successor equations while projecting to Rust's static owner/capture data. -/
+theorem model_ghost_counts : ghostCounts (atStep CoreExportedFixture.graph {last} initialModel) =
+    some (1, 2, 1, 1) := by decide +kernel
+
+theorem model_ghost_captures : ghostCaptures (atStep CoreExportedFixture.graph {last} initialModel) =
+    [(0, 0), (0, 1)] := by decide +kernel
+
+/-- Dropping the terminal boundary or adding one after completion fails. -/
+theorem truncated_rejected : checkTrace CoreExportedFixture.graph initialModel [] (actual.take {last}) =
+    false := by decide +kernel
+
+theorem extra_terminal_rejected : checkTrace CoreExportedFixture.graph initialModel [] (actual ++ [s{last}]) =
+    false := by decide +kernel
+
+#print axioms checked
+#print axioms actual_steps
+#print axioms actual_result
+#print axioms actual_cell_order
+#print axioms actual_write_values
+#print axioms actual_cleanup_start_order
+#print axioms model_ghost_counts
+#print axioms model_ghost_captures
+#print axioms truncated_rejected
+#print axioms extra_terminal_rejected
+
+end Ash.OneShot.CoreObservedTrace
+"#));
+    Ok(definitions)
+}
+
+#[test]
+#[ignore = "explicit regeneration of actual-loop Lean trace"]
+fn regenerate_actual_observed_trace() {
+    let fixture = crate::core::alignment_export::effect_program("restored-clause-suffix");
+    let (result, trace) = observed(&fixture);
+    assert_eq!(result.expect("actual execution").value.to_string(), "11");
+    let rendered = export_actual_trace(&fixture, &trace).expect("actual snapshots export");
+    std::fs::write(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/direct-effects/one-shot/CoreObservedTrace.lean"),
+        rendered,
+    )
+    .expect("write observed trace");
+}
+
+#[test]
+fn actual_observation_export_is_stable_and_matches_checked_in_trace() {
+    let first = crate::core::alignment_export::effect_program("restored-clause-suffix");
+    let second = crate::core::alignment_export::effect_program("restored-clause-suffix");
+    let (_, first_trace) = observed(&first);
+    let (_, second_trace) = observed(&second);
+    let rendered = export_actual_trace(&first, &first_trace).expect("export first");
+    assert_eq!(
+        rendered,
+        export_actual_trace(&second, &second_trace).expect("export second")
+    );
+    assert_eq!(
+        rendered,
+        include_str!("../../../docs/design/direct-effects/one-shot/CoreObservedTrace.lean")
+    );
+}

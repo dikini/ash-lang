@@ -169,6 +169,12 @@ remain separate targets. A small first example does not reduce the final scope.
   the inserted suffix's pending checks, including resumed and discarded owner
   contexts. The actual plain frame is retained, with ordinary/unwind behavior
   distinguished. Declaration-recipe integration remains in progress.
+- The actual Rust trace bridge passed independent verification: 91 snapshots,
+  exactly 90 independent model transitions, terminal 11, writes `[7, 11]`,
+  cleanup-start order and final resource release. Checker/comparison soundness
+  and missing/extra-boundary rejection are kernel-checked with standard axioms.
+  The fresh combined Rust run passed 18 observer/exporter tests. This is finite
+  implementation evidence; full model/calculus simulation remains open.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |

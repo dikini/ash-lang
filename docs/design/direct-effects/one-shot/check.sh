@@ -781,3 +781,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreValueRelation.olean" CoreVal
 lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictSteps.olean" CoreStrictSteps.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreKernelAdmission.olean" CoreKernelAdmission.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdministrativeSteps.olean" CoreAdministrativeSteps.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreObservation.olean" CoreObservation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreObservedTrace.olean" CoreObservedTrace.lean

@@ -535,10 +535,10 @@ impl Exporter {
     }
 }
 
-fn export(
+fn export_with_identities(
     program: &ValidatedEffectProgram,
     sources: &[(SourceId, ModuleId, String)],
-) -> Result<String, String> {
+) -> Result<(String, IdentityMaps), String> {
     let mut exporter = Exporter::default();
     for (source, module, path) in sources {
         let slot = exporter.sources.len();
@@ -593,12 +593,44 @@ fn export(
     exporter.manifest.dedup();
     let manifest = list(exporter.manifest.iter().map(|line| format!("{:?}", line)));
     let node_count = nodes.len();
-    Ok(format!(
+    let rendered = format!(
         "import CoreSyntax\nimport CoreTranslation\n\n/-! Generated from independently validated Effect Core by the test-only\nalignment exporter. Regenerate with the ignored Rust regeneration test.\nThe manifest retains static identities and signatures; it is not admission. -/\nnamespace Ash.OneShot.CoreExportedFixture\nopen CoreSyntax\nset_option maxRecDepth 100000\nset_option maxHeartbeats 1000000\n\ndef graph : Graph := ⟨[\n{}\n  ], {}⟩\n\ndef identityManifest : List String := {manifest}\n\nexample : graph.nodes.length = {node_count} := rfl\nexample : checkShape graph = .ok () := rfl\nexample : (CoreTranslation.translate graph).isOk = true := rfl\n\nend Ash.OneShot.CoreExportedFixture\n",
         nodes.join(",\n"),
         exporter.reference(program.root())
+    );
+    Ok((
+        rendered,
+        IdentityMaps {
+            nodes: exporter.slots,
+            binders: exporter.binders,
+            resources: exporter.resources,
+            effects: exporter.effects,
+            owners: exporter.owners,
+        },
     ))
 }
+
+/// Frozen numbering produced by the same traversal that renders the graph.
+/// Runtime export fails for missing identities rather than allocating new ones.
+pub(crate) struct IdentityMaps {
+    pub(crate) nodes: HashMap<NodeId, usize>,
+    pub(crate) binders: BTreeMap<BinderId, usize>,
+    pub(crate) resources: BTreeMap<TypeVariableId, usize>,
+    pub(crate) effects: BTreeMap<crate::types::EffectId, usize>,
+    pub(crate) owners: HashMap<crate::resolved::ResumeId, usize>,
+}
+
+pub(crate) fn identity_maps(fixture: &CompiledFixture) -> Result<IdentityMaps, String> {
+    export_with_identities(&fixture.program, &fixture.sources).map(|(_, identities)| identities)
+}
+
+fn export(
+    program: &ValidatedEffectProgram,
+    sources: &[(SourceId, ModuleId, String)],
+) -> Result<String, String> {
+    export_with_identities(program, sources).map(|(rendered, _)| rendered)
+}
+
 #[test]
 fn exports_complete_validated_fixture() {
     let program = effect_program("restored-clause-suffix");

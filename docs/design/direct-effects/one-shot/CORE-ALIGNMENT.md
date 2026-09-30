@@ -236,7 +236,9 @@ deliberately. Kernel-checked `decide` verifies the same full-graph assertions
 without that reduction cost; no native decision axiom is used. These examples
 do not prove graph admission, a general state relation or simulation. Dynamic
 occurrence counters are ghost metadata, and internal `entered` observations
-are not Rust's dispatch trace, which omits cleanup registration entries.
+include cleanup registration, as does Rust's loop entry trace. Registration
+bypasses `dispatch_entry` after the loop records the entry; the separate Rust
+effect trace has no model ghost identities.
 
 ### Actual Rust configurations
 
@@ -249,11 +251,12 @@ Raw snapshots retain identity tokens. A separate comparison view renumbers
 environment references and uses a consistent module map across the observed
 run; it preserves distinct modules and rejects foreign closure arenas.
 
-Ten focused tests pass, including a fresh independent run. They check result
+Eleven focused tests pass, including a fresh independent run. They check result
 and trace agreement with observation disabled, result 11 and cell writes 7 then
 11, nearest exact owner selection and full-prefix restoration, lexical cell
 capture, deterministic comparison across independent compilation, and an
-unchanged resource-capacity failure with its observed prefix. Clippy with
+unchanged resource-capacity failure with its observed prefix, and exact trace
+regeneration using the static graph exporter's frozen identity maps. Clippy with
 warnings denied and formatting checks also pass.
 
 The observer explicitly rejects arithmetic frames, general data, polymorphism,
@@ -261,9 +264,42 @@ hooks and native buffers. Such a rejection stops observation while evaluation
 continues; two arithmetic cleanup fixtures exercise this distinction. Tests of
 native/hook/polymorphic rejection use constructed states. These exclusions are
 observer coverage limits, not new exclusions from Ash or changes to the declared
-Core fragment. Snapshot-to-model conversion and step correspondence remain
-unproved. The capacity test concerns a failed acquisition; it does not establish
+Core fragment. The capacity test concerns a failed acquisition; it does not establish
 discard atomicity or observation accounting inside every failing step.
+
+### Checked finite implementation trace
+
+[CoreObservation.lean](CoreObservation.lean) projects model states and raw Rust
+snapshots to common semantic data. It retains controls, lexical environments,
+heap contents, active and recursively captured frames, consumed owners and cell
+payloads. Raw tuple metadata receives separate consistency checks. Ownership
+accounting includes dormant captures. The checker compares loop node entries,
+cell events and cleanup-start boundaries; model-only handler, ticket, cleanup
+and close labels remain explicit ghost data. Rust request trace events retain
+declaration identities only; exact effect arguments and lexical instantiation
+are checked in the configurations.
+
+[CoreObservedTrace.lean](CoreObservedTrace.lean) contains 91 snapshots generated
+only from the actual Rust `run_loop`. Its `actual_steps` theorem applies checker
+soundness to obtain exactly 90 successful independent Core transitions, a
+related snapshot at every boundary and a terminal result. Further kernel checks
+establish result 11, cell writes `[7, 11]`, cleanup action start `[27]` in the
+shared graph numbering, final cell release, distinct model owner tickets and
+rejection of missing or extra terminal boundaries.
+
+The first direct reduction attempt encountered opaque generated recursive
+comparisons. Transparent structural comparisons now have equality-soundness
+proofs; no snapshot data or compared field was removed to pass the check.
+Fresh independent compilation of both leaves passes with only `propext` and
+`Quot.sound`. The fresh combined Rust run passes 18 tests (11 observer and seven
+graph exporter tests); both regeneration tests are deliberately ignored.
+
+Capacity limits remain fixed across this successful trace, work accounting is
+monotone with constant total budget, and frame/capture/owner bounds are checked
+at each boundary. These facts do not establish general failure atomicity or
+identify finite host capacity with mathematical freshness. This finite checked
+Rust/model trace does not prove general Rust correspondence or the model's
+calculus simulation.
 
 ### Value and environment correspondence
 

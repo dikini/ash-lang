@@ -83,10 +83,11 @@ inductive Control where
   | discard : Nat → Nat → Control
   deriving Repr
 
-/-- Model observations include ghost node-entry and ownership events. They are
-    not Rust EffectTrace events or an equality claim about dispatch_entry (which
-    omits cleanup entry). Dynamic keys distinguish repeated occurrences of each
-    static resource; handler, owner, cleanup and close counters are separate. -/
+/-- Model observations include node-entry and ghost ownership events. Rust's
+    loop entry trace includes cleanup registration before it bypasses dispatch_entry;
+    its separate EffectTrace has no model ghost identities. Dynamic keys distinguish
+    repeated resource occurrences; handler, owner, cleanup and close counters
+    are separate. -/
 inductive Observation where
   | entered : NodeRef → Observation
   | acquired : NodeRef → Nat → Observation
