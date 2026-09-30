@@ -1220,9 +1220,27 @@ Every intermediate Core point relates to a constructed admitted snapshot. The
 world/history and issued ledger remain unchanged, completed owners become
 `[ticket 0]`, and the resume, disposal and annotated stores remove owner0. Ticket
 rights remain unchanged. Fresh independent warnings-as-errors compilation and
-all five dependency reports pass with standard axioms. Admission through second
-capture and later execution, general metadata authentication and higher-order
-admission remain open.
+all six dependency reports pass with standard axioms. Its metadata endpoint
+retains the already-derived focus context/scope and handler identity/clauses;
+the original theorem remains a wrapper with the same statement.
+
+[CoreAdmittedSecondCapturePrefix.lean](CoreAdmittedSecondCapturePrefix.lean)
+extends that same admitted execution to actual s40 after 40 Core transitions
+and 20 target events. It splits the saved annotations while retaining their
+owner maps. Source preservation supplies the second focused frame; the actual
+handler cut, exact effect identity and selected clause determine the same second
+capture on both sides. The first and second captures keep separate chosen
+resume/close rows and source-selected input contracts.
+
+Every Core point relates to an admitted snapshot. The intermediate calculus
+state between plug and bind is also admitted, even though those two target
+events match one Core return-bind transition. The final world/history are `[0]`,
+issued owners are `[resource 0, cleanup 0, ticket 0, ticket 1]` and completed owners
+are `[ticket 0]`. The post-resume frame and spent ticket0 remain outside the new
+capture, which retains the armed cleanup and handler. All three affected modules
+pass fresh independent compilation with standard axioms. Admission through
+discard and cleanup, general metadata authentication and higher-order admission
+remain open.
 
 ### Initial-admission interface repair
 

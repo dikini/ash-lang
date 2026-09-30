@@ -393,12 +393,14 @@ def extensionPoints (d : Data) (post : PlainData) (saved : List MappedFrame) : L
 /-- Admission and simulation of the same actual Core execution through its
 first resume. The continuation's full capture is restored, ticket zero is
 consumed, and all current source-selected ports and action data are retained. -/
-theorem admittedResumePrefix (tables : CallableProtectionFrames.Tables) (families : SourceDependencyFrames.Families)
+theorem admittedResumePrefix_metadata (tables : CallableProtectionFrames.Tables) (families : SourceDependencyFrames.Families)
     (required : SourceContextualRechecking.Required) (resumeRow : Footprint) (closeRow : Option Footprint) :
     ∃ (d : Data) (allocated : SourcePlannedTyping.Contract) (captured : Snapshot operations)
       (post : PlainData) (saved : List MappedFrame) (final : Snapshot operations),
       allocated.resumeRow = resumeRow ∧ allocated.closeRow = closeRow ∧
       d.input = ScopedPorts.embedPort allocated.input.erase.erase.port ∧
+      d.focus.context = .bind 7 CoreAdmittedCapturePrefix.suffix ∧ d.focus.scope = .none ∧
+      d.handler.activation = 0 ∧ d.handler.clauses = CoreHandlerPrefix.clauses ∧
       post.context = .bind 10 postWriteCode ∧ post.scope = ticketScope ∧
       framesOf saved = framesOf capturedMaps ∧
       CoreAdmittedPrefix.Admitted captured ∧ captured.run.execution.machine = .eval (p28 d).target ∧
@@ -417,7 +419,7 @@ theorem admittedResumePrefix (tables : CallableProtectionFrames.Tables) (familie
       final.run.tickets = captured.run.tickets ∧
       final.run.execution.machine = .eval (p35 d post saved).target := by
   obtain ⟨answer, plain, handler, action, focus, allocated, captured,
-    resumeEq, closeEq, _focusContext, _focusScope, _handlerIdentity, _handlerArms,
+    resumeEq, closeEq, focusContext, focusScope, handlerIdentity, handlerArms,
     earlier, trace, capturedValid, allEarlier, world, history, issued, completed, _rights, machine⟩ :=
     CoreAdmittedCapturePrefix.admittedCapturePrefix tables families required resumeRow closeRow
   let d : Data := ⟨answer, plain, handler, action, focus, ScopedPorts.embedPort allocated.input.erase.erase.port⟩
@@ -500,7 +502,7 @@ theorem admittedResumePrefix (tables : CallableProtectionFrames.Tables) (familie
         · exact ⟨pending, pendingValid, rfl⟩
         · exact ⟨final, finalValid, rfl⟩
       refine ⟨d, allocated, captured, post, saved, final, resumeEq, closeEq, rfl,
-        context, scope, framesEq, capturedValid, machine, chain,
+        focusContext, focusScope, handlerIdentity, handlerArms, context, scope, framesEq, capturedValid, machine, chain,
         .step (.step (.step trace actualBranchEvent) actualFocusEvent) resumeEvent,
         finalValid, ?_, world, history, issued, ?_, rfl, rfl, rfl, rfl, rfl⟩
       · intro point member
@@ -514,6 +516,40 @@ theorem admittedResumePrefix (tables : CallableProtectionFrames.Tables) (familie
       · change .ticket 0 :: captured.run.execution.completed = _
         rw [completed]
 
+
+/-- The original endpoint projects the same selected witnesses. -/
+theorem admittedResumePrefix (tables : CallableProtectionFrames.Tables) (families : SourceDependencyFrames.Families)
+    (required : SourceContextualRechecking.Required) (resumeRow : Footprint) (closeRow : Option Footprint) :
+    ∃ (d : Data) (allocated : SourcePlannedTyping.Contract) (captured : Snapshot operations)
+      (post : PlainData) (saved : List MappedFrame) (final : Snapshot operations),
+      allocated.resumeRow = resumeRow ∧ allocated.closeRow = closeRow ∧
+      d.input = ScopedPorts.embedPort allocated.input.erase.erase.port ∧
+      post.context = .bind 10 postWriteCode ∧ post.scope = ticketScope ∧
+      framesOf saved = framesOf capturedMaps ∧
+      CoreAdmittedPrefix.Admitted captured ∧ captured.run.execution.machine = .eval (p28 d).target ∧
+      Chain graph p0 (priorPoints d ++ extensionPoints d post saved) (p35 d post saved) ∧
+      RawTrace (CoreAdmittedPrefix.initial tables families required).run.execution 16 final.run.execution ∧
+      CoreAdmittedPrefix.Admitted final ∧
+      (∀ point ∈ p0 :: (priorPoints d ++ extensionPoints d post saved),
+        Related graph point ∧ ∃ snapshot : Snapshot operations,
+          CoreAdmittedPrefix.Admitted snapshot ∧ snapshot.run.execution.machine = .eval point.target) ∧
+      final.world = [0] ∧ final.history = [0] ∧
+      final.run.execution.issued = [.resource 0, .cleanup 0, .ticket 0] ∧
+      final.run.execution.completed = [.ticket 0] ∧
+      final.resumes = RecursiveTransport.removeOwner 0 captured.resumes ∧
+      final.disposals = RecursiveTransport.removeOwner 0 captured.disposals ∧
+      final.annotatedStore = RecursiveTransport.removeOwner 0 captured.annotatedStore ∧
+      final.run.tickets = captured.run.tickets ∧
+      final.run.execution.machine = .eval (p35 d post saved).target := by
+  obtain ⟨d, allocated, captured, post, saved, final, resumeEq, closeEq, inputEq,
+    _focusContext, _focusScope, _handlerIdentity, _handlerArms, context, scope, framesEq,
+    capturedValid, capturedMachine, chain, trace, finalValid, allPoints, world, history, issued,
+    completed, resumes, disposals, annotatedStore, tickets, finalMachine⟩ :=
+    admittedResumePrefix_metadata tables families required resumeRow closeRow
+  exact ⟨d, allocated, captured, post, saved, final, resumeEq, closeEq, inputEq, context, scope,
+    framesEq, capturedValid, capturedMachine, chain, trace, finalValid, allPoints,
+    world, history, issued, completed, resumes, disposals, annotatedStore, tickets, finalMachine⟩
+
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.branchPrefix
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.focusMapped
@@ -522,3 +558,5 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.consumeMapped
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.admittedResumePrefix
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedResumePrefix.admittedResumePrefix_metadata

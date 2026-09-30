@@ -345,6 +345,25 @@ common owner contracts, capture/resume/discard, cleanup and resource-exit suppor
 remain required subsequent integration work. The full M4 invariant and general
 Core admission remain open.
 
+The next handler checkpoint extends the same experimental source and pending
+judgments. An immutable registry fixes operation contracts and ticket policy;
+the common owner registry and resource world become recursive indices, allowing
+fresh owner insertion and later resource acquisition. Owner contracts retain
+both common input and answer contracts, together with their existing demand,
+row, permission and effect information. Handler, resume and discard source rules
+must preserve structural substitution, actual-plan certification and scoped
+lower typing.
+
+The bounded execution gate constructs a checked fixed-world handler request and
+its selected clause entry. One callable-result operation contract must admit
+both the unchanged Unit callback and a callback retaining cell0, with the same
+captured bind-and-invoke caller. The clause successor must follow from that
+current request's source, exact cut, checking certificate and saved accounting
+root. The lower capture-checking laws can be reused after inversion of the new
+source; the legacy `ExecutionSite` wrapper still requires old authentication.
+The corresponding outer receiver must reject retained cell support. Full runtime
+resume, clause return and changing-world transport remain subsequent gates.
+
 The subsequent resume migration must also reconstruct saved support under the
 restored receiving context. In the
 [clause-cell result fixture](direct-effects/one-shot/fixtures/core-resume-clause-cell-closure.ash),

@@ -211,7 +211,7 @@ theorem selectedCut (answer : Ty) (plain : PlainData) (handler : HandlerData) (a
     exact .push bindFrame (by simp [ExecFrame.erase, PlainData.erase, Frame.target])
       (.push cleanupFrame (by simp [ExecFrame.erase, ActionData.erase, Frame.target]) selected)
 
-private theorem physicalUnique
+theorem physicalUnique
     (first : HandlerCut requested whole cap tail handler)
     (second : HandlerCut requested whole otherCap otherTail otherHandler) :
     cap = otherCap ∧ tail = otherTail ∧ handler = otherHandler := by
@@ -447,3 +447,5 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedCapturePrefix.captureMapped
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedCapturePrefix.admittedCapturePrefix
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreAdmittedCapturePrefix.physicalUnique

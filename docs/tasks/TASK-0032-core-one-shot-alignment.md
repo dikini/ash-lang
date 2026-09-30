@@ -694,13 +694,29 @@ remain separate targets. A small first example does not reduce the final scope.
   CLI evidence for subsequent saved-frame transport; no Rust implementation
   changed.
 
+- `CoreAdmittedSecondCapturePrefix` reaches actual s40 from the same admitted
+  first-resume witnesses: 40 Core transitions and 20 target events. It retains
+  authentic saved owner maps, selected ports, action, handler and post-resume
+  frame, with separate symbolic row choices for both capture epochs. Every Core
+  point and the additional intermediate plug/bind target have admitted snapshots.
+  Fresh ticket1 follows from the issued ledger; ticket0 remains spent outside
+  the new capture. The final ledger issues resource0, cleanup0, ticket0 and
+  ticket1, completing only ticket0.
+- The first-resume metadata endpoint exposes existing focus/handler equations;
+  its original statement is retained as a projection wrapper. The existing
+  physical-cut uniqueness proof is public and reused. The combined audit covers
+  832 registered modules and 11,326 exact dependency reports: three freshly
+  compiled affected modules and 829 unchanged verified source/report pairs.
+  Active handler/owner migration and callback-write edits are excluded. No Rust
+  code changed.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted first-resume prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
+| C2 | 0 / 4 | Actual-root Program and admitted second-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
 | C3 | 0 / 5 | Fifty-one-transition cleanup callback-entry prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Callback cell-write batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and connected callable cell-reply checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Next handler/owner batch being scoped; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted first-resume prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted second-capture batch 1–2 hours; total unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and connected callable cell-reply checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Registry/indexing then connected handler-entry checkpoints about one hour each; full repair unresolved |
+| C5 | 0 / 4 | Admitted second-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted discard batch being scoped; total unresolved |
 
 ## Verification
 
