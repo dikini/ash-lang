@@ -812,6 +812,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreResumeEntry.olean" CoreResum
 lean -DwarningAsError=true -o "$proof_build_dir/CoreSecondCapture.olean" CoreSecondCapture.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupRunFrames.olean" CoreCleanupRunFrames.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreUnwindRelation.olean" CoreUnwindRelation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreNormalCleanupSteps.olean" CoreNormalCleanupSteps.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreDiscardPrefix.olean" CoreDiscardPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCleanupRunPrefix.olean" CoreCleanupRunPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCellWriteFrames.olean" CoreCellWriteFrames.lean

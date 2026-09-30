@@ -769,12 +769,32 @@ remain separate targets. A small first example does not reduce the final scope.
   the public contract and signature. This revises the earlier handler-entry
   estimate; a bounded statement plan must precede implementation.
 
+- The general-transition review identified normal cleanup start/finish as the
+  next missing C3.2 component. `CoreNormalCleanupSteps` now proves both for
+  arbitrary states and saved return values. The same delayed action, saved-value
+  relation and mapped outside stack construct both endpoint interpretations and
+  the actual Core transitions. Unit completion restores the saved value and
+  scope; a non-Unit result is rejected. Callback success and future validity
+  are not premises.
+- `RunningTail.normal` and its heap transport reuse the existing running-step
+  interface. Ten affected modules pass independent compilation, including
+  discarded cleanup and admitted discard. The combined audit covers 839 modules
+  and 11,400 exact reports, retaining 829 unchanged verified pairs. General
+  callback dispatch, cell updates, projection/retirement and static readiness
+  remain C3 obligations; no additional example variant or Rust change was added.
+- Further batches target named general obligations. The existing example's
+  admitted completion remains in progress, but its runtime trace will not be
+  extended. Handler substitution reuses proof-level family selection and
+  existing signature/row transport; it does not require a new syntax walker.
+  The connected handler/caller checkpoint must pass before that repair is
+  integrated. Initial admission remains a separate static construction.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Full ninety-transition example independently verified | General transitions, reachable annotations, captured owners and ownership correspondence | Static annotations and general state relation | Finite runtime suffix complete; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Certified actual-plan substitution and saved-frame transport under restored world/context | Revised handler estimate awaits substitution statement plan; changing-world transport unresolved |
+| C3 | 0 / 5 | Full runtime example and generic normal-cleanup start/finish independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Normal-cleanup batch complete; next general batch requires a bounded statement; total unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Certified actual-plan substitution and saved-frame transport under restored world/context | Connected substituted-handler/caller checkpoint active, about 1–1.5 hours; capture and changing-world transport remain |
 | C5 | 0 / 4 | Admitted discard prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted completion to s67 about 1–2 hours; another hour to s90 if bounded; total unresolved |
 
 ## Verification

@@ -3,13 +3,21 @@ import CoreAdministrativeTransport
 import CoreCleanupFrames
 import SourceResourceRoutes
 
-/-! Running cleanup retains an authenticated projected physical tail and the
-original lexical handler scopes. Ordinary work is interpreted above this tail;
+/-! Running cleanup retains either its normal saved return value or an
+authenticated projected physical tail and original lexical handler scopes.
+Ordinary work is interpreted above this tail;
 there is no opaque related suffix or callback-success premise. -/
 namespace Ash.OneShot.CoreCleanupRunFrames
 open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictStack CoreStrictPotential CoreCleanupFrames
 
 inductive RunningTail (graph : CoreSyntax.Graph) (heap : Heap) : List CoreMachine.Frame → Stack → Prop where
+  | normal
+      (delayed : CleanupRel graph cleanupOwners heap (.cleanupBoundary action environment data.identity) data)
+      (saved : ValueRel graph callerOwners heap savedValue savedCode)
+      (outside : PushedWithMaps graph heap outsideMaps outsideTarget) :
+      RunningTail graph heap
+        (.cleanupCompletion data.identity savedValue :: framesOf outsideMaps)
+        (.push (.running data savedCode saved.closed) outsideTarget)
   | projected
       (captured : PushedWithMaps graph heap
         ((pendingOwners,pending) :: (savedOwners,.cleanupBoundary action environment data.identity) :: retainedMaps)
@@ -28,6 +36,9 @@ inductive RunningTail (graph : CoreSyntax.Graph) (heap : Heap) : List CoreMachin
 theorem RunningTail.heap_weaken (related : RunningTail graph heap physical lexical)
     (extension : HeapExtends heap larger) : RunningTail graph larger physical lexical := by
   cases related with
+  | normal delayed saved outside =>
+      exact .normal (delayed.heap_weaken extension) (saved.heap_weaken extension)
+        (outside.heap_weaken extension)
   | projected captured delayed retained outside projection =>
       exact .projected (captured.heap_weaken extension) (delayed.heap_weaken extension)
         (retained.heap_weaken extension) (outside.heap_weaken extension) projection

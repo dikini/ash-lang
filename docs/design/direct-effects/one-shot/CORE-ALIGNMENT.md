@@ -705,6 +705,29 @@ This completes the runtime relation for this finite example. Admission through
 its completion, general transition coverage, cleanup dispatch, close-name and
 nested-ticket correspondence remain separate obligations.
 
+[CoreNormalCleanupSteps.lean](CoreNormalCleanupSteps.lean) proves normal
+cleanup start and finish for arbitrary states and saved values. The normal
+`RunningTail` constructor retains the same delayed action relation, saved-value
+relation and mapped outside stack. Start derives both current interpretation
+and the actual callback-entry successor. Unit completion restores the exact
+saved value, its caller map and the action's saved scope, discharging precisely
+that cleanup identity. Heap extension transports all three retained witnesses.
+
+These are general transition lemmas, with current structural evidence as
+premises. They assume neither callback success nor a future related or valid
+state. A non-Unit callback result is proved rejected and cannot supply a
+successful Core step. The outside stack must have an ordinary mapped
+interpretation; nested running cleanup, arbitrary callback execution, dispatch
+and normal cleanup cell updates still need their correspondence proofs. The relation
+`Related` alone is not a general preservation theorem; `Link.positive` requires
+both endpoint relations, which these two lemmas construct.
+
+All ten affected modules pass independent warnings-as-errors compilation,
+including the existing discarded-cleanup and admitted-discard consumers. The
+combined audit covers 839 modules and 11,400 exact standard-axiom reports,
+retaining 829 unchanged verified pairs. This closes the two normal-cleanup
+transition components of C3.2, not its complete simulation obligation.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
