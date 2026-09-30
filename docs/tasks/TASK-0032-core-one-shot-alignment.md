@@ -330,6 +330,10 @@ remain separate targets. A small first example does not reduce the final scope.
   affected modules have fresh independent compilation evidence; 790 unchanged
   verified source/report pairs are retained. The design-note lint still has its
   same 14 pre-existing findings, with no new finding.
+- Full `cargo xtask verify` for the integrated increment passes: 2,900 tests
+  passed, none failed and two were ignored. Formatting, metadata, build, Clippy
+  and documentation checks also passed. This includes the four new higher-order
+  regressions; it does not establish the missing general correspondence proof.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
