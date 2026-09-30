@@ -495,13 +495,35 @@ remain separate targets. A small first example does not reduce the final scope.
   compilation evidence; 809 unchanged verified source/report pairs are retained.
   Active runtime and callable-source work is excluded from the snapshot.
 
+- `CoreAdmittedPrefix` connects the constructed initial M4 state to the first
+  12 actual Core transitions, through resource entry and handle binding. All
+  intermediate points have constructed valid target snapshots, using the same
+  source-selected resource answer. Its five positive target steps issue only
+  resource0. Seven dependency reports pass independent compilation against
+  477 transitive source files. No desired successor validity is assumed.
+- `CoreRequestFrames` and `CoreCaptureEntry` derive exact selected-clause
+  translation, preserve parameter masking, relate recursive live/spent captures
+  and prove nearest-handler selection with matching-cell barriers. The actual
+  initial chain reaches clause body40 in 28 Core transitions, retaining the
+  pending second request and cleanup callback. Its exact issued ledger is
+  `[resource 0, cleanup 0, ticket 0]`, with no discharges. All 14 affected modules
+  pass fresh independent warnings-as-errors compilation. Capture annotations
+  and M4 validity remain separate; resume/discard and cleanup execution are next.
+- The combined admitted-entry/capture audit passes for 813 registered modules,
+  11,140 exact dependency reports and 1,994 local links or anchors. Fourteen
+  modules have fresh independent compilation evidence; 799 unchanged verified
+  source/report pairs are retained. Trust, import order, whitespace, artifacts
+  and changed Markdown checks pass. Active shared handler-installation and
+  callable-source changes are excluded. Rust is unchanged since the 2,900-test
+  product gate.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Complete actual-root Program independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits contract-source result |
-| C3 | 0 / 5 | Twenty-four-transition cleanup-registration prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Request/capture batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Twenty-eight-transition first-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | First-resume batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs verified; contract-source prototype assigned | Resolve retained support and callable refinements without changing declared ports | Compositional substitution, common helper/result derivations and M4 preservation transport | Contract-source prototype 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Actual admitted root and 810-module audit verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted resource-entry prefix 1–2 hours; total unresolved |
+| C5 | 0 / 4 | Admitted resource-entry prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted handler-entry prefix 1–2 hours; total unresolved |
 
 ## Verification
 

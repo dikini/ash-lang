@@ -1,18 +1,19 @@
 import CoreStrictFrames
 import CoreEffectFrames
 import CoreCleanupFrames
+import CoreRequestFrames
 
 /-! Bounded ordinary-stack components for TASK-0032.
 Only a contiguous inner prefix may be flattened. Each flattened hole must be
 closed and value-ready; plugging app/bind/branch produces a non-value, so such
 a frame terminates that prefix. This is not generic reachable-stack coverage.
 Pushed frames carry explicit PlainData scopes and annotations. Authentication
-against Core validation remains a static obligation. Captured owners, running cleanup,
-and discard have no relation constructors; exact armed cleanup, handler/cell boundaries and
+against Core validation remains a static obligation. Running cleanup,
+and discard have no relation constructors; exact live/spent owners, armed cleanup, handler/cell boundaries and
 resource initializers are explicit constructors, never opaque related suffixes.
 No full simulation theorem or future configuration validity is assumed. -/
 namespace Ash.OneShot.CoreStrictStack
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames CoreCleanupFrames
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames CoreCleanupFrames CoreRequestFrames
 
 abbrev MappedFrame := CoreTranslation.OwnerMap × CoreMachine.Frame
 
@@ -40,6 +41,20 @@ inductive PushedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) : List MappedF
   | cleanup (frame : CleanupRel graph owners heap core data)
       (tail : PushedWithMaps graph heap cores target) :
       PushedWithMaps graph heap ((owners, core) :: cores) (.push (.armed data) target)
+  | request (frame : RequestRel graph owners heap core plain)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
+  | live (header : OwnerHeader graph owners heap handler owner occurrence data)
+      (captured : PushedWithMaps graph heap capturedMaps capturedTarget)
+      (outside : PushedWithMaps graph heap outsideMaps outsideTarget) :
+      PushedWithMaps graph heap
+        ((owners, .clauseBoundary handler owner occurrence ticket (some (framesOf capturedMaps))) :: outsideMaps)
+        (.live ticket operationResult data.answer capturedTarget data.scope outsideTarget)
+  | spent (header : OwnerHeader graph owners heap handler owner occurrence data)
+      (outside : PushedWithMaps graph heap outsideMaps outsideTarget) :
+      PushedWithMaps graph heap
+        ((owners, .clauseBoundary handler owner occurrence ticket none) :: outsideMaps)
+        (.spent ticket data.answer data.scope outsideTarget)
 
 inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
     List MappedFrame → Code → Scope → Code → Scope → Prop where
@@ -49,6 +64,10 @@ inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
       (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
       FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
   | initializer (frame : InitializerRel graph owners heap core plain)
+      (ready : ClosedValue code)
+      (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
+      FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
+  | request (frame : RequestRel graph owners heap core plain)
       (ready : ClosedValue code)
       (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
       FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
@@ -109,6 +128,10 @@ theorem PushedWithMaps.heap_weaken (related : PushedWithMaps graph heap cores ta
   | initializer frame tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ih
   | boundary frame tail ih => exact .boundary (BoundaryRel.heap_weaken frame extension) ih
   | cleanup frame tail ih => exact .cleanup (CleanupRel.heap_weaken frame extension) ih
+  | request frame tail ih => exact .request (RequestRel.heap_weaken frame extension) ih
+  | live header captured outside ihCaptured ihOutside =>
+      exact .live (OwnerHeader.heap_weaken header extension) ihCaptured ihOutside
+  | spent header outside ihOutside => exact .spent (OwnerHeader.heap_weaken header extension) ihOutside
 
 theorem FlattenedWithMaps.heap_weaken
     (related : FlattenedWithMaps graph heap cores code scope result resultScope)
@@ -117,6 +140,7 @@ theorem FlattenedWithMaps.heap_weaken
   | nil => exact .nil
   | cons frame ready tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ready ih
   | initializer frame ready tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ready ih
+  | request frame ready tail ih => exact .request (RequestRel.heap_weaken frame extension) ready ih
 
 theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
     (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target :=
@@ -324,6 +348,7 @@ theorem application_flattening_barrier :
   intro related
   cases related with
   | initializer frame ready tail => cases frame
+  | request frame ready tail => cases frame
   | cons frame ready tail =>
     rename_i plain
     have notValue : ¬ (plain.context.plug argument).IsValue := by
@@ -334,6 +359,7 @@ theorem application_flattening_barrier :
     cases tail with
     | cons nextFrame nextReady remaining => exact notValue nextReady.1
     | initializer nextFrame nextReady remaining => exact notValue nextReady.1
+    | request nextFrame nextReady remaining => exact notValue nextReady.1
 
 
 namespace Examples
@@ -395,4 +421,15 @@ end Examples
 #print axioms beta_complete
 #print axioms unchanged_admin_rejected
 #print axioms application_flattening_barrier
+/-- Request flattening uses the exact saved effect carrier and one ready hole. -/
+theorem prepend_request (frame : RequestRel graph owners heap core plain)
+    (ready : ClosedValue code)
+    (tail : OrdinaryWithMaps graph heap annotations (plain.context.plug code) plain.scope result resultScope target)
+    (runtimeScope : Scope) :
+    OrdinaryWithMaps graph heap ((owners, core) :: annotations) code runtimeScope result resultScope target := by
+  obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := tail
+  exact ⟨(owners, core) :: flatPrefix, suffix, congrArg ((owners, core) :: ·) split,
+    .request frame ready flattened, pushed⟩
+
+#print axioms prepend_request
 end Ash.OneShot.CoreStrictStack

@@ -555,6 +555,30 @@ and a missing callback is proved to reject rather than register. Supplied action
 scope, answer and request annotations still need authentication. Cleanup
 execution, general owner freshness, capture and M4 validity remain open.
 
+[CoreRequestFrames.lean](CoreRequestFrames.lean) derives request effects and
+selected clause bodies from the same saved environment interpretation. The
+selected body remains under its parameter binder until argument substitution,
+so an outer binding with the same name cannot replace the clause parameter.
+Live owner frames recursively retain the full captured stack; spent frames
+retain their selected handler identity and outside stack.
+
+[CoreCaptureEntry.lean](CoreCaptureEntry.lean) proves simultaneous Core and
+calculus nearest-handler selection, including matching-cell barriers and
+search past live or spent clauses without searching their dormant captures.
+The generic capture theorem constructs the clause environment and successor
+relation from the actual selected handler. Non-value request operands take a
+positive focus step; value-ready operand traversal uses the strict potential.
+
+The connected exported prefix now reaches clause body40 after 28 actual Core
+transitions. It retains the second request, cleanup action27 and selected
+handler inside ticket0, with the resource and handler-result continuation
+outside. The exact target ledger is `[resource 0, cleanup 0, ticket 0]`, with
+nothing discharged. A matching-cell selection and an unchanged-source silent
+step provide negative checks. Independent compilation of all 14 affected
+modules passes with standard axioms. Supplied annotations, reachable owner-map
+coherence, live-owner uniqueness and M4 capture validity remain obligations;
+this prefix does not prove resume, discard or cleanup execution.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
@@ -935,6 +959,18 @@ installation, cleanup registration and capture. All 23 dependency reports pass
 fresh independent compilation with standard axioms; 475 dependency sources
 match the integrated baseline. General metadata authentication and higher-order
 admission remain open.
+
+[CoreAdmittedPrefix.lean](CoreAdmittedPrefix.lean) connects that constructed
+initial state to the first 12 actual Core transitions, through resource entry
+and the generated handle binding. The target trace has five positive steps.
+Every intermediate Core point relates to a constructed valid target snapshot;
+resource entry uses the answer annotation chosen by the source preservation
+proof throughout the relation. No successor validity is an input. The endpoint
+has resource world `[0]`, empty handler history, issued ledger `[resource 0]`
+and nothing completed. Initial public translation is tied to the same exported
+root. All seven reports pass independent compilation with standard axioms.
+Handler installation, cleanup registration and capture still need the same
+admitted-state connection.
 
 ### Initial-admission interface repair
 

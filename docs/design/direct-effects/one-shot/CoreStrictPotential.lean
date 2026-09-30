@@ -8,7 +8,7 @@ unchanged-target progress. No effect transition is authorized by its weight.
 Translation, lexical interpretation, closed readiness and PlainData annotation
 obligations remain explicit current inputs. No whole simulation is claimed. -/
 namespace Ash.OneShot.CoreStrictPotential
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreStrictStack
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreStrictStack CoreRequestFrames
 
 /-- Reuse the frozen static postorder condition and checker extraction. -/
 abbrev Postorder := CoreTranslationFuel.Postorder
@@ -34,7 +34,7 @@ theorem cost_recurrence (ordered : Postorder graph)
 
 def frameWeight (graph : CoreSyntax.Graph) : CoreMachine.Frame → Nat
   | .applyFunction argument _ | .tupleLeft argument _ => nodeCost graph argument + 2
-  | .applyArgument _ | .tupleRight _ => 1
+  | .applyArgument _ | .tupleRight _ | .request _ _ _ => 1
   | .bind _ body _ | .resourceInitializer _ _ _ body _ => nodeCost graph body + 1
   | .matchCases arms _ => (arms.map fun arm => nodeCost graph arm.body).sum + 1
   | _ => 0
@@ -159,7 +159,7 @@ def traversalReady (graph : CoreSyntax.Graph) (state : CoreMachine.State) : Bool
   match state.control with
   | .evaluate index _ => match graph.node index with
     | some node => match node.kind with
-      | .apply _ _ | .tuple [_, _] | .bind _ _ _ | .resource _ _ _ _
+      | .apply _ _ | .tuple [_, _] | .bind _ _ _ | .resource _ _ _ _ | .request _ _ _
         | .matchCases _ [⟨.unit, _⟩]
         | .matchCases _ [⟨.boolean true, _⟩, ⟨.boolean false, _⟩]
         | .matchCases _ [⟨.boolean false, _⟩, ⟨.boolean true, _⟩] => true
@@ -455,6 +455,52 @@ theorem tuple_right_same_target_mapped {base : CoreMachine.State}
 #print axioms application_argument_same_target_mapped
 #print axioms tuple_entry_same_target_mapped
 #print axioms tuple_right_same_target_mapped
+
+/-- Exact value-ready request operand traversal shares the common potential.
+Capture itself is positive and cannot use this witness. -/
+theorem request_entry_decreases {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .request effect operation operand) (tail : List CoreMachine.Frame) :
+    CoreMachine.next graph { base with control := .evaluate site environment, frames := tail } =
+      .stepped { base with control := .evaluate operand environment, frames := .request effect operation environment :: tail, observations := base.observations ++ [.entered site] } ∧
+    potential graph { base with control := .evaluate operand environment, frames := .request effect operation environment :: tail, observations := base.observations ++ [.entered site] } <
+      potential graph { base with control := .evaluate site environment, frames := tail } := by
+  have cost := cost_recurrence ordered known
+  simp only [kind, CoreSyntax.Kind.children, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil] at cost
+  refine ⟨?_, ?_⟩
+  · cases node with
+    | mk original type effects source nodeKind => cases kind; simp only [CoreMachine.next, known]
+  · simp only [potential, List.map_cons, List.sum_cons, frameWeight]
+    omega
+
+theorem request_entry_same_target_mapped {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .request effect operation operand)
+    (translated : CoreTranslation.translateFuel graph fuel owners operand = .ok raw)
+    (saved : EnvCloses graph owners base.heap environment
+      (.perform effect operation raw) (.perform (Instantiation.freezeEffect requested) operation code))
+    (ready : ClosedValue code) (plain : PlainData)
+    (context : plain.context = .perform (Instantiation.freezeEffect requested) operation)
+    (tail : PushedWithMaps graph base.heap annotations target) :
+    SilentMapped graph owners owners annotations ((owners, .request effect operation environment) :: annotations)
+      { base with control := .evaluate site environment, frames := framesOf annotations }
+      { base with control := .evaluate operand environment, frames := .request effect operation environment :: framesOf annotations, observations := base.observations ++ [.entered site] }
+      ⟨.perform (Instantiation.freezeEffect requested) operation code, plain.scope, target⟩ := by
+  obtain ⟨next, decrease⟩ := request_entry_decreases (base := base) ordered known kind (framesOf annotations)
+  have siteTranslated : CoreTranslation.translateFuel graph (fuel + 1) owners site =
+      .ok (.perform effect operation raw) := by
+    rw [CoreTranslation.request_equation graph owners fuel site node effect operation operand known kind, translated]; rfl
+  obtain ⟨effectEq, operandSaved⟩ := perform_components saved
+  have carrier := perform_header_at saved _ _ _ _ _ rfl rfl
+  have frame : RequestRel graph owners base.heap (.request effect operation environment) plain := .operand carrier context
+  have stack := prepend_request frame ready (pushed_mapped tail) plain.scope
+  simp only [context, Context.plug] at stack
+  exact ⟨next, decrease, by simp [traversalReady, known, kind],
+    ⟨rfl, _, plain.scope, .evaluate siteTranslated saved, pushed_mapped tail⟩,
+    ⟨rfl, _, plain.scope, .evaluate translated operandSaved, stack⟩⟩
+
+#print axioms request_entry_decreases
+#print axioms request_entry_same_target_mapped
 
 namespace Examples
 open CoreMachineExamples

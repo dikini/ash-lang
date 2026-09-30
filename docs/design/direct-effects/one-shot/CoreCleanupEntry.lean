@@ -71,6 +71,12 @@ private theorem handler_head_pushed {graph : CoreSyntax.Graph}
         simpa using head.symm
       cases same
       cases frame
+  | @request frameOwners core plain cores code scope result resultScope frame ready tail =>
+      have same : core = .handlerBoundary site saved activation := by
+        have head := congrArg (fun xs => xs.head?.map Prod.snd) split
+        simpa using head.symm
+      cases same
+      cases frame
 
 private theorem translation_unique {rawCode otherRaw : Code}
     (first : CoreTranslation.translateFuel graph fuel owners index = .ok rawCode)
