@@ -4194,6 +4194,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(ElaborationFailure::InvalidState);
         }
         self.zonk_builder_types()?;
+        // A surrounding clause's solved output can change a nested handler's
+        // output after that handler's own resume rows were first constructed.
+        F::finish_cleanup_effect_rows(&mut self.builder)?;
         self.builder.finish(root).map_err(Into::into)
     }
 

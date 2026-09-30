@@ -28,8 +28,9 @@ The source request rule retains recursively checked selected-clause syntax.
 Capture constructs the actual selected-clause source site, including its
 retained continuation and saved resumption record, and connects it to the
 complete common state. The count records transition-family coverage, not a
-fraction of the broader research programme. General declaration admission,
-Core correspondence remains open.
+fraction of the broader research programme. Translation from validated Core and
+its execution correspondence remain open;
+[TASK-0032](../../../tasks/TASK-0032-core-one-shot-alignment.md) organizes that work.
 
 `ExecutableState.leave_handler` and `leave_clause` preserve the corrected state
 at handler and consumed-clause exit. The latter projects the checked tail of the
@@ -88,11 +89,11 @@ and absent-owner consumption preserve the stronger judgment.
 
 A finite derivation admits an actual selected clause whose body resumes its
 continuation and then performs an inherited operation. The existing inherited
-disposing-request example also remains admitted. These are structural source
-examples, not complete initial-machine admission or capture preservation.
+disposing-request example also remains admitted. These structural source
+examples are components of the later complete initial-admission construction.
 Authenticated clause extraction additionally retains the selected handler's
-answer annotation and boundary mode. Complete initial source admission remains
-unfinished.
+answer annotation and boundary mode. `InitialAdmission.Program` assembles these
+obligations; constructing it from validated Core remains outstanding.
 
 ## What consistency means here
 
@@ -122,17 +123,19 @@ expression in [the scoped `Code` representation](ScopedExpressions.lean) used
 as the starting expression of execution. This representation also permits
 runtime activation identities and residual expressions. Membership in `Code`
 therefore does not establish that a term is suitable for initial execution.
-The current admission boundary is the explicit premises of
-[`initial_finite_prefix`](SourceScheduledFiniteRuns.lean): source typing with an
-actual plan signature, local plan checking, `checkInitial = true`, a completion
-derivation and declaration-signature agreement. `checkInitial` computes the
-requirement evaluation, empty-row acceptance and closed initial resource support.
-These are source judgments and finite checks; they
-do not assume a successful next state. That scheduled theorem does not establish
-initial admission for the newer lexical unwinding judgments. The lexical clause
-compiler now includes effectful footprint callbacks under resources and choices;
-callbacks that invoke owners, general consuming handler bodies and complete
-initial admission remain open.
+The current admission boundary is
+[`InitialAdmission.Program`](SourceScheduledInitialAdmission.lean). It retains
+one authenticated source decoration, its structural rows and checking
+derivation, resource support, finite requirement interpretation and builtin
+signature compatibility. `Program.initial_state` constructs the complete
+lexical installation invariant. None of these premises assumes execution,
+a successful successor or future progress. This is a proof-carrying admission
+interface, not an inference algorithm or a theorem about the Rust validator.
+
+The earlier [`initial_finite_prefix`](SourceScheduledFiniteRuns.lean) uses a
+different scheduled interface with `checkInitial`, a completion derivation and
+declaration-signature agreement. Its historical limitations do not qualify the
+completed lexical M2 endpoint.
 
 An initial calculus term is distinct from Ash surface text and from current
 Core. References below to source admission at this experimental layer mean
@@ -143,40 +146,34 @@ relate validated current Core programs to calculus terms and their executions.
 
 ## Current theorem boundary
 
-[Scheduled capture and exhaustive progress](#scheduled-capture-and-exhaustive-progress)
-connects all one-shot runtime cases to one retained source/runtime invariant.
-From that invariant, `Run.progress` proves an ordinary terminal or an actual
-step to another retained state. `Run.finite_prefix` constructs any requested
-number of actual steps unless a terminal is reached first. The terminal ledger
-accounts for every issued owner exactly once.
+[M3 preservation](SourceScheduledPreservation.lean) constructs a valid successor
+realizing each applicable request from the current valid snapshot. Its fixed
+inventory covers all 32 transition families. [M4 availability](SourceScheduledM4Availability.lean)
+constructs an applicable request or proves terminality from that snapshot,
+under the admitted immutable builtin-signature law. Their composition supplies
+an actual preserving event at every nonterminal valid state.
 
-[Universal preservation for retained events](#universal-preservation-for-retained-events)
-now covers every finite sequence of stable computation, access-checked disposal
-and six focus forms, starting from that same retained invariant. The fixed
-operation signature supplies request ports; the retained continuation contract
-supplies resume ports; context and annotated stack shape supply both pair
-components, branch conditions and resource initializers.
+[Admitted-program execution](SourceScheduledM4.lean) connects M2 initial
+admission to a raw prefix for every fuel, with a valid endpoint and either fuel
+exhaustion or terminality. Separately,
+[raw trace ownership](SourceScheduledM4Execution.lean) accounts for every finite
+supplied event trace from an initial ledger. Terminal accounting gives
+issued/completed permutation and completed-owner uniqueness.
 
-The remaining full-safety work is to extend consuming-clause admission to
-handler and effectful-cleanup scopes, establish complete initial
-admission for that grammar, and prove preservation for every execution admitted
-by a final
-structural transition judgment. A
-[pure-cleanup rule](SourceScheduledNeutralChecks.lean) wraps any locally
-admitted body and retains its callback through capture and disposal. Both
-consuming declaration recipe layers now include that rule, and their capture
-and signature-transport proofs cover it. Resource recipes also account for
-operations supplied by locally acquired providers and retain their checks
-through declaration selection and capture. The finite-prefix existence theorem
-does not replace that universal preservation obligation. Multishot, escape, suspension
-and asynchronous integration are separate targets.
+These results construct source-selected annotation choices. They do not prove
+type/source preservation for arbitrary raw choices, actual Core execution
+simulation, termination or compiler correctness. Earlier scheduled and retained
+event results below remain reusable evidence at their stated boundaries.
+Multishot, escape, suspension and asynchronous integration are separate targets.
 
 ## Current Core correspondence status
 
-The current comparison assesses agreement, missing proofs and demonstrated
-mismatches. It does not authorize Core alignment changes. No general relation
+The [active Core comparison](CORE-ALIGNMENT.md) assesses agreement, missing
+proofs and demonstrated mismatches under TASK-0032. Its finite inventories
+separate the formal model from Rust implementation evidence. No general relation
 from validated Core configurations to this calculus, or simulation theorem for
-that relation, has been established.
+that relation, has been established. The table below records the pre-alignment
+baseline; active findings and changes are recorded in that comparison.
 
 | Area | Evidence and present limit |
 | --- | --- |
@@ -186,14 +183,15 @@ that relation, has been established.
 | Open captures and pending resume arguments | The [open-owner comparison](#outside-owner-use-interfaces) distinguishes successful bound-request resumption (`17 : Int`, exit 0), rejected unsafe disposal (`effect.discard-unsafe`, exit 1), and a direct effectful resume argument that fails Core construction (`internal.core-build`, compiler responsibility, `invalid-payload`, exit 2). The last failure prevents an execution comparison for that form; it is not an admitted runtime outcome of the calculus. |
 | Types and declaration admission | The represented resource-parameter declaration registry compiles to ports with proved support bounds. Core's complete kinds, polymorphism, authenticated declarations and validator acceptance are not formalized by that registry. |
 | Runtime capture annotations | A [model counterexample](#checking-the-supplied-capture-annotation) preserves ownership and access while assigning the wrong continuation input type. Declaration-checked capture excludes it. This identifies an annotation obligation in the proof model, not a demonstrated defect in validated Core. |
-| Disposal, cleanup and completion | The retained source/runtime invariant now covers capture, disposal and cleanup with exhaustive progress and terminal ownership accounting. General scope-bearing clause admission and universal checked-run preservation remain open. No general comparison of Core and calculus close traces is proved. |
+| Disposal, cleanup and completion | The retained source/runtime invariant now covers capture, disposal and cleanup with exhaustive progress and terminal ownership accounting. M2 constructs initial admission, and M3–M4 construct preserving source-selected execution. Arbitrary raw-annotation preservation and general Core/calculus close-trace correspondence remain unproved. |
 | Failure and divergence observations | Current [observation semantics](../../../../spec/dynamic-semantics.md#observation) includes structured internal failures, and current acquisition/disposal performs fallible preparation. The mathematical fresh-name construction is not a model of finite runtime capacity. Failure and divergence correspondence remain unproved. |
 
 The focused Core freshness test and payload fixture pass. The three open-owner
 fixtures have also been rerun with the outcomes above. The direct-argument
 failure is a diagnosed Core-construction limitation; its comparison and
 classification are recorded separately from unsafe-disposal rejection. No
-alignment changes are made. An absent proof alone is not a demonstrated
+alignment change was part of that baseline. The active comparison records the
+subsequent repair under CP-0021. An absent proof alone is not a demonstrated
 semantic disagreement.
 
 ## Direct control representation

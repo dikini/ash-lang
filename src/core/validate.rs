@@ -12386,12 +12386,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             Some(ValidationCause::ResumeArgumentType)
         } else if !self.same_type_charged(&node.ty, &handler_node.ty)? {
             Some(ValidationCause::ResumeResultType)
-        } else if !self.same_effect_row_charged(&node.effects, &handler_node.effects, id)? {
-            Some(ValidationCause::ResumeEffectRow)
-        } else if !self.effect_row_subset_charged(&value.effects, &handler_node.effects, id)? {
+        } else if !self.effect_row_subset_charged(&value.effects, &node.effects, id)? {
             Some(ValidationCause::ResumeArgumentEffects)
         } else {
-            None
+            let expected =
+                self.union_effect_rows_charged(&value.effects, &handler_node.effects, id)?;
+            if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                Some(ValidationCause::ResumeEffectRow)
+            } else {
+                None
+            }
         };
         if let Some(cause) = cause {
             return Err(ValidationError::with_cause(cause, Some(id)));
@@ -13255,12 +13259,12 @@ mod tests {
             (
                 ValidationCause::ResumeEffectRow,
                 "resume-effect-row",
-                "A Core resume's effect row differs from its handler's output row.",
+                "A Core resume's effect row differs from the union of its argument and handler output rows.",
             ),
             (
                 ValidationCause::ResumeArgumentEffects,
                 "resume-argument-effects",
-                "A Core resume argument has effects outside its handler's output row.",
+                "A Core resume argument has effects outside the resume node's row.",
             ),
         ] {
             for node in [None, Some(NodeId::new(arena, 42))] {
@@ -13329,6 +13333,153 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.cause, Some(ValidationCause::ResumeHandlerShape));
+    }
+
+    #[test]
+    fn resume_exact_union_rejects_omitted_and_inflated_core_rows() {
+        use super::super::effect::{EffectExprKind, EffectOperation};
+        let source = concat!(
+            "effect Selected {\nask : Unit -> Unit\n}\n",
+            "effect Operand {\npong : Unit -> Unit\n}\n",
+            "effect Output {\ntick : Unit -> Unit\n}\n",
+            "effect Extra {\nextra : Unit -> Unit\n}\n",
+            "main : Unit -> Int\nmain () = handle (handle {\n",
+            "let ignored = perform Output.tick ()\n",
+            "let ignored = perform Selected.ask ()\n17\n",
+            "} with Selected {\nask ignored => ",
+            "handle (resume (perform Operand.pong ())) with Operand {\n",
+            "pong ignored => resume ()\n}\n",
+            "}) with Output {\ntick ignored => resume ()\n}\n",
+        );
+
+        for corruption in 0..4 {
+            let (mut core, sources, relations) = hook_source_fixture(source);
+            let index = core
+                .nodes
+                .iter()
+                .position(|node| {
+                    let EffectExprKind::Operation(EffectOperation::Resume(resume)) = &node.kind
+                    else {
+                        return false;
+                    };
+                    matches!(
+                        core.nodes[resume.value().index().unwrap()].kind,
+                        EffectExprKind::Operation(EffectOperation::Request(_))
+                    )
+                })
+                .unwrap();
+            let EffectExprKind::Operation(EffectOperation::Resume(resume)) =
+                &core.nodes[index].kind
+            else {
+                unreachable!()
+            };
+            let resume = resume.clone();
+            let handler_index = core.nodes.iter().position(|node| {
+                matches!(&node.kind, EffectExprKind::Operation(EffectOperation::Handler(handler))
+                    if handler.id() == resume.handler())
+            }).unwrap();
+            let operand_row = core.nodes[resume.value().index().unwrap()].effects.clone();
+            let output_row = core.nodes[handler_index].effects.clone();
+            assert!(!operand_row.is_empty());
+            assert!(!output_row.is_empty());
+            assert_ne!(operand_row, output_row);
+            let expected = operand_row.union(&output_row).unwrap();
+            assert_eq!(core.nodes[index].effects, expected);
+            core.nodes[index].effects = match corruption {
+                0 => expected,
+                1 => output_row,
+                2 => operand_row,
+                _ => {
+                    let extra = core
+                        .registry
+                        .effects()
+                        .iter()
+                        .find(|effect| effect.spelling == "Extra")
+                        .unwrap();
+                    expected
+                        .union(&EffectRow::singleton(EffectInstance::new(
+                            extra.id,
+                            Box::new([]),
+                        )))
+                        .unwrap()
+                }
+            };
+            let borrowed = sources.iter().collect::<Vec<_>>();
+            let validator = Validator::new_modules(&core, &borrowed, &relations).unwrap();
+            let id = NodeId::new(core.arena, index as u32);
+            let contracts = HashMap::from([(
+                (resume.handler(), resume.owner()),
+                EffectClauseContract {
+                    handler: NodeId::new(core.arena, handler_index as u32),
+                    clause: 0,
+                },
+            )]);
+            let result = validator.validate_effect_resume(
+                id,
+                &core.nodes[index],
+                &resume,
+                &HashMap::new(),
+                &contracts,
+            );
+            if corruption == 0 {
+                result.unwrap();
+                let work = validator.type_work.get();
+                let retained = core.nodes[index].effects.clone();
+                let short = Validator::new_modules(&core, &borrowed, &relations).unwrap();
+                short
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - work + 1)
+                    .unwrap();
+                assert_eq!(
+                    short
+                        .validate_effect_resume(
+                            id,
+                            &core.nodes[index],
+                            &resume,
+                            &HashMap::new(),
+                            &contracts,
+                        )
+                        .unwrap_err()
+                        .reason(),
+                    ValidationReason::Resource
+                );
+                assert_eq!(core.nodes[index].effects, retained);
+                for _ in 0..2 {
+                    let retry = Validator::new_modules(&core, &borrowed, &relations).unwrap();
+                    retry
+                        .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - work)
+                        .unwrap();
+                    retry
+                        .validate_effect_resume(
+                            id,
+                            &core.nodes[index],
+                            &resume,
+                            &HashMap::new(),
+                            &contracts,
+                        )
+                        .unwrap();
+                    assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                }
+                let validated =
+                    super::super::validate_effect_modules(core, &borrowed, &relations).unwrap();
+                assert_eq!(
+                    crate::eval::evaluate_effect(&validated)
+                        .unwrap()
+                        .value
+                        .to_string(),
+                    "17"
+                );
+            } else {
+                let cause = if corruption == 1 {
+                    ValidationCause::ResumeArgumentEffects
+                } else {
+                    ValidationCause::ResumeEffectRow
+                };
+                assert_eq!(result.unwrap_err().cause, Some(cause));
+                assert!(
+                    super::super::validate_effect_modules(core, &borrowed, &relations).is_err()
+                );
+            }
+        }
     }
 
     #[test]

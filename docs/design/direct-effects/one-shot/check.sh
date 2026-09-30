@@ -767,3 +767,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/SourceCodeDecomposition.olean" S
 lean -DwarningAsError=true -o "$proof_build_dir/SourceCodeCoverage.olean" SourceCodeCoverage.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceAnnotatedCodeRecords.olean" SourceAnnotatedCodeRecords.lean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceAnnotatedStoredUseExecutionCapture.olean" SourceAnnotatedStoredUseExecutionCapture.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreClosing.olean" CoreClosing.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSupport.olean" CoreCallableSupport.lean

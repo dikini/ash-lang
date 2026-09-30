@@ -258,7 +258,8 @@ Pure Core families. Effect Core adds only these operation-family nodes:
 - each clause retains its operation identity, checked irrefutable pattern,
   body, handler identity, and one resume-owner identity;
 - `Resume(handler, owner, value)` remains a clause-scoped Core operation rather
-  than a value or function;
+  than a value or function; its exact row is the union of the operand row and
+  the selected handler's output row;
 - `Discard(handler, owner)` is a clause-scoped, childless operation with value
   type `Unit` and empty immediate row;
 - `Resource(acquisition, handle, initializer, body)` retains the authenticated

@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-No active tasks.
+- [TASK-0032: Align Effect Core with the annotated one-shot calculus](TASK-0032-core-one-shot-alignment.md)

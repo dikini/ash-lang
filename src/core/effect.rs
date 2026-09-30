@@ -617,7 +617,7 @@ impl CoreBuilder<EffectOperationFamily> {
             Registration(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
-            Replace,
+            Resume(NodeId),
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
@@ -652,7 +652,7 @@ impl CoreBuilder<EffectOperationFamily> {
                     EffectExprKind::Operation(EffectOperation::Resume(resume))
                         if resume.handler == handler && resume.owner == owner =>
                     {
-                        Equation::Replace
+                        Equation::Resume(resume.value)
                     }
                     EffectExprKind::Operation(
                         EffectOperation::Resume(_) | EffectOperation::Discard(_),
@@ -746,8 +746,14 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
                     Equation::Pure => self.infer_pure_effects_at(index)?,
-                    Equation::Replace => clone_effect_row_with_budget(output, &mut self.type_work)
-                        .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                    Equation::Resume(value) => self
+                        .nodes
+                        .get(value.index()?)
+                        .ok_or(super::BuildError::InvalidNodeId)?
+                        .effects
+                        .union_with_budget(output, &mut self.type_work)
+                        .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        .map_err(|_| super::BuildError::InvalidPayload)?,
                     Equation::Request(operand, effect) => {
                         let operand = operand.index()?;
                         self.nodes
@@ -818,7 +824,7 @@ impl CoreBuilder<EffectOperationFamily> {
         Ok(())
     }
 
-    /// Completes source-only cleanup row replay after its row variables are solved.
+    /// Completes source handler row replay after its row variables are solved.
     pub(crate) fn finish_cleanup_effect_rows(&mut self) -> Result<(), super::BuildError> {
         let count = self.nodes.len();
         self.charge_effect_metadata(count)?;
@@ -890,7 +896,8 @@ impl CoreBuilder<EffectOperationFamily> {
                         .get(&(resume.handler, resume.owner))
                         .ok_or(super::BuildError::InvalidPayload)?;
                     // Operand work is intrinsic even while the owner output is
-                    // bottom. At the fixed point it is included in that output.
+                    // bottom. Clause-local handlers may discharge its effects
+                    // without adding them to the owner's output.
                     let output = self.nodes[owner]
                         .effects
                         .union_with_budget(
@@ -1247,6 +1254,93 @@ mod tests {
         );
         assert_eq!(node.ty, Type::Unit);
         assert!(node.effects.is_empty());
+    }
+
+    #[test]
+    fn resume_operand_row_replay_is_exact_atomic_and_retryable() {
+        fn fixture() -> (
+            EffectCoreBuilder,
+            std::ops::Range<usize>,
+            EffectRow,
+            EffectRow,
+            NodeId,
+        ) {
+            let source = SourceFile::new("resume-row-replay", "()").unwrap();
+            let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+            let mut builder =
+                EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+            let unit = builder.unit(Type::Unit, origin.clone()).unwrap();
+            let effect =
+                |index| EffectInstance::new(EffectId::new(ModuleId::new(0), index), Box::new([]));
+            let operand_effect = effect(0);
+            let operand_row = EffectRow::singleton(operand_effect.clone());
+            let output = EffectRow::singleton(effect(1));
+            let expected = operand_row.union(&output).unwrap();
+            let operand = builder
+                .request(
+                    operand_effect.clone(),
+                    OperationId::new(operand_effect.effect(), 0),
+                    unit,
+                    Type::Unit,
+                    operand_row.clone(),
+                    origin.clone(),
+                )
+                .unwrap();
+            let start = builder.node_checkpoint();
+            let resume = builder
+                .resume(
+                    HandlerId::new(0),
+                    ResumeId::new(0),
+                    ResumeUse::Consumed,
+                    operand,
+                    Type::Unit,
+                    operand_row,
+                    origin.clone(),
+                )
+                .unwrap();
+            let binder = builder.binder(Type::Unit, origin.clone()).unwrap();
+            builder
+                .binding(binder, resume, unit, Type::Unit, origin)
+                .unwrap();
+            let end = builder.node_checkpoint();
+            (builder, start..end, output, expected, resume)
+        }
+
+        let (mut measured, range, output, expected, resume) = fixture();
+        let before = measured.type_work.used();
+        recompute(&mut measured, range, &output).unwrap();
+        let work = measured.type_work.used() - before;
+        assert_eq!(measured.nodes[resume.index().unwrap()].effects, expected);
+
+        let (mut short, range, output, _, _) = fixture();
+        let rows = short
+            .nodes
+            .iter()
+            .map(|node| node.effects.clone())
+            .collect::<Vec<_>>();
+        short
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - short.type_work.used() - work + 1)
+            .unwrap();
+        assert_eq!(
+            recompute(&mut short, range, &output),
+            Err(super::super::BuildError::TypeWorkExceeded)
+        );
+        assert_eq!(
+            short
+                .nodes
+                .iter()
+                .map(|node| node.effects.clone())
+                .collect::<Vec<_>>(),
+            rows
+        );
+
+        let (mut retry, range, output, expected, resume) = fixture();
+        retry
+            .charge_type_work_for_test(TYPE_WORK_LIMIT - retry.type_work.used() - work)
+            .unwrap();
+        recompute(&mut retry, range, &output).unwrap();
+        assert_eq!(retry.nodes[resume.index().unwrap()].effects, expected);
+        assert_eq!(retry.type_work.used(), TYPE_WORK_LIMIT);
     }
 
     fn range_fixture(

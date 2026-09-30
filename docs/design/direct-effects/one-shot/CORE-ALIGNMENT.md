@@ -1,0 +1,247 @@
+# Effect Core alignment evidence
+
+This comparison is governed by [DN-0033](../../DN-0033-direct-effects-and-continuation-capabilities.md)
+and organized by [TASK-0032](../../../tasks/TASK-0032-core-one-shot-alignment.md).
+It is experimental evidence, not the Ash specification. No general Core
+admission or execution simulation theorem is established yet.
+
+## Baseline
+
+The inspected product baseline is `124e164`. The current annotated calculus
+constructs initial admission through
+[InitialAdmission.Program](SourceScheduledInitialAdmission.lean) and preserving
+bounded execution through [M4](SourceScheduledM4.lean). These results do not
+prove that a validated Core graph supplies the initial admission fields, or that
+an arbitrary raw annotation choice preserves typing. Earlier open obligations
+in KERNEL.md describe earlier models; the final M0–M4 sections and endpoint code
+determine this baseline.
+
+Core independently validates typed nodes, exact rows, declaration identities,
+scope and capture/completion relationships. Its accepted representation is a
+finite acyclic arena. Runtime closures retain Core code and explicit environments;
+the heap stores tuple/constructor cells and recursive aliases. Captured frame
+vectors own resources and nested live continuations. These representation facts
+come from [Core](../../../../src/core/dialect.rs),
+[validation](../../../../src/core/validate.rs) and
+[the evaluator](../../../../src/eval/machine.rs), not from the calculus.
+
+## C1.1 intended comparison boundary
+
+The target is an explicitly checked monomorphic one-shot fragment containing
+unit, Boolean and integer values, variables, binary products, nonrecursive
+functions and application, sequencing, Boolean branching, exact operations,
+handlers, resume, discard, scoped cells and cleanup. Functions retain their
+lexical environments and resource support. Higher-order resource support remains
+an admission obligation; this boundary is not a claim that it is already solved.
+
+The input must be independently validated Effect Core. Admission must also
+check membership in the declared fragment and authenticate any added finite
+annotations. Rejecting an unsupported construct is a translation limitation,
+not a source-language error. The first vertical fixture cannot by itself define
+or certify this boundary.
+
+| Feature | Intended treatment and outstanding obligation |
+| --- | --- |
+| Scalar values, variables, nonrecursive binding/functions/application | Direct structural translation; environment/closure substitution needs a runtime relation. |
+| Binary tuples and Boolean matches | Translate to pair and branch; authenticate pattern and branch coverage. Heap-backed Core tuples require a value relation. |
+| General tuples, constructors, arbitrary patterns, arithmetic | Outside the direct initial calculus grammar. Any required normalization or calculus extension must be proved and added explicitly. |
+| Nonrecursive global entry wrappers | The first linked fixture has a single-member `RecursiveBind` for nonrecursive `main`, an entry application and a Unit-pattern match. Justify finite expansion and match erasure; these wrappers are present in actual Core. |
+| General recursive bindings | Excluded from the initial declared fragment; no current recursive-expression calculus constructor. |
+| Exact parameterized effects | Preserve defining effect/operation identities and complete closed arguments; resource arguments instantiate with fresh activations. |
+| Polymorphism | Open polymorphism is outside the initial fragment. Closed specialization and sealed builtin wrappers still need explicit instantiation/erasure evidence. |
+| Synchronous hooks | General registration owners and pending callbacks are outside the initial fragment. Ordinary handler lowering alone does not prove their coverage. |
+| Native buffers | Outside the initial fragment. Cell ownership does not establish native allocation, failure, payload or release behavior. |
+| Multishot, escaping continuations, suspension, asynchronous hooks | Explicitly excluded by the objective. |
+
+These exclusions classify the initial comparison target. They do not change Ash
+or permit reducing the required handler/request/sequence/resume/discard/cell/
+cleanup coverage to whatever examples pass.
+
+## C1.2 cleanup during discard
+
+Current [dynamic semantics](../../../../spec/dynamic-semantics.md#effect-handlers-and-completion)
+removes captured source handlers from owned close control. Current
+[static semantics](../../../../spec/static-semantics.md#scoped-cleanup-actions)
+rejects cleanup when its nearest interpreter at the closing position would be a
+removed source or generated handler. A farther same-instance handler or builtin
+provider cannot replace that candidate.
+
+The calculus's [lexical discard](SourceResourceRoutes.lean) retains the captured
+stack and unwinds it. It removes each handler only when traversal reaches that
+handler. `LexicalUnwind.DisposalExample.execution` records this explicit sequence:
+
+1. Consume the outer ticket and enter captured-stack unwind.
+2. Start the armed cleanup callback.
+3. Apply its lambda.
+4. Its request captures the still-retained inner source handler.
+5. The inner clause resumes.
+6. The callback finishes.
+7. Unwind removes the inner handler.
+8. Unwind removes the consumed inner clause.
+9. Unwind removes the outer handler.
+10. Finish the close operation.
+11. Return through the consumed outer clause.
+
+This raw-machine difference is not an accepted-Core disagreement:
+[SourceCleanupRoutes.initial_program_rejected](SourceCleanupRoutes.lean)
+rejects the corresponding source shape under the stricter compatibility rules;
+`outside_copy_rejected` proves that adding an outer copy does not repair it.
+Executable [Core regressions](../../../../tests/core_alignment_cleanup.rs)
+establish the following comparison:
+
+| Fixture | Observation |
+| --- | --- |
+| [Minimal removed handler](fixtures/core-cleanup-removed-handler.ash) | `effect.row-union-ambiguous`: the outward cleanup-row gate rejects it first. |
+| [Outside copy](fixtures/core-cleanup-outside-copy.ash) | `effect.cleanup-context`: supplying the outward row isolates the forbidden nearest-interpreter replacement. |
+| [Surviving handler](fixtures/core-cleanup-surviving-handler.ash) | Returns Unit; cleanup selects the surviving interpreter. |
+| [Passed body handler](fixtures/core-cleanup-passed-body-handler.ash) | Returns Unit; a handler passed before the closing position does not replace the cleanup interpreter. |
+| [Nested discard](fixtures/core-cleanup-nested-discard.ash) | Returns `70213`; cleanup records 2 then 1, then the clause records 3. Three cell owners release in reverse acquisition order. |
+| [Nested resume](fixtures/core-cleanup-nested-resume.ash) | Returns `424213`; resumed body records 4 before the same cleanup and clause order. |
+| [Restored clause suffix](fixtures/core-cleanup-restored-clause-suffix.ash) | Returns `11`; actual Core node entries invoke write applications with operands `[7, 11]` and skip `99`. |
+
+The last fixture contains all requested kernel constructs. Its 55 reachable Core
+nodes include a single-member nonrecursive `RecursiveBind` entry wrapper, Unit
+and Boolean matches, and callable cell read/write helpers. There are no type
+abstractions/applications, primitive operations or registrations in this graph.
+The wrapper and builtin-helper correspondence remain proof obligations.
+
+The candidate bridge retains Core's same-interpreter condition.
+[Admission.OpenRequests](Admission.lean) compares original and surviving dispatch;
+`OpenCloses` recursively checks the actual closing positions, including nested
+captures. [SourceResourceRoutes.Realizes.route](SourceResourceRoutes.lean)
+already proves dispatch equality for its represented scopes. C3 must extend that
+argument through actual callback execution, capture and resumption. Retained
+handlers being irrelevant cannot be assumed merely because a program validates.
+
+## C1.3 direct effectful resume operands
+
+Fresh baseline regression results:
+
+| Fixture | Baseline observation |
+| --- | --- |
+| [Bound form](fixtures/open-owner-resume.ash) | `17 : Int` |
+| [Direct form](fixtures/open-owner-resume-operand.ash) | Core construction fails with `InvalidPayload` / `internal.core-build`. |
+| [Unsafe discard](fixtures/open-owner-discard.ash) | Source rejection `effect.discard-unsafe`. |
+
+The failing replay replaces the matching resume node's entire row with its
+owner's output row. That drops the operand's local effect; exact removal at the
+nested handler then fails. The baseline independent validator and T-Resume also
+require the operand effects to be a subset of the owner's output row. Changing
+this contract therefore needs a semantic proposal, not only a local builder fix.
+[CP-0021](../../../proposals/CP-0021-local-effects-in-resume-operands.md)
+records the accepted union rule and required evidence. The source inference and
+least-handler-output traversal already retain the operand's direct requirements.
+
+## C1.4 discrepancy inventory
+
+| ID | Classification | Finding | Required response |
+| --- | --- | --- | --- |
+| D1 | Admission/raw-machine difference | Lexical calculus unwind retains handlers that Core close projection drops. | Preserve Core's cleanup compatibility and prove inactive-handler simulation; do not claim an accepted-program disagreement from the raw witness. |
+| D2 | Demonstrated construction failure and static restriction | Direct effectful resume operand fails while its bound form returns 17. | CP-0021 changes the row contract; repair replay and independent validation with positive/negative regressions. |
+| D3 | Missing static evidence | Core discards the capture-analysis result after validation; the stored program lacks a calculus admission certificate. | Derive or retain finite authenticated annotations and prove their structural compiler sound. |
+| D4 | Admission representation gap | M4 callable ports require retained resource support to occur in input/output/requests. The [pure closure fixture](fixtures/core-cleanup-pure-closure-capture.ash) returns Unit in validated Core with only cell acquisition/release and no requests. | Justify capture erasure or an explicit support annotation. No broad closure claim before resolution. |
+| D5 | Representation/proof gap | Core environments, tuple heap and frame vectors differ from substituted calculus values/stacks. | Define the relation and prove every applicable step. |
+| D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
+| D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
+
+## C1.5 finite case inventory
+
+Core has 23 node alternatives at its closed assembly boundary: five value
+alternatives, variable, ten ordinary computations and seven effect operations.
+The following map is an implementation inventory; no row is marked proved yet.
+
+| Core alternatives | Calculus translation or separate treatment |
+| --- | --- |
+| Integer, Boolean, Unit | `integer`, `boolean`, `unit` |
+| Function; Variable | `lambda`; `variable`, with explicit lexical binder mapping |
+| Constructor | General nominal data excluded initially |
+| Bind; Apply | `bind`; `app` |
+| Tuple; Match | Binary `pair`; exhaustive Boolean `branch` subset |
+| RecursiveBind | General recursion excluded; inspect nonrecursive global wrappers separately |
+| Primitive | No direct constructor; separate pure-extension obligation if required |
+| NewtypeConversion; LocalNominalScope | Erasure/identity authentication requires separate evidence |
+| TypeAbstraction; TypeApplication | Closed specialization requires separate evidence |
+| Request; Handler | `perform`; `handle` with exact declarations and exhaustive clauses |
+| Resume; Discard | `resume`; `discard` with lexical owner mapping and capabilities |
+| Resource | `resource` for authenticated cells; bind the handle to its activation reference |
+| Cleanup | `cleanup`; authenticate preceding callback binding and stored invocation |
+| Registration | Excluded initially; handler lowering does not erase its ownership obligation |
+
+The actual evaluator has three control forms (`Evaluate`, `Return`, `Discard`)
+and 19 frame alternatives. The frame correspondence inventory is:
+
+| Core frame alternatives | Required relation |
+| --- | --- |
+| Bind, ApplyFunction, ApplyArgument, Tuple, Match | Ordinary strict calculus contexts, lexical environments and heap value projection |
+| ResourceInitializer, ResourceBoundary | Initializer context; fresh cell activation, payload and release owner |
+| HandlerBoundary, Request, Resume | Exact lexical selection and operand contexts |
+| ClauseBoundary | Live captured segment or consumed owner, preserving the full active clause prefix |
+| CleanupBoundary, CleanupCompletion, CloseCompletion | Armed action, required running completion and close completion; ordered callbacks |
+| PrimitiveLeft, PrimitiveRight | Outside direct initial grammar |
+| InitializeRecursive | General recursion outside initial grammar; entry-wrapper analysis remains explicit |
+| TypeApplication | Closed-instantiation normalization obligation |
+| RegistrationBoundary | Outside initial fragment |
+
+The calculus has 16 expression constructors and 32 existing transition families:
+
+| Group | Exact families |
+| --- | --- |
+| Ordinary, 20 | Focus; plug; bind; beta; true/false branch; enter/leave handler; enter/leave cell; register/start/finish normal cleanup; capture; resume; leave clause; finish-close-unit; retire-unit; read/write cell. |
+| Unwind, 6 | Skip plain; skip handler; release cell; skip spent owner; open nested live capture; retire owner. |
+| Outer lexical, 6 | Start/finish unwind cleanup; discard; finish unwind close; retire returned value; close returned value. |
+
+Focus contains ten strict expression positions. Unit and general close/retire
+cases overlap intentionally. Core may match several administrative calculus
+events; C3 must give a decreasing measure for any zero-event administrative
+match. This inventory does not establish coverage by counting constructor names.
+
+## C2–C5 proof and implementation boundary
+
+The recommended bridge exports finite Core data and annotations and checks them
+independently. A distinct formal Core validation derivation should compile into
+the existing source, authentication, structural admission, resource and
+accounting judgments. An annotation must not contain `InitialAdmission.Program`,
+an execution trace, successor validity or a claim about every future execution.
+
+The runtime relation must use an independently defined Core step and match the
+step actually taken. M3's existence of a preserving calculus successor does not
+prove this correspondence. Observable result, callback order, cell operations
+and owner completion need separate relations; ledger permutations alone do not
+establish order. Rust tests and exported examples remain implementation evidence,
+distinct from the general theorem about the formal Core model.
+
+### Closing projection component
+
+[CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
+projection with an independent `PopAppend` traversal. Shared `Control` encodes
+frame shapes and ghost owner identities; this is not an exported Rust heap or
+configuration. `discard_projection_exact` proves the exact ordered retained
+cleanup/resource list. `ready_selected_accounting` partitions the selected and
+contained tickets from retained owners, and `ready_selected_no_duplicate_owners`
+derives uniqueness. `open_closes_projection` connects existing interpreter and
+support evidence to the same traversal.
+
+This component assumes successful preparation and disposal checks, and excludes
+registrations, native buffers and protected running completions. It does not
+simulate callback execution or the conditional Core close-completion marker.
+The selected and nested ticket retirement order is related by permutation; only
+retained cleanup/resource order is claimed exact. Independent review found no
+scope or proof defect. A fresh warnings-as-errors compilation passed with only
+`propext` and `Quot.sound` in reported dependencies.
+
+### Callable-support component
+
+[CoreCallableSupport.lean](CoreCallableSupport.lean) constructs a closed
+`InitialAdmission.Program` for a pure closure retaining a cell reference under
+an unused binding. Its actual latent footprint stays empty. The target request
+allowance includes that cell to satisfy the existing lambda capture guard;
+`capture_guard_from_cell_support` derives the guard from a finite support bound.
+The negative empty-allowance theorem confirms that the original guard cannot
+admit the same retained reference without support in the function port.
+
+This resolves the concrete D4 representation example through conservative
+annotation refinement. It does not establish a general Core translation, exact
+Core-row equality, arbitrary callable refinement or Rust closure correspondence.
+Independent review and warnings-as-errors compilation passed. The Program
+construction uses only `propext` and `Quot.sound`; its existing initial-state
+wrapper additionally depends on `Classical.choice`.

@@ -23,4 +23,4 @@ No proposed semantic transition is awaiting acceptance.
 
 ## Accepted changes
 
-No accepted semantic transition awaits its product checkpoint.
+- [CP-0021: Local effects in resume operands](CP-0021-local-effects-in-resume-operands.md)

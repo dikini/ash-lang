@@ -1040,10 +1040,10 @@ T-Handle :=
 T-Resume :=
   active-resume = resume(Q, A, epsilon_out)
   GAMMA |- value ⇐ Q ! value_effects
-  value_effects subset-of epsilon_out
+  resume_effects = value_effects union epsilon_out
   ===>
   GAMMA; active-resume |- resume value
-    ⇒ A ! epsilon_out, consumes-resume
+    ⇒ A ! resume_effects, consumes-resume
 
 T-Discard :=
   active-resume = resume(Q, A, epsilon_out)
@@ -1062,7 +1062,10 @@ requirements check against that shared row. Ordinary completion of the handled
 body passes its `A` value through; there is no source return clause.
 `T-Resume` checks the resumed value against the selected operation result,
 consumes the capability, and gives the resumed computation the handler's result
-contract.
+contract. Its row includes both operand evaluation and that continuation's
+output effects. The operand runs before consumption under the surrounding clause
+control, so a clause-local handler can discharge an operand effect without
+adding it to the selected continuation's output contract.
 `T-Discard` consumes the same capability without resuming its captured
 computation. Its result is `Unit`, not the handler's result type; subsequent
 clause work still checks against the handler contract. Its inferred

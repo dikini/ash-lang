@@ -8,6 +8,11 @@ is claimed.
 The [mathematical companion](KERNEL.md) explains the structural judgments,
 proof dependencies, and what a full consistency claim would require.
 
+[Core alignment evidence](CORE-ALIGNMENT.md) records the active comparison
+boundary, discrepancy and case inventories, and implementation observations for
+[TASK-0032](../../../tasks/TASK-0032-core-one-shot-alignment.md). General Core
+admission and execution simulation remain unfinished.
+
 The schematic request boundary is backed by the existing structural judgments.
 The
 [structural capture and restoration boundary](KERNEL.md#structural-capture-and-restoration-boundary)
@@ -51,7 +56,7 @@ do not qualify the current annotated-state M0–M4 result above.
 | Annotated runtime state | [Shared runtime integration](KERNEL.md#annotated-runtime-integration) retains the actual annotated code, saved continuations and closing callbacks under one owner, name, access, usage and completion invariant. All ten focus forms, ordinary computation, all eight return forms, resumption, builtin replies, both capture branches, disposal and resource/handler/cleanup entry are connected. [Exhaustive progress and finite execution](KERNEL.md#annotated-progress-and-finite-execution) construct actual successors and finite prefixes, with exact terminal ownership accounting. [Checked annotated events](KERNEL.md#checked-annotated-events) have universal preservation and finite-trace safety, including dynamic registry updates and exact annotated disposal, for every transition family. Progress in that same relation now yields an event at every nonterminal admitted state and every finite trace endpoint. Complete declaration/initial admission remains open. |
 | Declaration-policy integration | [Explicit policies in the shared state](KERNEL.md#declaration-policies-in-the-shared-state) now pass through initial assembly, all ten focus forms, ordinary computation, all eight value-return forms, builtin replies, resumption, disposal, and resource/cleanup/handler entry, reusing existing ownership and completion proofs. Handler entry requires a proved source-evidence retention law; the recipe instance reuses its signature-transport proof. Capture now connects contextual source admission to the typed allocator with admitted snapshots and installed packets. Deriving contextual admission at every reachable request and integrating the broader policy into finite execution remain open. |
 | Complete initial-term admission | Initial requirement evaluation, row acceptance and resource support use one executable check. [Recursive capability annotations](KERNEL.md#recursive-continuation-capability-annotations) derive scheduling and connect to initial runtime assembly and finite safety. Closed operation interfaces remain a specialization. General consuming declarations and complete source/completion/support admission remain open. “Initial term” means [scoped calculus code](KERNEL.md#initial-calculus-terms-and-core-programs). |
-| Core correspondence | [Evidence and gap assessment](KERNEL.md#current-core-correspondence-status), with no general simulation proved and no alignment work authorized. |
+| Core correspondence | [Active comparison and case inventory](CORE-ALIGNMENT.md), with alignment work authorized by TASK-0032. No general Core admission or simulation theorem is proved. |
 
 These are separate obligations, not equally sized units of work. Completion of
 the finite-result fragment does not estimate completion of the full one-shot
