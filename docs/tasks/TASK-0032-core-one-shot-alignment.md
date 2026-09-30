@@ -290,14 +290,54 @@ remain separate targets. A small first example does not reduce the final scope.
   design note now records these boundaries. A payload-indexed input prototype
   alone would not resolve general higher-order admission; this changes the next
   repair estimate from a local guard adjustment to a bounded interface experiment.
+- `CoreOrdinaryCompletion` and its narrow potential-family extension passed
+  fresh independent compilation and statement review. Unit/Boolean completion
+  restores saved maps and scopes; value-ready bind/Unit/Boolean entry decreases
+  the shared potential. Singleton wrapper entry derives its template successor
+  from current closing evidence. Exported wrapper54/function50 and the supplied
+  main/Unit-match prefix reach effect48. Whole-program reachability, non-value
+  traversal and effect-frame correspondence are not claimed. The next runtime
+  batch adds exact handler/cell boundaries so ordinary tails compose beneath
+  them; it does not introduce an opaque effect suffix.
+- The graph compiler now indexes resources, contracts, worlds and owner maps
+  recursively. Resume/discard constructors and `Clause.compiled` passed fresh
+  independent compilation: actual clause40 retains condition30, resume32/Unit31,
+  binder10, write11/bind38 and discard39. A finite row-uniqueness lemma resolves
+  an elaborator transport mismatch without an extra premise. Handler41,
+  cleanup and resource48 construction remain open; protected offers retain
+  their existing separate obligations.
+- The combined audit passes for 794 registered modules, 10,895 exact dependency
+  reports and 1,965 local links/anchors. Four new or transitively affected
+  modules received fresh independent compilation; 790 unchanged verified
+  source/report pairs were retained. Standard axioms, source hashes, import
+  order, trust, whitespace and artifact checks pass. Changed Markdown passes
+  lint. Product Rust is unchanged by this batch.
+- `CorePayloadRefinement` passed fresh independent compilation and review as
+  partial interface evidence. It constructs actual capture/call/beta steps and
+  selected body checks for distinct same-port closures, with computed retained
+  support and an executable check tied to the actual receiving stack. Inner
+  reception accepts the cell-retaining closure; outer reception rejects it.
+  The old lambda authentication and fixed rich operation-table obstructions
+  remain explicit. Formal helper/branch/result transport and full initial
+  admission remain open; the shared interface has not been selected for rewrite.
+- Four Rust regressions retain the corresponding Core evidence. All ten
+  cleanup/alignment integration tests pass, including exact same-operation and
+  same-type checks on distinct lowered closure bodies, inside/outside resource
+  reception, and both ordinary-helper branch choices. Targeted clippy with
+  warnings denied and formatting checks pass. No product semantics changed.
+- The combined audit including the bounded prototype passes for 795 modules,
+  10,921 exact dependency reports and 1,971 local links/anchors. Five new or
+  affected modules have fresh independent compilation evidence; 790 unchanged
+  verified source/report pairs are retained. The design-note lint still has its
+  same 14 pre-existing findings, with no new finding.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Normalized admission and partial graph compiler independently verified | Full graph admission, metadata authentication, general compiler | Recursive resource/owner indices and effect constructors; higher-order refinement gap | Next effect-index batch 1–2 hours; full estimate unresolved |
-| C3 | 0 / 5 | Mapped ordinary transport and connected beta/body/caller path independently verified | Reachable maps/annotations, remaining ordinary phases, effect frames, full simulation | Static annotations and state/ownership relation | Next relation batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; C4.1 reopened for D4 | Resolve retained support and callable refinements without changing declared ports | Payload, helper, branch and output interfaces all need assessment | Bounded interface prototype about 2–4 hours; general repair unresolved |
-| C5 | 0 / 4 | Product gate and 793-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C2 | 0 / 4 | Normalized admission, graph clause40 and partial compiler independently verified | Full graph admission, metadata authentication, general compiler | Handler/cleanup/resource constructors; higher-order refinement gap | Next effect-admission batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Mapped ordinary transport, completion and exported entry components independently verified | Reachable maps/annotations, remaining ordinary phases, effect frames, full simulation | Static annotations and state/ownership relation | Next handler/cell boundary batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; bounded D4 operation prototype and regressions checked | Resolve retained support and callable refinements without changing declared ports | Formal helper/branch/output transport and shared-interface decision | Next interface assessment 1–2 hours; general repair unresolved |
+| C5 | 0 / 4 | Product gate and 795-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

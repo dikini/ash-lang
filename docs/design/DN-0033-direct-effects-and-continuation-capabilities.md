@@ -66,6 +66,15 @@ existing M4 admission boundary. These are proof-interface experiments toward
 current Ash semantics, not a language change or a reduction of the task's
 higher-order scope.
 
+The first [payload-refinement experiment](direct-effects/one-shot/CorePayloadRefinement.lean)
+now supplies the same-port operation, computed retention, actual capture/beta
+prefix and selected-receiver checks. It is retained as partial evidence, not as
+approval to generalize this interface through M4. The old lambda authentication
+and fixed rich operation table remain explicit obstructions. Rust regressions
+also exercise ordinary helpers and both branch choices, but their formal
+transport and the higher-order result boundary remain unproved. The
+generalization gate above remains in force.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately

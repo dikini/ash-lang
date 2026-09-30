@@ -419,9 +419,10 @@ application and tuple traversal strictly decrease this potential while preservin
 one identical target configuration when the target operand is already a value.
 The potential also decreases for every earlier `ValueWitness`. An explicit
 family guard excludes effect transitions, and an unchanged state cannot supply
-a witness. Bind/match traversal, arbitrary mixed-prefix transport and complete
-ordinary simulation remain open. Fresh independent compilation and statement
-review of both modules pass with standard axioms only.
+a witness. The completion component below extends the covered traversal shapes
+to bind, Unit match and exhaustive Boolean match. Arbitrary mixed-prefix
+traversal and complete ordinary simulation remain open. Fresh independent
+compilation and statement review pass with standard axioms only.
 
 [CoreAdministrativeTransport.lean](CoreAdministrativeTransport.lean) transports
 value entry and tuple allocation through arbitrary existing mixed ordinary
@@ -449,6 +450,24 @@ without an empty-map restriction; older annotations persist. It assumes neither
 the desired successor interpretation nor future validity. This is ordinary
 component correspondence: authentication of `PlainData`, reachable maps,
 remaining phase cases and effect-frame correspondence are still open.
+
+[CoreOrdinaryCompletion.lean](CoreOrdinaryCompletion.lean) derives singleton
+nonrecursive wrapper entry from its current lexical interpretation. Its actual
+Core successor installs the self-inclusive function template; the target takes
+a positive binding step. The generic theorem retains explicit finite
+nonrecursion, callable, translation and closedness checks. Bind, Unit-match and
+Boolean-match entry preserve one target configuration and decrease the common
+potential when the selected operand is already a value. Unit and Boolean return
+restore the saved frame map and supplied scope, preserving the Core environment
+and older mapped frames. Unit return erases the target's generated dummy binding
+using its absence certificate; an integer scrutinee is rejected.
+
+The exported examples instantiate wrapper54/function50 and connect main's beta,
+Unit-match entry, variable return and match completion to effect node48. They
+start from the stated Core configurations; they do not establish whole-program
+reachability or execute the effect body. Fresh independent compilation passes
+with standard axioms. Non-value traversal, reachable annotation authentication
+and effect-frame correspondence remain separate obligations.
 
 ### Closing projection component
 
@@ -479,8 +498,8 @@ allowance includes that cell to satisfy the existing lambda capture guard;
 The negative empty-allowance theorem confirms that the original guard cannot
 admit the same retained reference without support in the function port.
 
-This resolves the concrete D4 representation example through conservative
-annotation refinement. It does not establish a general Core translation, exact
+This admits the isolated closure through conservative annotation refinement.
+It does not establish a general Core translation, exact
 Core-row equality, arbitrary callable refinement or Rust closure correspondence.
 Independent review and warnings-as-errors compilation passed. The Program
 construction uses only `propext` and `Quot.sound`; its existing initial-state
@@ -511,6 +530,37 @@ erasure alternative must preserve actual cell and cleanup observations. Neither
 obligation is discharged by merely relaxing the lambda guard or deleting pure
 calls. C4.1 is reopened for this identified admission repair; the D2, D8 and D9
 repairs remain verified.
+
+[CorePayloadRefinement.lean](CorePayloadRefinement.lean) checks a bounded
+candidate using one declared pure operation port, actual payload body plans and
+independent retained support. Unit and sequenced-Unit closures have distinct
+rich refinements at that same port. A cell-retaining closure's support is
+computed from its closed code; the executable check accepts an inner handler
+receiver and rejects an outer receiver. Both checks use tables and families
+realized by the actual stacks and exact handler cuts. The candidate constructs
+specialized clause selection, body Source/Auth, Local/Pending and actual
+acquisition, installation, capture, call and beta steps. After beta it constructs
+source/authentication and canonical support for the substituted body.
+
+This is partial interface evidence, not a selected general repair. The old
+retaining-lambda authentication is still refuted, and a single old rich
+operation table cannot store both actual refinements by equality. The module
+does not assemble an initial `Program`, accounting or general helper, branch
+and higher-order result transport. Those formal checks remain the design note's
+generalization gate. Fresh independent warnings-as-errors compilation passes
+with standard axioms; the complete D4 obligation remains open.
+
+Four focused Rust regressions in
+[core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
+retain implementation evidence for this pressure. Independent Core validation
+preserves two requests with the same exact operation and `Unit -> Unit` payload
+type but distinct Unit/Bind bodies. The
+[inside-owner payload](fixtures/core-cleanup-passed-pure-closure.ash) executes,
+the [outside-owner payload](fixtures/core-cleanup-passed-pure-closure-outside.ash)
+is rejected with `type.resource-escape`, and an
+[ordinary helper](fixtures/core-cleanup-helper-closure-branch.ash) executes both
+branch choices. All ten cleanup/alignment integration tests pass, as do targeted
+clippy and formatting checks. These tests do not repair calculus admission.
 
 ### Runtime capacity boundary
 
@@ -564,8 +614,8 @@ the shape check, and fresh administrative-name separation. Concrete reductions
 cover the supported constructor transformations and structured rejection cases.
 Types, exact rows, declaration signatures, lexical support and source provenance
 are retained data, not authenticated static judgments. Fuel exhaustion is an
-explicit error; shape checking has not yet been proved to supply sufficient
-fuel. No initial admission or execution correspondence follows from this syntax
+explicit error; the separate budget proof below rules it out for checked graphs.
+No initial admission or execution correspondence follows from this syntax
 component alone. Independent warnings-as-errors compilation passed.
 
 ### Translation budget and type support
@@ -652,18 +702,28 @@ obligation.
 static derivation and constructs source typing and row authentication from it.
 The ordinary rules cover literals, variables, lambdas, application, binding,
 binary pairs, Boolean branches, Unit matches and singleton nonrecursive entry
-wrappers; exact operation requests are also covered. The translation theorem
+wrappers; exact operation requests, resume and discard are also covered. The
+resource environment, owner contracts, issued world and lexical owner map are
+recursive indices. Resume/discard check the actual Core owner mapping, resolved
+source ticket, permission and contract allowances; discard retains the existing
+unprotected-contract requirement. The translation theorem
 synchronizes that construction with actual fuel-bounded graph translation and
 resource instantiation. Core rows are compared as sets; function bodies may use
 a subset of their original declared allowance. Source/Auth judgments and future
 execution are not inputs to this compiler.
 
 Concrete derivations construct the exported getter, setter and write applications
-for 7, 99 and 11 using actual graph indices and typed lexical environments. These
-remain partial graph admission: the current grammar does not construct handler,
-resume/discard, cleanup or resource-entry nodes. Conditional binding extensions
-around those nodes leave their premises explicit. The static derivation still
-needs to be constructed from validated Core metadata in general; this is not an
+for 7, 99 and 11 using actual graph indices and typed lexical environments.
+`Clause.compiled` constructs actual clause40: condition30, resume32 with Unit31,
+the write11 application under binder10, bind38 and discard39. It preserves the
+fresh contract's demands and rows, and requires the existing branch-demand
+balance. Its ordinary unprotected mode does not impose that mode on every
+handler offer. Fresh independent compilation passes with standard axioms.
+
+These remain partial graph admission: handler, cleanup and resource-entry
+constructors are still open. The ordinary binding spine is conditional on
+handler41, and resource48 is not yet constructed. The static derivation still
+needs to be derived from validated Core metadata in general; this is not an
 executable complete Core validator or an initial `Program` for the exported root.
 
 ### Initial-admission interface repair

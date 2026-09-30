@@ -290,3 +290,112 @@ fn pure_closure_can_capture_a_cell_while_its_owner_remains_live() {
         ]
     );
 }
+
+#[test]
+fn same_operation_accepts_distinct_pure_closure_bodies_in_validated_core() {
+    use ash::{
+        core::{EffectExprKind, EffectOperation, PureComputation, PureExprKind, PureValue},
+        types::Type,
+    };
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum BodyShape {
+        Unit,
+        Bind,
+    }
+
+    // The independent validator runs before inspecting the lowered requests.
+    let program = effect_program("passed-distinct-closures");
+    let mut pending = vec![program.root()];
+    let mut seen = std::collections::HashSet::new();
+    let mut payloads = Vec::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let node = program.node(id).expect("reachable Core node");
+        if let EffectExprKind::Operation(EffectOperation::Request(request)) = &node.kind {
+            let operand = program.node(request.operand()).expect("request operand");
+            let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =
+                &operand.kind
+            else {
+                panic!("Invoke.run operand must remain a Core function");
+            };
+            let body = program.node(function.body()).expect("closure body");
+            let shape = match &body.kind {
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(_))) => BodyShape::Unit,
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(_))) => {
+                    BodyShape::Bind
+                }
+                _ => panic!("unexpected closure body: {:?}", body.kind),
+            };
+            payloads.push((request.effect(), request.operation(), &operand.ty, shape));
+        }
+        pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));
+    }
+    assert_eq!(payloads.len(), 2, "both requests survive lowering");
+    assert_eq!(payloads[0].0, payloads[1].0, "same exact effect instance");
+    assert_eq!(payloads[0].1, payloads[1].1, "same exact operation");
+    assert_eq!(payloads[0].2, payloads[1].2, "same declared payload type");
+    assert_eq!(payloads[0].2, &Type::function(Type::Unit, Type::Unit));
+    assert_ne!(payloads[0].3, payloads[1].3, "Unit and Bind body shapes");
+
+    let evaluation = evaluate_effect(&program).expect("validated fixture executes");
+    assert_eq!(evaluation.value.to_string(), "()");
+    assert_eq!(
+        evaluation
+            .effect_trace()
+            .iter()
+            .filter(|event| matches!(event, EffectTraceEvent::Request(_)))
+            .count(),
+        2,
+        "both same-key requests execute"
+    );
+}
+
+#[test]
+fn pure_closure_payload_executes_inside_its_cell_owner() {
+    assert_eq!(driver_result("passed-pure-closure"), Ok("()".into()));
+    let evaluation = evaluation("passed-pure-closure");
+    assert_eq!(evaluation.value.to_string(), "()");
+    let cell_events = evaluation
+        .effect_trace()
+        .iter()
+        .copied()
+        .filter(|event| {
+            matches!(
+                event,
+                EffectTraceEvent::ResourceAcquired(_) | EffectTraceEvent::ResourceReleased(_)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cell_events,
+        vec![
+            EffectTraceEvent::ResourceAcquired(0),
+            EffectTraceEvent::ResourceReleased(0),
+        ]
+    );
+}
+
+#[test]
+fn pure_closure_payload_cannot_cross_outside_its_cell_owner() {
+    assert_eq!(
+        driver_result("passed-pure-closure-outside"),
+        Err("type.resource-escape".into())
+    );
+}
+
+#[test]
+fn ordinary_helper_accepts_distinct_closures_and_both_branch_results() {
+    assert_eq!(driver_result("helper-closure-branch"), Ok("()".into()));
+    let evaluation = evaluation("helper-closure-branch");
+    assert_eq!(evaluation.value.to_string(), "()");
+    assert_eq!(
+        evaluation.effect_trace(),
+        &[
+            EffectTraceEvent::ResourceAcquired(0),
+            EffectTraceEvent::ResourceReleased(0),
+        ]
+    );
+}

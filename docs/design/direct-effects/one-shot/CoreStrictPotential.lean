@@ -3,7 +3,7 @@ import CoreTranslationFuel
 
 /-! Finite structural potential for the bounded ordinary administrative slice.
 Postorder is static graph descent, not a bound on future execution. Only the
-named actual application/tuple transitions below may use this potential for
+named actual ordinary traversal transitions may use this potential for
 unchanged-target progress. No effect transition is authorized by its weight.
 Translation, lexical interpretation, closed readiness and PlainData annotation
 obligations remain explicit current inputs. No whole simulation is claimed. -/
@@ -142,7 +142,10 @@ def traversalReady (graph : CoreSyntax.Graph) (state : CoreMachine.State) : Bool
   match state.control with
   | .evaluate index _ => match graph.node index with
     | some node => match node.kind with
-      | .apply _ _ | .tuple [_, _] => true
+      | .apply _ _ | .tuple [_, _] | .bind _ _ _
+        | .matchCases _ [⟨.unit, _⟩]
+        | .matchCases _ [⟨.boolean true, _⟩, ⟨.boolean false, _⟩]
+        | .matchCases _ [⟨.boolean false, _⟩, ⟨.boolean true, _⟩] => true
       | _ => false
     | none => false
   | .returned _ => match state.frames with
