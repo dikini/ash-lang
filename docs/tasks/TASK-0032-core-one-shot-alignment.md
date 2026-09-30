@@ -334,14 +334,35 @@ remain separate targets. A small first example does not reduce the final scope.
   passed, none failed and two were ignored. Formatting, metadata, build, Clippy
   and documentation checks also passed. This includes the four new higher-order
   regressions; it does not establish the missing general correspondence proof.
+- `CoreRefinementJoins` completes the bounded helper/branch assessment and passes
+  fresh independent compilation with eleven standard-axiom reports. Actual
+  helper traces and branch support checks pass, while structural inversions
+  prove the current fixed helper input and homogeneous branch result cannot
+  admit the two unchanged closure bodies. This rules out treating the earlier
+  per-payload prototype as a complete interface repair. Callable inputs/results,
+  branch joins and continuation refinements remain part of C4.1.
+- Exact handler/cell entry and normal-return components now compose with mapped
+  stacks. A shared resource initializer relation covers both pushed and
+  value-ready flattened phases; its entry decreases the common potential.
+  The exported resource48 prefix reaches body47 by actual initializer evaluation,
+  acquisition and generated handle binding. Six new or affected modules pass
+  fresh independent compilation. The supplied key7 starting counter is not a
+  reachability proof. Fresh history, target-world equality, scope authentication,
+  captured owners and cleanup still require integration.
+- The integrated boundary/guarded-body increment passes the combined audit for
+  799 registered modules and 10,957 exact dependency reports. Ten new or affected
+  modules have fresh independent compilation; 789 unchanged verified
+  source/report pairs are retained. Only standard axioms occur, with no proof
+  holes or new lint findings. Product code and tests are unchanged since the
+  successful 2,900-test gate.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Normalized admission, graph clause40 and partial compiler independently verified | Full graph admission, metadata authentication, general compiler | Handler/cleanup/resource constructors; higher-order refinement gap | Next effect-admission batch 1–2 hours; full estimate unresolved |
-| C3 | 0 / 5 | Mapped ordinary transport, completion and exported entry components independently verified | Reachable maps/annotations, remaining ordinary phases, effect frames, full simulation | Static annotations and state/ownership relation | Next handler/cell boundary batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; bounded D4 operation prototype and regressions checked | Resolve retained support and callable refinements without changing declared ports | Formal helper/branch/output transport and shared-interface decision | Next interface assessment 1–2 hours; general repair unresolved |
-| C5 | 0 / 4 | Product gate and 795-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C2 | 0 / 4 | Normalized admission, graph clause40 and guarded-body compiler components verified | Full graph admission, metadata authentication, general compiler | Handler/resource constructors; higher-order refinement gap | Handler41 batch 45–75 minutes; full estimate unresolved |
+| C3 | 0 / 5 | Mapped ordinary and handler/cell boundary components independently verified | Initial prefix, allocation history, reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Initial-prefix and history batches each 45–90 minutes in parallel; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; D4 helper/branch assessment confirms shared-interface gap | Resolve retained support and callable refinements without changing declared ports | Common static callable/result contracts and M4 preservation transport | Interface design 1–2 hours; implementation estimate unresolved |
+| C5 | 0 / 4 | Product gate and 799-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

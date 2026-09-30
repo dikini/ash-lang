@@ -1,15 +1,17 @@
 import CoreStrictFrames
+import CoreEffectFrames
 
 /-! Bounded ordinary-stack components for TASK-0032.
 Only a contiguous inner prefix may be flattened. Each flattened hole must be
 closed and value-ready; plugging app/bind/branch produces a non-value, so such
 a frame terminates that prefix. This is not generic reachable-stack coverage.
 Pushed frames carry explicit PlainData scopes and annotations. Authentication
-against Core validation remains a static obligation. Effects, owners, cleanup,
-and discard have no relation constructors; no opaque suffix is called related.
+against Core validation remains a static obligation. Captured owners, cleanup,
+and discard have no relation constructors; exact handler/cell boundaries and
+resource initializers are explicit constructors, never opaque related suffixes.
 No full simulation theorem or future configuration validity is assumed. -/
 namespace Ash.OneShot.CoreStrictStack
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames
 
 abbrev MappedFrame := CoreTranslation.OwnerMap × CoreMachine.Frame
 
@@ -28,11 +30,21 @@ inductive PushedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) : List MappedF
   | cons (frame : PlainFrameRel graph owners heap core plain)
       (tail : PushedWithMaps graph heap cores target) :
       PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
+  | initializer (frame : InitializerRel graph owners heap core plain)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push (.plain plain) target)
+  | boundary (frame : BoundaryRel graph owners heap core effectFrame)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push effectFrame target)
 
 inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
     List MappedFrame → Code → Scope → Code → Scope → Prop where
   | nil : FlattenedWithMaps graph heap [] code scope code scope
   | cons (frame : PlainFrameRel graph owners heap core plain)
+      (ready : ClosedValue code)
+      (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
+      FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
+  | initializer (frame : InitializerRel graph owners heap core plain)
       (ready : ClosedValue code)
       (tail : FlattenedWithMaps graph heap cores (plain.context.plug code) plain.scope result resultScope) :
       FlattenedWithMaps graph heap ((owners, core) :: cores) code scope result resultScope
@@ -90,6 +102,8 @@ theorem PushedWithMaps.heap_weaken (related : PushedWithMaps graph heap cores ta
   induction related with
   | nil => exact .nil
   | cons frame tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ih
+  | initializer frame tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ih
+  | boundary frame tail ih => exact .boundary (BoundaryRel.heap_weaken frame extension) ih
 
 theorem FlattenedWithMaps.heap_weaken
     (related : FlattenedWithMaps graph heap cores code scope result resultScope)
@@ -97,6 +111,7 @@ theorem FlattenedWithMaps.heap_weaken
   induction related with
   | nil => exact .nil
   | cons frame ready tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ready ih
+  | initializer frame ready tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ready ih
 
 theorem PushedRel.heap_weaken (related : PushedRel graph owners heap cores target)
     (extension : HeapExtends heap larger) : PushedRel graph owners larger cores target :=
@@ -207,6 +222,19 @@ theorem prepend_mapped (frame : PlainFrameRel graph owners heap core plain)
   obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := tail
   exact ⟨(owners, core) :: flatPrefix, suffix, by simp [split], .cons frame ready flattened, pushed⟩
 
+/-- Prepend the exact resource initializer to the same mixed reconstruction;
+closed readiness permits only this named flattened resource family. -/
+theorem prepend_initializer (frame : InitializerRel graph owners heap core plain)
+    (ready : ClosedValue code)
+    (tail : OrdinaryWithMaps graph heap annotations (plain.context.plug code) plain.scope result resultScope target)
+    (runtimeScope : Scope) :
+    OrdinaryWithMaps graph heap ((owners, core) :: annotations) code runtimeScope result resultScope target := by
+  obtain ⟨flatPrefix, suffix, split, flattened, pushed⟩ := tail
+  exact ⟨(owners, core) :: flatPrefix, suffix, congrArg ((owners, core) :: ·) split,
+    .initializer frame ready flattened, pushed⟩
+
+#print axioms prepend_initializer
+
 theorem beta_complete_mapped {base : CoreMachine.State}
     (function : ValueRel graph codeOwners base.heap (.closure parameter body saved) (.lambda parameter result))
     (argument : ValueRel graph codeOwners base.heap value argumentCode)
@@ -290,6 +318,7 @@ theorem application_flattening_barrier :
       argument scope result resultScope := by
   intro related
   cases related with
+  | initializer frame ready tail => cases frame
   | cons frame ready tail =>
     rename_i plain
     have notValue : ¬ (plain.context.plug argument).IsValue := by
@@ -299,6 +328,7 @@ theorem application_flattening_barrier :
       | applyArgument value => simp [Context.plug, Code.IsValue]
     cases tail with
     | cons nextFrame nextReady remaining => exact notValue nextReady.1
+    | initializer nextFrame nextReady remaining => exact notValue nextReady.1
 
 
 namespace Examples

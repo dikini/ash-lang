@@ -35,7 +35,7 @@ theorem cost_recurrence (ordered : Postorder graph)
 def frameWeight (graph : CoreSyntax.Graph) : CoreMachine.Frame → Nat
   | .applyFunction argument _ | .tupleLeft argument _ => nodeCost graph argument + 2
   | .applyArgument _ | .tupleRight _ => 1
-  | .bind _ body _ => nodeCost graph body + 1
+  | .bind _ body _ | .resourceInitializer _ _ _ body _ => nodeCost graph body + 1
   | .matchCases arms _ => (arms.map fun arm => nodeCost graph arm.body).sum + 1
   | _ => 0
 
@@ -92,6 +92,23 @@ theorem tuple_right_decreases (base : CoreMachine.State) (tail : List CoreMachin
   simp [potential, frameWeight]
   omega
 
+/-- Only this actual resource entry may use the common potential. The saved
+initializer weight retains the pending source body cost. -/
+theorem resource_entry_decreases {base : CoreMachine.State}
+    (ordered : Postorder graph) (known : graph.node site = some node)
+    (kind : node.kind = .resource identity handle initializer body) (tail : List CoreMachine.Frame) :
+    CoreMachine.next graph { base with control := .evaluate site environment, frames := tail } =
+      .stepped { base with control := .evaluate initializer environment, frames := .resourceInitializer site identity handle body environment :: tail, observations := base.observations ++ [.entered site] } ∧
+    potential graph { base with control := .evaluate initializer environment, frames := .resourceInitializer site identity handle body environment :: tail, observations := base.observations ++ [.entered site] } <
+      potential graph { base with control := .evaluate site environment, frames := tail } := by
+  have cost := cost_recurrence ordered known
+  simp only [kind, CoreSyntax.Kind.children, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil] at cost
+  refine ⟨?_, ?_⟩
+  · simp [CoreMachine.next, known, kind]
+  · simp only [potential, List.map_cons, List.sum_cons, frameWeight]; omega
+
+#print axioms resource_entry_decreases
+
 theorem nodeCost_positive (graph : CoreSyntax.Graph) (index : Nat) : 0 < nodeCost graph index := by
   rw [nodeCost]
   omega
@@ -142,7 +159,7 @@ def traversalReady (graph : CoreSyntax.Graph) (state : CoreMachine.State) : Bool
   match state.control with
   | .evaluate index _ => match graph.node index with
     | some node => match node.kind with
-      | .apply _ _ | .tuple [_, _] | .bind _ _ _
+      | .apply _ _ | .tuple [_, _] | .bind _ _ _ | .resource _ _ _ _
         | .matchCases _ [⟨.unit, _⟩]
         | .matchCases _ [⟨.boolean true, _⟩, ⟨.boolean false, _⟩]
         | .matchCases _ [⟨.boolean false, _⟩, ⟨.boolean true, _⟩] => true

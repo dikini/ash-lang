@@ -1,4 +1,5 @@
 import CoreExportedAdmission
+import CoreGraphCapabilities
 
 /-! A distinct static graph derivation for the administrative fragment. Checked
 Core node equations, declared annotations and lexical bindings are inputs;
@@ -223,6 +224,29 @@ inductive Checked (graph : Graph)
         (.invoke ⟨owner, .dispose⟩ contract.closeDemand []) (.invoke (key := ⟨owner, .dispose⟩)) .unit .invoke
         (allowanceEffects contract.closeEffects)
 
+  | cleanup {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
+      (known : graph.node index = some node) (kind : node.kind = .cleanup callbackBinder actionIndex bodyIndex)
+      (actionShape : CoreTranslation.checkCleanup graph index callbackBinder actionIndex = .ok ())
+      (callbackType : TypeAgreement resources callbackBinder.type
+        (.function .unit .unit requests latent (signature callbackBodyPlan)))
+      (callback : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        fuel callbackIndex (.variable callbackBinder.id) (.function .unit .unit requests latent (signature callbackBodyPlan))
+        callbackDemand callbackReq callbackPlan (.function .unit .unit callbackBodyRows) callbackRows callbackEffects)
+      (action : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        fuel actionIndex (.app (.variable callbackBinder.id) .unit) .unit
+        actionDemand actionReq actionPlan .unit actionRows actionEffects)
+      (body : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        fuel bodyIndex code output bodyDemand bodyReq bodyPlan outputRows bodyRows bodyEffects)
+      (admitted : requests ⊆ allowed)
+      (metadata : Metadata resources node output (callbackEffects ++ bodyEffects ++ allowanceEffects requests)) :
+      Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        (fuel + 1) index (.cleanup (.variable callbackBinder.id) code) output
+        (callbackDemand ++ bodyDemand) (.emitAfter (.sequence callbackReq bodyReq) [] (qualify true latent))
+        (Plan.sequence callbackPlan (Plan.cleanup (needs := requests) callbackBodyPlan bodyPlan)) outputRows
+        (by simpa only [signature] using Rows.sequence callbackRows (Rows.cleanup latent callbackBodyRows bodyRows))
+        (callbackEffects ++ bodyEffects ++ allowanceEffects requests)
+
 /-- The graph certificate constructs both source layers; neither is an input. -/
 theorem Checked.sourceAuth
     (checked : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
@@ -274,6 +298,19 @@ theorem Checked.sourceAuth
       exact ⟨.discard contractKnown resolved permission unprotected admitted,
         .discard (known := contractKnown) (resolved := resolved) (permission := permission)
           (unprotected := unprotected) (admitted := admitted)⟩
+
+  | cleanup known kind actionShape callbackType callback action body admitted metadata ihCallback _ihAction ihBody =>
+      obtain ⟨sourceC, authC⟩ := ihCallback
+      obtain ⟨sourceB, authB⟩ := ihBody
+      exact ⟨.cleanup sourceC sourceB admitted, .cleanup (admitted := admitted) authC authB⟩
+
+private theorem cleanupTranslation (known : graph.node index = some node)
+    (kind : node.kind = .cleanup callback action bodyIndex)
+    (authenticated : CoreTranslation.checkCleanup graph index callback action = .ok ())
+    (body : CoreTranslation.translateFuel graph fuel ownerMap bodyIndex = .ok raw) :
+    CoreTranslation.translateFuel graph (fuel + 1) ownerMap index = .ok (.cleanup (.variable callback.id) raw) := by
+  rw [CoreTranslation.cleanup_equation _ _ _ _ _ _ _ _ known kind authenticated, body]
+  rfl
 
 private theorem pairTranslation (known : graph.node index = some node)
     (kind : node.kind = .tuple [leftIndex, rightIndex])
@@ -513,6 +550,11 @@ theorem Checked.translation
       simp [Code.instantiate, instantiated]
   | discard known kind mapped => exact ⟨_, discardTranslation known kind mapped, rfl⟩
 
+  | cleanup known kind actionShape callbackType callback action body admitted metadata _ihCallback _ihAction ihBody =>
+      obtain ⟨raw, translated, instantiated⟩ := ihBody
+      refine ⟨_, cleanupTranslation known kind actionShape translated, ?_⟩
+      simp [Code.instantiate, instantiated]
+
 /-- A syntactic restriction for the owner-map-independent ordinary subset.
 Owner-bearing terms are handled by the indexed translation theorem instead. -/
 def ticketFree : Code → Bool
@@ -591,6 +633,7 @@ theorem Checked.ticketFreeSyntax
       simp [Code.instantiate, instantiated, instantiatedOperand]
   | resume => intro free; cases free
   | discard => intro free; cases free
+  | cleanup => intro free; cases free
 
 /-- A compiled fragment is tied to the raw graph translation as well as its
 resource-instantiated source. No target derivation is supplied by the caller. -/
@@ -850,6 +893,16 @@ structure WriteBindings (identity : Nat) (environment : Environment) (rows : Env
 
 variable {scope : Execution.Scope}
 
+/-- An unrelated ordinary binding preserves the exact resource/helper rows. -/
+theorem WriteBindings.extend (bindings : WriteBindings identity environment environmentRows)
+    (referenceFresh : name ≠ 4) (setterFresh : name ≠ 3) (valueRows : ValueRows value) :
+    WriteBindings identity (environment.extend name value) (environmentRows.extend name valueRows) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · simpa [Environment.extend, Ne.symm referenceFresh] using bindings.reference
+  · simpa [Environment.extend, Ne.symm setterFresh] using bindings.setter
+  · simpa [EnvironmentRows.extend, Ne.symm referenceFresh] using bindings.referenceRows
+  · simpa [EnvironmentRows.extend, Ne.symm setterFresh] using bindings.setterRows
+
 theorem storeBindings : WriteBindings identity (storeEnvironment identity environment)
     (storeEnvironmentRows identity environmentRows) :=
   ⟨by simp [storeEnvironment, applicationEnvironment, savedEnvironment, Environment.extend],
@@ -859,7 +912,7 @@ theorem storeBindings : WriteBindings identity (storeEnvironment identity enviro
 
 theorem functionChecked (site : Site) (issued : identity ∈ world) (bindings : WriteBindings identity environment environmentRows) :
     Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
-      [.cell identity] scope environment environmentRows
+      allowed scope environment environmentRows
       (fuel + 1) site.functionIndex (.variable 3) (Setter.value identity) [] empty .pure (Setter.valueRows identity) .pure [] := by
   simpa only [bindings.setterRows] using
     (Checked.variable (graph := CoreExportedFixture.graph) (resources := Getter.resources identity)
@@ -873,7 +926,7 @@ theorem functionChecked (site : Site) (issued : identity ∈ world) (bindings : 
 
 theorem argumentChecked (site : Site) (issued : identity ∈ world) (bindings : WriteBindings identity environment environmentRows) :
     Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
-      [.cell identity] scope environment environmentRows
+      allowed scope environment environmentRows
       (fuel + 2) site.tupleIndex (argument site) (Setter.input identity) [] tupleRequirements tuplePlan
       (.pair .reference .integer) tupleRows [] := by
   unfold argument Setter.input tupleRequirements tuplePlan tupleRows
@@ -898,14 +951,15 @@ theorem argumentChecked (site : Site) (issued : identity ∈ world) (bindings : 
       (kind := by cases site <;> rfl) ⟨by cases site <;> exact .integer, by intro effect; cases site <;> rfl⟩
   · exact ⟨by cases site <;> exact .product (.reference rfl) .integer, by intro effect; cases site <;> rfl⟩
 
-theorem checked (site : Site) (issued : identity ∈ world) (bindings : WriteBindings identity environment environmentRows) :
+theorem checkedAllowed (site : Site) (issued : identity ∈ world) (bindings : WriteBindings identity environment environmentRows)
+    (admitted : .cell identity ∈ allowed) :
     Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
-      [.cell identity] scope environment environmentRows
+      allowed scope environment environmentRows
       (fuel + 3) site.applicationIndex (application site) .unit [] (requirements identity) (plan identity)
       .unit (rows identity) [Instantiation.freezeEffect (.cell identity)] := by
   apply Checked.app (graph := CoreExportedFixture.graph) (resources := Getter.resources identity)
     (operations := operations) (policy := policy) (ports := ports) (contracts := contracts) (owners := owners)
-    (world := world) (allowed := [.cell identity]) (scope := scope)
+    (world := world) (allowed := allowed) (scope := scope)
     (environmentRows := environmentRows) (fuel := fuel + 2)
     (input := Setter.input identity) (output := .unit) (requests := [.cell identity])
     (latent := Setter.footprint identity) (inputRows := .pair .reference .integer) (outputRows := .unit)
@@ -915,12 +969,218 @@ theorem checked (site : Site) (issued : identity ∈ world) (bindings : WriteBin
     (functionEffects := []) (argumentEffects := []) (node := node site.applicationIndex)
     (functionIndex := site.functionIndex) (argumentIndex := site.tupleIndex)
     (known := by cases site <;> rfl) (kind := by cases site <;> rfl)
-    (admitted := List.Subset.refl _)
+    (admitted := by intro effect member; simp only [List.mem_singleton] at member; subst effect; exact admitted)
   · simpa [Setter.value, Setter.valueRows] using (functionChecked (fuel := fuel + 1) site issued bindings)
   · exact argumentChecked site issued bindings
   · exact ⟨by cases site <;> exact .unit, by intro effect; cases site <;> rfl⟩
 
+
+theorem checked (site : Site) (issued : identity ∈ world) (bindings : WriteBindings identity environment environmentRows) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [.cell identity] scope environment environmentRows
+      (fuel + 3) site.applicationIndex (application site) .unit [] (requirements identity) (plan identity)
+      .unit (rows identity) [Instantiation.freezeEffect (.cell identity)] :=
+  checkedAllowed site issued bindings List.mem_cons_self
+
 end Writes
+
+namespace Callback
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+def code := Code.lambda 5 (Writes.application .callback)
+def value (identity : Nat) := Value.function .unit .unit [.cell identity] (Setter.footprint identity) (signature (Writes.plan identity))
+def valueRows (identity : Nat) : ValueRows (value identity) := .function .unit .unit (Writes.rows identity)
+variable {world : List Nat} {base : Environment} {baseRows : EnvironmentRows base}
+theorem bindings : Writes.WriteBindings identity ((Writes.storeEnvironment identity base).extend 5 .unit)
+    ((Writes.storeEnvironmentRows identity baseRows).extend 5 .unit) :=
+  ⟨by simp [Writes.storeEnvironment, applicationEnvironment, savedEnvironment, Environment.extend],
+   by simp [Writes.storeEnvironment, Environment.extend],
+   by simp [Writes.storeEnvironmentRows, applicationEnvironmentRows, EnvironmentRows.extend],
+   by simp [Writes.storeEnvironmentRows, EnvironmentRows.extend]⟩
+
+theorem checked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      allowed .none (Writes.storeEnvironment identity base) (Writes.storeEnvironmentRows identity baseRows)
+      (fuel + 4) 13 code (value identity) [] empty .pure (valueRows identity) .pure [] := by
+  apply Checked.lambda (node := node 13) (binder := ⟨5, .unit⟩) (bodyIndex := 12)
+    (known := rfl) (kind := rfl) (inputType := .unit)
+    (body := Writes.checked (fuel := fuel) (scope := .none) .callback issued bindings)
+    (bodyBound := List.Subset.refl _) (latent := Setter.footprint identity)
+    (outward := .emitAfter (layers := []) (raw := Setter.footprint identity)
+      (.sequence (.request (layers := []) (raw := []))
+        (.sequence (.request (layers := []) (raw := [])) (.request (layers := []) (raw := [])))))
+    (latentBound := by intro request member; simp only [Setter.footprint, List.mem_singleton] at member; subst request; exact List.mem_cons_self)
+  · apply CoreCallableSupport.capture_guard_from_cell_support (resources := [identity])
+    simp [Writes.application, Writes.argument, Code.dependencies, Syntax.without,
+      LambdaPortCaptureSupport.portSupport, ScopedPorts.Support.evaluate, Writes.storeEnvironment,
+      applicationEnvironment, savedEnvironment, Environment.extend, Setter.value, Setter.input,
+      Value.erase, SourceDependencyAnnotations.Value.erase, CoherentSourceTypes.Value.port,
+      ScopedPorts.Port.resources, Instance.resources]
+  · intro resource member
+    simp [Value.erase, SourceDependencyAnnotations.Value.erase, CoherentSourceTypes.Value.port,
+      ScopedPorts.Port.resources, Instance.resources] at member
+    subst resource
+    exact issued
+  · exact ⟨.function .unit .unit (by intro effect; rfl)
+      (by intro request member; simp only [Setter.footprint, List.mem_singleton] at member; subst request; exact List.mem_cons_self),
+      by intro effect; rfl⟩
+end Callback
+
+namespace Requests
+open CoreInitialExample
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+def operandIndex (flag : Bool) := if flag then 14 else 16
+def index (flag : Bool) := if flag then 15 else 17
+theorem checked (flag : Bool) (admitted : effect ∈ allowed) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      allowed scope environment environmentRows (fuel + 2) (index flag) (request flag) .unit []
+      requestRequirements requestPlan .unit (.sequence .pure .request) [Instantiation.freezeEffect effect] := by
+  apply Checked.perform (node := node (index flag)) (rawEffect := .user 0 []) (operandIndex := operandIndex flag)
+    (known := by cases flag <;> rfl) (kind := by cases flag <;> rfl) (instantiated := rfl)
+    (operationType := (rfl : operations effect 0 = some (.boolean, .unit)))
+    (admitted := admitted) (formed := List.nil_subset _)
+    (operandPlan := Plan.pure) (operandRows := Rows.pure) (operandEffects := [])
+  · exact Checked.boolean (node := node (operandIndex flag)) (known := by cases flag <;> rfl)
+      (kind := by cases flag <;> rfl) ⟨by cases flag <;> exact .boolean, by intro effect; cases flag <;> rfl⟩
+  · exact ⟨by cases flag <;> exact .unit, by intro effect; cases flag <;> rfl⟩
+end Requests
+
+namespace Guarded
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+def environment (identity : Nat) (base : Environment) := (Writes.storeEnvironment identity base).extend 8 (Callback.value identity)
+def environmentRows (identity : Nat) (base : EnvironmentRows original) : EnvironmentRows (environment identity original) :=
+  (Writes.storeEnvironmentRows identity base).extend 8 (Callback.valueRows identity)
+variable {world : List Nat} {base : Environment} {baseRows : EnvironmentRows base}
+def afterSecond := Code.bind 6 (request false) (Writes.application .skipped)
+def afterSecondReq (identity : Nat) : Requirements [] := .sequence requestRequirements (Writes.requirements identity)
+def afterSecondPlan (identity : Nat) := Plan.sequence requestPlan (Writes.plan identity)
+def afterSecondRows (identity : Nat) : Rows (signature (afterSecondPlan identity)) := .sequence (.sequence .pure .request) (Writes.rows identity)
+theorem skippedBindings : Writes.WriteBindings identity ((environment identity base).extend 6 .unit)
+    ((environmentRows identity baseRows).extend 6 .unit) :=
+  ⟨by simp [environment, Writes.storeEnvironment, applicationEnvironment, savedEnvironment, Environment.extend],
+   by simp [environment, Writes.storeEnvironment, Environment.extend],
+   by simp [environmentRows, Writes.storeEnvironmentRows, applicationEnvironmentRows, EnvironmentRows.extend],
+   by simp [environmentRows, Writes.storeEnvironmentRows, EnvironmentRows.extend]⟩
+
+theorem afterSecondChecked (issued : identity ∈ world)
+    (bindings : Writes.WriteBindings identity current currentRows) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none current currentRows
+      (fuel + 4) 23 afterSecond .unit [] (afterSecondReq identity) (afterSecondPlan identity) .unit (afterSecondRows identity)
+      [Instantiation.freezeEffect effect, Instantiation.freezeEffect (.cell identity)] := by
+  apply Checked.bind (node := node 23) (binder := ⟨6, .unit⟩) (initialIndex := 17) (bodyIndex := 22)
+    (known := rfl) (kind := rfl) .unit
+    (Requests.checked (fuel := fuel + 1) false List.mem_cons_self)
+    (Writes.checkedAllowed .skipped issued (bindings.extend (by decide) (by decide) ValueRows.unit) (by simp))
+  exact ⟨.unit, by intro effect; rfl⟩
+
+def bodyCode := Code.bind 7 (request true) afterSecond
+def bodyReq (identity : Nat) : Requirements [] := .sequence requestRequirements (afterSecondReq identity)
+def bodyPlan (identity : Nat) := Plan.sequence requestPlan (afterSecondPlan identity)
+def bodyRows (identity : Nat) : Rows (signature (bodyPlan identity)) := .sequence (.sequence .pure .request) (afterSecondRows identity)
+
+theorem bodyChecked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none (environment identity base) (environmentRows identity baseRows)
+      (fuel + 5) 24 bodyCode .unit [] (bodyReq identity) (bodyPlan identity) .unit (bodyRows identity)
+      [Instantiation.freezeEffect effect, Instantiation.freezeEffect effect, Instantiation.freezeEffect (.cell identity)] := by
+  apply Checked.bind (node := node 24) (binder := ⟨7, .unit⟩) (initialIndex := 15) (bodyIndex := 23)
+    (known := rfl) (kind := rfl) .unit
+    (Requests.checked (fuel := fuel + 2) true List.mem_cons_self)
+    (afterSecondChecked issued (((Writes.storeBindings (identity := identity) (environment := base) (environmentRows := baseRows)).extend (by decide) (by decide)
+      (Callback.valueRows identity)).extend (by decide) (by decide) ValueRows.unit))
+  exact ⟨.unit, by intro effect; change effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect (.cell identity)] ↔ effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect CoreInitialExample.effect, Instantiation.freezeEffect (.cell identity)]; simp⟩
+
+theorem callbackChecked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none (environment identity base) (environmentRows identity baseRows)
+      (fuel + 1) 25 (.variable 8) (Callback.value identity) [] empty .pure (Callback.valueRows identity) .pure [] := by
+  simpa [environmentRows, EnvironmentRows.extend] using
+    (Checked.variable (graph := CoreExportedFixture.graph) (resources := Getter.resources identity)
+      (operations := operations) (policy := policy) (ports := ports) (contracts := contracts) (owners := owners)
+      (world := world) (environmentRows := environmentRows identity baseRows) (fuel := fuel)
+      (node := node 25) (index := 25) (known := rfl) (kind := rfl)
+      (binding := (by simp [environment, Environment.extend] : environment identity base 8 = some (Callback.value identity)))
+      (formed := (by intro resource member; simp [Callback.value, Value.erase, SourceDependencyAnnotations.Value.erase,
+        CoherentSourceTypes.Value.port, ScopedPorts.Port.resources, Instance.resources] at member; subst resource; exact issued))
+      (metadata := ⟨.function .unit .unit (by intro effect; rfl)
+        (by intro request member; simp only [Setter.footprint, List.mem_singleton] at member; subst request; exact List.mem_cons_self),
+        by intro effect; rfl⟩))
+
+def actionReq (identity : Nat) : Requirements [] := .emitAfter (.sequence empty empty) [] (Setter.footprint identity)
+def actionPlan (identity : Nat) := Plan.sequence Plan.pure (Plan.sequence Plan.pure (Writes.plan identity))
+def actionRows (identity : Nat) : Rows (signature (actionPlan identity)) := .sequence .pure (.sequence .pure (Writes.rows identity))
+theorem actionChecked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none (environment identity base) (environmentRows identity baseRows)
+      (fuel + 2) 27 (.app (.variable 8) .unit) .unit [] (actionReq identity) (actionPlan identity)
+      .unit (actionRows identity) [Instantiation.freezeEffect (.cell identity)] := by
+  apply Checked.app (graph := CoreExportedFixture.graph) (resources := Getter.resources identity)
+    (operations := operations) (policy := policy) (ports := ports) (contracts := contracts) (owners := owners)
+    (world := world) (ownerMap := ownerMap) (allowed := [effect, .cell identity]) (scope := .none)
+    (environmentRows := environmentRows identity baseRows) (fuel := fuel + 1)
+    (functionDemand := []) (argumentDemand := []) (functionReq := empty) (argumentReq := empty)
+    (node := node 27) (functionIndex := 25) (argumentIndex := 26)
+    (known := rfl) (kind := rfl) (input := .unit) (output := .unit)
+    (requests := [.cell identity]) (latent := Setter.footprint identity)
+    (inputRows := .unit) (outputRows := .unit) (bodyPlan := Writes.plan identity) (bodyRows := Writes.rows identity)
+    (functionPlan := Plan.pure) (argumentPlan := Plan.pure) (functionRows := Rows.pure) (argumentRows := Rows.pure)
+    (functionEffects := []) (argumentEffects := []) (admitted := by intro effect member; simp only [List.mem_singleton] at member; subst effect; simp)
+  · exact callbackChecked issued
+  · exact Checked.unit (node := node 26) (known := rfl) (kind := rfl) ⟨.unit, by intro effect; rfl⟩
+  · exact ⟨.unit, by intro effect; rfl⟩
+
+def cleanupCode := Code.cleanup (.variable 8) bodyCode
+def cleanupReq (identity : Nat) : Requirements [] := .emitAfter (.sequence empty (bodyReq identity)) [] (qualify true (Setter.footprint identity))
+def cleanupPlan (identity : Nat) := Plan.sequence Plan.pure (Plan.cleanup (needs := [.cell identity]) (Writes.plan identity) (bodyPlan identity))
+def cleanupRows (identity : Nat) : Rows (signature (cleanupPlan identity)) := .sequence .pure (.cleanup (Setter.footprint identity) (Writes.rows identity) (bodyRows identity))
+theorem cleanupChecked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none (environment identity base) (environmentRows identity baseRows)
+      (fuel + 6) 28 cleanupCode .unit [] (cleanupReq identity) (cleanupPlan identity) .unit (cleanupRows identity)
+      [Instantiation.freezeEffect effect, Instantiation.freezeEffect effect,
+        Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)] := by
+  apply Checked.cleanup (node := node 28) (callbackBinder := ⟨8, .function .unit .unit [.cell (.bound 0)]⟩)
+    (actionIndex := 27) (bodyIndex := 24) (callbackIndex := 25)
+    (known := rfl) (kind := rfl) (actionShape := rfl)
+    (callbackType := .function .unit .unit (by intro effect; rfl)
+      (by intro request member; simp only [Setter.footprint, List.mem_singleton] at member; subst request; exact List.mem_cons_self))
+    (callback := callbackChecked (fuel := fuel + 4) issued)
+    (action := actionChecked (fuel := fuel + 3) issued)
+    (body := bodyChecked issued)
+    (admitted := by intro effect member; simp only [List.mem_singleton] at member; subst effect; simp)
+  exact ⟨.unit, by intro effect; change effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect (.cell identity)] ↔ effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect CoreInitialExample.effect, Instantiation.freezeEffect (.cell identity),
+    Instantiation.freezeEffect (.cell identity)]; simp⟩
+
+def code := Code.bind 8 Callback.code cleanupCode
+def requirements (identity : Nat) : Requirements [] := .sequence empty (cleanupReq identity)
+def plan (identity : Nat) := Plan.sequence Plan.pure (cleanupPlan identity)
+def rows (identity : Nat) : Rows (signature (plan identity)) := .sequence .pure (cleanupRows identity)
+theorem checked (issued : identity ∈ world) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [effect, .cell identity] .none (Writes.storeEnvironment identity base) (Writes.storeEnvironmentRows identity baseRows)
+      (fuel + 7) 29 code .unit [] (requirements identity) (plan identity) .unit (rows identity)
+      [Instantiation.freezeEffect effect, Instantiation.freezeEffect effect,
+        Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)] := by
+  apply Checked.bind (node := node 29) (binder := ⟨8, .function .unit .unit [.cell (.bound 0)]⟩)
+    (initialIndex := 13) (bodyIndex := 28) (known := rfl) (kind := rfl)
+    (.function .unit .unit (by intro effect; rfl)
+      (by intro request member; simp only [Setter.footprint, List.mem_singleton] at member; subst request; exact List.mem_cons_self))
+    (Callback.checked (fuel := fuel + 2) issued) (cleanupChecked issued)
+  exact ⟨.unit, by intro effect; change effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect (.cell identity)] ↔ effect ∈ [Instantiation.freezeEffect CoreInitialExample.effect,
+    Instantiation.freezeEffect CoreInitialExample.effect, Instantiation.freezeEffect (.cell identity),
+    Instantiation.freezeEffect (.cell identity)]; simp⟩
+
+end Guarded
 
 namespace Spine
 open CoreInitialExample CoreExportedAdmission CoreKernelProgram
@@ -1164,6 +1424,11 @@ theorem balanced {data : Data} (balance : data.closeDemand.Perm data.resumeDeman
   simpa only [List.nil_append, List.append_nil] using balance.symm.cons owner
 
 def code := Code.branch (.variable 9) yesCode (.discard ticket)
+/-- The checked translated clause consumes its own ticket on both arms. -/
+theorem capability : ScopedExpressions.Uses policy (.ticket ticket (policy ticket)) .available code .consumed :=
+  CoreGraphCapabilities.sound (fuel := 8) rfl
+
+
 def requirements (identity owner : Nat) (data : Data) (balance : data.closeDemand.Perm data.resumeDemand) :
     Requirements ([] ++ (([] ++ owner :: data.resumeDemand) ++ [])) :=
   .sequence empty (.choice (yesRequirements identity owner data)
@@ -1255,3 +1520,9 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.checked
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.compiled
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Callback.checked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.capability
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Guarded.checked

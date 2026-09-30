@@ -71,9 +71,37 @@ now supplies the same-port operation, computed retention, actual capture/beta
 prefix and selected-receiver checks. It is retained as partial evidence, not as
 approval to generalize this interface through M4. The old lambda authentication
 and fixed rich operation table remain explicit obstructions. Rust regressions
-also exercise ordinary helpers and both branch choices, but their formal
-transport and the higher-order result boundary remain unproved. The
-generalization gate above remains in force.
+also exercise ordinary helpers and both branch choices. The subsequent
+[helper/branch assessment](direct-effects/one-shot/CoreRefinementJoins.lean)
+proves actual helper traces and selected branch support, but also proves that
+the current fixed-input and homogeneous-result constructors cannot admit the
+unchanged two-body examples. Thus per-payload specialization does not supply
+common whole-expression admission. Ordinary callable input/result contracts,
+heterogeneous joins and higher-order continuation transport must be addressed
+together before generalizing the candidate through M4. The generalization gate
+above remains unmet.
+
+The next interface comparison must distinguish public ports from three private
+facts: a value's retained support, its actual body plan, and the refinements its
+caller or continuation accepts. The current `ValueRows.function` stores one
+body decoration; `Auth.app` uses that exact decoration, and `Auth.branch` shares
+one result decoration between both arms. Changing only the operation table
+therefore cannot supply the required transport. A candidate with static families
+must authenticate each body's actual code and allow callers to accept every
+refinement admitted by the declared port. Such quantification is a static proof
+obligation, never a premise that execution will succeed.
+
+The earlier [callable contracts](direct-effects/one-shot/CallableContracts.lean)
+already separate captures from input/result structure and prove substitution.
+Their operation clauses require finite port bounds, and the derivation lacks
+cleanup and discard constructors. Those lemmas may be reused within their
+stated scope, but that historical component does not replace the current M4
+invariant. A family-based repair must reach `InitialAdmission.Program` and the
+current application, branch, capture, resume, saved-context and resource-exit
+preservation boundaries. An observational normalization remains an alternative
+only with a proof preserving internal allocation and cleanup as well as returned
+values. No shared rewrite or normalization is selected by the negative examples
+alone.
 
 ## Question
 

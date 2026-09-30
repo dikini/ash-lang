@@ -418,9 +418,10 @@ graph's strict postorder; frame weights include saved operand costs. Actual
 application and tuple traversal strictly decrease this potential while preserving
 one identical target configuration when the target operand is already a value.
 The potential also decreases for every earlier `ValueWitness`. An explicit
-family guard excludes effect transitions, and an unchanged state cannot supply
-a witness. The completion component below extends the covered traversal shapes
-to bind, Unit match and exhaustive Boolean match. Arbitrary mixed-prefix
+family guard limits silent steps to the named administrative families, and an
+unchanged state cannot supply a witness. The completion and effect components
+below extend traversal to bind, Unit match, exhaustive Boolean match and
+value-ready resource entry. Arbitrary mixed-prefix
 traversal and complete ordinary simulation remain open. Fresh independent
 compilation and statement review pass with standard axioms only.
 
@@ -431,7 +432,8 @@ target configuration. Allocation extends the heap and removes exactly its ready
 inner tuple frame; further ready pair frames and saved lexical continuations
 remain related. The same family guard and strict potential rule out an unchanged
 source state. A nested tuple example checks both allocations over a saved caller
-binding. Traversal of arbitrary mixed prefixes and effect frames remain open.
+binding. Traversal of arbitrary mixed prefixes remains open; the boundary
+component below adds exact handler/cell frames.
 Fresh independent compilation and statement review pass with standard axioms.
 
 `PushedWithMaps`, `FlattenedWithMaps` and `OrdinaryWithMaps` now give each saved
@@ -449,7 +451,7 @@ beta, plug and bind steps. The saved caller map and supplied scope are restored
 without an empty-map restriction; older annotations persist. It assumes neither
 the desired successor interpretation nor future validity. This is ordinary
 component correspondence: authentication of `PlainData`, reachable maps,
-remaining phase cases and effect-frame correspondence are still open.
+remaining phase cases and full effect correspondence are still open.
 
 [CoreOrdinaryCompletion.lean](CoreOrdinaryCompletion.lean) derives singleton
 nonrecursive wrapper entry from its current lexical interpretation. Its actual
@@ -467,7 +469,33 @@ Unit-match entry, variable return and match completion to effect node48. They
 start from the stated Core configurations; they do not establish whole-program
 reachability or execute the effect body. Fresh independent compilation passes
 with standard axioms. Non-value traversal, reachable annotation authentication
-and effect-frame correspondence remain separate obligations.
+and complete effect correspondence remain separate obligations.
+
+### Handler and cell boundary components
+
+[CoreEffectFrames.lean](CoreEffectFrames.lean) relates actual saved handler and
+resource boundaries to target handler/cell frames. Handler body, exact effect
+instantiation and clause header are derived from one current `EnvCloses`
+derivation. Resource opening preserves the lexical resource barrier, including
+shadowing and stored templates. Resource initializers retain the same derived
+body carrier in both pushed and value-ready flattened stack positions.
+
+[CoreEffectEntry.lean](CoreEffectEntry.lean) constructs mapped handler entry and
+normal return, cell acquisition and normal release. Acquisition takes the actual
+Core transition and two positive target steps: resource entry and the generated
+handle binding. Normal return restores the boundary's supplied map and scope;
+cell release names its exact key. Value-ready resource entry uses the common
+strict potential and preserves an identical target expression. No arbitrary
+effect transition receives a silent-step witness.
+
+The exported acquisition prefix runs resource48's integer initializer and enters
+body47 with its cell handle. It instantiates a supplied counter at key7 and
+retains arbitrary older mapped frames; it does not establish that supplied
+state's reachability or execute the remaining body. Closedness checks are
+computed for the fixture. Generic freshness, target-world correspondence,
+reachable map/scope authentication, captured owners and cleanup remain open.
+Six new or affected modules pass fresh independent warnings-as-errors
+compilation and statement review, using only standard axioms.
 
 ### Closing projection component
 
@@ -546,9 +574,25 @@ This is partial interface evidence, not a selected general repair. The old
 retaining-lambda authentication is still refuted, and a single old rich
 operation table cannot store both actual refinements by equality. The module
 does not assemble an initial `Program`, accounting or general helper, branch
-and higher-order result transport. Those formal checks remain the design note's
-generalization gate. Fresh independent warnings-as-errors compilation passes
-with standard axioms; the complete D4 obligation remains open.
+and higher-order result transport. Fresh independent warnings-as-errors
+compilation passes with standard axioms; the complete D4 obligation remains open.
+
+[CoreRefinementJoins.lean](CoreRefinementJoins.lean) completes the bounded
+helper/branch assessment. Structural inversion proves that the unchanged Unit
+and sequenced-Unit lambdas cannot share one old rich value. Consequently, the
+current homogeneous branch constructor cannot admit both arms, and two calls
+through one stored helper cannot accept both arguments at its fixed rich input.
+These are restrictions of the current constructors, not an impossibility result
+for every translation.
+
+The same helper code has actual finite traces to Unit for both payloads. Boolean
+selection retains the chosen payload's declared port and computed support; an
+outside-owner receiver rejects the retaining arm. Per-payload body Source/Auth
+and these operational results do not construct common whole-expression
+admission. The generalization gate therefore identifies required changes at
+ordinary callable inputs/results, branch joins and continuation refinements as
+well as operation ports. A shared-interface repair remains undecided. The leaf
+passes fresh independent compilation with eleven standard-axiom reports.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
@@ -702,8 +746,8 @@ obligation.
 static derivation and constructs source typing and row authentication from it.
 The ordinary rules cover literals, variables, lambdas, application, binding,
 binary pairs, Boolean branches, Unit matches and singleton nonrecursive entry
-wrappers; exact operation requests, resume and discard are also covered. The
-resource environment, owner contracts, issued world and lexical owner map are
+wrappers; exact operation requests, resume, discard and cleanup are also covered.
+The resource environment, owner contracts, issued world and lexical owner map are
 recursive indices. Resume/discard check the actual Core owner mapping, resolved
 source ticket, permission and contract allowances; discard retains the existing
 unprotected-contract requirement. The translation theorem
@@ -720,8 +764,18 @@ fresh contract's demands and rows, and requires the existing branch-demand
 balance. Its ordinary unprotected mode does not impose that mode on every
 handler offer. Fresh independent compilation passes with standard axioms.
 
-These remain partial graph admission: handler, cleanup and resource-entry
-constructors are still open. The ordinary binding spine is conditional on
+The cleanup rule checks the original callback binder type, callback variable,
+actual delayed application and body recursively. It retains the translator's
+cleanup-shape check and records registration separately from delayed execution.
+`Guarded.checked` constructs body29 with callback13/write7, cleanup28/action27,
+both requests and the write99 suffix. The
+[finite capability checker](CoreGraphCapabilities.lean) constructs existing
+one-shot usage derivations from actual syntax, including branch agreement,
+callable barriers and nested clauses. `Clause.capability` applies it to the
+translated clause40; duplicate resume and callable ticket escape are rejected.
+
+These remain partial graph admission: handler and resource-entry constructors
+are still open. The ordinary binding spine is conditional on
 handler41, and resource48 is not yet constructed. The static derivation still
 needs to be derived from validated Core metadata in general; this is not an
 executable complete Core validator or an initial `Program` for the exported root.
