@@ -761,8 +761,8 @@ remain separate targets. A small first example does not reduce the final scope.
   and the same recursively related mapped tail. Eight affected modules pass
   independent compilation, including admitted discard. The combined audit
   covers 838 modules and 11,395 exact reports, retaining 830 unchanged verified
-  pairs. No Rust implementation changed. Admission for the completion suffix
-  and general simulation remain open.
+  pairs. No Rust implementation changed. The admitted-completion batch below
+  supplies the remaining example suffix; general simulation remains open.
 - Handler extension exposed a substitution statement limitation: actual clause
   syntax changes, so the literal old handler plan cannot remain its index.
   The next proof must construct and certify the substituted plan while retaining
@@ -783,8 +783,7 @@ remain separate targets. A small first example does not reduce the final scope.
   callback dispatch, cell updates, projection/retirement and static readiness
   remain C3 obligations; no additional example variant or Rust change was added.
 - Further batches target named general obligations. The existing example's
-  admitted completion remains in progress, but its runtime trace will not be
-  extended. Handler substitution reuses proof-level family selection and
+  admitted completion is recorded below; its runtime trace will not be extended. Handler substitution reuses proof-level family selection and
   existing signature/row transport; it does not require a new syntax walker.
   The connected handler/caller checkpoint must pass before that repair is
   integrated. Initial admission remains a separate static construction.
@@ -817,19 +816,47 @@ remain separate targets. A small first example does not reduce the final scope.
   proof relies on port-bounded values, which cannot be reused for a pure callable
   retaining resources absent from its public port. The required per-clause
   evidence must use actual support environments and remain available inside
-  private lambda bodies. A bounded interface review must establish how actual
-  receiving bounds and changed worlds instantiate that evidence before adding
-  a companion judgment. The earlier one-hour connected-handler estimate is no
-  longer supported; the next twenty-minute review resolves this representation
-  question. No helper-only Source checkpoint will be integrated.
+  private lambda bodies. Review also found that full row equality cannot cover
+  later-world inputs: it would preserve an old empty clause bound after a
+  resource-retaining value is substituted. Fixed-bound substitution needs its
+  explicit support hypotheses; restoration needs authenticated reannotation.
+  The proposed companion must explain how this interacts with the lambda's
+  universal checking refinement before implementation. The earlier one-hour
+  connected-handler estimate is no longer supported; a twenty-minute interface
+  review is resolving this representation question. No helper-only Source
+  checkpoint will be integrated.
+
+- `CoreEmptyDiscard` completes the general empty-projection batch, including
+  nested live/spent captures. The same mapped cut constructs actual Core next,
+  a finite positive target segment and the related successor. Core consumes
+  nested tickets before children; lexical retirement follows children. Exact
+  orders and a permutation preserve ticket multiplicity. Empty projection
+  excludes retained resource/cleanup frames.
+- Core's close counter stays unchanged. The target close label is chosen
+  independently, created and discharged within the segment. Target freshness
+  remains an explicit admission obligation; neither future validity nor a
+  historical name map is assumed. Rust's observation projection erases close
+  ghost labels. Nonempty projected callbacks and general admission remain open.
+- The bounded admitted example is complete through the same 90 actual Core
+  transitions and 41 target events. `admittedFinalCompletion` preserves the
+  source-selected annotations and derives the callback/getter/setter code from
+  reached environments. Every Core point is related to an admitted snapshot;
+  target-only cleanup and bind intermediates are admitted explicitly. The final
+  result is integer 11 with an empty stack and all five issued owners discharged.
+- The three new leaves pass independent compilation against the current baseline
+  with ten exact standard-only reports. Grouped integration covers 844 modules
+  and 11,428 reports, retaining 841 unchanged verified pairs.
+  `CoreValueUniqueness` establishes finite closing-code uniqueness, not annotation
+  uniqueness. This finishes the finite-example line; general admission,
+  simulation and the integrated theorem remain open.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Full runtime example and generic cleanup, cell and completion components independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Completion batch complete; general lifting, projection/retirement and static derivation remain; total unresolved |
+| C3 | 0 / 5 | General empty discard and prior cleanup/cell/completion components independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Empty-discard batch complete; broader lifting, nonempty projection and static derivation unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Hereditary per-clause support authentication, substituted plans and restored-world caller transport | Support-interface review about 20 minutes; connected repair estimate pending its result |
-| C5 | 0 / 4 | Admitted discard independently verified; admitted completion through s67 locally verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Remaining admitted suffix to s90 about 45–60 minutes, then independent review; total unresolved |
+| C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification
 

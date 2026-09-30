@@ -639,8 +639,8 @@ The actual callback's cell0 request resolves to the same builtin interpreter
 on both sides. An explicit negative check shows that unrelated user0 dispatch
 does differ, so this is not all-effect dispatch equality. Cleanup has not
 started. All 15 affected modules pass fresh independent compilation with
-standard axioms. Callback execution, general dispatch/close-identity evidence
-and M4 admission through these later states remain open.
+standard axioms. The completion proofs below extend callback execution and
+admission; general dispatch and close-identity evidence remain open.
 
 [CoreCleanupRunFrames.lean](CoreCleanupRunFrames.lean) and
 [CoreCleanupRunPrefix.lean](CoreCleanupRunPrefix.lean) extend that same chain to
@@ -701,9 +701,33 @@ A terminal negative theorem excludes an extra successful Core step.
 All eight affected modules pass independent warnings-as-errors compilation,
 including the admitted-discard consumer. The combined audit covers 838 modules
 and 11,395 exact standard-axiom reports, retaining 830 unchanged verified pairs.
-This completes the runtime relation for this finite example. Admission through
-its completion, general transition coverage, cleanup dispatch, close-name and
-nested-ticket correspondence remain separate obligations.
+This completes the runtime relation for this finite example. General transition
+coverage, cleanup dispatch, close-name and nested-ticket correspondence remain
+separate obligations.
+
+[CoreAdmittedCompletionPrefix.lean](CoreAdmittedCompletionPrefix.lean) connects
+that same exported execution to admission through all 90 Core transitions and
+41 target events. `admittedFinalCompletion` consumes the admitted discard's
+selected annotations, derives the actual callback and saved caller code from
+the reached environments, and retains the selected handler answers, scopes and
+resource answer until their boundaries return. The supporting
+[CoreValueUniqueness.lean](CoreValueUniqueness.lean) proves uniqueness of closed
+code for the same finite physical value/environment; it does not identify
+selectable type or row annotations.
+
+Every Core point has both its runtime relation and an admitted target snapshot.
+Additional target-only cleanup/handler and bind-plug intermediates are admitted
+explicitly. The endpoint returns integer 11 with an empty target stack, historical
+resource world `[0]`, and all five issued owners discharged: resource0, cleanup0,
+tickets0/1 and close0. The completed list records resource0, close0, cleanup0,
+ticket1 and ticket0 in reverse completion order. Existing runtime-final results
+supply the exact Core observations and terminality for the same endpoint.
+
+Both leaves pass independent warnings-as-errors compilation against the current
+baseline, with seven exact standard-axiom reports. This finishes the bounded
+admitted example; no further variants or trace extensions
+are planned. General higher-order admission, simulation and the integrated
+fragment theorem remain open.
 
 [CoreNormalCleanupSteps.lean](CoreNormalCleanupSteps.lean) proves normal
 cleanup start and finish for arbitrary states and saved values. The normal
@@ -766,6 +790,28 @@ The new leaf passes independent warnings-as-errors compilation with six exact
 standard-axiom reports. The combined audit covers 841 modules and 11,418 reports,
 retaining 840 unchanged verified pairs. This adds two C3.2 transition components;
 it does not complete the general simulation obligation.
+
+[CoreEmptyDiscard.lean](CoreEmptyDiscard.lean) proves general empty-projection
+discard, including nested live and spent captures. The same mapped capture and
+successful empty `closeFuel` result construct a finite lexical unwind. Core
+consumes nested tickets before their children; lexical unwind retires parents
+after children. The proof gives both exact orders and their permutation, without
+confusing those ghost events with observable callback order. Retained resource
+or cleanup frames contradict the empty-projection hypothesis.
+
+`discard_empty` derives actual Core next and both related endpoints from the
+same current owner cut. Core's close counter stays unchanged. The positive
+target segment explicitly discards, advances and retires scopes, then finishes a close
+whose label is chosen independently of that counter. Its created close is also
+discharged within the segment. Freshness of that label remains a current-history
+obligation for admission; the raw transition theorem does not assert it.
+Nonempty projected callbacks and general annotation authentication remain open.
+
+The new leaf passes independent warnings-as-errors compilation with three exact
+standard-axiom reports. Grouped integration with the admitted-completion leaves
+covers 844 modules and 11,428 reports, retaining 841 unchanged verified pairs.
+No Rust behavior, relation representation or finite example was added for this
+general empty-discard proof.
 
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
@@ -1045,6 +1091,17 @@ returns that closure beyond the resource body and is rejected with
 automated regressions below. Full higher-order resume preservation must update
 saved support bounds under the restored world and receiving context; copying
 the pre-capture bounds is insufficient.
+
+This requirement also reaches handlers inside private callable bodies. Review
+found that aggregate expression support and plan certification do not validate
+each stored clause support bound. A bound selected before a resource is acquired
+cannot be preserved by equality when substitution inserts a callable retaining
+that resource. Fixed-bound substitution remains valid when its explicit support
+hypotheses hold; general restoration must authenticate new bounds against the
+actual receiver. A proposed hereditary support companion is under interface
+review. It must also account for the existing lambda refinement's universal
+checking premise: increasing a bound does not justify checking at every old
+receiver. No such transport theorem or full handler admission is claimed yet.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
@@ -1390,8 +1447,9 @@ final world/history stay `[0]`; issued owners are
 unchanged. The existing owner-head decomposition is public and reused without
 changing its statement. Three affected modules pass independent compilation;
 the combined audit covers 836 registered modules and 11,359 exact standard-axiom
-reports. Admission through cleanup/completion, general metadata authentication
-and higher-order admission remain open.
+reports. The admitted-completion proof above extends this same prefix through
+final release. General metadata authentication and higher-order admission remain
+open.
 
 ### Initial-admission interface repair
 
