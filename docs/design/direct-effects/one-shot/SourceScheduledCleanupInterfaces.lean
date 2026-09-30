@@ -1,3 +1,4 @@
+import SourcePlainSuffixTransport
 import SourceScheduledCleanupInsertion
 import SourceScheduledCallbackRoutes
 import SourceContextualCapture
@@ -1463,6 +1464,11 @@ inductive ClauseRecipe (outward : List Instance) (rights : Syntax.OneShotRights)
   | resource {family : Nat → Nat → Dependencies}
       (body : ∀ identity, ClauseRecipe outward rights required (fun owner => family owner identity) (identity :: provided)) :
       ClauseRecipe outward rights required (fun owner => .resource (family owner)) provided
+  | suffix {checking : Signature suffixCode}
+      (body : ClauseRecipe outward rights required family provided)
+      (continuation : Footprint checking needed) :
+      ClauseRecipe outward rights (required ++ externalRequirements provided needed)
+        (fun owner => .sequence (family owner) suffixCode) provided
   | choice (left : ClauseRecipe outward rights firstRequired first provided)
       (right : ClauseRecipe outward rights secondRequired second provided) :
       ClauseRecipe outward rights (firstRequired ++ secondRequired)
@@ -1505,6 +1511,13 @@ theorem ClauseRecipe.compile {captured : ReturnHints capturedScope} {tail : Retu
           (fun _ ready => ready) (fun _ _ known => known) (List.subset_append_left _ _))
         (fun permission => SourceDependencySchemes.Lexical.Recursive.local_transport (dispose permission)
           (fun _ ready => ready) (fun _ _ known => known) (List.subset_append_left _ _))
+  | suffix body continuation ih =>
+      simp only [checkRequirements, List.all_append, Bool.and_eq_true] at supplied
+      apply SourcePlainSuffixTransport.plain_suffix_admission continuation
+      · apply provider_requirements
+        exact SourceScheduledAdaptationCompilation.requirements_prefix
+          (front := .live owner capturedScope .nil) (fun _ => rfl) supplied.2
+      · exact ih supplied.1 resume dispose
   | choice left right ihLeft ihRight =>
       simp only [checkRequirements, List.all_append, Bool.and_eq_true] at supplied
       exact .choice (ihLeft supplied.1 resume dispose) (ihRight supplied.2 resume dispose)

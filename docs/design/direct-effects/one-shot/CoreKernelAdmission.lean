@@ -130,7 +130,7 @@ def declarationRows (identity : Nat) : ClauseRows (SourcePlanSignatures.clauseSi
 def handled (identity : Nat) : Code :=
   .handle (Instantiation.freezeEffect effect) (guardedBody identity) (clauses identity)
 def handledPlan (identity : Nat) := Plan.handler (effect := effect) (table := table identity)
-  [] (declarationPlans identity) (guardedPlan identity)
+  [(.cell identity, 1)] (declarationPlans identity) (guardedPlan identity)
 def handledRequirements (identity : Nat) : Requirements [] :=
   (guardedRequirements identity).prepend [.ordinary (.handler effect 0 (table identity))]
 def handledRows (identity : Nat) : Rows (signature (handledPlan identity)) :=
@@ -257,84 +257,78 @@ theorem resourceAuth : Auth operations policy ports InitialAdmission.owners empt
   simpa only [instantiated, List.nil_append] using cellBodyAuth identity
 
 
-/-- Existing declaration recipes consume at each alternative's final leaf.
-    This is a property of those recipes, not a language restriction. -/
-inductive EndsInInvocation : SourceDependencyAnnotations.Dependencies → Prop where
-  | invoke : EndsInInvocation (.invoke key)
-  | sequence : EndsInInvocation second → EndsInInvocation (.sequence first second)
-  | cleanup : EndsInInvocation body → EndsInInvocation (.cleanup needs callbackDependencies body)
-  | resource : (∀ identity, EndsInInvocation (family identity)) → EndsInInvocation (.resource family)
-  | choice : EndsInInvocation first → EndsInInvocation second → EndsInInvocation (.choice first second)
+/-- A consuming resume crosses the retained plain write suffix, whose request
+is discharged by the actual cell receiver. -/
+theorem effectfulPlainResume :
+    SourceDependencyChecks.Lexical.ReturnHints.Recursive.Local []
+      Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.Examples.actions
+      (OwnerPhaseTransitions.available [7]) [42]
+      (.sequence (.invoke ⟨7, .resume⟩) (.sequence .pure (.request (.cell 42) 1)))
+      Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.Examples.receiver := by
+  apply SourcePlainSuffixTransport.plain_suffix_admission
+    (SourceRequestFootprints.Footprint.sequence .pure .request) (by decide)
+  apply SourceDependencyChecks.Lexical.ReturnHints.Recursive.Local.resume
+    (rights := ⟨true, true⟩) (front := .nil) .hit
+  · simp [Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.Examples.actions]
+  · rfl
+  · simp [OwnerPhaseTransitions.available]
+  · exact .spent (.cell .nil)
 
-theorem existingRecipeEnds
-    (recipe : SourceContextualRequirements.Recipe outward rights required family provided) :
-    ∀ owner, EndsInInvocation (family owner) := by
-  induction recipe with
-  | resume permission => exact fun _ => .invoke
-  | dispose permission => exact fun _ => .invoke
-  | silent body silent ih => exact fun owner => .sequence (ih owner)
-  | request body ih => exact fun owner => .sequence (ih owner)
-  | localRequest member body ih => exact fun owner => .sequence (ih owner)
-  | handledRequest body ih => exact fun owner => .sequence (ih owner)
-  | resource body ih => exact fun owner => .resource (fun identity => ih identity owner)
-  | cleanup body ih => exact fun owner => .cleanup (ih owner)
-  | choice first second ihFirst ihSecond => exact fun owner => .choice (ihFirst owner) (ihSecond owner)
+/-- The resume branch retains its actual write suffix; its finite requirement
+is checked at the receiver after the continuation has been consumed. -/
+theorem clauseRecipe :
+    ClauseRecipe outward (clause identity).requiredActions [(.cell identity, 1)]
+      (clauseDependencies identity) := by
+  apply ClauseRecipe.sequence SourceRequestFootprints.Footprint.pure
+  apply ClauseRecipe.choice (firstRequired := [(.cell identity, 1)]) (secondRequired := [])
+  · have consumingRecipe : ClauseRecipe outward (clause identity).requiredActions []
+        (fun owner => .sequence .pure (.invoke ⟨owner, .resume⟩)) :=
+      .sequence .pure (.existing (.resume rfl))
+    have continuedRecipe := ClauseRecipe.suffix consumingRecipe
+      (SourceRequestFootprints.Footprint.sequence .pure
+        (SourceRequestFootprints.Footprint.request (effect := .cell identity) (operation := 1)))
+    simpa [externalRequirements, SourceContextualRequirements.providerScope,
+      SourceHandlerRequirements.outwardRequirements, SourceHandlerRequirements.reaches] using continuedRecipe
+  · exact .existing (.dispose rfl)
 
-theorem clauseRecipeEnds (recipe : ClauseRecipe outward rights required family provided) :
-    ∀ owner, EndsInInvocation (family owner) := by
-  induction recipe with
-  | existing recipe => exact existingRecipeEnds recipe
-  | sequence initial body ih => exact fun owner => .sequence (ih owner)
-  | cleanup callback body ih => exact fun owner => .cleanup (ih owner)
-  | resource body ih => exact fun owner => .resource (fun identity => ih identity owner)
-  | choice first second ihFirst ihSecond => exact fun owner => .choice (ihFirst owner) (ihSecond owner)
+theorem declarationRecipe :
+    ClauseDeclarations outward (clauses identity)
+      [(0, some (clauseDependencies identity), none)] [(.cell identity, 1)] :=
+  .cons (.available clauseRecipe) .unavailable .nil
 
-/-- The actual post-resume write cannot be admitted by the current declaration
-    recipe grammar. Neither branch nor the suffix is erased to obtain this fact. -/
-theorem effectfulSuffixRecipeRejected :
-    ¬ ClauseRecipe outward rights required (clauseDependencies identity) provided := by
-  intro recipe
-  have ending := clauseRecipeEnds recipe 0
-  have impossible : EndsInInvocation (.request (.cell identity) 1) := by
-    cases ending with
-    | sequence branch =>
-      cases branch with
-      | choice yes no =>
-        cases yes with
-        | sequence suffix =>
-          cases suffix with
-          | sequence request => exact request
-  cases impossible
+/-- Omitting the actual receiver fails the finite suffix check. -/
+theorem suffixMissingReceiver :
+    SourceContextualHints.checkRequirements SourceDependencyCapture.Scope.nil
+      [(.cell identity, 1)] = false := by
+  rfl
 
-
-theorem declarationRecipeRejected :
-    ¬ ClauseDeclarations outward (clauses identity)
-      [(0, some (clauseDependencies identity), none)] required := by
-  intro declaration
-  cases declaration with
-  | cons ordinary protectedMode rest =>
-    cases ordinary with
-    | available recipe => exact effectfulSuffixRecipeRejected recipe
-
-/-- This exact faithful plan lacks the static declaration certificate required
-    by Program. This does not refute all decorations of the source expression. -/
-theorem resourcePlanCertificateRejected :
-    ¬ SourcePlannedChecks.Certified (evidence := declarationPolicy) [] [] resourcePlan := by
-  intro certified
-  cases certified with
-  | sequence initial resource =>
-    cases resource with
-    | resource body =>
-      have checked := body 0 (by simp)
-      cases checked with
-      | sequence handled read =>
-        cases handled with
-        | handler recipes declarations body => exact declarationRecipeRejected recipes
+theorem resourceCertified :
+    SourcePlannedChecks.Certified (evidence := declarationPolicy) [] [] resourcePlan := by
+  letI : SourcePlannedChecks.DeclarationPolicy := declarationPolicy
+  unfold resourcePlan
+  apply SourcePlannedChecks.Certified.sequence .pure
+  apply SourcePlannedChecks.Certified.resource
+  intro identity fresh
+  unfold cellBodyPlan handledPlan
+  apply SourcePlannedChecks.Certified.sequence
+  · apply SourcePlannedChecks.Certified.handler declarationRecipe
+    · apply SourcePlannedChecks.CertifiedClauses.cons
+      · apply SourcePlannedChecks.CertifiedModes.available
+        intro owner
+        exact .sequence .pure (.choice (.sequence (.sequence .pure .invoke)
+          (.sequence .pure .request)) .invoke)
+      · exact .unavailable
+      · exact .nil
+    · exact .sequence .pure (.cleanup (.sequence .pure .request)
+        (.sequence (.sequence .pure .request)
+          (.sequence (.sequence .pure .request) (.sequence .pure .request))))
+  · exact .sequence .pure .request
 
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.resourceSource
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.resourceAuth
-#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.effectfulSuffixRecipeRejected
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.effectfulPlainResume
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.clauseRecipe
 
-#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.resourcePlanCertificateRejected
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreKernelAdmission.resourceCertified
