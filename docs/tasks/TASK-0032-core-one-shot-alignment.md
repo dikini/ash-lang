@@ -613,8 +613,8 @@ remain separate targets. A small first example does not reduce the final scope.
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Forty-transition second-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Lexical discard/closing-entry batch being scoped; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Next connected-invariant batch being scoped; full repair estimate unresolved |
+| C3 | 0 / 5 | Forty-transition second-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Lexical discard/closing-entry batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
 | C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch 1–2 hours; total unresolved |
 
 ## Verification

@@ -317,6 +317,26 @@ invariant, with concrete current/saved-source preservation and a connection to
 M4's existing guarantees. Another conditional beta wrapper would not meet that
 acceptance boundary.
 
+The next bounded checkpoint uses an upper companion for current and saved
+source evidence, importing the existing M4 checking and accounting definitions.
+It avoids a back-import into `SourceScheduledCleanupInterfaces`. Its current
+site replaces the legacy source/authentication fields for this prototype;
+structural saved frames carry the same recursive source, common contracts,
+scalar requirements and independent support. A projection to the lower
+`SourceTemplates.Expression` is admissible only by construction; that judgment
+does not require the function's exact private body signature.
+
+The acceptance case must construct a checked predecessor with a live cell0 and
+one saved helper suffix. The helper accepts two Unit-to-Int implementations
+that read the same cell, one with an extra Unit bind; both retain actual cell
+support. Actual focus, cell-read reply, plug and bind transitions must recover
+that same suffix with its private evidence and derive current and pending
+certificates and accounting from the predecessor. Leaving all predecessor
+checks as assumptions would not meet this gate. User-handler replies, callable
+operation results, common owner contracts, capture/resume/discard, cleanup and
+resource-exit support remain required subsequent integration work. Passing this
+checkpoint would not establish the full M4 invariant or general Core admission.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately
