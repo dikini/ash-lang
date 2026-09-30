@@ -83,6 +83,8 @@ structure Interface (owner : Nat) (contract : Owners.Contract) (disposes : Bool)
   available : disposes = true → ∃ row, contract.closeRow = some row
   closingBound : disposes = true → ∀ row, contract.closeRow = some row → EffectBounds.Covers (requestRow ++ contract.resumeRow) row
   fresh : owner ∉ OwnerPhaseTransitions.liveNames tail
+  closingSeparate : disposes = true → ∀ other ∈ contract.closeDemand,
+    other ∉ OwnerPhaseTransitions.liveNames tail
 
 /-- A clause that forbids disposal needs only the resume interface, regardless
 of any unused closing metadata retained in the historical contract. -/
@@ -93,7 +95,7 @@ theorem Interface.of_resume
     (fresh : owner ∉ OwnerPhaseTransitions.liveNames tail) :
     Interface owner contract disposes store tail before requestRow := by
   subst disposes
-  refine ⟨resume, ?_, ?_, ?_, fresh⟩ <;> intro impossible <;> cases impossible
+  refine ⟨resume, ?_, ?_, ?_, fresh, ?_⟩ <;> intro impossible <;> cases impossible
 
 structure Header where
   owner : Nat
@@ -400,6 +402,54 @@ theorem resume_rows {templates : Store → Prop} : Rows ⟨owner, contract, disp
     Checked.sequence (a := .request [] []) (firstRow := []) (Checked.request (by simp [OwnerSource.exportAt, ProtectionResiduals.residual_empty])) interface.resume
   obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked checked
   exact ⟨contract.resumeRow, calls, derived, supplied, List.subset_append_right _ _⟩
+
+/-- Physical disposal separates captured owners from the receiving tail.
+The same advertisement therefore bounds actual effectful work after resume;
+no exact held flag or request is weakened. Resume-only clauses are unchanged. -/
+theorem Interface.resume_then_suffix_checked
+    (interface : Interface owner contract disposes store tail before requestRow)
+    (permitted : disposes = true)
+    (balance : contract.closeDemand.Perm contract.resumeDemand)
+    (exported : OwnerSource.exportAt tail before raw = some requestRow) :
+    Checked store (.live owner contract.held :: tail) before
+      (.sequence (.sequence (.request [] [])
+        (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
+        (.emitAfter (.request [] []) [] raw))
+      (contract.resumeRow ++ requestRow) ∧
+    EffectBounds.Covers (requestRow ++ contract.resumeRow) (contract.resumeRow ++ requestRow) := by
+  have separate : ∀ other ∈ contract.resumeDemand, other ∉ OwnerPhaseTransitions.liveNames tail := by
+    intro other member
+    exact interface.closingSeparate permitted other (balance.mem_iff.mpr member)
+  have suffix : OwnerSource.exportAt (.live owner contract.held :: tail)
+      (OwnerPhaseTransitions.spendAll before (owner :: contract.resumeDemand)) raw =
+      OwnerSource.exportAt tail before raw := by
+    unfold OwnerSource.exportAt
+    rw [OwnerPhaseTransitions.project_after_selected_consumption interface.fresh separate]
+  constructor
+  · refine Checked.sequence (firstRow := contract.resumeRow) (secondRow := requestRow) ?_ ?_
+    · simpa only [List.nil_append] using
+        Checked.sequence (a := .request [] []) (firstRow := [])
+          (.request (by simp [OwnerSource.exportAt, residual_empty])) interface.resume
+    · simpa only [List.nil_append, List.append_nil, OwnerPhaseTransitions.spendAll] using
+        Checked.emitAfter (requirements := .request [] []) (bodyRow := [])
+          (requestRow := requestRow) (.request (by simp [OwnerSource.exportAt, residual_empty]))
+          (suffix.trans exported)
+  · intro request member
+    rcases List.mem_append.mp member with resumed | after
+    · exact List.mem_append_right _ resumed
+    · exact List.mem_append_left _ after
+
+
+theorem resume_then_effectful_suffix_rows {contract : Owners.Contract} {templates : Store → Prop}
+    (permitted : disposes = true)
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    Rows ⟨owner, contract, disposes, advertised⟩
+      (.sequence (.sequence (.request [] []) (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
+        (.emitAfter (.request [] []) [] advertised)) templates := by
+  intro store tail before requestRow interface exported
+  obtain ⟨checked, bounded⟩ := interface.resume_then_suffix_checked permitted balance exported
+  obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked checked
+  exact ⟨_, calls, derived, supplied, bounded⟩
 
 /-- Returning a value after the resume adds an empty requirement check at the
 post-invocation phase. -/
@@ -1072,6 +1122,16 @@ theorem protected_resume_rows {templates : Store → Prop} :
       (.sequence (.request [] []) (.invoke ⟨owner, .resume⟩ contract.resumeDemand [])) templates :=
   .of_unchanged resume_rows rfl
 
+/-- The effectful suffix adds no disposal alternative; reuse its exact
+ordinary certificate for protected generated checking. -/
+theorem protected_resume_then_effectful_suffix_rows {contract : CoherentSourceTypes.Owners.Contract} {templates : Store → Prop}
+    (permitted : disposes = true)
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ProtectedRows ⟨owner, contract, disposes, advertised⟩
+      (.sequence (.sequence (.request [] []) (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
+        (.emitAfter (.request [] []) [] advertised)) templates :=
+  .of_unchanged (resume_then_effectful_suffix_rows permitted balance) rfl
+
 theorem protected_discard_rows {templates : Store → Prop} :
     ProtectedRows ⟨owner, contract, true, advertised⟩
       (.invoke ⟨owner, .dispose⟩ contract.closeDemand []) templates := by
@@ -1098,9 +1158,53 @@ theorem ProtectedRows.of_calls {templates : Store → Prop}
   obtain ⟨checkedRow, checked, within⟩ := clause_disposals_checked derived supplied bounded closing
   obtain ⟨checkedCalls, generated, allChecked⟩ := ContextualClauseChecks.open_checked checked
   exact ⟨checkedRow, checkedCalls, generated, allChecked, within⟩
+/-- A pure condition checks no requests and consumes no owner before a clause. -/
+theorem Rows.pure_prefix (source : Rows header (requirements : Requirements demand) templates) :
+    Rows header (.sequence (.request [] []) requirements) templates := by
+  intro store tail before requestRow interface exported
+  obtain ⟨row, checked, bounded⟩ := source.instantiate interface exported store.property
+  have combined : Checked store (.live header.owner header.contract.held :: tail) before
+      (.sequence (.request [] []) requirements) ([] ++ row) :=
+    .sequence (.request (by simp [OwnerSource.exportAt, residual_empty])) checked
+  obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked combined
+  exact ⟨_, calls, derived, supplied, by simpa using bounded⟩
+
+theorem ProtectedRows.pure_prefix
+    (source : ProtectedRows header (requirements : Requirements demand) templates) :
+    ProtectedRows header (.sequence (.request [] []) requirements) templates := by
+  intro store tail before requestRow interface exported
+  obtain ⟨row, checked, bounded⟩ := source.instantiate interface exported store.property
+  have combined : Checked store (.live header.owner header.contract.held :: tail) before
+      (.sequence (.request [] []) (annotateDisposals requirements)) ([] ++ row) :=
+    .sequence (.request (by simp [OwnerSource.exportAt, residual_empty])) checked
+  obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked combined
+  exact ⟨_, calls, derived, supplied, by simpa using bounded⟩
+
+/-- Keep both branch requirements, including each generated disposal check. -/
+theorem ProtectedRows.alternatives
+    (first : ProtectedRows header (a : Requirements demand) templates)
+    (second : ProtectedRows header (b : Requirements otherDemand) templates)
+    (same : demand.Perm otherDemand) :
+    ProtectedRows header (.choice a b same) templates := by
+  intro store tail before requestRow interface exported
+  obtain ⟨firstRow, firstCheck, firstBound⟩ := first.instantiate interface exported store.property
+  obtain ⟨secondRow, secondCheck, secondBound⟩ := second.instantiate interface exported store.property
+  have combined : Checked store (.live header.owner header.contract.held :: tail) before
+      (.choice (annotateDisposals a) (annotateDisposals b) same) (firstRow ++ secondRow) :=
+    .choice firstCheck secondCheck
+  obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked combined
+  exact ⟨_, calls, derived, supplied, List.append_subset.mpr ⟨firstBound, secondBound⟩⟩
+
 end Ash.OneShot.ClauseRowAdmission
 #print axioms Ash.OneShot.ClauseRowAdmission.ProtectedRows.instantiate
 #print axioms Ash.OneShot.ClauseRowAdmission.ProtectedRows.of_unchanged
 #print axioms Ash.OneShot.ClauseRowAdmission.protected_resume_rows
 #print axioms Ash.OneShot.ClauseRowAdmission.protected_discard_rows
 #print axioms Ash.OneShot.ClauseRowAdmission.ProtectedRows.of_calls
+
+#print axioms Ash.OneShot.ClauseRowAdmission.Interface.resume_then_suffix_checked
+#print axioms Ash.OneShot.ClauseRowAdmission.resume_then_effectful_suffix_rows
+#print axioms Ash.OneShot.ClauseRowAdmission.protected_resume_then_effectful_suffix_rows
+#print axioms Ash.OneShot.ClauseRowAdmission.Rows.pure_prefix
+#print axioms Ash.OneShot.ClauseRowAdmission.ProtectedRows.pure_prefix
+#print axioms Ash.OneShot.ClauseRowAdmission.ProtectedRows.alternatives

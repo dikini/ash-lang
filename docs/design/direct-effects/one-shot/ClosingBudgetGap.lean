@@ -161,7 +161,7 @@ def enclosingStore : Store :=
 
 theorem combined_interface : ClauseRowAdmission.Interface 20 enclosingContract true enclosingStore
     (OwnerPhases.ofStack tables fixed) (available [20, 19]) forwarded := by
-  refine ⟨?_, ?_, fun _ => ⟨forwarded, rfl⟩, ?_, by decide⟩
+  refine ⟨?_, ?_, fun _ => ⟨forwarded, rfl⟩, ?_, by decide, by decide⟩
   · apply RecursiveRequirements.evaluate_sound
     simp [enclosingContract, enclosingStore, requirements, resumeRequirements,
       receiverRequirements, boundaryRequirements, empty, Requirements.prepend,

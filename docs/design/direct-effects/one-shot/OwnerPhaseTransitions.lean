@@ -294,6 +294,52 @@ theorem project_spend_absent_live (absent : owner ∉ liveNames context) :
       have restAbsent : owner ∉ liveNames rest := fun member => absent (List.mem_cons_of_mem _ member)
       simp only [project, spend_other different, ih restAbsent]
 
+theorem project_spendAll_absent_live
+    (separate : ∀ owner ∈ demand, owner ∉ liveNames receiving) :
+    project receiving (spendAll before demand) =
+      project receiving before := by
+  induction demand generalizing before with
+  | nil => rfl
+  | cons owner rest ih =>
+      rw [spendAll, ih (fun other member => separate other (List.mem_cons_of_mem _ member))]
+      exact project_spend_absent_live (separate owner List.mem_cons_self)
+
+
+theorem owned_closing_demand_separate {closingDemand : List Nat} {capture tail : Stack}
+    (accounting : closingDemand.Perm (ownedTickets capture))
+    (unique : (ownedTickets (capture.append tail)).Nodup) :
+    ∀ owner ∈ closingDemand, owner ∉ liveNames
+      (OwnerPhases.ofStack tables tail) := by
+  rw [owned_tickets_append] at unique
+  obtain ⟨_, _, disjoint⟩ := List.nodup_append.mp unique
+  intro owner member live
+  rw [liveNames_stack] at live
+  exact disjoint owner (accounting.mem_iff.mp member) owner
+    (active_tickets_owned tail live) rfl
+
+
+theorem project_after_selected_consumption
+    (fresh : owner ∉ liveNames tail)
+    (separate : ∀ other ∈ demand, other ∉ liveNames tail) :
+    project (.live owner held :: tail) (spendAll before (owner :: demand)) =
+      project tail before := by
+  have consumed : spendAll before (owner :: demand) owner = Syntax.UseState.consumed := by
+    simp [spendAll_at]
+  simp only [project, consumed, reduceCtorEq, ↓reduceIte]
+  rw [project_spendAll_absent_live (fun other member => by
+    rcases List.mem_cons.mp member with same | later
+    · simpa only [same] using fresh
+    · exact separate other later)]
+
+
+theorem owned_closing_demand_separate_at_live {closingDemand : List Nat} {capture tail : Stack}
+    (accounting : closingDemand.Perm (ownedTickets capture))
+    (unique : (ownedTickets (.live selected input answer capture caller tail)).Nodup) :
+    ∀ owner ∈ closingDemand, owner ∉ liveNames (OwnerPhases.ofStack tables tail) := by
+  apply owned_closing_demand_separate accounting
+  rw [owned_tickets_append]
+  exact (List.nodup_cons.mp unique).2
+
 theorem project_spend_absent (absent : owner ∉ OwnerPhases.names context) :
     project context (spend phases owner) = project context phases := by
   induction context with

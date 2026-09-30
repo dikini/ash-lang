@@ -1732,10 +1732,14 @@ theorem allocate_capture_source_from_closing_interfaces
       (RecursivePlanAdmission.caller_export callerReady).trans advertisedExport
     have interface : ClauseRowAdmission.Interface owner contract.erase offered.dispose store
         (OwnerPhases.ofStack tables tail) afterPhases requestRow := by
-      refine ⟨?_, ?_, closeAvailable, closeCovered, OwnerPhaseTransitions.capture_tail_fresh cut absent⟩
+      refine ⟨?_, ?_, closeAvailable, closeCovered, OwnerPhaseTransitions.capture_tail_fresh cut absent, ?_⟩
       · simpa only [store, added, List.cons_append, List.nil_append, afterPhases, OwnerPhases.ofStack, contract, SourceDependencyAnnotations.Contract.erase, saved.realizes.held] using resumeChecked
       · intro _ closingRow same
         simpa only [OwnerPhases.ofStack, contract, SourceDependencyAnnotations.Contract.erase, saved.realizes.held] using disposeChecked closingRow same
+      · intro _
+        change ∀ other ∈ OwnerClosingSource.retirements plan, other ∉ OwnerPhaseTransitions.liveNames (OwnerPhases.ofStack tables tail)
+        exact OwnerPhaseTransitions.owned_closing_demand_separate_at_live
+          (OwnerClosingSource.retirements_capture built) afterUnique
     obtain ⟨_, _, expression, rows⟩ := instantiated.normal_rows
     obtain ⟨clauseRow, checkedClause, covered⟩ := rows.instantiate interface exported
       (ClauseRowAdmission.SourceStore.of_source boundary.erase.source.erase
@@ -2732,7 +2736,7 @@ theorem allocate_disposing_split
     exact (List.nodup_append.mp decomposed).1
   obtain ⟨actualRow, evaluated, covered⟩ := summary.checked_effects (entries := []) effects captureUnique ready
   have callerFresh := OwnerPhaseTransitions.capture_tail_fresh (tables := tables) cut (source.fresh_unowned fresh)
-  refine ⟨?_, ?_, ?_, ?_, callerFresh⟩
+  refine ⟨?_, ?_, ?_, ?_, callerFresh, ?_⟩
   · simpa only [OwnerPhases.ofStack, contract, Contract.erase, saved.realizes.held] using resumeChecked
   · intro _ row same
     simpa only [OwnerPhases.ofStack, contract, Contract.erase, saved.realizes.held] using closingChecked row same
@@ -2741,6 +2745,9 @@ theorem allocate_disposing_split
   · intro _ row same
     have sameRow : actualRow = row := Option.some.inj (evaluated.symm.trans same)
     exact sameRow ▸ covered
+  · intro _
+    change ∀ other ∈ closingDemand, other ∉ OwnerPhaseTransitions.liveNames (OwnerPhases.ofStack tables tail)
+    exact OwnerPhaseTransitions.owned_closing_demand_separate_at_live summary.ownership afterUnique
 
 #print axioms Ash.OneShot.SourceDependencySchemes.Lexical.allocate_disposing_split
 
@@ -5860,12 +5867,15 @@ theorem capture_mode_segments_with_closing_store
                 · exact annotatedModes key body old
             · rw [phaseSame]
               exact evaluated.trans (chosenRow.symm.trans same)
-          refine ⟨resumed, ?_, fun _ => ⟨closeRow, chosenRow⟩, ?_, OwnerPhaseTransitions.capture_tail_fresh cut absent⟩
+          refine ⟨resumed, ?_, fun _ => ⟨closeRow, chosenRow⟩, ?_, OwnerPhaseTransitions.capture_tail_fresh cut absent, ?_⟩
           · intro _ row same
             simpa only [nextStack, OwnerPhases.ofStack, contract, Contract.erase, saved.realizes.held] using closingChecked row same
           · intro _ row same
             have equal : closeRow = row := Option.some.inj (chosenRow.symm.trans same)
             exact equal ▸ closeBound.trans (List.subset_append_right _ _)
+          · intro _
+            change ∀ other ∈ closingDemand, other ∉ OwnerPhaseTransitions.liveNames (OwnerPhases.ofStack tables tail)
+            exact OwnerPhaseTransitions.owned_closing_demand_separate_at_live summary.ownership afterUnique
     refine ⟨interface, ?_⟩
     obtain ⟨clauseDemand, clauseReq, clauseAnnotated, normalRow, clauseRow,
       expression, clauseAnnotation, checked, covered, normalCheck, normalBound⟩ :=

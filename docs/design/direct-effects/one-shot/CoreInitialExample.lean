@@ -6,8 +6,8 @@ TASK-0032 C2 construction for the normalization target of
 fixtures/core-cleanup-restored-clause-suffix.ash. This is a scoped source
 construction attempt; Rust graph translation and normalization remain separate
 proofs. Primitive source/Auth components compile, but no full Program is built.
-The final negative theorem exposes an overbroad clause-row interface rather than
-asserting that the Rust fixture is unsafe or that coherent runtime states fail.
+The source-store/tail mismatch below is rejected by the strengthened clause
+interface. Primitive components remain separate from full initial admission.
 -/
 namespace Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample
 open ScopedExpressions ScopedExecution ProtectionContracts
@@ -161,6 +161,32 @@ open InstallationSupport
         (.sequence (.sequence .pure .request) (.sequence .pure .request))) :=
   .bind (requestAuth user true) (.bind (requestAuth user false) (writeAuth issued cell 99))
 
+def guardedBody (identity : Nat) : Code := .cleanup (callback identity) (protectedBody identity)
+def guardedPlan (identity : Nat) :=
+  Plan.sequence Plan.pure (Plan.cleanup (needs := [.cell identity])
+    (writePlan identity) (protectedPlan identity))
+def guardedRequirements (identity : Nat) : Requirements [] :=
+  .emitAfter (.sequence empty (protectedRequirements identity)) []
+    (ProtectionContracts.qualify true (callbackFootprint identity))
+
+theorem guardedSource (issued : identity ∈ world) (cell : Instance.cell identity ∈ allowed)
+    (user : effect ∈ allowed) :
+    SourcePlannedSources.Expression operations policy contracts world allowed scope environment
+      (guardedBody identity) .unit [] (guardedRequirements identity) (signature (guardedPlan identity)) :=
+  .cleanup (callbackSource issued) (protectedSource issued cell user)
+    (by intro requested member; cases List.mem_singleton.mp member; exact cell)
+
+theorem guardedAuth (issued : identity ∈ world) (cell : Instance.cell identity ∈ allowed)
+    (user : effect ∈ allowed) :
+    Auth operations policy ports owners environmentRows
+      (guardedSource (scope := scope) (environment := environment) issued cell user)
+      .unit (.sequence .pure (.cleanup (callbackFootprint identity)
+        (.sequence .pure .request)
+        (.sequence (.sequence .pure .request)
+          (.sequence (.sequence .pure .request) (.sequence .pure .request))))) :=
+  .cleanup (admitted := by intro requested member; cases List.mem_singleton.mp member; exact cell)
+    (callbackAuth issued) (protectedAuth issued cell user)
+
 /-- Full requested normalization target. The admission attempt does not erase
     the branch, resumed suffix write, cleanup or either user operation. -/
 def writeAt (name : Instantiation.ResourceName) (value : Int) : Code :=
@@ -178,8 +204,8 @@ def normalized : Code :=
             (.discard 7)) .nil))
       (readAt (.bound 0)))
 
-/-- The general interface alone does not preserve a suffix advertisement:
-    another consumed live owner can remove a protected barrier in the tail. -/
+/-- Unrelated source stores and receiving tails can change a suffix
+    advertisement. The strengthened interface excludes this mismatch. -/
 theorem resumed_demand_changes_suffix_interpretation :
     OwnerSource.exportAt [.live 9 true] (OwnerPhaseTransitions.available [8, 9])
       [⟨.cell 0, 1, false⟩] = some [⟨.cell 0, 1, true⟩] ∧
@@ -194,6 +220,36 @@ theorem changed_suffix_not_covered_by_before_advertisement :
   intro covered
   have impossible := covered (List.mem_cons_self)
   simp at impossible
+
+/-- The complete clause requirement keeps the pure Boolean condition,
+    both alternatives, and the actual post-resume write. -/
+def clauseRequirements (identity owner : Nat) (contract : CoherentSourceTypes.Owners.Contract)
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    Requirements ([] ++ (([] ++ (owner :: contract.resumeDemand)) ++ [])) :=
+  .sequence empty
+    (.choice
+      (.sequence (.sequence empty (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
+        (writeRequirements identity))
+      (.invoke ⟨owner, .dispose⟩ contract.closeDemand [])
+      (by simpa using balance.symm.cons owner))
+
+theorem clauseRows {templates : RecursiveRequirements.Store → Prop}
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ClauseRowAdmission.Rows ⟨owner, contract, true, callbackFootprint identity⟩
+      (clauseRequirements identity owner contract balance) templates := by
+  apply ClauseRowAdmission.Rows.pure_prefix
+  apply ClauseRowAdmission.Rows.alternatives
+  · exact ClauseRowAdmission.resume_then_effectful_suffix_rows rfl balance
+  · exact ClauseRowAdmission.discard_rows
+
+theorem clauseProtectedRows {templates : RecursiveRequirements.Store → Prop}
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ClauseRowAdmission.ProtectedRows ⟨owner, contract, true, callbackFootprint identity⟩
+      (clauseRequirements identity owner contract balance) templates := by
+  apply ClauseRowAdmission.ProtectedRows.pure_prefix
+  apply ClauseRowAdmission.ProtectedRows.alternatives
+  · exact ClauseRowAdmission.protected_resume_then_effectful_suffix_rows rfl balance
+  · exact ClauseRowAdmission.protected_discard_rows
 
 namespace InterfaceObstruction
 open CoherentSourceTypes
@@ -264,29 +320,20 @@ def tail : OwnerPhases.Context := [.live 9 true]
 def advertised : Footprint := [⟨.cell 0, 1, false⟩]
 def requestRow : Footprint := [⟨.cell 0, 1, true⟩]
 
-theorem interface : Interface 8 selectedContract true store tail before requestRow := by
-  constructor
-  · apply Checked.invoke (body := resumeTemplate) (known := rfl) (ownersReady := rfl) (selection := .hit)
-    dsimp only [resumeTemplate, closeTemplate, empty]
-    refine Checked.sequence (firstRow := []) (secondRow := []) ?_ ?_
-    · exact .invoke (body := empty) (known := rfl) (ownersReady := rfl)
-        (selection := .hit) (.request rfl)
-    · refine Checked.sequence (firstRow := []) (secondRow := []) (.spent rfl) ?_
-      exact .request rfl
-  · intro _ row known
-    simp only [selectedContract, Option.some.injEq] at known
-    subst row
-    apply Checked.invoke (body := closeTemplate) (known := rfl) (ownersReady := rfl) (selection := .hit)
-    dsimp only [resumeTemplate, closeTemplate, empty]
-    refine Checked.sequence (firstRow := []) (secondRow := []) (.request rfl) ?_
-    refine Checked.sequence (firstRow := []) (secondRow := []) (.retire rfl) ?_
+theorem resume_checked : Checked store (.live 8 false :: tail) before
+    (.invoke ⟨8, .resume⟩ [9] []) [] := by
+  apply Checked.invoke (body := resumeTemplate) (known := rfl) (ownersReady := rfl) (selection := .hit)
+  dsimp only [resumeTemplate, closeTemplate, empty]
+  refine Checked.sequence (firstRow := []) (secondRow := []) ?_ ?_
+  · exact .invoke (body := empty) (known := rfl) (ownersReady := rfl)
+      (selection := .hit) (.request rfl)
+  · refine Checked.sequence (firstRow := []) (secondRow := []) (.spent rfl) ?_
     exact .request rfl
-  · intro _; exact ⟨[], rfl⟩
-  · intro _ row known
-    simp only [selectedContract, Option.some.injEq] at known
-    subst row
-    exact List.nil_subset _
-  · decide
+
+/-- The strengthened interface rejects the source-store/tail mismatch. -/
+theorem interface_rejected : ¬ Interface 8 selectedContract true store tail before requestRow := by
+  intro interface
+  exact interface.closingSeparate rfl 9 (by decide) (by decide)
 
 theorem advertisement : OwnerSource.exportAt tail before advertised = some requestRow := rfl
 
@@ -299,24 +346,8 @@ def suffixRequirements : Requirements [8, 9] :=
 theorem suffix_checked : Checked store (.live 8 false :: tail) before suffixRequirements
     [⟨.cell 0, 1, false⟩] := by
   refine Checked.sequence (firstRow := []) (secondRow := [⟨.cell 0, 1, false⟩])
-    (Checked.sequence (firstRow := []) (secondRow := []) (.request rfl) interface.resume) ?_
+    (Checked.sequence (firstRow := []) (secondRow := []) (.request rfl) resume_checked) ?_
   exact Checked.emitAfter (bodyRow := []) (requestRow := [⟨.cell 0, 1, false⟩]) (.request rfl) rfl
-
-/-- Source-store authentication and the advertised interface do not suffice for
-    this post-resume suffix. The source witness gives owner 9 an unprotected
-    capture, while the independent receiving tail marks owner 9 protected.
-    No premise relates those two metadata interpretations. This is an interface
-    counterexample, not a claim that a coherent Rust state has this alias. -/
-theorem suffix_rows_impossible :
-    ¬ ClauseRowAdmission.Rows ⟨8, selectedContract, true, advertised⟩ suffixRequirements
-      (ClauseRowAdmission.SourceStore operations.erase.erase 8 selectedContract) := by
-  intro rows
-  obtain ⟨actualRow, checked, covered⟩ := rows.instantiate interface advertisement source_store
-  have expected := RecursiveRequirements.checked_complete suffix_checked
-  have actual := RecursiveRequirements.checked_complete checked
-  have same : actualRow = [⟨Instance.cell 0, 1, false⟩] := Option.some.inj (actual.symm.trans expected)
-  subst actualRow
-  exact changed_suffix_not_covered_by_before_advertisement covered
 
 end InterfaceObstruction
 
@@ -326,5 +357,11 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.callbackAuth
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.protectedAuth
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.InterfaceObstruction.source_store
-#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.InterfaceObstruction.interface
-#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.InterfaceObstruction.suffix_rows_impossible
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.InterfaceObstruction.interface_rejected
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.InterfaceObstruction.suffix_checked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.clauseRows
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.clauseProtectedRows
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.guardedSource
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample.guardedAuth

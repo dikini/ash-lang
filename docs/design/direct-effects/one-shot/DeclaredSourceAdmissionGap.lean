@@ -144,11 +144,12 @@ theorem empty_admitted_offer_rejected (fresh : base 0 = none) :
       cases supplied with
       | typed source rows =>
           have interface : ClauseRowAdmission.Interface 0 aligned false store [] before [] := by
-            refine ⟨?_, ?_, ?_, ?_, by simp [OwnerPhaseTransitions.liveNames]⟩
+            refine ⟨?_, ?_, ?_, ?_, by simp [OwnerPhaseTransitions.liveNames], ?_⟩
             · exact .invoke (by rfl) (by rfl) .hit (.request (by rfl))
             · intro _ row same; cases same
             · intro impossible; cases impossible
             · intro _ row same; cases same
+            · intro impossible; cases impossible
           obtain ⟨row, checked, covered⟩ := rows.instantiate interface (by rfl) (store_source [effect])
           exact List.not_mem_nil (covered (every_body_check_contains_effect source checked))
 

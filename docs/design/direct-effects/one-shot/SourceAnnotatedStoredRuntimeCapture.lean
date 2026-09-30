@@ -318,7 +318,7 @@ theorem capture_with_closing_retaining (currentEvidence : ClauseEvidence)
               (((⟨owner, .resume⟩, ⟨capDemand, capReq⟩) :: resumes) ++
                 ((⟨owner, .dispose⟩, ⟨OwnerClosingSource.retirements closingPlan, closeReq⟩) :: disposals))
               (OwnerPhases.ofStack tables tail.erase) afterPhases requestRow := by
-            refine ⟨?_, ?_, ?_, ?_, OwnerPhaseTransitions.capture_tail_fresh cut.erase (RecursiveCapture.fresh_unowned pending.forget.erase.source.source.erase.erase.source.erase freshErased)⟩
+            refine ⟨?_, ?_, ?_, ?_, OwnerPhaseTransitions.capture_tail_fresh cut.erase (RecursiveCapture.fresh_unowned pending.forget.erase.source.source.erase.erase.source.erase freshErased), ?_⟩
             · simpa only [SourceAnnotatedRuntime.Handler.erase, SourceAnnotatedRuntime.Stack.erase, afterPhases, OwnerPhases.ofStack, allocated, SourceDependencyAnnotations.Contract.erase, capHeld] using resumeCheck
             · intro _ closingRow same
               simpa only [SourceAnnotatedRuntime.Handler.erase, SourceAnnotatedRuntime.Stack.erase, afterPhases, OwnerPhases.ofStack, allocated, SourceDependencyAnnotations.Contract.erase, capHeld] using disposeCheck closingRow same
@@ -329,6 +329,10 @@ theorem capture_with_closing_retaining (currentEvidence : ClauseEvidence)
               obtain ⟨actualClosingRow, closeSame, closingCovered⟩ := closingFacts disposes
               cases Option.some.inj (closeSame.symm.trans same)
               exact closingCovered
+            · intro _
+              change ∀ other ∈ OwnerClosingSource.retirements closingPlan, other ∉ OwnerPhaseTransitions.liveNames (OwnerPhases.ofStack tables tail.erase)
+              exact OwnerPhaseTransitions.owned_closing_demand_separate_at_live
+                (OwnerClosingSource.retirements_capture built) nextUnique
           cases body with
           | typed expression rows closingRows =>
             rename_i clauseDemand clauseRequirements

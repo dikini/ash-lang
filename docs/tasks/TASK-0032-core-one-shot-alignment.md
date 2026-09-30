@@ -131,13 +131,22 @@ remain separate targets. A small first example does not reduce the final scope.
   expectation to use nearest exact owner selection and made module normalization
   consistent across each trace. Snapshot-to-model conversion is the next batch;
   general correspondence is not established by these tests.
+- The conditional closing-separation repair is locally verified at every changed
+  capture constructor. The complete Boolean clause now has ordinary and
+  protected row certificates; cleanup around the protected kernel body has
+  source and authentication evidence. Focused builds passed for the fixture and
+  M4 endpoints (449 modules) and the other changed runtime constructors (469
+  modules; overlapping inventories). Independent fixture/coherence/M4 compilation
+  passed with standard axioms only. A full normalized `Program`, translation
+  bridge and general admission compiler remain open; C4.1 stays open until the
+  complete kernel admission construction validates this repair in context.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8 classified | Maintain findings through integration | Under 1 active hour for records |
-| C2 | 0 / 4 | Syntax/export components verified; admission repair underway | General static compiler and full admission | Current batch 1–2 active hours; generalization estimate unresolved |
+| C2 | 0 / 4 | Syntax/export and interface repair locally verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Closing projection, independent machine and Rust snapshots locally verified | Value/configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
-| C4 | 2 / 3 locally complete | D2 verified; C4.1 reopened for D8 | Integrate and verify experimental admission repair | C2; current repair about 1–2 active hours |
+| C4 | 2 / 3 locally complete | D2 verified; D8 interface repair and M4 endpoints verified | Check repair in complete kernel admission | C2; about 1–2 active hours |
 | C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification

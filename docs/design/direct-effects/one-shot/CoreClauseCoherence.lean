@@ -1,9 +1,9 @@
 import CoreInitialExample
 
 /-!
-TASK-0032 / DN-0033 component evidence for a possible conditional
-closing-separation premise on clause Interface. No existing judgment is changed.
-This is neither a full Program nor a general admission repair. Resume-only
+TASK-0032 / DN-0033 component evidence for the conditional
+closing-separation field of clause Interface. Its physical capture constructors
+derive the field from owner accounting and uniqueness. This is not a full Program. Resume-only
 external demands remain unrestricted: separation below is required only when
 actual disposal is permitted. Ownership and interpretation claims retain their
 separate premises; no successor state or future execution is assumed.
@@ -19,12 +19,8 @@ open ClauseRowAdmission (Interface)
 theorem project_spendAll_absent_live
     (separate : ∀ owner ∈ demand, owner ∉ OwnerPhaseTransitions.liveNames receiving) :
     OwnerPhaseTransitions.project receiving (spendAll before demand) =
-      OwnerPhaseTransitions.project receiving before := by
-  induction demand generalizing before with
-  | nil => rfl
-  | cons owner rest ih =>
-      rw [spendAll, ih (fun other member => separate other (List.mem_cons_of_mem _ member))]
-      exact OwnerPhaseTransitions.project_spend_absent_live (separate owner List.mem_cons_self)
+      OwnerPhaseTransitions.project receiving before :=
+  OwnerPhaseTransitions.project_spendAll_absent_live separate
 
 theorem export_spendAll_absent_live
     (separate : ∀ owner ∈ demand, owner ∉ OwnerPhaseTransitions.liveNames receiving) :
@@ -39,13 +35,8 @@ theorem owned_closing_demand_separate {closingDemand : List Nat} {capture tail :
     (accounting : closingDemand.Perm (ownedTickets capture))
     (unique : (ownedTickets (capture.append tail)).Nodup) :
     ∀ owner ∈ closingDemand, owner ∉ OwnerPhaseTransitions.liveNames
-      (OwnerPhases.ofStack tables tail) := by
-  rw [owned_tickets_append] at unique
-  obtain ⟨_, _, disjoint⟩ := List.nodup_append.mp unique
-  intro owner member live
-  rw [OwnerPhaseTransitions.liveNames_stack] at live
-  exact disjoint owner (accounting.mem_iff.mp member) owner
-    (active_tickets_owned tail live) rfl
+      (OwnerPhases.ofStack tables tail) :=
+  OwnerPhaseTransitions.owned_closing_demand_separate accounting unique
 
 /-- UnwindTemplate already proves the required physical owner accounting. -/
 theorem unwind_closing_demand_separate
@@ -63,25 +54,18 @@ theorem export_after_selected_consumption
     (separate : ∀ other ∈ demand, other ∉ OwnerPhaseTransitions.liveNames tail) :
     OwnerSource.exportAt (.live owner held :: tail) (spendAll before (owner :: demand)) raw =
       OwnerSource.exportAt tail before raw := by
-  have consumed : spendAll before (owner :: demand) owner = Syntax.UseState.consumed := by
-    simp [OwnerPhaseTransitions.spendAll_at]
   unfold OwnerSource.exportAt
-  simp only [OwnerPhaseTransitions.project, consumed, reduceCtorEq, ↓reduceIte]
-  rw [project_spendAll_absent_live (fun other member => by
-    rcases List.mem_cons.mp member with same | later
-    · simpa only [same] using fresh
-    · exact separate other later)]
+  rw [OwnerPhaseTransitions.project_after_selected_consumption fresh separate]
 
-/-- A possible interface field is conditional on disposal. Equal continuation
+/-- The interface field is conditional on disposal. Equal continuation
     demands transfer physical closing separation to the resume path. -/
 theorem disposing_resume_demand_separate {contract : CoherentSourceTypes.Owners.Contract}
+    (interface : Interface owner contract disposes store tail before requestRow)
     (permitted : disposes = true)
-    (balance : contract.closeDemand.Perm contract.resumeDemand)
-    (separate : disposes = true → ∀ other ∈ contract.closeDemand,
-      other ∉ OwnerPhaseTransitions.liveNames tail) :
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
     ∀ other ∈ contract.resumeDemand, other ∉ OwnerPhaseTransitions.liveNames tail := by
   intro other member
-  exact separate permitted other (balance.mem_iff.mpr member)
+  exact interface.closingSeparate permitted other (balance.mem_iff.mpr member)
 
 /-- Post-resume effectful work keeps its actual raw footprint. The supplied
     advertisement is interpreted at exactly the same tail and phase; no held
@@ -90,33 +74,16 @@ theorem disposing_resume_then_suffix_checked
     (interface : Interface owner contract disposes store tail before requestRow)
     (permitted : disposes = true)
     (balance : contract.closeDemand.Perm contract.resumeDemand)
-    (separate : disposes = true → ∀ other ∈ contract.closeDemand,
-      other ∉ OwnerPhaseTransitions.liveNames tail)
     (exported : OwnerSource.exportAt tail before raw = some requestRow) :
     Checked store (.live owner contract.held :: tail) before
       (.sequence (.sequence (.request [] [])
         (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
         (.emitAfter (.request [] []) [] raw))
       (contract.resumeRow ++ requestRow) ∧
-    EffectBounds.Covers (requestRow ++ contract.resumeRow) (contract.resumeRow ++ requestRow) := by
-  have suffix := export_after_selected_consumption (before := before) (raw := raw)
-    (held := contract.held) interface.fresh
-    (disposing_resume_demand_separate permitted balance separate)
-  constructor
-  · refine Checked.sequence (firstRow := contract.resumeRow) (secondRow := requestRow) ?_ ?_
-    · simpa only [List.nil_append] using
-        Checked.sequence (a := .request [] []) (firstRow := [])
-          (.request (by simp [OwnerSource.exportAt, residual_empty])) interface.resume
-    · simpa only [List.nil_append, List.append_nil, spendAll] using
-        Checked.emitAfter (requirements := .request [] []) (bodyRow := [])
-          (requestRow := requestRow) (.request (by simp [OwnerSource.exportAt, residual_empty]))
-          (suffix.trans exported)
-  · intro request member
-    rcases List.mem_append.mp member with resumed | after
-    · exact List.mem_append_right _ resumed
-    · exact List.mem_append_left _ after
+    EffectBounds.Covers (requestRow ++ contract.resumeRow) (contract.resumeRow ++ requestRow) :=
+  interface.resume_then_suffix_checked permitted balance exported
 
-/-- At a physical capture boundary the prospective conditional premise is
+/-- At a physical capture boundary the conditional premise is
     derived from closing ownership and uniqueness, rather than assumed of an
     arbitrary interface. The resume-only case gains no restriction. -/
 theorem disposing_owned_capture_resume_then_suffix_checked
@@ -134,8 +101,9 @@ theorem disposing_owned_capture_resume_then_suffix_checked
         (.emitAfter (.request [] []) [] raw))
       (contract.resumeRow ++ requestRow) ∧
     EffectBounds.Covers (requestRow ++ contract.resumeRow) (contract.resumeRow ++ requestRow) :=
-  disposing_resume_then_suffix_checked interface permitted balance
-    (fun _ => owned_closing_demand_separate closingOwnership unique) exported
+  disposing_resume_then_suffix_checked
+    { interface with closingSeparate := fun _ => owned_closing_demand_separate closingOwnership unique }
+    permitted balance exported
 
 open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreInitialExample
   (writeRequirements)
@@ -146,15 +114,13 @@ theorem disposing_resume_then_write_zero_checked
     (interface : Interface owner contract disposes store tail before requestRow)
     (permitted : disposes = true)
     (balance : contract.closeDemand.Perm contract.resumeDemand)
-    (separate : disposes = true → ∀ other ∈ contract.closeDemand,
-      other ∉ OwnerPhaseTransitions.liveNames tail)
     (exported : OwnerSource.exportAt tail before [⟨.cell 0, 1, false⟩] = some requestRow) :
     Checked store (.live owner contract.held :: tail) before
       (.sequence (.sequence (.request [] [])
         (.invoke ⟨owner, .resume⟩ contract.resumeDemand [])) (writeRequirements 0))
       (contract.resumeRow ++ requestRow) ∧
     EffectBounds.Covers (requestRow ++ contract.resumeRow) (contract.resumeRow ++ requestRow) :=
-  disposing_resume_then_suffix_checked interface permitted balance separate exported
+  disposing_resume_then_suffix_checked interface permitted balance exported
 
 /-- The earlier refutation's unprotected source capture and independently
     protected tail alias fail precisely this finite separation condition. -/

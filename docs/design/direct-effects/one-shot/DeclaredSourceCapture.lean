@@ -185,7 +185,7 @@ theorem capture_from_declaration_split
   let initial := OwnerPhaseTransitions.available (ownedTickets
     (.live owner (ScopedPorts.embedPort input.port) handler.answer capture handler.scope tail))
   have interface : ClauseRowAdmission.Interface owner contract offered.dispose store (OwnerPhases.ofStack tables tail) initial requestRow := by
-    refine ⟨?_, ?_, fun _ => ⟨closingRow, closeRowSame⟩, ?_, OwnerPhaseTransitions.capture_tail_fresh cut (RecursiveCapture.fresh_unowned source.erase fresh)⟩
+    refine ⟨?_, ?_, fun _ => ⟨closingRow, closeRowSame⟩, ?_, OwnerPhaseTransitions.capture_tail_fresh cut (RecursiveCapture.fresh_unowned source.erase fresh), ?_⟩
     · simpa only [OwnerPhases.ofStack, heldSame] using resumeCheck
     · intro _ actual same
       cases Option.some.inj (closeRowSame.symm.trans same)
@@ -193,6 +193,11 @@ theorem capture_from_declaration_split
     · intro _ actual same
       cases Option.some.inj (closeRowSame.symm.trans same)
       exact closingWithinBudget
+    · intro _
+      apply OwnerPhaseTransitions.owned_closing_demand_separate_at_live (capture := capture) (tail := tail)
+        (unique := afterUnique)
+      rw [closeDemandSame]
+      exact OwnerClosingSource.retirements_capture built
   have exported : OwnerSource.exportAt (OwnerPhases.ofStack tables tail) initial offeredRow = some requestRow := by
     rw [OwnerSource.exportAt, OwnerPhaseTransitions.project_agrees, OwnerPhases.project_stack]
     · exact requestExport

@@ -143,7 +143,7 @@ least-handler-output traversal already retain the operand's direct requirements.
 | D5 | Representation/proof gap | Core environments, tuple heap and frame vectors differ from substituted calculus values/stacks. | Define the relation and prove every applicable step. |
 | D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
 | D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
-| D8 | Admission-interface gap | A sourced store and a row-checking context can disagree about a nested owner's protection. `CoreInitialExample.InterfaceObstruction.suffix_rows_impossible` refutes the chosen post-resume suffix certificate. | Derive sufficient ownership/context coherence from static and captured structure; do not assume future execution or weaken protection-bit coverage. This is not a coherent Rust runtime counterexample. |
+| D8 | Admission-interface gap | A sourced store and a row-checking context could disagree about a nested owner's protection. The earlier interface refuted the chosen post-resume suffix certificate. | The conditional `Interface.closingSeparate` field now excludes that mismatch; actual capture constructors derive it from ownership and uniqueness. Full kernel initial admission remains open. This is not a coherent Rust runtime counterexample. |
 
 ## C1.5 finite case inventory
 
@@ -374,41 +374,47 @@ translation with kernel reduction. The manifest is retained data, not a Lean
 authentication theorem, and the exported example does not prove a general
 translation or execution correspondence.
 
-### Initial-admission obstruction
+### Initial-admission interface repair
 
 [CoreInitialExample.lean](CoreInitialExample.lean) retains the complete intended
 normalized fixture and constructs source/authentication components for its cell
-operations, user requests and cleanup callback. It does not construct a complete
-`Program`.
+operations, user requests and cleanup around the complete protected body. Its
+`clauseRows` and `clauseProtectedRows` now certify the full Boolean choice between
+resume followed by a cell write and discard, over any cell identity. It does not
+construct a complete `Program`.
 
-Its negative theorem constructs both `SourceStore` and `Interface` witnesses for
-the failed suffix certificate. The source stores owner 9 as unprotected, while
-the independently supplied receiving tail marks owner 9 protected. Resuming
-owner 8 consumes owner 9; a subsequent cell write then exports an unprotected
-demand, outside the earlier protected advertisement. Exact effect coverage keeps
-the protection bit, so the proposed certificate cannot hold.
+The original failed certificate allowed a source store with owner 9 unprotected
+and an independently supplied receiving tail with owner 9 protected. Resuming
+owner 8 consumes owner 9; a subsequent cell write exports an unprotected demand,
+outside the earlier protected advertisement. Exact effect coverage retains the
+protection bit. The current `InterfaceObstruction.interface_rejected` theorem
+proves that this sourced witness cannot satisfy the strengthened interface.
 
-This disproves that certificate with its chosen annotation, not all possible
-declaration annotations or any coherent Rust execution. A candidate repair is
-to retain the separation between a disposing capture's owned demand and its
-receiving tail. Existing unwind ownership evidence may derive this condition.
-It cannot be required indiscriminately for resume-only captures, whose pending
-code may use an outside owner. Component proofs are testing this candidate
-before any shared admission interface is changed.
+The conditional field `Interface.closingSeparate` requires a disposing capture's
+closing demand to be absent from live owners in its receiving tail. Actual
+capture constructors derive this fact from existing closing ownership and
+uniqueness. Resume-only interfaces acquire no restriction: their pending code
+may use an outside owner. The repair does not weaken protection-bit coverage or
+introduce a future-execution premise.
 
-[CoreClauseCoherence.lean](CoreClauseCoherence.lean) proves this candidate's
-component obligations. `unwind_closing_demand_separate` derives separation from
+[CoreClauseCoherence.lean](CoreClauseCoherence.lean) connects the repaired
+interface to its component obligations. `unwind_closing_demand_separate` derives
+separation from
 the existing unwind template and unique physical ownership.
 `disposing_resume_then_suffix_checked` preserves the exact ordered
 interpretation and effect bound after consuming the selected continuation and
 its separated demand. The earlier witness fails precisely this separation
-condition. Independent compilation passed with standard axioms only.
+condition. Shared lemmas live in `OwnerPhaseTransitions` and `ClauseRowContracts`;
+the comparison module reuses them.
 
-The selected next implementation is a conditional field on the clause
-`Interface`: when disposal is permitted, closing demand is absent from live
-owners in the receiving tail. Capture construction must derive the field from
-its actual closing template and ownership invariant. Existing resume-only
-interfaces acquire no additional restriction. This changes experimental
-admission evidence under DN-0033, not Ash's specified runtime behavior. Full
-admission still requires integrating this field and constructing the remaining
-source, authentication, resource and accounting judgments.
+Focused dependency builds passed for the fixture, coherence module and M4
+endpoints (449 modules), and for the remaining changed historical/runtime
+constructors (469 modules). Fresh independent compilation of the fixture,
+coherence module and `SourceScheduledM4` also passed, with only `propext`,
+`Quot.sound` and `Classical.choice` in the reports. These counts overlap and are
+not a substitute for the final registered audit.
+
+This changes experimental admission evidence under DN-0033, not Ash's specified
+runtime behavior. Full admission still requires constructing the handler source
+and authentication and the enclosing resource, declaration, admission and
+accounting judgments, then connecting the actual graph translation to them.
