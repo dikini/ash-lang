@@ -317,8 +317,8 @@ invariant, with concrete current/saved-source preservation and a connection to
 M4's existing guarantees. Another conditional beta wrapper would not meet that
 acceptance boundary.
 
-The next bounded checkpoint uses an upper companion for current and saved
-source evidence, importing the existing M4 checking and accounting definitions.
+The [current/saved-source checkpoint](direct-effects/one-shot/CoreCallableContractExecution.lean)
+uses an upper companion importing the existing M4 checking and accounting definitions.
 It avoids a back-import into `SourceScheduledCleanupInterfaces`. Its current
 site replaces the legacy source/authentication fields for this prototype;
 structural saved frames carry the same recursive source, common contracts,
@@ -326,16 +326,42 @@ scalar requirements and independent support. A projection to the lower
 `SourceTemplates.Expression` is admissible only by construction; that judgment
 does not require the function's exact private body signature.
 
-The acceptance case must construct a checked predecessor with a live cell0 and
-one saved helper suffix. The helper accepts two Unit-to-Int implementations
-that read the same cell, one with an extra Unit bind; both retain actual cell
-support. Actual focus, cell-read reply, plug and bind transitions must recover
-that same suffix with its private evidence and derive current and pending
-certificates and accounting from the predecessor. Leaving all predecessor
-checks as assumptions would not meet this gate. User-handler replies, callable
-operation results, common owner contracts, capture/resume/discard, cleanup and
-resource-exit support remain required subsequent integration work. Passing this
-checkpoint would not establish the full M4 invariant or general Core admission.
+The [concrete acceptance case](direct-effects/one-shot/CoreCallableContractExecutionExamples.lean)
+constructs a checked predecessor with live cell0 and a helper suffix. The helper
+accepts two Unit-to-Int implementations that read the same cell, one with an
+extra Unit bind; both retain actual cell support. Generic focus, exact cell-read
+reply, plug and bind transports recover that same suffix with its private
+evidence and derive current and pending certificates and accounting from the
+predecessor. The example applies all four transports in one actual raw trace.
+Both modules pass fresh independent warnings-as-errors compilation; all 18
+dependency reports use only standard axioms.
+
+Saved frames accept resources visible at their receiving scope and already in
+the current world. The returned value's actual support discharges that bound,
+independently of its declared function port. The builtin reply obtains its
+result contract from the same exact global operation key and its receiver from
+the physical cell update. User-handler replies, callable operation results,
+common owner contracts, capture/resume/discard, cleanup and resource-exit support
+remain required subsequent integration work. The full M4 invariant and general
+Core admission remain open.
+
+The subsequent resume migration must also reconstruct saved support under the
+restored receiving context. In the
+[clause-cell result fixture](direct-effects/one-shot/fixtures/core-resume-clause-cell-closure.ash),
+capture occurs before any cell exists. The handler clause acquires a cell,
+constructs a pure callback retaining it, and resumes with that callback. The
+restored caller invokes it while the clause's cell frame remains below the
+capture. The current Rust CLI accepts the program and returns `() : Unit`.
+Moving that invocation outside the handler in the
+[escape fixture](direct-effects/one-shot/fixtures/core-resume-clause-cell-closure-outside.ash)
+is rejected with `type.resource-escape`.
+
+This is implementation evidence for the existing operation-result and resource
+support obligation. A saved input bound fixed at the pre-capture resource world
+cannot simply be copied through this resume. The full invariant must transport
+the saved source and support bounds into the actual restored world and receiving
+context, while retaining the private body evidence and rejecting the escape.
+The fixed-world plain/cell checkpoint above does not yet prove that transport.
 
 ## Question
 

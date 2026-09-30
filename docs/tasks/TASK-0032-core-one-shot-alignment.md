@@ -675,12 +675,31 @@ remain separate targets. A small first example does not reduce the final scope.
   Active admitted-second-capture and higher-order edits are excluded. No Rust
   code changed.
 
+- `CoreCallableContractExecution` connects recursive current source and saved
+  plain/cell frames to existing checking/accounting structures. Focus, exact
+  builtin reply, plug and bind transport one predecessor's evidence. The
+  concrete example constructs that predecessor with live cell0 and one helper
+  used with two differently sequenced cell-reading closures, then applies all
+  four generic transports in a connected raw trace.
+- Review caught a saved input bound incorrectly fixed to the empty set. The
+  retained interface instead bounds resources by the receiving context and
+  current world, independently of the function port. The builtin reply checks
+  the same global operation key and derives the contextual receiver from the
+  physical cell update. Full M4 validity and handler/owner/resource-exit
+  migration remain open.
+- The combined callable-execution audit covers 831 registered modules and
+  11,317 exact dependency reports: two freshly compiled leaves and 829 unchanged
+  verified source/report pairs. Active second-capture and callback-write edits
+  are excluded. The clause-cell result and escape fixtures below supply fresh
+  CLI evidence for subsequent saved-frame transport; no Rust implementation
+  changed.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted first-resume prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Fifty-one-transition cleanup callback-entry prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Callback cell-write batch estimated after endpoint inspection; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
+| C3 | 0 / 5 | Fifty-one-transition cleanup callback-entry prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Callback cell-write batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and connected callable cell-reply checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Common continuation contracts and saved-frame transport under restored world/context | Next handler/owner batch being scoped; full repair estimate unresolved |
 | C5 | 0 / 4 | Admitted first-resume prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted second-capture batch 1–2 hours; total unresolved |
 
 ## Verification
@@ -703,6 +722,16 @@ the lexical calculus creates a close owner on every discard. The current
 nonempty fixture cannot justify equating these counters in general. This
 refines the existing C3.1/C3.3 ownership obligations without changing the
 fragment or acceptance inventory.
+
+Higher-order resume can add receiving resources after capture. The retained
+[positive fixture](../design/direct-effects/one-shot/fixtures/core-resume-clause-cell-closure.ash)
+captures before acquisition, then resumes with a closure retaining a cell
+acquired in its clause; invocation within the restored continuation returns
+`Unit`. The [outside fixture](../design/direct-effects/one-shot/fixtures/core-resume-clause-cell-closure-outside.ash)
+is rejected with `type.resource-escape`. Both results were checked through the
+current worktree's CLI. C2.3/C4.1 therefore require saved source/support transport
+under the restored world and receiving context, beyond the current fixed-world
+plain/cell checkpoint. This records existing scope rather than adding a package.
 
 ## Deviations
 

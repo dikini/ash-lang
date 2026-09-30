@@ -880,6 +880,39 @@ import back into that machinery would form a cycle. The integration plan must
 resolve that dependency and connect the new current and saved-source evidence;
 conditional beta transport alone does not replace the M4 invariant.
 
+[CoreCallableContractExecution.lean](CoreCallableContractExecution.lean) now
+connects current recursive source, saved plain/cell frames and the same existing
+contextual checking/accounting structures in a bounded companion `Site`. Source
+projection into `SourceTemplates.Expression` is constructive. Focus builds a
+saved frame whose input bound contains the receiving scope's visible resources
+that are in the current world. Plug preserves the returned value's actual
+support and the saved suffix's private body evidence. The exact cell-read reply
+derives its integer result contract from the same global operation key and its
+contextual builtin receiver from the actual physical cell update.
+
+[CoreCallableContractExecutionExamples.lean](CoreCallableContractExecutionExamples.lean)
+constructs the predecessor's source, current checks, saved-frame checks and
+accounting with live cell0. One helper accepts two cell-reading bodies with
+different sequencing and actual retained support `[0]`. Its `transported_segment`
+applies generic focus, cell reply, plug and bind in one actual raw trace, deriving
+the endpoint `Site` from that predecessor. Both modules pass fresh independent
+warnings-as-errors compilation; all 18 reports use only `propext` and
+`Quot.sound`. This fixed-world plain/cell companion leaves full M4 validity,
+user-handler replies, common owner input/answer contracts, capture/resume/discard,
+cleanup and resource-exit preservation open.
+
+The [clause-cell result fixture](fixtures/core-resume-clause-cell-closure.ash)
+adds a concrete receiving-context obligation. A request captures its caller
+before cell acquisition. Its clause then creates a cell-retaining callback and
+resumes with it; the caller invokes it while the clause's cell frame remains
+live below the restored capture. A fresh CLI run from the alignment worktree
+returns `() : Unit`. The [outside variant](fixtures/core-resume-clause-cell-closure-outside.ash)
+returns that closure beyond the resource body and is rejected with
+`type.resource-escape`. These fixtures retain CLI evidence, separate from the
+automated regressions below. Full higher-order resume preservation must update
+saved support bounds under the restored world and receiving context; copying
+the pre-capture bounds is insufficient.
+
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
 retain implementation evidence for this pressure. Independent Core validation
