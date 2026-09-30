@@ -661,13 +661,27 @@ remain separate targets. A small first example does not reduce the final scope.
   changed. The next admitted-prefix batch must connect the same selected data
   through second capture.
 
+- `CoreCleanupRunFrames` and `CoreCleanupRunPrefix` extend the same current
+  lexical-machine chain to 51 actual Core transitions. Cleanup starts once and
+  callback beta enters body12 in its saved environment. The running relation
+  retains the original captured relation, exact closing projection, saved Unit,
+  physical completion tail and lexical handler scope. The ledger stays unchanged
+  from discard; cell write and cleanup/close completion remain open.
+- A narrowly indexed administrative link reuses the existing ordinary witnesses
+  above that tail and requires the actual full Core step. Its strict potential
+  decrease is proved, and an unchanged step is rejected. The combined audit
+  covers 829 registered modules and 11,299 exact dependency reports: four freshly
+  compiled affected modules and 825 unchanged verified source/report pairs.
+  Active admitted-second-capture and higher-order edits are excluded. No Rust
+  code changed.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted first-resume prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Forty-five-transition lexical discard prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Cleanup application/beta batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Fifty-one-transition cleanup callback-entry prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup completion and full simulation | Static annotations and state/ownership relation | Callback cell-write batch estimated after endpoint inspection; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted first-resume prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted second-capture batch estimated after witness inspection; total unresolved |
+| C5 | 0 / 4 | Admitted first-resume prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted second-capture batch 1–2 hours; total unresolved |
 
 ## Verification
 

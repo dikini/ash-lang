@@ -642,6 +642,24 @@ started. All 15 affected modules pass fresh independent compilation with
 standard axioms. Callback execution, general dispatch/close-identity evidence
 and M4 admission through these later states remain open.
 
+[CoreCleanupRunFrames.lean](CoreCleanupRunFrames.lean) and
+[CoreCleanupRunPrefix.lean](CoreCleanupRunPrefix.lean) extend that same chain to
+51 actual Core transitions. The delayed callback and its saved environment come
+from the existing captured-stack relation. Cleanup starts once, then ordinary
+application and beta enter body12 with its original environment and Unit
+argument. The physical tail contains cleanup completion with saved Unit, close
+completion and the spent/outside frames. The corresponding lexical tail retains
+the original handler, unwinding action and closing scope.
+
+Ordinary administrative steps use the existing isolated-prefix witnesses,
+an exact common tail and actual full-state `CoreMachine.next` equations. Their
+strict potential decrease follows by adding the unchanged tail weight. An
+unchanged administrative step is rejected. The full target ledger is unchanged
+from discard; neither cleanup nor close has completed. Cell0 dispatch agrees
+for the callback's actual request. All four affected modules pass fresh
+independent compilation with standard axioms. Callback cell write and completion,
+general dispatch authentication and M4 admission remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

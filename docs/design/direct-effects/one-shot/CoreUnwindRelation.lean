@@ -1,5 +1,6 @@
 import CoreResumeEntry
 import SourceResourceRoutes
+import CoreCleanupRunFrames
 
 /-! A bounded bridge to the current lexical unwind machine. Core closeFuel
 projects captured scopes, while the target retains their lexical order. This
@@ -46,6 +47,10 @@ inductive Related (graph : CoreSyntax.Graph) : Point → Prop where
       (counter : state.nextClose = identity + 1) :
       Related graph ⟨state,.unwind scope (capturedTarget.append (.push (.closing identity scope) tail)),
         owners,tailMaps⟩
+  | runningCleanup (carrier : CoreCleanupRunFrames.RunningTail graph state.heap physical lexical)
+      (component : ComponentMapped graph owners annotations (CoreCleanupRunFrames.isolate state annotations) target)
+      (frames : state.frames = framesOf annotations ++ physical) :
+      Related graph ⟨state,.eval (CoreCleanupRunFrames.attach target lexical),owners,annotations⟩
 
 /-- Every lifted ordinary raw step requires the current lexical-machine guard.
 In particular this cannot lift the obsolete plan-based discard rule. -/
@@ -75,6 +80,14 @@ inductive Link (graph : CoreSyntax.Graph) : Point → Point → Prop where
       (phase : ∃ site environment handler owner,
         before.state.control = .evaluate site environment ∧ after.state.control = .discard handler owner)
       (decreasing : potential graph after.state < potential graph before.state) : Link graph before after
+  | runningAdministration
+      (carrier : CoreCleanupRunFrames.RunningTail graph before.heap physical lexical)
+      (witness : CoreCleanupRunFrames.Administrative graph beforeOwners afterOwners beforeMaps afterMaps before after target)
+      (beforeFrames : before.frames = framesOf beforeMaps ++ physical)
+      (afterFrames : after.frames = framesOf afterMaps ++ physical)
+      (core : CoreMachine.next graph before = .stepped after) :
+      Link graph ⟨before,.eval (CoreCleanupRunFrames.attach target lexical),beforeOwners,beforeMaps⟩
+        ⟨after,.eval (CoreCleanupRunFrames.attach target lexical),afterOwners,afterMaps⟩
 
 inductive Chain (graph : CoreSyntax.Graph) : Point → List Point → Point → Prop where
   | last (link : Link graph before after) : Chain graph before [after] after
@@ -162,12 +175,23 @@ theorem Link.endpoints (link : Link graph before after) : Related graph before �
   | positive current core target successor | discardEntry current successor core same phase decreasing => exact ⟨current,successor⟩
   | traversal witness => exact ⟨.eval witness.current,.eval witness.successor⟩
   | value witness => exact ⟨.eval witness.current,.eval witness.successor⟩
+  | runningAdministration carrier witness beforeFrames afterFrames core =>
+      obtain ⟨before,after,heap,_⟩ := witness.components
+      exact ⟨.runningCleanup carrier before beforeFrames,
+        .runningCleanup (heap.symm ▸ carrier) after afterFrames⟩
 
 theorem Link.core_next (link : Link graph before after) : CoreMachine.next graph before.state = .stepped after.state := by
   cases link with
   | positive _ core _ _ | discardEntry _ _ core _ _ _ => exact core
   | traversal witness => exact witness.core
   | value witness => exact witness.core
+  | runningAdministration _ _ _ _ core => exact core
+
+theorem running_administration_decreases
+    (witness : CoreCleanupRunFrames.Administrative graph bo ao bm am before after target)
+    (beforeFrames : before.frames = framesOf bm ++ physical)
+    (afterFrames : after.frames = framesOf am ++ physical) : potential graph after < potential graph before :=
+  CoreCleanupRunFrames.potential_splice beforeFrames afterFrames witness.components.2.2.2
 
 theorem Chain.endpoints (chain : Chain graph before points after) : Related graph before ∧ Related graph after := by
   induction chain with
@@ -218,6 +242,7 @@ theorem discard_projected {base : CoreMachine.State}
   · exact .projected capturedRelated (frontRelated.append (.spent header outsideRelated)) projection nonempty rfl
       (by simp [after,framesOf,List.map_append]) rfl
 
+#print axioms running_administration_decreases
 #print axioms raw_without_close_ordinary
 #print axioms raw_trace_lift
 #print axioms Trace.append
