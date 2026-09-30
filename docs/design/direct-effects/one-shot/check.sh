@@ -827,3 +827,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphProgram.olean" CoreGrap
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedPrefix.olean" CoreAdmittedPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedHandlerPrefix.olean" CoreAdmittedHandlerPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCleanupPrefix.olean" CoreAdmittedCleanupPrefix.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCapturePrefix.olean" CoreAdmittedCapturePrefix.lean

@@ -330,7 +330,7 @@ open RecursiveRequirements (Requirements)
 /-- Capture constructs its complete successor from the actual predecessor.
 The physical cut, operand readiness and fresh ticket are operational premises;
 source decomposition, clause checks and installed support are derived. -/
-theorem InstallationState.capture_successor
+theorem InstallationState.capture_successor_metadata
     (state : InstallationState operations policy contracts tables families required outward annotations world ambient history
       resumes disposals annotatedStore budget ports owners emptyRows output outputRows
       ⟨⟨.eval ⟨.perform (Instantiation.freezeEffect effect) operation operand, runtimeScope, stack⟩,
@@ -343,6 +343,16 @@ theorem InstallationState.capture_successor
     ∃ captureScope : SourceDependencyCapture.Scope,
     ∃ savedRequirements : Requirements allocated.resumeDemand,
     ∃ rights : Syntax.OneShotRights, ∃ next : Configuration,
+    ∃ selectedHandler : HandlerData, ∃ selectedCaptured selectedTail : Stack,
+    ∃ parameter binder : Nat, ∃ code : Code,
+      allocated.resumeRow = resumeRow ∧ allocated.closeRow = closeRow ∧
+      HandlerCut effect stack selectedCaptured selectedTail selectedHandler ∧
+      ClauseAt operation selectedHandler.clauses parameter binder code ∧
+      ClosedExcept parameter code ∧ rights = code.requiredActions ∧
+      next.expression = code.subst parameter operand ∧
+      next.scope = .ticket binder owner ∧
+      next.stack = .live owner (ScopedPorts.embedPort allocated.input.erase.erase.port)
+        selectedHandler.answer selectedCaptured selectedHandler.scope selectedTail ∧
       LexicalUnwind.Event
         ⟨.eval ⟨.perform (Instantiation.freezeEffect effect) operation operand, runtimeScope, stack⟩, issued, completed⟩
         ⟨.eval next, issued ++ [.ticket owner], completed⟩ ∧
@@ -388,11 +398,47 @@ theorem InstallationState.capture_successor
           rooted sourcePhase rootCheck (within.trans bounded) bound currentState.toExecutableState fresh currentState.installedSupport
       let allocated : Contract := ⟨site.result, answer, capturedScope.held, split.savedDemand, resumeRow,
         split.savedDemand, closeRow, resumeEffects, closeEffects⟩
+      have selectedPhysical := split.handler_cut cut stackSplit
       refine ⟨allocated, site.resultRows, answerRows, capturedScope, split.savedRequirements, code.requiredActions,
-        ⟨next.expression, next.runtimeScope, next.stack⟩, ?_, nextState, currentState.event_support event⟩
-      simpa only [← expressionEq, ← runtimeEq, ← stackEq] using event
+        ⟨next.expression, next.runtimeScope, next.stack⟩, actualHandler, split.capturedStack, split.tailStack,
+        parameter, binder, code, rfl, rfl, ?_, located, ready, rfl, expressionSame, scopeSame,
+        nextStack, ?_, nextState, currentState.event_support event⟩
+      · simpa only [← stackEq] using selectedPhysical
+      · simpa only [← expressionEq, ← runtimeEq, ← stackEq] using event
   | unwind => cases machineEq
+
+
+/-- The original endpoint projects preservation from the metadata-exposing endpoint. -/
+theorem InstallationState.capture_successor
+    (state : InstallationState operations policy contracts tables families required outward annotations world ambient history
+      resumes disposals annotatedStore budget ports owners emptyRows output outputRows
+      ⟨⟨.eval ⟨.perform (Instantiation.freezeEffect effect) operation operand, runtimeScope, stack⟩,
+        issued, completed⟩, actions⟩)
+    (physical : HandlerCut effect stack capturedStack tailStack handler)
+    (closed : ClosedValue operand)
+    (owner : Nat) (fresh : (issued ++ [Owner.ticket owner]).Nodup)
+    (resumeRow : Footprint) (closeRow : Option Footprint) :
+    ∃ allocated : Contract, ∃ inputRows : ValueRows allocated.input, ∃ answerRows : ValueRows allocated.answer,
+    ∃ captureScope : SourceDependencyCapture.Scope,
+    ∃ savedRequirements : Requirements allocated.resumeDemand,
+    ∃ rights : Syntax.OneShotRights, ∃ next : Configuration,
+      LexicalUnwind.Event
+        ⟨.eval ⟨.perform (Instantiation.freezeEffect effect) operation operand, runtimeScope, stack⟩, issued, completed⟩
+        ⟨.eval next, issued ++ [.ticket owner], completed⟩ ∧
+      InstallationState operations policy (contracts.insert owner allocated) tables families required outward
+        (fun other => if other = owner then some captureScope else annotations other) world ambient history
+        ((⟨owner, .resume⟩, ⟨allocated.resumeDemand, savedRequirements⟩) :: resumes) disposals
+        ((⟨owner, .resume⟩, ⟨allocated.resumeDemand, savedRequirements⟩) :: annotatedStore)
+        budget ports (owners.insert owner inputRows answerRows) emptyRows output outputRows
+        ⟨⟨.eval next, issued ++ [.ticket owner], completed⟩, actions.insert owner rights⟩ := by
+  obtain ⟨allocated, inputRows, answerRows, captureScope, savedRequirements, rights, next,
+    selectedHandler, selectedCaptured, selectedTail, parameter, binder, code,
+    _resumeRow, _closeRow, _physical, _located, _ready, _rights, _expression, _scope, _stack,
+    event, nextState⟩ := state.capture_successor_metadata physical closed owner fresh resumeRow closeRow
+  exact ⟨allocated, inputRows, answerRows, captureScope, savedRequirements, rights, next, event, nextState⟩
 
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport
 #print axioms Ash.OneShot.SourceDependencyCapture.Realizes.handler_not_builtin
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.InstallationState.capture_successor
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.InstallationState.capture_successor_metadata

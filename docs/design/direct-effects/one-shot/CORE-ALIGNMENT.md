@@ -1066,8 +1066,8 @@ proof throughout the relation. No successor validity is an input. The endpoint
 has resource world `[0]`, empty handler history, issued ledger `[resource 0]`
 and nothing completed. Initial public translation is tied to the same exported
 root. All seven reports pass independent compilation with standard axioms.
-The following modules supply handler installation and cleanup registration;
-capture still needs the same admitted-state evidence.
+The following modules supply handler installation, cleanup registration and
+first capture with the same admitted-state evidence.
 
 [CoreAdmittedHandlerPrefix.lean](CoreAdmittedHandlerPrefix.lean) extends that
 same admitted prefix to actual handler41/body29 after 20 Core transitions and
@@ -1101,7 +1101,29 @@ no fixed handler answer or desired successor invariant is assumed.
 [CoreReadyBindings.lean](CoreReadyBindings.lean) shares the three-step lambda
 binding proof across handler and callback setup, with arbitrary mapped tails.
 All six affected modules pass fresh independent compilation with standard
-axioms. Capture and later execution still require the admitted-state connection.
+axioms. The following capture construction extends this same admitted prefix.
+
+[CoreAdmittedCapturePrefix.lean](CoreAdmittedCapturePrefix.lean) reaches actual
+s28 after 28 Core transitions and 13 target events. Focus retains the frame
+selected by source preservation. The actual handler cut includes that frame,
+the armed action and the selected handler; physical-cut and clause uniqueness
+identify the same witnesses used by M4 preservation. Ticket0 freshness follows
+from the issued resource0/cleanup0 ledger.
+
+The metadata endpoint in
+[SourceScheduledCapture.lean](SourceScheduledCapture.lean) exposes the allocated
+input contract, selected clause, derived rights and exact successor shape from
+its existing preservation proof. The original endpoint remains a wrapper with
+the same statement. Resume and close footprints are explicit chosen annotations;
+this construction does not claim that those rows describe runtime work.
+
+Every intermediate Core point relates to a constructed admitted snapshot. The
+final world/history are `[0]`, issued owners are
+`[resource 0, cleanup 0, ticket 0]`, and nothing is completed. The ticket rights
+are the actual clause's required actions. All 25 affected modules pass fresh
+independent compilation with standard axioms. Admission through first resume
+and later execution remains open, as do general metadata authentication and
+higher-order admission.
 
 ### Initial-admission interface repair
 

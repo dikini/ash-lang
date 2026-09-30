@@ -609,13 +609,30 @@ remain separate targets. A small first example does not reduce the final scope.
   account for Core's projected handler frames and the calculus's retained
   lexical scopes. This is existing C3 coverage, not a new fragment exclusion.
 
+- `CoreAdmittedCapturePrefix` reaches actual s28 with 28 Core transitions and
+  13 target events from the same admitted root. Every intermediate point has
+  a related admitted snapshot. The source-selected result, handler, action and
+  focused frame survive the actual capture; exact cut/clause uniqueness connects
+  them to M4 preservation. The final ledger issues resource0, cleanup0 and
+  ticket0, completes nothing, and assigns the clause's actual required rights.
+- `SourceScheduledCapture.capture_successor_metadata` exposes the existing
+  proof's annotations and successor shape; the original theorem remains a
+  same-statement wrapper. Resume/close footprints remain explicit chosen
+  bookkeeping annotations. All 25 affected modules pass fresh independent
+  warnings-as-errors compilation. Admitted resume and later execution remain
+  open; the next batch must retain the same selected witnesses through s35.
+- The combined admitted-capture audit covers 824 registered modules and 11,252
+  exact dependency reports, retaining 799 unchanged verified source/report
+  pairs. Active higher-order and discard files are excluded from this frozen
+  snapshot. No Rust code changed.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
+| C2 | 0 / 4 | Actual-root Program and admitted first-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
 | C3 | 0 / 5 | Forty-transition second-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Lexical discard/closing-entry batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch 1–2 hours; total unresolved |
+| C5 | 0 / 4 | Admitted first-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-resume batch 1–2 hours; total unresolved |
 
 ## Verification
 
