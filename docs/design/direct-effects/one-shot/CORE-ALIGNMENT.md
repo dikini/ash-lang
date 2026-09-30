@@ -143,6 +143,7 @@ least-handler-output traversal already retain the operand's direct requirements.
 | D5 | Representation/proof gap | Core environments, tuple heap and frame vectors differ from substituted calculus values/stacks. | Define the relation and prove every applicable step. |
 | D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
 | D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
+| D8 | Admission-interface gap | A sourced store and a row-checking context can disagree about a nested owner's protection. `CoreInitialExample.InterfaceObstruction.suffix_rows_impossible` refutes the chosen post-resume suffix certificate. | Derive sufficient ownership/context coherence from static and captured structure; do not assume future execution or weaken protection-bit coverage. This is not a coherent Rust runtime counterexample. |
 
 ## C1.5 finite case inventory
 
@@ -301,3 +302,60 @@ are retained data, not authenticated static judgments. Fuel exhaustion is an
 explicit error; shape checking has not yet been proved to supply sufficient
 fuel. No initial admission or execution correspondence follows from this syntax
 component alone. Independent warnings-as-errors compilation passed.
+
+### Actual Core export
+
+The [test-only exporter](../../../../src/core/alignment_export.rs) compiles and
+independently validates the restored-clause-suffix fixture before exporting its
+55 reachable nodes to [CoreExportedFixture.lean](CoreExportedFixture.lean).
+Ordinary cell helper functions remain in the graph. A separate manifest retains
+qualified identities, instantiated operation signatures and provenance.
+The current exporter accepts nullary and resource user-effect arguments;
+other closed arguments remain an explicit exporter limitation.
+
+Seven focused Rust checks pass, including golden equality, deterministic export
+across independent compilation, actual node counts, sealed handle identity and
+unsupported-input rejection. The regeneration test is intentionally ignored by
+normal tests. Lean checks the exported count, graph shape and successful syntax
+translation with kernel reduction. The manifest is retained data, not a Lean
+authentication theorem, and the exported example does not prove a general
+translation or execution correspondence.
+
+### Initial-admission obstruction
+
+[CoreInitialExample.lean](CoreInitialExample.lean) retains the complete intended
+normalized fixture and constructs source/authentication components for its cell
+operations, user requests and cleanup callback. It does not construct a complete
+`Program`.
+
+Its negative theorem constructs both `SourceStore` and `Interface` witnesses for
+the failed suffix certificate. The source stores owner 9 as unprotected, while
+the independently supplied receiving tail marks owner 9 protected. Resuming
+owner 8 consumes owner 9; a subsequent cell write then exports an unprotected
+demand, outside the earlier protected advertisement. Exact effect coverage keeps
+the protection bit, so the proposed certificate cannot hold.
+
+This disproves that certificate with its chosen annotation, not all possible
+declaration annotations or any coherent Rust execution. A candidate repair is
+to retain the separation between a disposing capture's owned demand and its
+receiving tail. Existing unwind ownership evidence may derive this condition.
+It cannot be required indiscriminately for resume-only captures, whose pending
+code may use an outside owner. Component proofs are testing this candidate
+before any shared admission interface is changed.
+
+[CoreClauseCoherence.lean](CoreClauseCoherence.lean) proves this candidate's
+component obligations. `unwind_closing_demand_separate` derives separation from
+the existing unwind template and unique physical ownership.
+`disposing_resume_then_suffix_checked` preserves the exact ordered
+interpretation and effect bound after consuming the selected continuation and
+its separated demand. The earlier witness fails precisely this separation
+condition. Independent compilation passed with standard axioms only.
+
+The selected next implementation is a conditional field on the clause
+`Interface`: when disposal is permitted, closing demand is absent from live
+owners in the receiving tail. Capture construction must derive the field from
+its actual closing template and ownership invariant. Existing resume-only
+interfaces acquire no additional restriction. This changes experimental
+admission evidence under DN-0033, not Ash's specified runtime behavior. Full
+admission still requires integrating this field and constructing the remaining
+source, authentication, resource and accounting judgments.

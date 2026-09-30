@@ -34,3 +34,6 @@ pub use type_ops::{
 };
 pub use validate::{ValidationError, ValidationReason, validate, validate_modules};
 pub use variable::TypedBinder;
+
+#[cfg(test)]
+mod alignment_export;

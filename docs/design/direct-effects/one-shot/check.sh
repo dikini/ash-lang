@@ -771,3 +771,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreClosing.olean" CoreClosing.l
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSupport.olean" CoreCallableSupport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreSyntax.olean" CoreSyntax.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreTranslation.olean" CoreTranslation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreExportedFixture.olean" CoreExportedFixture.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreInitialExample.olean" CoreInitialExample.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreClauseCoherence.olean" CoreClauseCoherence.lean
