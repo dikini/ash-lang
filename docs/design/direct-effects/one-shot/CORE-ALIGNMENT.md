@@ -242,7 +242,7 @@ effect trace has no model ghost identities.
 
 ### Actual Rust configurations
 
-The test-only [alignment observer](../../../../src/eval/machine/alignment_trace.rs)
+The test-only [alignment observer](../../../../src/eval/machine/alignment_trace_tests.rs)
 records pre-step configurations in the actual `Machine::run_loop`. It retains
 structured controls, lexical environment entries and recursive function
 templates, resource instantiations, heap contents, active and captured frame
@@ -451,7 +451,7 @@ component alone. Independent warnings-as-errors compilation passed.
 
 ### Actual Core export
 
-The [test-only exporter](../../../../src/core/alignment_export.rs) compiles and
+The [test-only exporter](../../../../src/core/alignment_export_tests.rs) compiles and
 independently validates the restored-clause-suffix fixture before exporting its
 55 reachable nodes to [CoreExportedFixture.lean](CoreExportedFixture.lean).
 Ordinary cell helper functions remain in the graph. A separate manifest retains

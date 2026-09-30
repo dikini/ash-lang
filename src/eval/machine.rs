@@ -7,7 +7,7 @@ mod instantiation;
 use instantiation::Instantiation;
 
 #[cfg(test)]
-#[path = "machine/alignment_trace.rs"]
+#[path = "machine/alignment_trace_tests.rs"]
 mod alignment_trace;
 
 #[path = "native_buffer.rs"]
