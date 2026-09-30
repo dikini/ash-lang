@@ -102,6 +102,10 @@ theorem running_empty_parts (related : CoreUnwindRelation.Related graph point)
       simp only at control
       rw [actual] at control
       cases control
+  | retainedProjected cursor outside actual frames =>
+      simp only at control
+      rw [actual] at control
+      cases control
   | runningCleanup carrier component frames =>
       simp only at maps machine nonempty ⊢
       rw [maps] at component frames

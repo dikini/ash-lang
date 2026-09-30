@@ -701,6 +701,9 @@ private theorem ordinary40 (related : CoreUnwindRelation.Related graph
   | resourceProjected cursor outside control frames =>
     have machineEq := (CoreUnwindRelation.Point.mk.inj pointEq).2.1
     cases machineEq
+  | retainedProjected cursor outside control frames =>
+    have machineEq := (CoreUnwindRelation.Point.mk.inj pointEq).2.1
+    cases machineEq
   | runningCleanup carrier component frames =>
     rename_i physical lexical target
     obtain ⟨stateEq,machineEq,ownersEq,mapsEq⟩ := CoreUnwindRelation.Point.mk.inj pointEq
@@ -924,6 +927,9 @@ private theorem ordinary67 (related : CoreUnwindRelation.Related graph (w67 d)) 
     have machineEq := (CoreUnwindRelation.Point.mk.inj pointEq).2.1
     cases machineEq
   | resourceProjected cursor outside control frames =>
+    have machineEq := (CoreUnwindRelation.Point.mk.inj pointEq).2.1
+    cases machineEq
+  | retainedProjected cursor outside control frames =>
     have machineEq := (CoreUnwindRelation.Point.mk.inj pointEq).2.1
     cases machineEq
   | runningCleanup carrier component frames =>

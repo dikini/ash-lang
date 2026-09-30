@@ -60,6 +60,14 @@ inductive Related (graph : CoreSyntax.Graph) : Point → Prop where
       (frames : state.frames = physical ++ .closeCompletion coreClose :: framesOf annotations) :
       Related graph ⟨state,.unwind scope (lexical.append (.push (.closing targetClose callerScope) target)),
         owners,annotations⟩
+  /-- A general residual cursor includes armed cleanup boundaries and exact
+  nested saved captures; no future callback result is assumed. -/
+  | retainedProjected (cursor : CoreCleanupProjection.RetainedCursor graph state.heap physical lexical)
+      (outside : PushedWithMaps graph state.heap annotations target)
+      (control : state.control = .returned .unit)
+      (frames : state.frames = physical ++ .closeCompletion coreClose :: framesOf annotations) :
+      Related graph ⟨state,.unwind scope (lexical.append (.push (.closing targetClose callerScope) target)),
+        owners,annotations⟩
   | runningCleanup (carrier : CoreCleanupRunFrames.RunningTail graph state.heap physical lexical)
       (component : ComponentMapped graph owners annotations (CoreCleanupRunFrames.isolate state annotations) target)
       (frames : state.frames = framesOf annotations ++ physical) :

@@ -858,6 +858,25 @@ pairs: 847 registered modules and 11,454 exact reports in total. The additive
 unwind relation requires three impossible-case compatibility branches in
 existing consumers. No Rust change or new finite example accompanies this batch.
 
+[CoreCleanupProjection.lean](CoreCleanupProjection.lean) extends the residual
+cursor to retain authenticated delayed cleanups. Its construction uses the same
+captured frame relation and actual successful Core projection, including nested
+live and consumed captures. Finite normalization exposes the corresponding
+resource, armed cleanup or empty target head.
+
+[CoreProjectedCleanupSteps.lean](CoreProjectedCleanupSteps.lean) connects actual
+nonempty discard to selected cleanup start in one accounted chain. It also
+matches current Unit callback completion, resource release with later cleanups,
+and final close completion. Each case uses the same positive transition witness
+for execution and ownership accounting; physical and target close labels remain
+independent. No callback-success premise is supplied. General callback-body
+lifting, exact user-effect dispatch, freshness and admission remain open.
+
+The cleanup batch independently rebuilds 18 affected modules and retains 831
+unchanged verified pairs: 849 registered modules and 11,467 exact reports. The
+two new leaves add 13 standard-only reports. Existing consumers receive only
+the additive carrier cases; the completed finite example is unchanged.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
@@ -1155,12 +1174,27 @@ The approved experimental repair selects private rows from open body evidence
 indexed by the call world, receiving support bound and actual argument support.
 A hereditary companion authenticates each clause bound using the same source
 derivation and support environment. Private checking consumes evidence for the
-actual receiver; the existing code and accounting interfaces remain unchanged,
-and universal refinements embed into the conditional interface. This is an
-implementation decision, not a completed theorem. Its integration gate connects
+actual receiver. Further review disproved unconditional private-code refinement:
+public pure rows admit an unchecked caller tail, whereas an internally handled
+request must check that tail. The refinement must therefore also consume the
+current retained-stack certificate and its support check, already carried by
+the execution site. Existing return-mode and installation-history lemmas provide
+the required transport. Accounting remains unchanged, and universal refinements
+embed into the conditional interface. This is an implementation decision, not a
+completed theorem. Its integration gate connects
 substitution, supported source, saved frames and the current execution site
 through handler capture. General restored-world transport remains required.
 No such transport theorem or full handler admission is claimed yet.
+
+Operation payload transfer also needs current request-flow evidence. Rust's
+capture analysis checks hidden value dependencies against each acquisition in
+the selected prefix, but its transient check result is not a retained Core
+request annotation. A locally verified finite-certificate bridge now derives
+post-cut support from checked origin separation, one current activation-origin
+map and the actual handler cut. It does not authenticate the current request's
+table index or construct the operand/prefix realization. C2 must derive those
+facts from validated Core; the connected C4 admission gate must preserve them.
+Public callable ports and aggregate receiver bounds do not supply them.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)

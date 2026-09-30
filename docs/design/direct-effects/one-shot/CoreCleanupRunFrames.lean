@@ -1,6 +1,7 @@
 import CoreStrictPotential
 import CoreAdministrativeTransport
 import CoreCleanupFrames
+import CoreCleanupProjection
 import SourceResourceRoutes
 
 /-! Running cleanup retains either its normal saved return value or an
@@ -32,6 +33,15 @@ inductive RunningTail (graph : CoreSyntax.Graph) (heap : Heap) : List CoreMachin
       RunningTail graph heap
         (.cleanupCompletion data.identity .unit :: closing ++ .closeCompletion closeIdentity :: framesOf outsideMaps)
         (.push (.unwinding data) (retainedTarget.append (.push (.closing closeIdentity closeScope) outsideTarget)))
+  /-- The callback keeps the exact general residual projection and separately
+  paired local close labels. This does not establish callback dispatch safety. -/
+  | retainedProjected
+      (delayed : CleanupRel graph cleanupOwners heap (.cleanupBoundary action environment data.identity) data)
+      (residual : CoreCleanupProjection.RetainedCursor graph heap physical lexical)
+      (outside : PushedWithMaps graph heap outsideMaps outsideTarget) :
+      RunningTail graph heap
+        (.cleanupCompletion data.identity .unit :: physical ++ .closeCompletion coreClose :: framesOf outsideMaps)
+        (.push (.unwinding data) (lexical.append (.push (.closing targetClose closeScope) outsideTarget)))
 
 theorem RunningTail.heap_weaken (related : RunningTail graph heap physical lexical)
     (extension : HeapExtends heap larger) : RunningTail graph larger physical lexical := by
@@ -42,6 +52,8 @@ theorem RunningTail.heap_weaken (related : RunningTail graph heap physical lexic
   | projected captured delayed retained outside projection =>
       exact .projected (captured.heap_weaken extension) (delayed.heap_weaken extension)
         (retained.heap_weaken extension) (outside.heap_weaken extension) projection
+  | retainedProjected delayed residual outside =>
+      exact .retainedProjected (delayed.heap_weaken extension) (residual.heap_weaken extension) (outside.heap_weaken extension)
 
 def isolate (state : CoreMachine.State) (annotations : List MappedFrame) : CoreMachine.State :=
   { state with frames := framesOf annotations }

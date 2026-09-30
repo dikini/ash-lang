@@ -918,13 +918,78 @@ remain separate targets. A small first example does not reduce the final scope.
   estimated at 2–3 active hours. General callback-body lifting and exact effect
   dispatch remain separate obligations. Implementation is held pending the next
   C4 checkpoint; no additional finite examples are planned.
+- Independent C4 review disproved the proposed unconditional private-code
+  refinement. Public pure rows admit any caller context; a private locally
+  handled request requires the whole caller context to be checked. A fresh
+  Lean proof constructs an unchecked caller tail and derives the contradiction,
+  with four standard-only reports. The repair must consume current retained
+  source and retained support checks, already fields of the execution site.
+  Existing return-mode and installation-history transport lemmas apply. This
+  corrects the earlier decision to leave the code interface unchanged; it does
+  not change completed M4 proofs or demonstrate a runtime disagreement.
+  The negative review remains outside the registered proof suite pending the
+  connected C4 gate. Its effect on the implementation estimate is under review.
+- The worker accepted that correction and the related receiving-bound coverage
+  requirements. A saved bind suffix must accept the full current receiver;
+  plugging then specializes its lexical entry to the actual value's support.
+  Clause formation must likewise cover admissible inputs. Capture must derive
+  actual payload support at the selected post-cut receiver, preserving the
+  operation-operand retention rule already specified by Ash. A bounded
+  20-minute review is tracing that evidence through existing validation metadata
+  and lower proof interfaces before choosing the upper companion's policy index.
+- That review found the required finite data in Rust's existing capture
+  analysis: request ports, value/call contexts, actual closure dependencies and
+  crossed acquisition occurrences. The validator consumes the check result;
+  ordinary Core request type/row metadata does not retain the certificate.
+  C2 must construct and authenticate this evidence. C4 must preserve the same
+  request-flow identity through substitution and capture. Neither public port
+  resources nor raw validation success supplies the missing Lean proof.
+- The next bounded bridge uses finite dependency and crossed-origin records
+  with one current activation-origin realization. Checked origin disjointness
+  derives avoidance of the same captured prefix. Existing cut reconstruction
+  and visible-resource decomposition then derive the post-cut payload bound;
+  ambient resources remain admissible. The bridge is estimated at 45–60 active
+  minutes and feeds the connected capture gate. It does not implement a new
+  analysis or finish C2 certificate construction.
+- The corrected receiver-refinement interface independently compiles with
+  warnings as errors and six standard-only reports. It remains unregistered
+  pending the connected C4 gate. With that interface checkpoint reviewed, the
+  previously held C3 general cleanup-projection batch is authorized for 2–3
+  active hours in parallel. Its cursor/start/finish proofs have no dependency on
+  the changing callable-admission files; no finite examples are being extended.
+- The payload bridge is implemented and independently compiled against 441
+  recorded dependency pairs, with six standard-only reports. A finite check
+  derives origin separation; current operand and captured-prefix realizations
+  derive support at the actual post-cut receiver. The consumer must authenticate
+  the current request/call-context index and use the actual operand's dependency
+  bound. The bridge remains unregistered until the connected C4 gate passes.
+- Source certification and world extension compile. Hereditary formation is
+  being checked after explicit binder and registry arguments were corrected.
+  The next checkpoint specializes the same authenticated lambda derivation,
+  then proves changed-plan substitution and supported-source preservation.
+  The worker estimates 60–90 active minutes after formation checks for that
+  checkpoint. Saved frames, execution sites and actual handler capture follow;
+  this replaces the earlier estimate for the whole connected gate.
+- Following the user's concern about time spent aligning existing proofs,
+  further admission work is bounded by that connected dependency chain. Another
+  interface redesign requires a scope review before expansion. Additional
+  finite examples and optional generalization remain excluded. Passing helper
+  proofs alone does not close C4.1.
+- The general cleanup-projection batch is implemented and independently
+  verified. Its cursor derives from the same captured frames and successful
+  Core projection. An accounted chain connects actual discard to cleanup start;
+  current Unit completion, resource release with later cleanups and final close
+  are also matched. General callback-body lifting and exact dispatch remain
+  open. The grouped rebuild passes for 18 affected modules, with 831 unchanged
+  verified pairs: 849 registered modules and 11,467 exact reports. No finite
+  example or Rust behavior was added.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Resource-only discard and strict-focus components independently verified, alongside earlier transitions | Cleanup-bearing projection, general callback lifting, state/ownership correspondence | Static readiness/dispatch and annotation authentication | Cleanup construction/start/finish estimated 2–3 active hours; implementation held; full estimate unresolved |
-| C4 | 2 / 3 | Common owner-source checkpoint independently verified; receiver-dependent repair implementing | Migrate handler/owner contracts and retained support through full M4 invariant | Hereditary clause support, selected private rows and restored-world caller transport | Next checkpoint 30 minutes, then connected gate estimated 90–120 active minutes; rebasing and full M4 migration follow |
+| C3 | 0 / 5 | Resource/cleanup projection and strict-focus components independently verified | General callback lifting, exact dispatch, state/ownership correspondence | Static readiness and annotation authentication | Cleanup batch complete; full estimate awaits general readiness/dispatch connection |
+| C4 | 2 / 3 | Common owner-source checkpoint integrated; current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Substitution/support checkpoint 60–90 active minutes after formation checks; remainder awaits connected gate |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification
