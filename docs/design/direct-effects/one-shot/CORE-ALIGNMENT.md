@@ -324,6 +324,24 @@ The relation takes no future-execution premise. Resource activations currently
 use matching numeric identities; simulation must choose the same fresh identity
 in the existing calculus allocation request and prove its freshness.
 
+[CoreOwnerMapBoundary.lean](CoreOwnerMapBoundary.lean) identifies a coverage gap
+within D5. The retained [reentry fixture](CoreOwnerMapReentry.ash) returns Unit
+in the current validated Rust evaluator: a nonrecursive callable reenters its
+static handler while another activation is live. Separate finite graph proofs
+show that public root translation succeeds, but translating the callable under
+a colliding caller owner map fails at every fuel. Consequently the current
+fixed-map value relation cannot represent that callable under the caller map.
+This is a limitation of the relation, not a demonstrated Core runtime disagreement.
+Independent Lean compilation and the Rust CLI check pass.
+
+The required repair distinguishes each code component's lexical map from dynamic
+ticket activation. Callable barriers need an authenticated empty-map body;
+ordinary clause code must retain its own binding. The component records a static
+callable-site interface and positive/negative cases. Deriving that interface from
+validated Core and extending the value and saved-frame relations remain open.
+Neither removing duplicate-owner checks nor resetting all clause maps follows
+from this evidence.
+
 ### Completed strict redexes
 
 [CoreStrictSteps.lean](CoreStrictSteps.lean) connects completed application,

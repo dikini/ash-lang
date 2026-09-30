@@ -217,6 +217,14 @@ remain separate targets. A small first example does not reduce the final scope.
 - The additive registered audit passed for 787 unchanged-or-freshly-compiled
   sources, 10,807 exact dependency reports and 1,952 local links/anchors. It
   preserved the previous 784 module hashes; only standard Lean axioms occur.
+- `CoreOwnerMapBoundary` isolates a D5 relation-coverage gap: callable reentry
+  succeeds in validated Rust, while a caller-wide owner map can make the current
+  value interpretation impossible. Root translation and legal clause bindings
+  remain sound. Fresh independent Lean and Rust CLI checks pass. The next C3.1
+  repair separates lexical callable/frame maps from dynamic owner activations;
+  it does not change the supported fragment or claim a runtime discrepancy.
+  Its additive audit passes across 788 registered sources, 10,821 dependency
+  reports and 1,954 local links/anchors, preserving the previous 787 hashes.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
@@ -224,7 +232,7 @@ remain separate targets. A small first example does not reduce the final scope.
 | C2 | 0 / 4 | Complete normalized kernel admission and exact declaration-port construction verified | Actual graph bridge, authenticated metadata and general static compiler | Exported administrative syntax and builtin compatibility next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Finite Rust trace, strict steps, mixed-stack value transport and shared potential verified | Reachable configuration relation, transitions and observations | Lexical owner scopes and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
 | C4 | 3 / 3 for identified repairs | D2 regressions and D8/D9 complete normalized admission verified | Maintain resolution as C2/C3 discover further obligations | No current demonstrated unresolved discrepancy |
-| C5 | 0 / 4 | Product and 780-module proof gates passed; seven new modules separately verified | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
+| C5 | 0 / 4 | Product and 780-module proof gates passed; eight new modules separately verified and audited | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification
 
