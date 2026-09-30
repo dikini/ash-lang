@@ -1,0 +1,460 @@
+import CoreCallableContractSource
+
+/-! Experimental authenticated contract source. Exact global operation contracts,
+execution scope, scalar requirements, actual declaration plans and contextual
+rows are separate indices. This is not legacy Auth or M4 admission. -/
+namespace Ash.OneShot.CoreCallableContractAdmission
+open ScopedExpressions ScopedExecution ProtectionContracts
+open SourceDeclarationPlans (Plan)
+open SourcePlanSignatures (signature)
+open SourceDependencyAnnotations (Dependencies)
+open RecursiveRequirements (Requirements)
+open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows
+open CoreCallableContractSource (Contract Environment sequenceRows choiceRows)
+open CoreCallableRootRefinement (Refines RootTransport)
+open SourceDependencyAnnotations (RowAnnotation)
+open RecursiveRequirements (Checked)
+open SourceScheduledCleanupInterfaces.Lexical.Recursive (annotateDisposals)
+open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual
+open SourcePlannedChecks (Certified DeclarationPolicy)
+
+/-- Fixed registry and owner policy shared by every recursive constructor.
+Owner operations remain a required extension, not per-rule choices. -/
+structure Globals where
+  operations : Instance → Nat → Option (Contract × Contract)
+  policy : Syntax.TicketPolicy
+  owners : SourcePlannedTyping.Contracts
+
+def Globals.ports (globals : Globals) : ScopedPorts.Signature :=
+  fun effect operation => (globals.operations effect operation).map (fun pair => (pair.1.port, pair.2.port))
+
+section
+variable [DeclarationPolicy]
+
+/-- Each lambda recursively authenticates its private body. Public-plan
+certification is static declaration evidence, independent of port formation;
+application cannot infer it from a function's immediate pure plan. -/
+inductive Source (globals : Globals) (outward : List Instance) (world : List Nat) :
+    List Instance → Execution.Scope → Environment → Code → Contract →
+    (demand : List Nat) → Requirements demand → {dependencies : Dependencies} →
+    (plan : Plan dependencies) → Rows (signature plan) → Prop where
+  | unit : Source globals outward world allowed scope environment .unit .unit [] (.request [] []) .pure Rows.pure
+  | boolean : Source globals outward world allowed scope environment (.boolean value) .boolean [] (.request [] []) .pure Rows.pure
+  | integer : Source globals outward world allowed scope environment (.integer value) .integer [] (.request [] []) .pure Rows.pure
+  | reference (issued : identity ∈ world) :
+      Source globals outward world allowed scope environment (.resourceRef (.activation identity)) (.reference identity) [] (.request [] []) .pure Rows.pure
+  | variable (known : environment name = some contract) (formed : ScopedPorts.InWorld world contract.port) :
+      Source globals outward world allowed scope environment (.variable name) contract [] (.request [] []) .pure Rows.pure
+  | lambda {contractDependencies : Dependencies} {contractPlan : Plan contractDependencies}
+      {contractRows : Rows (signature contractPlan)}
+      (body : Source globals outward world requests .none (environment.extend parameter input) code output bodyDemand bodyReq actualPlan actualRows)
+      (refinement : Refines contractRows actualRows)
+      (bodyOutward : RecursiveOutward.Outward bodyReq (some latent))
+      (latentBound : ∀ request ∈ latent, request.effect ∈ requests)
+      (publicCertified : Certified outward world contractPlan)
+      (formed : ScopedPorts.InWorld world (Contract.function input output requests latent contractPlan contractRows).port) :
+      Source globals outward world allowed scope environment (.lambda parameter code)
+        (Contract.function input output requests latent contractPlan contractRows) [] (.request [] []) .pure Rows.pure
+  | purePair (left : Source globals outward world allowed scope environment a first [] (.request [] []) .pure Rows.pure)
+      (right : Source globals outward world allowed scope environment b second [] (.request [] []) .pure Rows.pure) :
+      Source globals outward world allowed scope environment (.pair a b) (.pair first second) [] (.request [] []) .pure Rows.pure
+  | pair (left : Source globals outward world allowed scope environment a first leftDemand leftReq leftPlan leftRows)
+      (right : Source globals outward world allowed scope environment b second rightDemand rightReq rightPlan rightRows) :
+      Source globals outward world allowed scope environment (.pair a b) (.pair first second)
+        (leftDemand ++ rightDemand) (.sequence leftReq rightReq) (.sequence leftPlan rightPlan) (sequenceRows leftRows rightRows)
+  | app (function : Source globals outward world allowed scope environment f
+        (Contract.function input output requests latent contractPlan contractRows) functionDemand functionReq functionPlan functionRows)
+      (argument : Source globals outward world allowed scope environment a input argumentDemand argumentReq argumentPlan argumentRows)
+      (admitted : requests ⊆ allowed)
+      (publicCertified : Certified outward world contractPlan) :
+      Source globals outward world allowed scope environment (.app f a) output
+        (functionDemand ++ argumentDemand) (.emitAfter (.sequence functionReq argumentReq) [] latent)
+        (.sequence functionPlan (.sequence argumentPlan contractPlan)) (sequenceRows functionRows (sequenceRows argumentRows contractRows))
+  | bind (initializer : Source globals outward world allowed scope environment a input initialDemand initialReq initialPlan initialRows)
+      (body : Source globals outward world allowed scope (environment.extend parameter input) b output bodyDemand bodyReq bodyPlan bodyRows) :
+      Source globals outward world allowed scope environment (.bind parameter a b) output
+        (initialDemand ++ bodyDemand) (.sequence initialReq bodyReq) (.sequence initialPlan bodyPlan) (sequenceRows initialRows bodyRows)
+  | branch (condition : Source globals outward world allowed scope environment test .boolean conditionDemand conditionReq conditionPlan conditionRows)
+      (yes : Source globals outward world allowed scope environment a output yesDemand yesReq yesPlan yesRows)
+      (no : Source globals outward world allowed scope environment b output noDemand noReq noPlan noRows)
+      (same : yesDemand.Perm noDemand) :
+      Source globals outward world allowed scope environment (.branch test a b) output
+        (conditionDemand ++ yesDemand) (.sequence conditionReq (.choice yesReq noReq same))
+        (.sequence conditionPlan (.choice yesPlan noPlan)) (sequenceRows conditionRows (choiceRows yesRows noRows))
+  | perform (known : globals.operations effect operation = some (input, output)) (admitted : effect ∈ allowed)
+      (operand : Source globals outward world allowed scope environment value input operandDemand operandReq operandPlan operandRows)
+      (formed : ScopedPorts.InWorld world output.port) :
+      Source globals outward world allowed scope environment (.perform (Instantiation.freezeEffect effect) operation value) output
+        operandDemand (.emitAfter operandReq [] [⟨effect, operation, false⟩])
+        (.sequence operandPlan (.request (effect := effect) (operation := operation))) (sequenceRows operandRows Rows.request)
+
+
+/-- Actual-plan declaration certification follows structural derivation;
+application separately checks its exposed plan, and lambda bodies stay recursive. -/
+theorem Source.certified (source : Source globals outward world allowed scope environment code contract demand requirements plan rows) :
+    Certified outward world plan := by
+  induction source with
+  | unit | boolean | integer | reference | «variable» | lambda | purePair => exact .pure
+  | pair left right ihL ihR | bind left right ihL ihR => exact .sequence ihL ihR
+  | app function argument admitted publicCertified ihF ihA => exact .sequence ihF (.sequence ihA publicCertified)
+  | branch condition yes no same ihC ihY ihN => exact .sequence ihC (.choice ihY ihN)
+  | perform known admitted operand formed ih => exact .sequence ih .request
+
+theorem Source.erase (source : Source globals outward world allowed scope environment code contract demand requirements plan rows) :
+    ScopedPorts.Typed globals.ports world environment.ports .none allowed code contract.port := by
+  induction source with
+  | unit => exact .unit
+  | boolean => exact .boolean
+  | integer => exact .integer
+  | reference issued => exact .reference issued
+  | «variable» known formed => exact .variable (by simp [Environment.ports, known]) formed
+  | lambda body refinement bodyOutward latentBound publicCertified formed ih =>
+      exact .lambda (by simpa only [Environment.ports_extend, Contract.port] using ih) formed
+  | purePair left right ihL ihR | pair left right ihL ihR => exact .pair ihL ihR
+  | app function argument admitted publicCertified ihF ihA => exact .app ihF ihA admitted
+  | bind initial body ihI ihB => exact .bind ihI (by simpa using ihB)
+  | branch condition yes no same ihC ihY ihN => exact .branch ihC ihY ihN
+  | perform known admitted operand formed ih => exact .perform (by simp [Globals.ports, known]) admitted ih formed
+theorem Source.environment_congr (source : Source globals outward world allowed scope environment code contract demand requirements plan rows)
+    (agree : ∀ name, Syntax.Dependency.variable name ∈ code.dependencies → environment name = destination name) :
+    Source globals outward world allowed scope destination code contract demand requirements plan rows := by
+  induction source generalizing destination with
+  | unit => exact .unit
+  | boolean => exact .boolean
+  | integer => exact .integer
+  | reference issued => exact .reference issued
+  | «variable» known formed => exact .variable ((agree _ (by simp [Code.dependencies])).symm.trans known) formed
+  | lambda body refinement bodyOutward latentBound publicCertified formed ih =>
+      rename_i parameter contractDependencies contractPlan contractRows
+      apply Source.lambda (ih ?_) refinement bodyOutward latentBound publicCertified formed
+      intro name member
+      by_cases same : name = parameter
+      · subst name; simp [Environment.extend]
+      · simp only [Environment.extend, same, ↓reduceIte]
+        exact agree name (Syntax.mem_without.mpr ⟨member, by simpa using same⟩)
+  | purePair left right ihL ihR =>
+      exact .purePair (ihL (fun name member => agree name (List.mem_append_left _ member)))
+        (ihR (fun name member => agree name (List.mem_append_right _ member)))
+  | pair left right ihL ihR =>
+      exact .pair (ihL (fun name member => agree name (List.mem_append_left _ member)))
+        (ihR (fun name member => agree name (List.mem_append_right _ member)))
+  | app function argument admitted publicCertified ihF ihA =>
+      exact .app (ihF (fun name member => agree name (List.mem_append_left _ member)))
+        (ihA (fun name member => agree name (List.mem_append_right _ member))) admitted publicCertified
+  | bind initial body ihI ihB =>
+      rename_i parameter b output bodyDemand bodyReq bodyDependencies bodySignature bodyRows
+      apply Source.bind (ihI (fun name member => agree name (List.mem_append_left _ member))) (ihB ?_)
+      intro name member
+      by_cases same : name = parameter
+      · subst name; simp [Environment.extend]
+      · simp only [Environment.extend, same, ↓reduceIte]
+        exact agree name (List.mem_append_right _ (Syntax.mem_without.mpr ⟨member, by simpa using same⟩))
+  | branch condition yes no sameDemand ihC ihY ihN =>
+      exact .branch
+        (ihC (fun name member => agree name (List.mem_append_left _ (List.mem_append_left _ member))))
+        (ihY (fun name member => agree name (List.mem_append_left _ (List.mem_append_right _ member))))
+        (ihN (fun name member => agree name (List.mem_append_right _ member))) sameDemand
+
+  | perform known admitted operand formed ih =>
+      exact .perform known admitted (ih (fun name member => agree name (List.mem_append_right _ member))) formed
+
+theorem Source.closed_environment (source : Source globals outward world allowed scope environment value contract [] (.request [] []) .pure Rows.pure)
+    (closed : ClosedValue value) (destination : Environment) : Source globals outward world allowed scope destination value contract [] (.request [] []) .pure Rows.pure :=
+  source.environment_congr (fun _ member => False.elim (ScopedTyping.closedValue_no_variable closed member))
+
+/-- Closed values retain their public contract when the caller's allowed row
+changes. The private lambda body continues under its own declared requests. -/
+theorem Source.value_allowed (source : Source globals outward world allowed scope environment value contract demand requirements plan rows)
+    (valueIsValue : value.IsValue) (next : List Instance) (nextScope : Execution.Scope) : Source globals outward world next nextScope environment value contract demand requirements plan rows := by
+  induction source with
+  | unit => exact .unit
+  | boolean => exact .boolean
+  | integer => exact .integer
+  | reference issued => exact .reference issued
+  | lambda body refinement bodyOutward latentBound publicCertified formed ih => exact .lambda body refinement bodyOutward latentBound publicCertified formed
+  | purePair left right ihL ihR => exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
+  | pair left right ihL ihR => exact .pair (ihL valueIsValue.1) (ihR valueIsValue.2)
+  | «variable» | app | bind | branch | perform => cases valueIsValue
+
+/-- Normalize only immediate checking rows of a value. The public contract
+and each lambda's private recursive body/refinement remain unchanged. -/
+theorem Source.value_summary (source : Source globals outward world allowed scope environment value contract demand requirements plan rows)
+    (valueIsValue : value.IsValue) : Source globals outward world allowed scope environment value contract [] (.request [] []) .pure Rows.pure := by
+  induction source with
+  | unit => exact .unit
+  | boolean => exact .boolean
+  | integer => exact .integer
+  | reference issued => exact .reference issued
+  | lambda body refinement bodyOutward latentBound publicCertified formed ih => exact .lambda body refinement bodyOutward latentBound publicCertified formed
+  | purePair left right ihL ihR | pair left right ihL ihR =>
+      exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
+  | «variable» | app | bind | branch | perform => cases valueIsValue
+
+/-- Compositional substitution for this contract judgment. It preserves the
+same exposed contract and rows, including private lambda-body refinements. -/
+theorem Source.substitution_at (source : Source globals outward world allowed scope sourceEnvironment code result demand requirements plan rows) :
+    ∀ environment name input value, sourceEnvironment = environment.extend name input →
+      Source globals outward world allowed scope environment value input [] (.request [] []) .pure Rows.pure → ClosedValue value →
+      Source globals outward world allowed scope environment (code.subst name value) result demand requirements plan rows := by
+  induction source with
+  | unit | boolean | integer | reference =>
+      intro environment name input value same replacement closed
+      cases same
+      first | exact .unit | exact .boolean | exact .integer | apply Source.reference; assumption
+  | «variable» known formed =>
+      intro environment name input value same replacement closed
+      cases same
+      simp only [Code.subst]
+      split
+      · rename_i equal
+        subst name
+        simp only [Environment.extend, ↓reduceIte] at known
+        cases Option.some.inj known
+        exact replacement
+      · rename_i different
+        exact .variable (by simpa [Environment.extend, Ne.symm different] using known) formed
+  | lambda body refinement bodyOutward latentBound publicCertified formed ih =>
+      intro environment name input value same replacement closed
+      cases same
+      simp only [Code.subst]
+      apply Source.lambda _ refinement bodyOutward latentBound publicCertified formed
+      split
+      · rename_i equal
+        subst name
+        simpa only [Environment.extend_shadow] using body
+      · rename_i different
+        exact ih _ name input value (Environment.extend_commute environment name _ input _ different)
+          ((replacement.value_allowed closed.1 _ .none).closed_environment closed _) closed
+  | purePair left right ihL ihR =>
+      intro environment name input value same replacement closed
+      cases same
+      exact .purePair (ihL environment name input value rfl replacement closed) (ihR environment name input value rfl replacement closed)
+  | pair left right ihL ihR =>
+      intro environment name input value same replacement closed
+      cases same
+      exact .pair (ihL environment name input value rfl replacement closed) (ihR environment name input value rfl replacement closed)
+  | app function argument admitted publicCertified ihF ihA =>
+      intro environment name input value same replacement closed
+      cases same
+      exact .app (ihF environment name input value rfl replacement closed) (ihA environment name input value rfl replacement closed) admitted publicCertified
+  | bind initial body ihI ihB =>
+      intro environment name input value same replacement closed
+      cases same
+      simp only [Code.subst]
+      apply Source.bind (ihI environment name input value rfl replacement closed)
+      split
+      · rename_i equal
+        subst name
+        simpa only [Environment.extend_shadow] using body
+      · rename_i different
+        exact ihB _ name input value (Environment.extend_commute environment name _ input _ different)
+          (replacement.closed_environment closed _) closed
+  | branch condition yes no sameDemand ihC ihY ihN =>
+      intro environment name input value same replacement closed
+      cases same
+      exact .branch (ihC environment name input value rfl replacement closed)
+        (ihY environment name input value rfl replacement closed) (ihN environment name input value rfl replacement closed) sameDemand
+
+  | perform known admitted operand formed ih =>
+      intro environment name input value same replacement closed
+      cases same
+      simpa only [Code.subst] using Source.perform known admitted
+        (ih environment name input value rfl replacement closed) formed
+
+theorem Source.substitution
+    (source : Source globals outward world allowed scope (environment.extend name input) code result demand requirements plan rows)
+    (replacement : Source globals outward world allowed scope environment value input [] (.request [] []) .pure Rows.pure) (closed : ClosedValue value) :
+    Source globals outward world allowed scope environment (code.subst name value) result demand requirements plan rows :=
+  source.substitution_at environment name input value rfl replacement closed
+
+/-- Closed products as well as primitive and callable values may substitute;
+only their immediate value-checking rows are normalized. -/
+theorem Source.closed_substitution
+    (source : Source globals outward world allowed scope (environment.extend name input) code result demand requirements plan rows)
+    (replacement : Source globals outward world allowed scope environment value input replacementDemand replacementRequirements replacementPlan replacementRows) (closed : ClosedValue value) :
+    Source globals outward world allowed scope environment (code.subst name value) result demand requirements plan rows :=
+  source.substitution (replacement.value_summary closed.1) closed
+
+
+
+/-- Scope carries future owner resolution; this ordinary/operation fragment
+has no ticket demand. Scalar requirements still retain exact request footprints. -/
+theorem Source.empty_demand (source : Source globals outward world allowed scope environment code contract demand requirements plan rows) :
+    demand = [] := by
+  induction source with
+  | unit | boolean | integer | reference | «variable» | lambda | purePair => rfl
+  | pair left right ihL ihR | app left right admitted publicCertified ihL ihR | bind left right ihL ihR => simp [ihL, ihR]
+  | branch condition yes no same ihC ihY ihN => simp [ihC, ihY]
+  | perform known admitted operand formed ih => exact ih
+
+/-- Independent support authenticates actual dependencies against finite
+lexical value-support entries and the issued world, never port resources. -/
+structure Supported (globals : Globals) (outward : List Instance) (world : List Nat)
+    (allowed : List Instance) (scope : Execution.Scope) (environment : Environment)
+    (supportEnvironment : ScopedPorts.Support.Env) (code : Code) (contract : Contract)
+    (demand : List Nat) (requirements : Requirements demand)
+    {dependencies : Dependencies} (plan : Plan dependencies) (rows : Rows (signature plan)) (bound : List Nat) : Prop where
+  source : Source globals outward world allowed scope environment code contract demand requirements plan rows
+  support : SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.Bounds supportEnvironment code.dependencies bound
+  issued : bound ⊆ world
+
+namespace Supported
+open SourceScheduledCleanupInterfaces.Lexical.Recursive
+open ScopedPorts.Support (evaluate extend)
+theorem canonical (source : Source globals outward world allowed scope environment code contract demand requirements plan rows)
+    (supportEnvironment : ScopedPorts.Support.Env) (issued : evaluate supportEnvironment code.dependencies ⊆ world) :
+    Supported globals outward world allowed scope environment supportEnvironment code contract demand requirements plan rows
+      (evaluate supportEnvironment code.dependencies) := ⟨source, SourceSupport.Bounds.canonical _ _, issued⟩
+
+theorem substitution
+    (body : Supported globals outward world allowed scope (environment.extend name input)
+      (extend supportEnvironment name valueBound) code output demand requirements plan rows bodyBound)
+    (replacement : Supported globals outward world allowed scope environment replacementEnvironment value input
+      replacementDemand replacementRequirements replacementPlan replacementRows valueBound)
+    (closed : ClosedValue value) :
+    Supported globals outward world allowed scope environment supportEnvironment (code.subst name value)
+      output demand requirements plan rows bodyBound := by
+  refine ⟨body.source.closed_substitution replacement.source closed, ?_, body.issued⟩
+  apply SourceSupport.bounds_iff.mpr
+  exact (ScopedPorts.Support.substitution_support_bound code name closed replacement.support.resources).trans
+    (SourceSupport.bounds_iff.mp body.support)
+end Supported
+
+/-- Recovered private body includes scalar outward authentication and actual
+certification. No desired successor or legacy exact-body typing is supplied. -/
+theorem Source.lambda_body
+    (source : Source globals outward world allowed scope environment (.lambda parameter body)
+      (Contract.function input output requests latent contractPlan contractRows) [] (.request [] []) .pure Rows.pure) :
+    ∃ (bodyDemand : List Nat) (bodyReq : Requirements bodyDemand) (actualDependencies : Dependencies)
+      (actualPlan : Plan actualDependencies) (actualRows : Rows (signature actualPlan)),
+      Source globals outward world requests .none (environment.extend parameter input) body output bodyDemand bodyReq actualPlan actualRows ∧
+      Refines contractRows actualRows ∧ RecursiveOutward.Outward bodyReq (some latent) ∧
+      Certified outward world actualPlan ∧ Certified outward world contractPlan := by
+  cases source with
+  | lambda body refinement bodyOutward latentBound publicCertified formed =>
+      exact ⟨_, _, _, _, _, body, refinement, bodyOutward, body.certified, publicCertified⟩
+
+theorem Source.beta
+    (function : Source globals outward world allowed scope environment (.lambda parameter body)
+      (Contract.function input output requests latent contractPlan contractRows) [] (.request [] []) .pure Rows.pure)
+    (argument : Source globals outward world requests .none environment value input argumentDemand argumentReq argumentPlan argumentRows)
+    (closed : ClosedValue value) (closureReady : ClosedValue (.lambda parameter body)) (stack : Stack) :
+    ∃ (bodyDemand : List Nat) (bodyReq : Requirements bodyDemand) (actualDependencies : Dependencies)
+      (actualPlan : Plan actualDependencies) (actualRows : Rows (signature actualPlan)),
+      Source globals outward world requests .none environment (body.subst parameter value) output bodyDemand bodyReq actualPlan actualRows ∧
+      Certified outward world actualPlan ∧ Refines contractRows actualRows ∧ RecursiveOutward.Outward bodyReq (some latent) ∧
+      RawStep ⟨.app (.lambda parameter body) value, scope, stack⟩ ⟨body.subst parameter value, .none, stack⟩ [] [] := by
+  obtain ⟨demand, requirements, dependencies, plan, rows, actualBody, refinement, bodyOutward, actualCertified, publicCertified⟩ := function.lambda_body
+  exact ⟨demand, requirements, dependencies, plan, rows, actualBody.closed_substitution argument closed,
+    actualCertified, refinement, bodyOutward, .beta parameter body value scope stack closed closureReady⟩
+
+/-- Request inversion uses the same fixed operation table for input and result. -/
+theorem Source.request_contract
+    (source : Source globals outward world allowed scope environment
+      (.perform (Instantiation.freezeEffect effect) operation value) output demand requirements plan rows) :
+    ∃ input, globals.operations effect operation = some (input, output) := by
+  generalize equation : Code.perform (Instantiation.freezeEffect effect) operation value = code at source
+  cases source <;> try { cases equation }
+  case perform =>
+    rename_i actual operationActual input valueActual deps operandPlan operandRows admitted known formed operandReq operand
+    simp only [Code.perform.injEq] at equation
+    obtain ⟨sameEffect, sameOperation, sameValue⟩ := equation
+    have same : effect = actual := Instantiation.effect_realization_unique
+      (Instantiation.frozen_effect_realizes Instantiation.Environment.empty effect)
+      (by rw [sameEffect]; exact Instantiation.frozen_effect_realizes Instantiation.Environment.empty actual)
+    subst actual
+    subst operationActual
+    exact ⟨input, known⟩
+
+/-- Operand authentication and result contract come from one exact global key. -/
+theorem Source.request_operand
+    (source : Source globals outward world allowed scope environment
+      (.perform (Instantiation.freezeEffect effect) operation value) output demand requirements plan rows) :
+    ∃ (input : Contract) (operandDemand : List Nat) (operandReq : Requirements operandDemand)
+      (operandDependencies : Dependencies) (operandPlan : Plan operandDependencies) (operandRows : Rows (signature operandPlan)),
+      globals.operations effect operation = some (input, output) ∧
+      Source globals outward world allowed scope environment value input operandDemand operandReq operandPlan operandRows := by
+  generalize equation : Code.perform (Instantiation.freezeEffect effect) operation value = code at source
+  cases source <;> try { cases equation }
+  case perform =>
+    rename_i actual operationActual input valueActual deps operandPlan operandRows admitted known formed operandReq operand
+    simp only [Code.perform.injEq] at equation
+    obtain ⟨sameEffect, sameOperation, sameValue⟩ := equation
+    have same : effect = actual := Instantiation.effect_realization_unique
+      (Instantiation.frozen_effect_realizes Instantiation.Environment.empty effect)
+      (by rw [sameEffect]; exact Instantiation.frozen_effect_realizes Instantiation.Environment.empty actual)
+    subst actual
+    subst operationActual
+    subst valueActual
+    exact ⟨input, _, operandReq, deps, operandPlan, operandRows, known, operand⟩
+
+/-- Recover actual effectful body and declaration certification while transporting
+only current certificates/accounting. Scalar body requirements and contextual
+root demand are separate existential/indexed data, not equated. -/
+theorem Source.beta_current
+    (function : Source globals outward world allowed runtimeScope environment (.lambda parameter body)
+      (Contract.function input output requests latent contractPlan contractRows) [] (.request [] []) .pure Rows.pure)
+    (argument : Source globals outward world requests .none environment value input argumentDemand argumentReq argumentPlan argumentRows)
+    (closed : ClosedValue value) (closureReady : ClosedValue (.lambda parameter body))
+    (stack : Stack)
+    (installations ambient : List Nat) (actions : Syntax.UsageTickets)
+    (phases : OwnerPhaseTransitions.Phases) (budget : Footprint)
+    {scope : SourceDependencyCapture.Scope} {hints : SourceDependencyChecks.Lexical.ReturnHints scope}
+    (context : Context hints)
+    (certificate : SourceAdmission.Code outward actions budget phases world installations contractRows context)
+    (certificateChecked : InstallationSupport.CodeChecked ambient outward certificate)
+    (root annotated : Requirements demand)
+    (run : Accounting.Run world installations contractRows context root)
+    (entries : RecursiveRequirements.Store) (receiving : OwnerPhases.Context) (row : Footprint)
+    (annotation : RowAnnotation root annotated)
+    (check : Checked entries receiving phases (annotateDisposals annotated) row) (bounded : row ⊆ budget) :
+    ∃ (actualDependencies : Dependencies) (actualPlan : Plan actualDependencies)
+      (actualRows : Rows (signature actualPlan)),
+      ∃ (bodyDemand : List Nat) (bodyReq : Requirements bodyDemand),
+      Source globals outward world requests .none environment (body.subst parameter value) output bodyDemand bodyReq actualPlan actualRows ∧
+      Certified outward world actualPlan ∧
+      RawStep ⟨.app (.lambda parameter body) value, runtimeScope, stack⟩
+        ⟨body.subst parameter value, .none, stack⟩ [] [] ∧
+      ∃ actualCertificate : SourceAdmission.Code outward actions budget phases world installations actualRows context,
+        InstallationSupport.CodeChecked ambient outward actualCertificate ∧
+        ∃ actualRoot actualAnnotated : Requirements demand, ∃ actualRow : Footprint,
+          Accounting.Run world installations actualRows context actualRoot ∧
+          RootTransport root actualRoot ∧ RowAnnotation actualRoot actualAnnotated ∧
+          Checked entries receiving phases (annotateDisposals actualAnnotated) actualRow ∧ actualRow ⊆ budget := by
+  obtain ⟨bodyDemand, bodyReq, dependencies, plan, rows, bodySource, actualCertified, refinement, bodyOutward, raw⟩ :=
+    function.beta argument closed closureReady stack
+  let actualCertificate := refinement.code outward actions budget phases world installations context certificate
+  obtain ⟨actualRoot, actualAnnotated, actualRow, actualRun, transport, actualAnnotation, actualCheck, actualBound⟩ :=
+    CoreCallableRootRefinement.checked_accounting refinement world installations context root annotated run
+      entries receiving phases budget row annotation check bounded
+  exact ⟨dependencies, plan, rows, bodyDemand, bodyReq, bodySource, actualCertified, raw, actualCertificate,
+    refinement.checked ambient outward actions budget phases world installations context certificate certificateChecked,
+    actualRoot, actualAnnotated, actualRow, actualRun, transport, actualAnnotation, actualCheck, actualBound⟩
+
+/-- Bind substitution comes from the same structural source derivation. -/
+theorem Source.bind_step
+    (source : Source globals outward world allowed scope environment (.bind parameter value body) output
+      demand (.sequence (.request [] []) bodyReq) (.sequence .pure bodyPlan) (sequenceRows Rows.pure bodyRows))
+    (closed : ClosedValue value) (ready : ClosedExcept parameter body) (stack : Stack) :
+    Source globals outward world allowed scope environment (body.subst parameter value) output demand bodyReq bodyPlan bodyRows ∧
+      Certified outward world bodyPlan ∧
+      RawStep ⟨.bind parameter value body, scope, stack⟩ ⟨body.subst parameter value, scope, stack⟩ [] [] := by
+  cases source with
+  | bind initializer bodySource =>
+      exact ⟨bodySource.substitution initializer closed, bodySource.certified, .bind parameter value body scope stack closed ready⟩
+
+#print axioms Source.bind_step
+#print axioms Source.beta_current
+#print axioms Source.certified
+#print axioms Source.erase
+#print axioms Source.environment_congr
+#print axioms Source.value_summary
+#print axioms Source.closed_substitution
+#print axioms Source.empty_demand
+#print axioms Supported.substitution
+#print axioms Source.lambda_body
+#print axioms Source.beta
+#print axioms Source.request_operand
+#print axioms Source.request_contract
+end
+end Ash.OneShot.CoreCallableContractAdmission

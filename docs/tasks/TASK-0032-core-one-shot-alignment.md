@@ -578,13 +578,31 @@ remain separate targets. A small first example does not reduce the final scope.
   unchanged. The next admitted-state batch connects first capture using the
   same chosen action, handler and resource answer.
 
+- `CoreCallableContractAdmission` and its effectful examples pass fresh
+  independent compilation: 13 source reports and 12 example reports use only
+  `propext` and `Quot.sound`. Fixed global operation contracts, scalar
+  requirements, recursive private-body certification and independent support
+  survive substitution. One bound helper accepts both same-contract requesting
+  bodies. Actual bind/beta steps and signature/support negatives are verified.
+- Current code/resource certificate and accounting transport remains conditional
+  on supplied current checks. Enclosing handler admission/response and M4's
+  current/pending/coherent migration remain open. The owner registry still uses
+  legacy contracts; the experimental imports also prevent a direct import back
+  into the M4 file. The next bounded plan must resolve that dependency and carry
+  the same source evidence through current, saved-frame and operation-result
+  boundaries. This records the existing D4 obligation, not a scope expansion.
+- The combined effectful-source audit covers 822 registered modules and 11,236
+  exact dependency reports. Both new leaves have independent compilation
+  evidence; 820 unchanged verified source/report pairs are retained. Active
+  first-capture admission and second-capture runtime work is excluded.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits effectful source and M4 migration |
+| C2 | 0 / 4 | Actual-root Program and admitted cleanup prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
 | C3 | 0 / 5 | Thirty-five-transition first-resume prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Second-request/capture batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; ordinary contract-source gate independently verified | Migrate effectful callable evidence and retained support through M4 | Effectful authenticated source and M4 current/pending/coherent migration | Effectful source checkpoint 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch being scoped; total unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Next connected-invariant batch being scoped; full repair estimate unresolved |
+| C5 | 0 / 4 | Admitted cleanup-registration prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-capture batch 1–2 hours; total unresolved |
 
 ## Verification
 

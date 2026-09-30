@@ -287,6 +287,36 @@ implementation may factor shared judgments or introduce an authenticated
 companion, but it must connect this full boundary before claiming general
 higher-order admission.
 
+### Indexed source checkpoint
+
+The separate
+[contract admission judgment](direct-effects/one-shot/CoreCallableContractAdmission.lean)
+now fixes exact operation contracts, execution scope, outward allowance and
+resource world throughout recursive source evidence. Scalar requirements and
+actual declaration plans remain distinct indices. Lambda evidence retains the
+private body, scalar outward bound and public-plan certification; actual-plan
+certification follows structurally. Substitution preserves these witnesses and
+independent retained-support bounds.
+
+Its [effectful examples](direct-effects/one-shot/CoreCallableContractAdmissionExamples.lean)
+construct a single helper accepting both unchanged implementations of the same
+requesting contract, including the extra-sequencing case. Bind/beta steps and
+current-check transport pass independent compilation. The transport takes
+current certificates and accounting as inputs; it does not construct an
+admitted enclosing handler or prove handler response. Wrong signatures and
+false support bounds are rejected. This retains the candidate for migration,
+without completing general admission.
+
+The owner registry still uses legacy contracts and is unused by this checkpoint.
+It must adopt common input/answer contracts together with operation results and
+live/spent pending interfaces. There is also a module dependency boundary:
+these experimental modules transitively import `SourceScheduledCleanupInterfaces`.
+Importing them back into that file would create a cycle. The next integration
+must factor the required definitions or justify a generalized companion
+invariant, with concrete current/saved-source preservation and a connection to
+M4's existing guarantees. Another conditional beta wrapper would not meet that
+acceptance boundary.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately

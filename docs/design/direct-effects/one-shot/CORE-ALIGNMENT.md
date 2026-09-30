@@ -783,6 +783,34 @@ The [migration boundary](../../DN-0033-direct-effects-and-continuation-capabilit
 records the required current, pending and coherent interfaces. Higher-order
 functions remain in the intended comparison fragment.
 
+[CoreCallableContractAdmission.lean](CoreCallableContractAdmission.lean)
+extends the separate source judgment with a fixed exact operation registry,
+execution scope, scalar source requirements and actual declaration plans.
+Each lambda retains recursive private-body evidence and its scalar outward
+bound. Public declaration certification is checked explicitly; actual-plan
+certification follows from the source derivation. Closed substitution preserves
+these witnesses, and independent support bounds compose through substitution.
+Request inversion authenticates both input and result from the same global key.
+
+[CoreCallableContractAdmissionExamples.lean](CoreCallableContractAdmissionExamples.lean)
+constructs one bound helper used with two same-contract bodies containing the
+same exact request, one with an additional Unit bind. Actual bind/beta steps and
+private certification are proved for these derivations. Current code/resource
+certificates and checked accounting roots transport under supplied current
+checks. Wrong input, result and operation keys are rejected, as is a false empty
+support bound for an effectful closure retaining a cell. All 25 reports pass
+fresh independent compilation with only `propext` and `Quot.sound`.
+
+This is an indexed source checkpoint, not an enclosing handler's admission or
+an operation-response preservation theorem. Handler, resource, cleanup and
+owner constructors still need extension. The fixed owner field currently uses
+legacy contracts and is unused by these constructors; common callable
+input/answer contracts must reach both operation results and live/spent pending
+continuations. The experimental modules import existing M4 machinery, so direct
+import back into that machinery would form a cycle. The integration plan must
+resolve that dependency and connect the new current and saved-source evidence;
+conditional beta transport alone does not replace the M4 invariant.
+
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
 retain implementation evidence for this pressure. Independent Core validation
