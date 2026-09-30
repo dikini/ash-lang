@@ -452,13 +452,28 @@ remain separate targets. A small first example does not reduce the final scope.
   fresh independent compilation evidence; 795 unchanged verified source/report
   pairs are retained. Trust, import order, whitespace and artifact checks pass.
   Rust is unchanged since the 2,900-test product gate.
+- C4's next gate is now the contract-source value interface specified in
+  DN-0033, rather than further accounting prerequisites. Test a common callable
+  contract with private lambda-body evidence and independent retained support;
+  prove compositional closed substitution and whole-expression helper/branch/
+  returned-callable cases. Ordinary port typing or separately specialized
+  legacy derivations do not satisfy this gate. A shared M4 migration still
+  requires the current, pending and coherent value interfaces and their
+  preservation boundaries to be connected.
+- The ticket-history prerequisite is implemented and independently compiled:
+  actual-step analysis derives `capturedTickets = range nextOwner`, freshness
+  and history preservation through resume/discard. The repeated static
+  handler/owner fixture issues distinct tickets; missing-clause dispatch issues
+  none. Thirteen reports use standard axioms, and 26 dependency source hashes
+  match the integrated baseline. The leaf remains pending grouped integration;
+  its worker has moved to the central C4 prototype.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual root Source/Auth compiler independently verified | Initial Program certificates, metadata authentication, general compiler | Contextual code/accounting assembly; higher-order refinement gap | Actual-root Program batch 1–2 hours; full estimate unresolved |
 | C3 | 0 / 5 | Twenty-four-transition cleanup-registration prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Request/capture batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; checked-root refinement independently verified and reviewed | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result judgments, substitution and M4 preservation transport | Next bounded value-interface decision about 1 hour; full repair estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; contract-source prototype assigned | Resolve retained support and callable refinements without changing declared ports | Compositional substitution, common helper/result derivations and M4 preservation transport | Contract-source prototype 1–2 hours; full repair estimate unresolved |
 | C5 | 0 / 4 | Product gate and 808-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification

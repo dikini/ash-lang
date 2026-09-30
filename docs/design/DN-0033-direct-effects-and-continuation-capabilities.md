@@ -187,6 +187,55 @@ value and authentication judgments are unchanged. The next design decision
 must address those value judgments and substitution, rather than add further
 post-beta wrappers to this result.
 
+### Next value-interface experiment
+
+The next candidate assigns a callable a common checking contract while keeping
+its actual body derivation inside its lambda evidence. The contract's signature
+and rows describe what a caller checks; they need not equal the actual body's
+signature and rows. Application checks that common contract. Beta must recover
+the selected actual body, perform authenticated substitution, and transport the
+current certificates using the proved row/root refinement. Retained support is
+checked from lexical value evidence and dependencies, independently of the
+declared function port. This is a candidate proof judgment, not a new source
+annotation or runtime representation. Current elaboration already retains
+private control summaries separately from public function types
+([Elaboration](../../spec/elaboration.md)).
+
+The alternatives have different obligations. A family of whole legacy source
+derivations would still need a common substitution and continuation interface;
+quantifying separately over the existing rich types does not construct it.
+Normalization would instead need an operational correspondence preserving
+allocation, callback order and retained support. The next prototype tests the
+contract-based lambda rule directly, because row/root transport supplies its
+local beta obligation. Neither alternative is ruled out generally.
+
+Use a separate experimental contract-source judgment first. Its lambda rule
+must retain a structural actual-body derivation and a contract-to-body
+refinement. Variables, application, binding and branch results use the common
+contract, so closed substitution must be proved for that judgment itself.
+Independent support substitution must reuse the existing lexical bounds; it
+must not reinstate the port-resource capture guard or replace unknown support
+with an empty set. Ordinary type erasure must retain the declared ports.
+
+The acceptance gate is a whole-expression derivation for one helper bound once
+and called with both Unit and sequenced-Unit closures, followed by the
+cell-retaining instance, a branch returning either closure and a returned
+callable used by its caller. Require actual beta/bind/branch steps and current
+certificate, accounting and support transport for those same derivations.
+Reject the prototype if it supplies only ordinary port typing, separate
+per-call legacy types, or another after-beta wrapper. Outside-owner receipt of
+the retained closure must still fail its actual support check. No desired
+successor invariant or successful future execution is an input.
+
+This gate does not by itself replace M4's source invariant. Before changing
+shared judgments, map the constructed interface to `ExecutionSite.current`,
+`pending` and `coherent`, and the application, capture, resume and resource-exit
+preservation boundaries. Exact operation input/output contracts and saved
+continuations must then use the same value interface; an operation-input-only
+repair is insufficient. Retain the prototype only with that explicit migration
+boundary and its positive compositional substitution evidence. General
+higher-order admission remains open until the full invariant is connected.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately
