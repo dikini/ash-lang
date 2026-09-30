@@ -16,6 +16,44 @@ structural judgments and checked proofs for this note's first kernel. Its
 evidence status distinguishes completed lemmas from remaining obligations;
 the schematic predicates below are not proof assumptions.
 
+## Current Core alignment pressure
+
+[TASK-0032](../tasks/TASK-0032-core-one-shot-alignment.md) compares validated Core
+with the completed annotated M0–M4 endpoints. The
+[comparison record](direct-effects/one-shot/CORE-ALIGNMENT.md) owns its current
+coverage and discrepancies; historical experiment boundaries below do not
+supersede that task or reopen completed calculus milestones.
+
+The D4 higher-order case exposes two distinct annotation constraints. A pure
+callable can retain a live cell while keeping an empty declared request row;
+the current lambda guard instead bounds retention by port resources. Also,
+`SourcePlannedTyping.Operations` fixes one rich input/output pair at each exact
+operation key. A rich function value contains its body's latent footprint and
+structural signature, beyond its declared Core function type. Different closure
+bodies can therefore require different annotations at the same declared port.
+`OperationRows` fixes decorations for that same rich pair. Downward erasure does
+not construct a common authenticated refinement for those payloads.
+
+The [retained obstruction](direct-effects/one-shot/CoreHigherOrderSupport.lean)
+establishes the unchanged-port failure for the selected cell-retaining closure.
+It does not establish impossibility for all translations. A candidate interface
+repair must separate declared operation ports from authenticated payload
+refinements, including retained support, and transport them through clause
+parameters, substitution, receiving scopes and resource exit. Adding a retained
+list to a globally fixed input type alone is insufficient. An alternative
+normalization must prove that the removed captures and changed callable
+structure preserve evaluation, cell observations and cleanup order; purity alone
+does not justify removing calls.
+
+Any bounded prototype must first cover two differently structured pure closures
+at one operation key and a freshly acquired cell retained through that key. It
+must preserve the exact declared signature and reject a dependent payload sent
+outside its resource owner. Retain the prototype only if it supplies these
+checks without future-success assumptions and identifies how it reaches the
+existing M4 admission boundary. These are proof-interface experiments toward
+current Ash semantics, not a language change or a reduction of the task's
+higher-order scope.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately
