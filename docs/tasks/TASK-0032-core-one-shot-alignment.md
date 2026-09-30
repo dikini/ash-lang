@@ -253,13 +253,23 @@ remain separate targets. A small first example does not reduce the final scope.
   modules received fresh independent compilation; 780 unchanged source/report
   pairs were retained from the verified snapshot. Source hashes, import order,
   standard axioms, trust scan and artifact checks pass.
+- `CoreHigherOrderSupport` passed fresh independent compilation and statement
+  review. Its positive source request and negative authentication results expose
+  the exact D4 gap for a retained closure passed through an unchanged pure
+  operation input. The cell-request refinement changes that input port; merely
+  removing the capture guard would invalidate existing substitution and
+  resource-exit support arguments. C4.1 is reopened, changing C4 from 3/3 for the
+  previous repairs to 2/3 overall. This does not refute every translation or
+  change the supported fragment. The next comparison is independent retention
+  versus proved capture erasure. This new leaf is independently verified;
+  the next combined audit waits for the ordinary-stack edits to freeze.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Normalized admission, exported getter admission and finite builtin compatibility verified | Full graph admission, authenticated metadata and general static compiler | Static graph derivation and callable certificates next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Callable-map repair, executable certificate bridge, finite trace and strict components verified | Post-beta map-aware transitions, full configuration relation and simulation | Extend ordinary transport across the proved beta boundary next, about 1 active hour; full proof estimate unresolved |
-| C4 | 3 / 3 for identified repairs | D2 regressions and D8/D9 complete normalized admission verified | Maintain resolution as C2/C3 discover further obligations | No current demonstrated unresolved discrepancy |
+| C4 | 2 / 3 | D2 regressions and D8/D9 complete normalized admission verified; C4.1 reopened for D4 | Resolve higher-order retention while preserving exact operation signatures | Compare independent retention with justified capture erasure; next bounded decision about 1 active hour |
 | C5 | 0 / 4 | Product gate and 791-module combined audit passed | Integrated theorem and final scope audit | Depends on C2–C4 |
 
 ## Verification

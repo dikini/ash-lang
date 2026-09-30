@@ -42,9 +42,20 @@ closing-separation repair is verified, including its derivation from existing
 unwind ownership and uniqueness; resume-only outside demands remain permitted.
 The complete normalized fixture's `Program` now compiles, including the D9
 consuming-clause suffix extension. Direct admission of the exported getter
-closure and application is the next bounded step. Retain the actual helper,
-resource-handle and callback bindings when extending this construction to the
-whole graph; do not substitute normalized-source admission for graph admission.
+closure and application is independently verified. The generic graph derivation
+now constructs their source and authentication evidence; extend its ordinary
+constructors and then its handler, cleanup and resource cases. Retain the actual
+helper, resource-handle and callback bindings when extending this construction
+to the whole graph; do not substitute normalized-source admission for graph
+admission.
+
+D4's passed pure closure makes the higher-order boundary explicit: extending a
+callable's request allowance changes an unchanged operation input port. Compare
+independent retained support with a semantics-preserving capture erasure before
+changing the calculus interface. The first route must handle fixed operation
+signatures, substitution and recipient/resource-exit bounds; the second must
+preserve cell and cleanup observations. Neither permits excluding higher-order
+resource support from the agreed fragment.
 
 The independent `CoreMachine` now provides concrete configurations for the C3
 relation. Its focused examples and the opt-in snapshots taken by Rust's actual

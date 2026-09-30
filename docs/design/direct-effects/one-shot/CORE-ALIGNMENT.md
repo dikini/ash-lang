@@ -478,6 +478,22 @@ compatible support representation or capture erasure; neither follows from the
 successful Rust run. This remains higher-order support within C2.3, not an
 additional fragment exclusion or a demonstrated runtime disagreement.
 
+[CoreHigherOrderSupport.lean](CoreHigherOrderSupport.lean) proves the precise
+obstruction. Keeping the original pure function port forces its request allowance
+to remain empty. The unchanged retaining lambda then fails the current capture
+guard and `Auth.value_support`, although its source typing can be constructed.
+Adding the cell allowance changes the operation input port. These results rule
+out that annotation strategy for this case, not every possible translation.
+
+The [specified resource analysis](../../../../spec/static-semantics.md#scoped-cells-and-resource-dependencies)
+tracks stored dependencies separately from request obligations and checks the
+recipient of operation payloads. A separate retention interface must preserve
+that receiving-scope check, substitution and resource-exit bounds. A capture
+erasure alternative must preserve actual cell and cleanup observations. Neither
+obligation is discharged by merely relaxing the lambda guard or deleting pure
+calls. C4.1 is reopened for this identified admission repair; the D2, D8 and D9
+repairs remain verified.
+
 ### Runtime capacity boundary
 
 The [runtime failure representation](../../../../src/eval/failure.rs)
