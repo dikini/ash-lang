@@ -39237,14 +39237,15 @@ theorem ExecutionRoot.handler_run
       rw [expressionEq] at selected
       cases selected
 
-/-- Handler installation chooses a fresh identity and preserves the actual
-checked source, saved records, lifetime evidence and resource access. -/
-theorem ExecutableState.install_handler
+/-- Handler installation uses the supplied fresh occurrence and preserves the
+actual checked source, saved records, lifetime evidence and resource access. -/
+theorem ExecutableState.install_handler_at
     (state : ExecutableState operations policy contracts tables families required outward annotations world ambient history
       resumes disposals annotatedStore budget ports owners emptyRows output outputRows
-      ⟨⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩, actions⟩) :
+      ⟨⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩, actions⟩)
+    (activation : Nat) (fresh : activation ∉ history) :
     ∃ handler : HandlerData, ∃ nextTables nextFamilies nextRequired,
-      handler.activation ∉ history ∧ handler.scope = runtimeScope ∧ handler.effectInst = effect ∧ handler.clauses = arms ∧
+      handler.activation = activation ∧ handler.activation ∉ history ∧ handler.scope = runtimeScope ∧ handler.effectInst = effect ∧ handler.clauses = arms ∧
       (∀ old, old.activation ∈ stack.erase.activations →
         tables old = nextTables old ∧ families old = nextFamilies old ∧ required old = nextRequired old) ∧
       LexicalUnwind.Event
@@ -39253,7 +39254,6 @@ theorem ExecutableState.install_handler
       ExecutableState operations policy contracts nextTables nextFamilies nextRequired outward annotations world ambient
         (history ++ [handler.activation]) resumes disposals annotatedStore budget ports owners emptyRows output outputRows
         ⟨⟨.eval ⟨code, runtimeScope, .push (.handler handler) stack⟩, issued, completed⟩, actions⟩ := by
-  obtain ⟨activation, fresh⟩ := ScopedTyping.fresh_world_name history
   have source := state.source
   dsimp only at source
   generalize machineEq : LexicalUnwind.Machine.eval
@@ -39320,7 +39320,7 @@ theorem ExecutableState.install_handler
           · exact same ▸ identityEq.symm ▸ List.mem_append_right _ List.mem_cons_self
           · apply List.mem_append_left
             exact state.activations (by simpa only [LexicalUnwind.Machine.stack, ← stackEq] using prior)
-      refine ⟨handler, nextTables, nextFamilies, nextRequired, ?_, handlerScope.trans runtimeEq.symm,
+      refine ⟨handler, nextTables, nextFamilies, nextRequired, identityEq, ?_, handlerScope.trans runtimeEq.symm,
         handlerEffect, handlerArms, ?_, ?_, ?_⟩
       · simpa only [identityEq] using fresh
       · simpa only [LexicalUnwind.Machine.stack, ← stackEq] using registryAgree
@@ -39328,8 +39328,29 @@ theorem ExecutableState.install_handler
       · simpa only [identityEq, bodyEq, nextScopeEq, nextStackEq, ← runtimeEq, ← stackEq] using nextState
   | unwind => cases machineEq
 
+/-- The original endpoint retains its fresh-choice interface. -/
+theorem ExecutableState.install_handler
+    (state : ExecutableState operations policy contracts tables families required outward annotations world ambient history
+      resumes disposals annotatedStore budget ports owners emptyRows output outputRows
+      ⟨⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩, actions⟩) :
+    ∃ handler : HandlerData, ∃ nextTables nextFamilies nextRequired,
+      handler.activation ∉ history ∧ handler.scope = runtimeScope ∧ handler.effectInst = effect ∧ handler.clauses = arms ∧
+      (∀ old, old.activation ∈ stack.erase.activations →
+        tables old = nextTables old ∧ families old = nextFamilies old ∧ required old = nextRequired old) ∧
+      LexicalUnwind.Event
+        ⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩
+        ⟨.eval ⟨code, runtimeScope, .push (.handler handler) stack⟩, issued, completed⟩ ∧
+      ExecutableState operations policy contracts nextTables nextFamilies nextRequired outward annotations world ambient
+        (history ++ [handler.activation]) resumes disposals annotatedStore budget ports owners emptyRows output outputRows
+        ⟨⟨.eval ⟨code, runtimeScope, .push (.handler handler) stack⟩, issued, completed⟩, actions⟩ := by
+  obtain ⟨activation, fresh⟩ := ScopedTyping.fresh_world_name history
+  obtain ⟨handler, nextTables, nextFamilies, nextRequired, _identity, fresh, scope, effect, clauses, agree, event, next⟩ :=
+    state.install_handler_at activation fresh
+  exact ⟨handler, nextTables, nextFamilies, nextRequired, fresh, scope, effect, clauses, agree, event, next⟩
+
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.ExecutionRoot.handler_run
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.ExecutableState.install_handler_at
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.ExecutableState.install_handler
 
 

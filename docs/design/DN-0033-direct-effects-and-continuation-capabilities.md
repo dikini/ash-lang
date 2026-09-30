@@ -189,7 +189,7 @@ post-beta wrappers to this result.
 
 ### Next value-interface experiment
 
-The next candidate assigns a callable a common checking contract while keeping
+The candidate assigns a callable a common checking contract while keeping
 its actual body derivation inside its lambda evidence. The contract's signature
 and rows describe what a caller checks; they need not equal the actual body's
 signature and rows. Application checks that common contract. Beta must recover
@@ -245,6 +245,47 @@ Row refinement alone does not establish this obligation.
 Retain the prototype only with that explicit migration
 boundary and its positive compositional substitution evidence. General
 higher-order admission remains open until the full invariant is connected.
+
+The separate ordinary prototype now passes its bounded gate. Its recursive
+public contract supports compositional substitution while retaining private
+lambda witnesses; the examples include one bound helper with both unchanged
+bodies, independently checked retained support, common branch results and an
+actual returned-callable invocation. Current code/resource certificates and
+accounting checks follow those derivations. Ordinary actual-plan certification
+is constructed structurally. This evidence retains the candidate for the
+migration below; it does not establish effectful or general M4 admission.
+
+### M4 migration boundary
+
+Inspection of the current judgments identifies the following connected changes.
+These are obligations of the existing D4 repair, not additional language scope.
+The ordinary contract-source prototype does not yet discharge them.
+
+| Boundary | Evidence the migration must retain |
+| --- | --- |
+| Current expression | `SourceAdmission.Admitted` contains the legacy structural `Expression` and `Auth`, as well as its current `Code` certificate. The new source must supply type, effect, scalar requirement and authentication evidence for the same syntax; ordinary port erasure alone cannot replace these fields. |
+| Private callable body | `ExecutionSite.certified` certifies the actual declaration plan under the current outward allowance and resource world. Retain this certification with the actual body evidence, or prove its transport; a public row refinement supplies neither a declaration recipe nor certification of nested handlers. |
+| Focus and return | `ExecutionSite.focus` and `plug` transfer one authenticated source into and out of a saved plain frame. The frame and its returned value must share the public contract while preserving each lambda's private evidence. |
+| Operation and continuation boundaries | `OperationRows` fixes both operation argument and result rows. `ContractRows` and `PendingRows.live` fix a captured continuation's input and answer rows recursively; `spent` keeps its answer contract. All these boundaries must use the same value interface. |
+| Capture, resume and closing | Saved source, its certified declaration plans, lexical support and contextual checks must survive capture and restoration together. Resource receipt and exit must use actual retained support, independently of the declared function port. |
+| Initial admission | `Program.source`, `authenticated` and `certified` must construct the migrated current and pending invariant from static source evidence. No constructor may take a desired successor invariant or successful execution. |
+
+The relevant definitions are in
+[SourcePlannedSources](direct-effects/one-shot/SourcePlannedSources.lean),
+[SourcePlannedChecks](direct-effects/one-shot/SourcePlannedChecks.lean),
+[SourceScheduledCleanupInterfaces](direct-effects/one-shot/SourceScheduledCleanupInterfaces.lean)
+and [SourceScheduledInitialAdmission](direct-effects/one-shot/SourceScheduledInitialAdmission.lean).
+The scalar source requirements and the contextual accounting root are distinct
+fields: transporting the latter does not automatically construct the former.
+
+Extending the prototype to effects must first index its source derivation by
+exact operation contracts, continuation contracts and execution scope. The
+current ordinary judgment has none of these indices; choosing them separately
+at each effect constructor would not authenticate one program. Substitution
+must preserve the body evidence and these interfaces compositionally. An
+implementation may factor shared judgments or introduce an authenticated
+companion, but it must connect this full boundary before claiming general
+higher-order admission.
 
 ## Question
 

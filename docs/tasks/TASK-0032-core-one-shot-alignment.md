@@ -516,14 +516,45 @@ remain separate targets. A small first example does not reduce the final scope.
   and changed Markdown checks pass. Active shared handler-installation and
   callable-source changes are excluded. Rust is unchanged since the 2,900-test
   product gate.
+- The D4 migration map now identifies each current, frame, operation, captured
+  continuation and initial-admission consumer of the value interface. Source
+  scalar requirements remain distinct from the contextual accounting root;
+  transporting the latter cannot fill `Admitted.previous`. Effectful extension
+  must index source evidence by exact operation/continuation contracts and
+  execution scope. These are existing general-admission obligations, not new
+  language features or additional acceptance items.
+- The ordinary contract-source gate passes fresh independent compilation:
+  11 source-judgment reports and 23 example reports. Whole helper, retained
+  support, branch-result and returned-callable cases preserve one public
+  contract and private body evidence. The returned-callable trace now includes
+  its actual invocation; review rejected stopping at the caller's final bind.
+  Legacy `Auth` and M4 admission are not claimed. The next C4 batch adds an
+  authenticated source interface with scalar requirements and exact global
+  operation/owner/scope indices, tested across an operation boundary.
+- `CoreAdmittedHandlerPrefix` connects the same resource answer and source-
+  selected frame/handler data through 20 actual Core transitions and nine target
+  events, with every intermediate target admitted. Supplied occurrence0 is
+  proved fresh from the current empty history. The final world/history are
+  `[0]`, issued ledger is `[resource 0]`, and nothing is completed. The shared
+  installation proof is factored once with the old existential wrapper retained.
+  All 169 affected registered modules and the three new leaves pass fresh
+  independent compilation. A temporary worker model-capacity failure recovered
+  on retry without substituting the required model.
+- The combined installation/contract-source audit passes for 816 registered
+  modules, 11,179 exact dependency reports and 2,002 local links or anchors.
+  Fresh independent compilation covers 172 affected or new modules; 644
+  unchanged verified source/report pairs are retained. Import order, trust,
+  whitespace, artifact and changed Markdown checks pass. Active resume and
+  next-stage admission work is excluded from this snapshot. Rust remains
+  unchanged since the 2,900-test product gate.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Complete actual-root Program independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits contract-source result |
+| C2 | 0 / 4 | Actual-root Program and admitted handler prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits effectful source and M4 migration |
 | C3 | 0 / 5 | Twenty-eight-transition first-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | First-resume batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; contract-source prototype assigned | Resolve retained support and callable refinements without changing declared ports | Compositional substitution, common helper/result derivations and M4 preservation transport | Contract-source prototype 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Admitted resource-entry prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted handler-entry prefix 1–2 hours; total unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; ordinary contract-source gate independently verified | Migrate effectful callable evidence and retained support through M4 | Effectful authenticated source and M4 current/pending/coherent migration | Effectful source checkpoint 1–2 hours; full repair estimate unresolved |
+| C5 | 0 / 4 | Admitted handler-entry prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted cleanup-registration prefix 1–2 hours; total unresolved |
 
 ## Verification
 

@@ -152,6 +152,26 @@ theorem InstallationState.enter_resource
   obtain ⟨payload, answer, expressionEq, event, next⟩ := state.toExecutableState.enter_resource isValue fresh
   exact ⟨payload, answer, expressionEq, event, next, state.event_support event⟩
 
+theorem InstallationState.install_handler_at
+    (state : InstallationState operations policy contracts tables families required outward annotations world ambient history
+      resumes disposals annotatedStore budget ports owners emptyRows output outputRows
+      ⟨⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩, actions⟩)
+    (activation : Nat) (fresh : activation ∉ history) :
+    ∃ handler : HandlerData, ∃ nextTables nextFamilies nextRequired,
+      handler.activation = activation ∧ handler.activation ∉ history ∧ handler.scope = runtimeScope ∧ handler.effectInst = effect ∧ handler.clauses = arms ∧
+      (∀ old, old.activation ∈ stack.erase.activations →
+        tables old = nextTables old ∧ families old = nextFamilies old ∧ required old = nextRequired old) ∧
+      LexicalUnwind.Event
+        ⟨.eval ⟨.handle (Instantiation.freezeEffect effect) code arms, runtimeScope, stack⟩, issued, completed⟩
+        ⟨.eval ⟨code, runtimeScope, .push (.handler handler) stack⟩, issued, completed⟩ ∧
+      InstallationState operations policy contracts nextTables nextFamilies nextRequired outward annotations world ambient
+        (history ++ [handler.activation]) resumes disposals annotatedStore budget ports owners emptyRows output outputRows
+        ⟨⟨.eval ⟨code, runtimeScope, .push (.handler handler) stack⟩, issued, completed⟩, actions⟩ := by
+  obtain ⟨handler, nextTables, nextFamilies, nextRequired, identity, fresh, scope, effect, clauses, agree, event, next⟩ :=
+    state.toExecutableState.install_handler_at activation fresh
+  exact ⟨handler, nextTables, nextFamilies, nextRequired, identity, fresh, scope, effect, clauses, agree,
+    event, next, state.event_support event⟩
+
 theorem InstallationState.install_handler
     (state : InstallationState operations policy contracts tables families required outward annotations world ambient history
       resumes disposals annotatedStore budget ports owners emptyRows output outputRows
@@ -410,3 +430,5 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.source_installation_ready
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.InstallationState.transition_support
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.InstallationState.event_support
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.InstallationState.install_handler_at

@@ -732,6 +732,33 @@ compilation with standard axioms; all 437 dependency source hashes match the
 verified baseline. This changes no value-typing rule: common helper,
 branch-result, continuation and resource-exit admission remain open.
 
+[CoreCallableContractSource.lean](CoreCallableContractSource.lean) now supplies
+a separate recursive value judgment. A function has a public checking contract
+and retains its own private body derivation and row refinement. Closed
+substitution preserves that private evidence through variables, products,
+application, binding and branch results. Actual lexical support is bounded
+independently of the public function port. Beta recovers the selected body and
+transports its current code certificate, resource check and accounting root.
+
+[CoreCallableContractExamples.lean](CoreCallableContractExamples.lean) checks
+one helper bound once and called with two unchanged implementations under the
+same contract. The retaining instance computes the captured cell support and
+accepts receipt inside its owner while rejecting the actual outside receiver.
+Common-contract branches and returned callables retain their private bodies.
+A connected trace follows the producer, branch selection, caller binding and
+returned-function invocation; the sequenced implementation executes its extra
+Unit bind. Current checks follow the same source derivations, and ordinary
+actual-plan certification is derived structurally. All 34 reports across both
+modules pass fresh independent warnings-as-errors compilation.
+
+This completes the bounded ordinary prototype gate. It does not construct
+legacy `Auth`, `ExecutionSite` or general M4 admission. Effectful extension must
+retain exact global operation and owner contracts, execution scope, scalar
+source requirements and certification of private bodies containing handlers.
+The [migration boundary](../../DN-0033-direct-effects-and-continuation-capabilities.md#m4-migration-boundary)
+records the required current, pending and coherent interfaces. Higher-order
+functions remain in the intended comparison fragment.
+
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
 retain implementation evidence for this pressure. Independent Core validation
@@ -953,9 +980,9 @@ No execution, desired invariant or external source certificate is an input.
 `closed_initial_state` constructs the M4 invariant, and `initial_target`
 identifies its machine with the runtime relation's actual root target.
 `finite_prefix` applies existing M4 progress to this admitted source. It does
-not identify the resulting trace with the fixed Core execution: source-selected
-successor metadata must still be connected at resource entry, handler
-installation, cleanup registration and capture. All 23 dependency reports pass
+not identify the resulting trace with the fixed Core execution. The following
+prefix modules connect source-selected successor metadata incrementally;
+cleanup registration and capture still need this admitted-state connection. All 23 dependency reports pass
 fresh independent compilation with standard axioms; 475 dependency sources
 match the integrated baseline. General metadata authentication and higher-order
 admission remain open.
@@ -969,8 +996,24 @@ proof throughout the relation. No successor validity is an input. The endpoint
 has resource world `[0]`, empty handler history, issued ledger `[resource 0]`
 and nothing completed. Initial public translation is tied to the same exported
 root. All seven reports pass independent compilation with standard axioms.
-Handler installation, cleanup registration and capture still need the same
-admitted-state connection.
+The next module supplies the handler-installation connection; cleanup
+registration and capture still need the same admitted-state evidence.
+
+[CoreAdmittedHandlerPrefix.lean](CoreAdmittedHandlerPrefix.lean) extends that
+same admitted prefix to actual handler41/body29 after 20 Core transitions and
+nine target events. Both method bindings preserve the chosen resource answer.
+Focus obtains its actual `PlainData` from source preservation; installation
+retains the selected `HandlerData` and updated registries. The supplied-identity
+`install_handler_at` endpoint uses Core occurrence0, whose freshness follows
+from the empty handler history. The previous existential installation endpoint
+remains a wrapper around this proof.
+
+Every intermediate Core point has a related, constructed valid target snapshot.
+The final resource world and handler history are both `[0]`; the issued ledger
+is `[resource 0]` and nothing is completed. No future validity or successful
+execution is assumed. Fresh independent compilation passes for all 169 modules
+affected by the shared endpoint factor and for this new leaf. The proof stops
+before callback binding and cleanup registration.
 
 ### Initial-admission interface repair
 
