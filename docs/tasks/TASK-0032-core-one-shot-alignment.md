@@ -230,14 +230,21 @@ remain separate targets. A small first example does not reduce the final scope.
   table, and exact port erasure constructs existing builtin compatibility.
   The initial-example comparison is explicitly restricted to one finite domain.
   Functional operation enrichment and Rust registry authentication remain open.
+- `CoreExportedAdmission` passed fresh independent compilation and review.
+  Actual exported getter/application nodes retain their resource instantiation
+  and typed lexical bindings. Source/Auth, current structural admission and
+  independent accounting are constructed at the cell receiver. A general static
+  graph derivation and the full exported initial `Program` remain open.
+  Both new leaves are registered; the next combined audit follows the in-flight
+  shared value-relation repair rather than auditing a changing proof tree.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
-| C2 | 0 / 4 | Complete normalized kernel admission and exact declaration-port construction verified | Actual graph bridge, authenticated metadata and general static compiler | Exported administrative syntax and builtin compatibility next, about 1–2 active hours; generalization estimate unresolved |
+| C2 | 0 / 4 | Normalized admission, exported getter admission and finite builtin compatibility verified | Full graph admission, authenticated metadata and general static compiler | Static graph derivation and callable certificates next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Finite Rust trace, strict steps, mixed-stack value transport and shared potential verified | Reachable configuration relation, transitions and observations | Lexical owner scopes and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
 | C4 | 3 / 3 for identified repairs | D2 regressions and D8/D9 complete normalized admission verified | Maintain resolution as C2/C3 discover further obligations | No current demonstrated unresolved discrepancy |
-| C5 | 0 / 4 | Product and 780-module proof gates passed; eight new modules separately verified and audited | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
+| C5 | 0 / 4 | Product gate, 788-module audit and two subsequent leaf builds passed | Shared-repair grouped audit, integrated theorem and final scope audit | Depends on C2–C4 |
 
 ## Verification
 

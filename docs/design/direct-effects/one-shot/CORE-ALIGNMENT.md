@@ -576,6 +576,21 @@ translation with kernel reduction. The manifest is retained data, not a Lean
 authentication theorem, and the exported example does not prove a general
 translation or execution correspondence.
 
+[CoreExportedAdmission.lean](CoreExportedAdmission.lean) directly constructs
+source and row authentication for the actual exported getter closure at node 4
+and its application at node 44. Translation equations retain resource-name
+instantiation; typed lexical environments retain resource handle 4 and getter 11
+over an arbitrary existing environment. The getter's request allowance, latent
+read footprint and body rows are explicit. A reusable administrative row wrapper
+constructs the application's current structural `Code`/`CodeChecked` evidence at
+the actual cell receiver; independent accounting discharges the read there.
+
+Fresh independent compilation and statement review pass with standard axioms.
+This local construction assumes the issued cell and typed lexical environment;
+it does not construct the whole exported resource/binding chain or an initial
+`Program` for the graph. A static graph derivation that supplies these premises
+and generalizes the ordinary constructors is the next C2 obligation.
+
 ### Initial-admission interface repair
 
 [CoreInitialExample.lean](CoreInitialExample.lean) retains the complete intended
