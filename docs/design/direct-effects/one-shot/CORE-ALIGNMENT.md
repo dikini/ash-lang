@@ -497,6 +497,26 @@ reachable map/scope authentication, captured owners and cleanup remain open.
 Six new or affected modules pass fresh independent warnings-as-errors
 compilation and statement review, using only standard axioms.
 
+The separate [initial-prefix proof](CoreInitialPrefix.lean) now starts at
+`CoreMachine.initial graph`. Twelve linked actual Core transitions evaluate the
+wrapper, application, Unit match and initializer, then reach body47 with key0
+and counter1. Every intermediate configuration has the component relation.
+Silent links use the existing named strict-potential witnesses; the other links
+take five positive target steps. The exact target ledger creates `[resource 0]`
+and discharges nothing. This proves that fixed raw prefix, without assuming a
+reachable starting state. It does not construct M4 validity or authenticate the
+source annotations, and it does not execute the remaining handler body.
+
+[CoreAllocationHistory.lean](CoreAllocationHistory.lean) derives the historical
+resource-key invariant from actual Core transitions. Acquisition is the only
+successful step that increments the counter and appends an acquisition event;
+all prior acquired keys are smaller. The result applies to finite executions
+from `initial`, including the same twelve-step prefix and checked observation
+traces. It covers resource activations, not handler, ticket or cleanup owners.
+Its target-world freshness corollary still requires world correspondence; the
+Core history proof does not supply that premise. Both leaves pass fresh
+independent compilation and statement review with standard axioms only.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
@@ -593,6 +613,19 @@ admission. The generalization gate therefore identifies required changes at
 ordinary callable inputs/results, branch joins and continuation refinements as
 well as operation ports. A shared-interface repair remains undecided. The leaf
 passes fresh independent compilation with eleven standard-axiom reports.
+
+[CoreCallablePlanRefinement.lean](CoreCallablePlanRefinement.lean) supplies the
+next static prerequisite. An actual `PurePlan` body receives M4's
+`SourceAdmission.Code` certificate and `CodeChecked` evidence at any current
+context. Existing silent-plan accounting transports between its actual rows
+and the pure contract with exactly the same root requirements. This is an
+equivalence of accounting judgments, not unconditional continuation admission.
+Unit, sequenced-Unit and cell-retaining payloads instantiate that contract with
+unchanged bodies and ports; computed support still accepts the inner receiver
+and rejects the outer receiver. Independent compilation and review pass for all
+eight named reports. Old lambda/application/result judgments do not yet accept
+these private refinements, so whole-program admission and effectful callable
+contracts remain open.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)

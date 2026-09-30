@@ -355,14 +355,39 @@ remain separate targets. A small first example does not reduce the final scope.
   source/report pairs are retained. Only standard axioms occur, with no proof
   holes or new lint findings. Product code and tests are unchanged since the
   successful 2,900-test gate.
+- `CoreInitialPrefix` connects twelve actual transitions from the exported
+  `CoreMachine.initial` state to body47 with acquired key0. Every intermediate
+  state has the component relation; silent steps use named strict-potential
+  witnesses, and five positive target steps yield the exact ledger
+  `[resource 0]` created and nothing discharged. `CoreAllocationHistory` derives
+  historical resource freshness from actual initial executions and connects it
+  to that prefix and checked traces. These are raw execution and resource-key
+  results; M4 validity, annotation authentication and target-world correspondence
+  remain open.
+- `CoreCallablePlanRefinement` constructs actual-row M4 static certificates and
+  their installation-support checks from `PurePlan`. Existing accounting lemmas
+  preserve the exact context and root when relating each actual body to the
+  common pure contract. The retained-cell instance preserves computed support
+  and the inner-accept/outer-reject checks. This closes the bounded certificate
+  experiment, not the lambda/application/result interface repair. It does not
+  assume successful execution or grant arbitrary continuation admission.
+- All three leaves pass fresh independent warnings-as-errors compilation and
+  statement review. The selected-source integration audit passes for 802
+  registered modules, 10,999 exact dependency reports and 1,981 local links or
+  anchors. Three new modules have fresh independent compilation evidence; the
+  799 unchanged source/report pairs are retained. The audit uses the committed
+  graph compiler while its handler extension is still being implemented; that
+  unfinished extension is outside this increment's verification claim. Staged
+  proof sources match the audited manifest. Trust, import order, whitespace and
+  artifact checks pass, with no new Markdown lint findings.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Normalized admission, graph clause40 and guarded-body compiler components verified | Full graph admission, metadata authentication, general compiler | Handler/resource constructors; higher-order refinement gap | Handler41 batch 45–75 minutes; full estimate unresolved |
-| C3 | 0 / 5 | Mapped ordinary and handler/cell boundary components independently verified | Initial prefix, allocation history, reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Initial-prefix and history batches each 45–90 minutes in parallel; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; D4 helper/branch assessment confirms shared-interface gap | Resolve retained support and callable refinements without changing declared ports | Common static callable/result contracts and M4 preservation transport | Interface design 1–2 hours; implementation estimate unresolved |
-| C5 | 0 / 4 | Product gate and 799-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C2 | 0 / 4 | Normalized admission, graph clause40 and guarded-body compiler components verified | Full graph admission, metadata authentication, general compiler | Handler/resource constructors; higher-order refinement gap | Handler41 batch 30–50 minutes; full estimate unresolved |
+| C3 | 0 / 5 | Actual initial prefix and resource history integrated with mapped boundary components | Reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Next handler-entry prefix 45–75 minutes; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; pure callable-plan static certificates verified | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result and M4 preservation transport | Remaining interface design about 1 hour; implementation estimate unresolved |
+| C5 | 0 / 4 | Product gate and 802-module selected-source audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

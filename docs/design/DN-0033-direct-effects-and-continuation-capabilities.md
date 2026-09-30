@@ -103,6 +103,30 @@ only with a proof preserving internal allocation and cleanup as well as returned
 values. No shared rewrite or normalization is selected by the negative examples
 alone.
 
+The next bounded experiment tests a common callable plan contract while retaining
+each actual body plan privately. For the existing `PurePlan` witnesses, it must
+construct `SourceAdmission.Code` and its `CodeChecked` evidence at an arbitrary
+current context, and transport `Accounting.Run` from the pure contract to the
+actual rows with the same root requirements. These are the static certificates
+used by M4, rather than a claim that the body will execute successfully. The
+Unit, sequenced-Unit and cell-retaining payloads must instantiate the same
+contract without changing their code or declared ports; support remains checked
+separately. Retain this experiment only if it constructs those certificates from
+the existing structural witness. It must expose the remaining lambda, application
+and result-interface changes instead of presenting a contract witness as complete
+M4 admission. Effectful bodies, higher-order outputs and resource-exit transport
+remain obligations of the full repair, even if this bounded comparison passes.
+
+The [bounded certificate result](direct-effects/one-shot/CoreCallablePlanRefinement.lean)
+passes independent compilation and review. It constructs the existing actual-row
+certificates and preserves the exact accounting root for arbitrary current
+contexts. All three payloads instantiate the contract; independent retained
+support still rejects the outside receiver. Retain this result as a static
+prerequisite. It supplies no lambda/application/result coercion and does not
+establish that an arbitrary continuation is admitted. The next interface work
+must transport the private body refinement through those judgments and their
+preservation boundaries, including retained support at resource exit.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately
