@@ -895,6 +895,21 @@ tail, nested callback/unwind coverage, general readiness and creation freshness
 remain open. This batch establishes reuse for covered evaluation transitions;
 it does not close general simulation or admission.
 
+[CoreProjectedCellDispatch](CoreProjectedCellDispatch.lean) connects builtin
+cell reads and writes through a retained cleanup projection. Current scope
+selection, realization of that scope by the same target stack, and its ownership
+ledger determine the actual physical cell cut. Uniqueness prevents a saved cell
+from intercepting the selected operation. The dispatch theorems construct actual
+Core execution, a positive target transition, both related endpoints and the
+exact read or write observation. Accounting uses that same transition witness.
+No additional transparency checker or future-state premise is required.
+
+The new leaf passes independent pinned compilation with nine standard-only
+reports. The grouped result contains 852 registered modules and 11,496 exact
+reports, including 851 unchanged verified pairs. User-handler capture into the
+retained tail, nested running completions, general admission and creation
+freshness remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

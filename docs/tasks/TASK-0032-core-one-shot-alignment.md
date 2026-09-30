@@ -1064,12 +1064,94 @@ remain separate targets. A small first example does not reduce the final scope.
   until the connected C4 admission batch. This establishes nonvacuity of the
   corrected interface, not general higher-order admission.
 
+- Parent review and independent pinned compilation now verify the complete
+  minimal private-handler refinement. All 441 source/artifact inputs remained
+  unchanged; six reports use only standard axioms. The code and checked fields
+  restore the supplied current caller after immediate resume. Accounting retains
+  its arbitrary current requirement tree beneath two empty prefixes and removes
+  the fresh local owner's obligations using the existing rules. No additional
+  interface premise is introduced. The leaf remains unregistered until the
+  connected C4 batch.
+- Changed-plan substitution exposed a uniformity obligation in C4.1:
+  `SourceOffer.available` stores one plan per owner and authenticates it for
+  every compatible continuation contract. A separate existential successor plan
+  for each contract does not supply that shared plan. Logical choice cannot
+  exchange these quantifiers. The bounded scope review compares existing
+  signature-preserving rewriting with deterministic substitution guided by the
+  source code. Any transform must retain public application contracts, honor
+  binding shadowing and update actual nested declaration witnesses. Changing
+  owner-contract indices or existing M4 interfaces is not authorized by this
+  finding. The prior 60–90 minute substitution estimate is uncertain until this
+  uniform construction is settled.
+
+- Scope review approved a deterministic, source-guided annotation substitution
+  for that uniformity obligation. Existing `ClauseMap.plan` would also rewrite
+  an application's public contract plan, while `substituteClauses` alone leaves
+  nested offered bodies unchanged. The local transform therefore preserves the
+  public suffix, follows source binders and maps available mode families
+  pointwise over owners. A separate worker owns its one new leaf and signature
+  laws; the admission worker owns structural source and hereditary preservation.
+  No owner-contract index or shared M4 interface changes are planned. Transform
+  work is bounded at 60–90 active minutes; source/support preservation is
+  estimated at 60–90 minutes after declarations are available, with overlap;
+  saved-frame/site/capture connection is another estimated 60–90 minutes. These
+  estimates exclude unresolved restored-world transport and do not claim a
+  general admission completion date.
+- C3 dispatch review identified a narrower prerequisite before another component
+  batch: projected cleanup physically removes handlers and flattens saved live
+  captures, so the correspondence must derive current selector agreement.
+  Current resource ownership and target support may establish the builtin-cell
+  case without a new checker certificate; a bounded read-only review checks
+  this route first. User-handler capture and nested running cleanup also exceed
+  the existing ordinary captured-stack carrier. Conditional dispatch code and
+  carrier redesign are held until their current evidence is identified.
+
+- The C3 builtin review found that the existing current ownership invariant
+  resolves saved-cell interception. The source-selected target `CellUpdate`
+  reaches an outside cell; whole-stack uniqueness excludes that resource owner
+  from a dormant saved capture. The same retained cursor authenticates every
+  flattened physical cell. Crossed lexical handlers miss the request by that
+  target selection, so no user-only handler restriction or new transparency
+  checker is needed. A connected 1–2 active hour read/write batch is authorized:
+  derive the target cut from current scope realization and builtin selection,
+  then derive physical selection, actual Core execution and both related
+  endpoints with the same accounting witness. Existing M4 selection induction
+  and ledger uniqueness are reused. A supplied successor relation or cut-only
+  helper does not satisfy this batch. User-effect capture and nested running
+  cleanup remain outside this increment, within the existing C3 obligations.
+
+- The deterministic annotation transform now passes independent pinned
+  compilation. Its three signature laws use only `propext` and `Quot.sound`;
+  all 252 imported source/artifact pairs stayed unchanged. Parent statement
+  review confirms that application public plans, binder shadowing and uniform
+  owner-indexed mode plans are retained as intended. The transformation finished
+  within its bound and remains unregistered pending connected source/support
+  preservation. The admission worker now uses the exact deterministic output.
+- Review clarified the later saved-support obligation: existing M4 resume
+  preservation keeps the same current world across the resume step. The saved
+  evidence may predate resources acquired by the clause, so its old receiver
+  bounds must be reconstructed for the restored continuation. Existing world
+  extension is reusable; a theorem for shrinking the historical world is not
+  required by the motivating fixture. This does not yet prove that larger
+  saved-input bounds can be authenticated by the common-contract companion.
+
+- Projected builtin dispatch now derives the physical read/write cut from
+  current scope realization, selection and the same stack ledger. Existing
+  uniqueness excludes interception by saved cells. Both theorems construct
+  actual Core execution, a positive target transition, both related endpoints
+  and exact observations; accounting uses the same witness. Independent pinned
+  compilation passes with nine standard-only reports. The grouped result is
+  852 registered modules and 11,496 exact reports, with one fresh and 851
+  unchanged verified pairs. This closes the bounded builtin batch within its
+  estimate. User-handler capture, nested running completions and the general
+  simulation obligations remain open; C3 stays at 0/5.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Resource/cleanup projection, strict focus and callback suffix/beta components integrated | General callback lifting, exact dispatch, state/ownership correspondence | Static readiness and annotation authentication | Suffix/beta batch complete; next estimate awaits readiness/dispatch boundary review |
-| C4 | 2 / 3 | Common owner-source checkpoint integrated; formation, current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Substitution/support checkpoint 60–90 active minutes; remainder awaits connected gate |
+| C3 | 0 / 5 | Projected builtin read/write, resource/cleanup projection and callback suffix/beta components integrated | User capture, nested running cleanup, general state/ownership correspondence | Static readiness and annotation authentication | Builtin batch complete within its 1–2 hour bound; user capture/nested running remain unestimated |
+| C4 | 2 / 3 | Common owner-source checkpoint integrated; formation, current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Transform independently checked; source/support 60–90 min; frame/site/capture 60–90 min; saved-support restoration unestimated |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

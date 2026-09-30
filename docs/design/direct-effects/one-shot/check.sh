@@ -855,3 +855,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedDiscardPrefix.olean"
 lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCompletionPrefix.olean" CoreAdmittedCompletionPrefix.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreSuffixSplice.olean" CoreSuffixSplice.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreRunningSplice.olean" CoreRunningSplice.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreProjectedCellDispatch.olean" CoreProjectedCellDispatch.lean
