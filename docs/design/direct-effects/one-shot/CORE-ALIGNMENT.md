@@ -143,8 +143,8 @@ least-handler-output traversal already retain the operand's direct requirements.
 | D5 | Representation/proof gap | Core environments, tuple heap and frame vectors differ from substituted calculus values/stacks. | Define the relation and prove every applicable step. |
 | D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
 | D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
-| D8 | Admission-interface gap | A sourced store and a row-checking context could disagree about a nested owner's protection. The earlier interface refuted the chosen post-resume suffix certificate. | The conditional `Interface.closingSeparate` field now excludes that mismatch; actual capture constructors derive it from ownership and uniqueness. Full kernel initial admission remains open. This is not a coherent Rust runtime counterexample. |
-| D9 | Declaration-recipe gap | The earlier `ClauseRecipe` grammar could not describe the normalized clause's resume followed by a cell write. | The structural suffix extension now constructs the exact declaration certificate from request footprints and receiving-tail checks. Complete kernel initial admission remains open. Historical rejection evidence is retained in commit `f44ff78`; the fixture is unchanged. |
+| D8 | Admission-interface gap, repaired | A sourced store and a row-checking context could disagree about a nested owner's protection. The earlier interface refuted the chosen post-resume suffix certificate. | The conditional `Interface.closingSeparate` field excludes that mismatch; actual capture constructors derive it from ownership and uniqueness. Complete normalized kernel admission now validates the repair in context. This is not a coherent Rust runtime counterexample. |
+| D9 | Declaration-recipe gap, repaired | The earlier `ClauseRecipe` grammar could not describe the normalized clause's resume followed by a cell write. | The structural suffix extension constructs the exact declaration certificate from request footprints and receiving-tail checks. Complete normalized kernel admission passes. Historical rejection evidence is retained in commit `f44ff78`; the fixture is unchanged. |
 
 ## C1.5 finite case inventory
 
@@ -392,6 +392,16 @@ a witness. Bind/match traversal, arbitrary mixed-prefix transport and complete
 ordinary simulation remain open. Fresh independent compilation and statement
 review of both modules pass with standard axioms only.
 
+[CoreAdministrativeTransport.lean](CoreAdministrativeTransport.lean) transports
+value entry and tuple allocation through arbitrary existing mixed ordinary
+stacks. It reuses the current lexical interpretation and preserves one identical
+target configuration. Allocation extends the heap and removes exactly its ready
+inner tuple frame; further ready pair frames and saved lexical continuations
+remain related. The same family guard and strict potential rule out an unchanged
+source state. A nested tuple example checks both allocations over a saved caller
+binding. Traversal of arbitrary mixed prefixes and effect frames remain open.
+Fresh independent compilation and statement review pass with standard axioms.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
@@ -504,6 +514,17 @@ actual captures, typing Core expressions and constructing source admission remai
 open. Both modules passed fresh independent compilation and review with standard
 axioms only.
 
+[CoreOperationSignatures.lean](CoreOperationSignatures.lean) builds declaration
+ports from supplied Core metadata using the existing lexical realization
+relations. Accepted lookup is equivalent to a realized source declaration;
+every accepted entry remains represented. Keys retain the entire effect argument
+tree. Aliased keys must have equal ports, and conflicting aliases are rejected.
+Callable retention annotations do not affect the resulting declared port, while
+reference identities and nested function request rows remain exact. Independent
+compilation and review pass. Authenticating these inputs against the Rust
+registry, builtin cell compatibility and enriched admission operations remain
+open; a supplied declaration table is not validated Core evidence.
+
 ### Actual Core export
 
 The [test-only exporter](../../../../src/core/alignment_export_tests.rs)
@@ -529,7 +550,8 @@ normalized fixture and constructs source/authentication components for its cell
 operations, user requests and cleanup around the complete protected body. Its
 `clauseRows` and `clauseProtectedRows` now certify the full Boolean choice between
 resume followed by a cell write and discard, over any cell identity. It does not
-construct a complete `Program`.
+itself construct a complete `Program`; `CoreKernelProgram` below completes that
+construction.
 
 The original failed certificate allowed a source store with owner 9 unprotected
 and an independently supplied receiving tail with owner 9 protected. Resuming
@@ -580,10 +602,9 @@ resumed prefix with the write still pending; `suffixMissingReceiver` rejects a
 missing receiver. The previous rejection proofs are retained in commit `f44ff78`.
 
 Fresh independent compilation of the kernel fixture and affected M4 endpoints
-passed across 450 dependency modules with standard axioms only. Full `Program`
-construction, the actual graph-translation bridge and general admission remain
-open. This is an experimental evidence extension under DN-0033, not a change to
-specified Ash behavior.
+passed across 450 dependency modules with standard axioms only. This is an
+experimental evidence extension under DN-0033, not a change to specified Ash
+behavior.
 
 [SourcePlainSuffixTransport.lean](SourcePlainSuffixTransport.lean) supplies the
 standalone transport needed by D9. `plain_suffix_admission` constructs checking
@@ -594,4 +615,19 @@ resume restoration and discard waiting contexts while retaining the actual plain
 frame. The inserted suffix executes during ordinary return and is skipped during
 unwind. No constructor takes successful future execution or a future `Pending`
 proof. Fresh independent compilation and review pass with standard axioms only.
-Declaration-recipe integration is verified; full initial admission remains open.
+Declaration-recipe integration is verified.
+
+[CoreKernelProgram.lean](CoreKernelProgram.lean) constructs every field of
+`Program` for the complete normalized fixture: source and row authentication,
+declaration evidence, structural code and receiving-tail checks, independent
+root accounting and checked empty root demand. Both requests, cleanup write 7,
+resume followed by write 11, discard, pending write 99 and the final read remain
+in the source. No external certificate or successful future execution is a
+premise. Its initial-state and finite-prefix theorems apply the existing M4
+endpoint. Fresh independent warnings-as-errors compilation and statement review
+pass, with standard axioms only.
+
+This completes the normalized admission checkpoint for D8/D9. It does not connect
+the exported 55-node graph to that normalized source: helper closures, handle and
+callback bindings, and the entry wrapper still require authenticated static
+transport or direct admission. General Core admission and simulation remain open.

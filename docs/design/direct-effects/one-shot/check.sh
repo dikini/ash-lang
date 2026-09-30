@@ -788,3 +788,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreTranslationFuel.olean" CoreT
 lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictStack.olean" CoreStrictStack.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictPotential.olean" CoreStrictPotential.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreTypeSupport.olean" CoreTypeSupport.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreKernelProgram.olean" CoreKernelProgram.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreAdministrativeTransport.olean" CoreAdministrativeTransport.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreOperationSignatures.olean" CoreOperationSignatures.lean

@@ -201,14 +201,30 @@ remain separate targets. A small first example does not reduce the final scope.
   component and one graph-derived potential cover the proved value-ready
   application/tuple traversal cases. General admission, annotation authentication,
   reachable-state phase discipline and complete simulation remain open.
+- `CoreKernelProgram` now constructs the complete normalized fixture's `Program`,
+  including structural receiving-tail checks, root accounting and initial
+  admission. The existing M4 finite-prefix endpoint applies. Fresh independent
+  compilation and statement review pass without supplied certificates or future
+  execution premises. This validates D8/D9 in context and closes C4.1 for the
+  identified repairs: C4 returns from 2/3 to 3/3. New findings may reopen it.
+  The actual exported graph bridge and general C2 admission remain open.
+- `CoreAdministrativeTransport` extends value entry and tuple allocation to
+  existing mixed ordinary stacks while preserving one exact target and the
+  strict potential. `CoreOperationSignatures` constructs exact declaration-port
+  lookup, rejects conflicting aliases and proves retention independence. Both
+  passed fresh independent compilation and statement review. Runtime owner-scope
+  coverage and authentication of declaration inputs remain separate obligations.
+- The additive registered audit passed for 787 unchanged-or-freshly-compiled
+  sources, 10,807 exact dependency reports and 1,952 local links/anchors. It
+  preserved the previous 784 module hashes; only standard Lean axioms occur.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
-| C2 | 0 / 4 | Syntax/export, fuel, type support and interface repairs verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Finite Rust trace, strict steps, stack components and shared potential verified | Reachable configuration relation, transitions and observations | Mixed-stack and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
-| C4 | 2 / 3 locally complete | D2 verified; D8/D9 evidence repairs and M4 endpoints verified | Complete kernel admission to close discrepancy resolution | C2; kernel Program batch about 1–2 active hours |
-| C5 | 0 / 4 | Product and 780-module proof gates passed; four new modules separately verified | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
+| C2 | 0 / 4 | Complete normalized kernel admission and exact declaration-port construction verified | Actual graph bridge, authenticated metadata and general static compiler | Exported administrative syntax and builtin compatibility next, about 1–2 active hours; generalization estimate unresolved |
+| C3 | 0 / 5 | Finite Rust trace, strict steps, mixed-stack value transport and shared potential verified | Reachable configuration relation, transitions and observations | Lexical owner scopes and remaining ordinary cases next, about 1–2 active hours; full proof estimate unresolved |
+| C4 | 3 / 3 for identified repairs | D2 regressions and D8/D9 complete normalized admission verified | Maintain resolution as C2/C3 discover further obligations | No current demonstrated unresolved discrepancy |
+| C5 | 0 / 4 | Product and 780-module proof gates passed; seven new modules separately verified | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification
 
