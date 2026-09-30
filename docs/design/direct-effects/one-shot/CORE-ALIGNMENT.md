@@ -305,6 +305,22 @@ unchanged parameters; these theorems do not yet relate whole configurations or
 construct the required static premises from Core validation. No discard rule is
 used.
 
+### Ranked administrative values
+
+[CoreAdministrativeSteps.lean](CoreAdministrativeSteps.lean) proves the
+administrative value cases: literal, lexical variable and lambda entry, plus
+completed binary tuple allocation. Cell handles use ordinary variable lookup.
+Each witness retains the current translated/closed value interpretation, the
+actual Core successor, the successor value relation and a strictly decreasing
+rank. Value entry removes an evaluation bonus; tuple allocation removes a frame
+and preserves existing heap relations. Unsupported nodes and rejected lookups
+cannot provide a witness.
+
+Fresh independent compilation and statement review pass with standard axioms
+only. The rank justifies these specific zero-step target matches; it does not
+permit arbitrary Core steps to match by stuttering. Whole-frame and configuration
+relations and construction of the current static premises remain open.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard

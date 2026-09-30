@@ -152,6 +152,11 @@ remain separate targets. A small first example does not reduce the final scope.
   steps and related lexical results. Both stack tails remain explicit and
   unchanged; their relation is still a separate obligation. The modules use
   standard axioms only and are registered in `check.sh`.
+- `CoreAdministrativeSteps` passed fresh independent compilation and review.
+  Its literal/variable/lambda entry and tuple-allocation witnesses retain current
+  interpretation, actual successor, related result and decreasing rank. The
+  allowed-family check and malformed-state negatives prevent unrestricted
+  zero-step matching. Whole-frame/configuration correspondence remains open.
 - Full normalized resource source/authentication construction reached a second
   declaration boundary, D9: the current consuming-recipe grammar has no suffix
   after resume. Fresh independent compilation verifies full normalized source/
