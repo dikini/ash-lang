@@ -264,6 +264,29 @@ Core fragment. Snapshot-to-model conversion and step correspondence remain
 unproved. The capacity test concerns a failed acquisition; it does not establish
 discard atomicity or observation accounting inside every failing step.
 
+### Value and environment correspondence
+
+[CoreValueRelation.lean](CoreValueRelation.lean) relates independent Core values,
+lexical environments and tuple heap locations to scoped calculus code. It reuses
+the graph translator, substitution and resource instantiation. Finite derivations
+expand a used function template over its captured environment tail; removing
+its self binding requires explicit nonrecursion evidence. Inserted values are
+closed, so outer substitutions cannot change their lexical meaning.
+
+Theorems preserve the relation under heap extension and establish actual Core
+variable/resource lookup, closure shape and parameter shadowing. Examples check
+the captured value 17 against a caller binding of 99, the exported-style `main`
+template, resource shadowing and tuple allocation. Fresh independent compilation
+passed with standard axioms only.
+
+Closure constructors retain a finite `ClosedValue` witness; this file does not
+derive that witness or template nonrecursion from validated Core. Static
+authentication, construction of the relation for reachable heaps, relation of
+continuation scopes and full configuration/transition simulation remain open.
+The relation takes no future-execution premise. Resource activations currently
+use matching numeric identities; simulation must choose the same fresh identity
+in the existing calculus allocation request and prove its freshness.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard

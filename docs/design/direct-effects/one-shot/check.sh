@@ -776,3 +776,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreInitialExample.olean" CoreIn
 lean -DwarningAsError=true -o "$proof_build_dir/CoreClauseCoherence.olean" CoreClauseCoherence.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreMachine.olean" CoreMachine.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreMachineExamples.olean" CoreMachineExamples.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreValueRelation.olean" CoreValueRelation.lean

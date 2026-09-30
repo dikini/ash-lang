@@ -140,6 +140,12 @@ remain separate targets. A small first example does not reduce the final scope.
   passed with standard axioms only. A full normalized `Program`, translation
   bridge and general admission compiler remain open; C4.1 stays open until the
   complete kernel admission construction validates this repair in context.
+- `CoreValueRelation` passed fresh independent compilation and review. It relates
+  scalars, handles, tuple locations and lexical closures using the existing
+  translator; proves heap extension and actual variable/resource lookup; and
+  checks template expansion and shadowing. It retains finite closure closedness
+  and nonrecursion evidence that static Core admission must still construct.
+  Full configuration and transition correspondence remain open.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
