@@ -1,9 +1,11 @@
 import CoreExportedAdmission
 import CoreGraphCapabilities
 
-/-! A distinct static graph derivation for the administrative fragment. Checked
-Core node equations, declared annotations and lexical bindings are inputs;
-translated source typing and row authentication are constructed outputs. -/
+/-! A static graph derivation for the supported ordinary, ticket, cleanup and
+handler constructors. Core node equations, declared annotations and lexical
+checks are inputs; translated source typing, row authentication and clause
+usage are constructed outputs. Deriving these annotations from Core validation
+and admitting resource entry remain separate obligations. -/
 namespace Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission
 open ScopedExpressions ScopedExecution ProtectionContracts
 open SourcePlannedTyping (Value Environment Operations Contracts Contract)
@@ -45,6 +47,7 @@ structure Metadata (resources : Instantiation.Environment) (node : Node) (value 
 variable {contracts : Contracts} {owners : ContractRows contracts}
   {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
 
+mutual
 inductive Checked (graph : Graph)
     (operations : Operations) (policy : Syntax.TicketPolicy) (ports : OperationRows operations) :
     (resources : Instantiation.Environment) → (contracts : Contracts) → ContractRows contracts →
@@ -247,13 +250,193 @@ inductive Checked (graph : Graph)
         (by simpa only [signature] using Rows.sequence callbackRows (Rows.cleanup latent callbackBodyRows bodyRows))
         (callbackEffects ++ bodyEffects ++ allowanceEffects requests)
 
+  | handler {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
+      (known : graph.node index = some node) (kind : node.kind = .handler handler rawEffect bodyIndex coreClauses)
+      (instantiated : rawEffect.instantiate resources = Instantiation.freezeEffect effect)
+      (shapes : CoreSyntax.checkClauseShapes index coreClauses = .ok ())
+      (body : Checked graph operations policy ports resources contracts owners world ownerMap (effect :: residual) scope environment environmentRows
+        fuel bodyIndex code answer demand requirements bodyPlan answerRows bodyRows bodyEffects)
+      (declarations : CheckedDeclarations graph operations policy ports resources contracts owners world ownerMap residual environment environmentRows
+        fuel handler effect answer answerRows coreClauses arms table plans declarationRows)
+      (coverage : ScopedPorts.Covers operations.erase.erase.ports effect arms)
+      (unique : (ScopedTyping.clauseKeys arms).Nodup)
+      (admitted : residual ⊆ allowed)
+      (effectsAdmitted : handlerEffects ⊆ allowanceEffects residual)
+      (metadata : Metadata resources node answer handlerEffects) :
+      Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        (fuel + 1) index (.handle (Instantiation.freezeEffect effect) code arms) answer demand
+        (requirements.prepend [.ordinary (.handler effect 0 table)])
+        (Plan.handler (effect := effect) (table := table) required plans bodyPlan) answerRows
+        (by simpa only [signature] using Rows.handler (required := required) declarationRows bodyRows) handlerEffects
+
+inductive CheckedOffer (graph : Graph) (operations : Operations) (policy : Syntax.TicketPolicy) (ports : OperationRows operations) :
+    (resources : Instantiation.Environment) → (contracts : Contracts) → ContractRows contracts →
+    (world : List Nat) → CoreTranslation.OwnerMap → (allowed : List Instance) →
+    (environment : Environment) → EnvironmentRows environment →
+    Nat → Nat → Nat → Nat → Nat → Nat →
+    (argument : Value) → ValueRows argument → (input : Value) → ValueRows input →
+    (answer : Value) → ValueRows answer → List Instance → List Instance → Code → Bool → Bool → Option Footprint →
+    {family : Option (Nat → SourceDependencyAnnotations.Dependencies)} →
+    (plans : SourceDeclarationPlans.ModePlans family) → ModeRows (SourcePlanSignatures.modeSignatures plans) → Prop where
+  | unavailable {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap} :
+      CheckedOffer graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows
+        resumeEffects closeEffects code held disposes none .unavailable .unavailable
+  | available {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
+      {family : Nat → SourceDependencyAnnotations.Dependencies}
+      {plans : ∀ owner, Plan (family owner)}
+      {bodyRows : ∀ owner, Rows (signature (plans owner))}
+      {bodyDemand : Nat → Contract → List Nat}
+      {bodyReq : ∀ owner contract, contract.closeDemand.Perm contract.resumeDemand → Requirements (bodyDemand owner contract)}
+      (resumeInterface : code.requiredActions.resume = true → resumeEffects = allowed)
+      (closeInterface : code.requiredActions.dispose = true → closeEffects = allowed)
+      (body : ∀ owner (contract : Contract) (_fresh : contracts owner = none)
+          (inputSame : contract.input = input) (answerSame : contract.answer = answer)
+          (_resumeSame : contract.resumeEffects = resumeEffects) (_closeSame : contract.closeEffects = closeEffects)
+          (_heldSame : contract.held = held) (balance : contract.closeDemand.Perm contract.resumeDemand),
+        Checked graph operations policy ports resources (contracts.insert owner contract)
+          (owners.insert owner (inputSame.symm ▸ inputRows) (answerSame.symm ▸ answerRows)) world
+          (⟨handler, coreOwner, binder⟩ :: ownerMap) allowed (.ticket binder owner)
+          (environment.extend parameter argument) (environmentRows.extend parameter argumentRows)
+          fuel bodyIndex code answer (bodyDemand owner contract) (bodyReq owner contract balance)
+          (plans owner) answerRows (bodyRows owner) bodyEffects)
+      (rows : ∀ owner (contract : Contract), contracts owner = none →
+          contract.input = input → contract.answer = answer → contract.resumeEffects = resumeEffects →
+          contract.closeEffects = closeEffects → contract.held = held →
+          ∀ balance : contract.closeDemand.Perm contract.resumeDemand,
+        ClauseRowAdmission.Rows ⟨owner, contract.erase.erase, disposes, row⟩ (bodyReq owner contract balance)
+          (ClauseRowAdmission.SourceStore operations.erase.erase owner contract.erase.erase))
+      (closingRows : ∀ owner (contract : Contract), contracts owner = none →
+          contract.input = input → contract.answer = answer → contract.resumeEffects = resumeEffects →
+          contract.closeEffects = closeEffects → contract.held = held →
+          ∀ balance : contract.closeDemand.Perm contract.resumeDemand,
+        ClauseRowAdmission.ProtectedRows ⟨owner, contract.erase.erase, disposes, row⟩ (bodyReq owner contract balance)
+          (ClauseRowAdmission.SourceStore operations.erase.erase owner contract.erase.erase)) :
+      CheckedOffer graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows
+        resumeEffects closeEffects code held disposes (some row) (.available plans)
+        (by simpa only [SourcePlanSignatures.modeSignatures] using ModeRows.available bodyRows)
+
+inductive CheckedDeclarations (graph : Graph) (operations : Operations) (policy : Syntax.TicketPolicy) (ports : OperationRows operations) :
+    (resources : Instantiation.Environment) → (contracts : Contracts) → ContractRows contracts →
+    (world : List Nat) → CoreTranslation.OwnerMap → (allowed : List Instance) →
+    (environment : Environment) → EnvironmentRows environment → Nat → Nat →
+    Instance → (answer : Value) → ValueRows answer → List CoreSyntax.Clause →
+    (clauses : Clauses) → List (Nat × ClauseContract) →
+    {families : SourceDependencyAnnotations.ClauseDependencies} →
+    (plans : SourceDeclarationPlans.ClausePlans clauses families) →
+    ClauseRows (SourcePlanSignatures.clauseSignatures plans) → Prop where
+  | nil {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap} :
+      CheckedDeclarations graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler effect answer answerRows [] .nil [] .nil .nil
+  | cons {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
+      (operationKnown : operations effect operation = some (argument, input))
+      (argumentType : TypeAgreement resources parameter.type argument)
+      (distinct : ownerMap.any (fun binding => binding.owner == coreOwner) = false)
+      (mapped : binder = CoreTranslation.ticket graph coreOwner)
+      (witnessFresh : contracts witness = none)
+      (witnessInput : witnessContract.input = input) (witnessAnswer : witnessContract.answer = answer)
+      (witnessResume : witnessContract.resumeEffects = allowed) (witnessClose : witnessContract.closeEffects = allowed)
+      (witnessHeld : witnessContract.held = false)
+      (portBody : Checked graph operations policy ports resources (contracts.insert witness witnessContract)
+        (owners.insert witness (witnessInput.symm ▸ (ports effect operation argument input operationKnown).2)
+          (witnessAnswer.symm ▸ answerRows)) world (⟨handler, coreOwner, binder⟩ :: ownerMap) allowed
+        (.ticket binder witness) (environment.extend parameter.id argument)
+        (environmentRows.extend parameter.id (ports effect operation argument input operationKnown).1)
+        fuel bodyIndex code answer portDemand portReq portPlan answerRows portRows bodyEffects)
+      (disposeMode : code.requiredActions.dispose = true → disposes = true)
+      (usage : CoreGraphCapabilities.state policy (.ticket binder (policy binder)) .available usageFuel code = some .consumed)
+      (ordinary : CheckedOffer graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler coreOwner bodyIndex parameter.id binder argument (ports effect operation argument input operationKnown).1
+        input (ports effect operation argument input operationKnown).2 answer answerRows
+        resumeEffects closeEffects code false disposes ordinaryRow ordinaryPlan ordinaryRows)
+      (protectedMode : CheckedOffer graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler coreOwner bodyIndex parameter.id binder argument (ports effect operation argument input operationKnown).1
+        input (ports effect operation argument input operationKnown).2 answer answerRows
+        resumeEffects closeEffects code true disposes protectedRow protectedPlan protectedRows)
+      (rest : CheckedDeclarations graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler effect answer answerRows restCore restClauses restTable restPlan restRows)
+      (support : ScopedPorts.Support.evaluate (LambdaPortCaptureSupport.portSupport (environment.extend parameter.id argument))
+        code.dependencies ⊆ supportBound) :
+      CheckedDeclarations graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+        fuel handler effect answer answerRows
+        (⟨operation, .binder parameter, coreOwner, bodyIndex⟩ :: restCore) (.cons operation parameter.id binder code restClauses)
+        ((operation, ⟨disposes, ordinaryRow, protectedRow⟩) :: restTable)
+        (.cons ordinaryPlan protectedPlan restPlan)
+        (by simpa only [SourcePlanSignatures.clauseSignatures] using
+          ClauseRows.cons (operation := operation) (rights := code.requiredActions) ordinaryRows protectedRows restRows supportBound)
+end
+
+private def translateClauseList (graph : Graph) (fuel : Nat) (ownerMap : CoreTranslation.OwnerMap)
+    (handler index : Nat) (clauses : List CoreSyntax.Clause) : Except CoreSyntax.Error (List (Nat × Nat × Nat × Code)) :=
+  clauses.mapM fun clause => do
+    if ownerMap.any (fun binding => binding.owner == clause.owner) then
+      throw (.duplicateOwner index clause.owner)
+    match clause.argument with
+    | .binder argument =>
+        let mapped := CoreTranslation.ticket graph clause.owner
+        let clauseOwners := ⟨handler, clause.owner, mapped⟩ :: ownerMap
+        let translated ← CoreTranslation.translateFuel graph fuel clauseOwners clause.body
+        pure (clause.operation, argument.id, mapped, translated)
+    | _ => throw (.unsupportedClausePattern index clause.operation)
+
+private def packClauses (entries : List (Nat × Nat × Nat × Code)) : Clauses :=
+  entries.foldr (fun (operation, parameter, binder, body) rest => .cons operation parameter binder body rest) .nil
+
+private theorem handlerTranslation (known : graph.node index = some node)
+    (kind : node.kind = .handler handler effect bodyIndex clauses)
+    (shapes : CoreSyntax.checkClauseShapes index clauses = .ok ())
+    (body : CoreTranslation.translateFuel graph fuel ownerMap bodyIndex = .ok rawBody)
+    (declarations : translateClauseList graph fuel ownerMap handler index clauses = .ok entries) :
+    CoreTranslation.translateFuel graph (fuel + 1) ownerMap index = .ok (.handle effect rawBody (packClauses entries)) := by
+  cases node with
+  | mk original type effects span nodeKind =>
+    cases kind
+    simp only [CoreTranslation.translateFuel, CoreTranslation.requireNode, known]
+    change (do
+      CoreSyntax.checkClauseShapes index clauses
+      let translatedBody ← CoreTranslation.translateFuel graph fuel ownerMap bodyIndex
+      let translatedClauses ← translateClauseList graph fuel ownerMap handler index clauses
+      pure (Code.handle effect translatedBody (packClauses translatedClauses))) = _
+    rw [shapes, body, declarations]
+    rfl
+
+def CheckedOffer.Compiled
+    (_checked : CheckedOffer graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+      fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows
+      resumeEffects closeEffects code held disposes row plans rows) : Prop :=
+    ∃ source : SourcePlannedSources.Offer operations policy contracts world environment allowed parameter binder argument input answer
+      resumeEffects closeEffects code held disposes row plans,
+      AuthOffer operations policy ports owners environmentRows argumentRows inputRows answerRows source rows
+
+def CheckedDeclarations.Compiled
+    (_checked : CheckedDeclarations graph operations policy ports resources contracts owners world ownerMap allowed environment environmentRows
+      fuel handler effect answer answerRows core clauses table plans rows) : Prop :=
+    ∃ source : SourcePlannedSources.Declarations operations policy contracts world environment allowed effect answer clauses table plans,
+      AuthDeclarations operations policy ports owners environmentRows answerRows source rows ∧
+      ScopedPorts.ClausesTyped operations.erase.erase.ports world environment.erase.erase.ports effect answer.erase.erase.port allowed clauses ∧
+      ClausesUse policy clauses ∧ SourceTemplates.ClauseModes clauses table
+
+private theorem ticketScope (known : contracts owner = some contract) :
+    ScopedPorts.EffectScope contracts.erase.erase.ports (.ticket binder owner)
+      (.bound binder contract.input.erase.erase.port contract.answer.erase.erase.port contract.resumeEffects contract.closeEffects) :=
+  .bound (CoherentSourceTypes.Owners.ports_lookup
+    (SourceDependencyAnnotations.contract_erase_known (SourcePlannedSources.contract_erase_known known)))
+
 /-- The graph certificate constructs both source layers; neither is an input. -/
 theorem Checked.sourceAuth
     (checked : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
       fuel index code value demand requirements plan valueRows rows effects) :
     ∃ source : SourcePlannedSources.Expression operations policy contracts world allowed scope environment
       code value demand requirements (signature plan), Auth operations policy ports owners environmentRows source valueRows rows := by
-  induction checked with
+  induction checked using Checked.rec
+    (motive_2 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows resumeEffects closeEffects code held disposes row family plans rows checked => CheckedOffer.Compiled checked)
+    (motive_3 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler effect answer answerRows core clauses table families plans rows checked => CheckedDeclarations.Compiled checked) with
   | unit => exact ⟨.unit, .unit⟩
   | boolean => exact ⟨.boolean, .boolean⟩
   | integer => exact ⟨.integer, .integer⟩
@@ -303,6 +486,47 @@ theorem Checked.sourceAuth
       obtain ⟨sourceC, authC⟩ := ihCallback
       obtain ⟨sourceB, authB⟩ := ihBody
       exact ⟨.cleanup sourceC sourceB admitted, .cleanup (admitted := admitted) authC authB⟩
+
+  | handler known kind instantiated shapes body declarations coverage unique admitted effectsAdmitted metadata ihBody ihDecl =>
+      obtain ⟨sourceB, authB⟩ := ihBody
+      obtain ⟨sourceD, authD, typed, capabilities, modes⟩ := ihDecl
+      exact ⟨.handler sourceB typed capabilities coverage unique admitted _ modes sourceD,
+        .handler (clauses := typed) (capabilities := capabilities) (coverage := coverage) (unique := unique)
+          (admitted := admitted) (modes := modes) authB authD⟩
+  | unavailable => exact ⟨.unavailable, .unavailable⟩
+  | available resumeInterface closeInterface body rows closingRows ihBody =>
+      refine (let sourceBodies := ?_;
+        ⟨.available resumeInterface closeInterface sourceBodies,
+          AuthOffer.available (source := sourceBodies) (resumeInterface := resumeInterface)
+            (closeInterface := closeInterface) ?_⟩)
+      · intro owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+        obtain ⟨source, authenticated⟩ := ihBody owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+        exact .typed source (rows owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance)
+          (closingRows owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance)
+      · intro owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+        obtain ⟨source, authenticated⟩ := ihBody owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+        exact AuthBody.typed (source := source)
+          (rows := rows owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance)
+          (closingRows := closingRows owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance) authenticated
+  | nil => exact ⟨.nil, .nil, .nil, .nil, .nil⟩
+  | cons operationKnown argumentType distinct mapped witnessFresh witnessInput witnessAnswer witnessResume witnessClose witnessHeld
+      portBody disposeMode usage ordinary protectedMode rest support ihPort ihOrdinary ihProtected ihRest =>
+      obtain ⟨sourceP, authP⟩ := ihPort
+      obtain ⟨sourceO, authO⟩ := ihOrdinary
+      obtain ⟨sourceH, authH⟩ := ihProtected
+      obtain ⟨sourceR, authR, typedR, useR, modesR⟩ := ihRest
+      have portTyped := SourceTemplates.expression_ports
+        (DeclaredSources.expression_erase (SourceDependencyAnnotations.expression_erase
+          (SourcePlannedSources.expression_erase sourceP)))
+        (ticketScope (by simp [SourcePlannedTyping.Contracts.insert]; rfl))
+      refine ⟨.cons operationKnown sourceO sourceH sourceR, .cons authO authH authR support, ?_,
+        .cons (CoreGraphCapabilities.sound usage) useR, .cons disposeMode modesR⟩
+      apply ScopedPorts.ClausesTyped.cons
+        (CoherentSourceTypes.port_lookup (SourceDependencyAnnotations.operation_erase (SourcePlannedSources.operation_erase operationKnown)))
+      · simpa only [SourceDependencyAnnotations.environment_erase_extend,
+          SourcePlannedTyping.environment_erase_extend, CoherentSourceTypes.ports_extend,
+          witnessInput, witnessAnswer, witnessResume, witnessClose] using portTyped
+      · exact typedR
 
 private theorem cleanupTranslation (known : graph.node index = some node)
     (kind : node.kind = .cleanup callback action bodyIndex)
@@ -498,7 +722,11 @@ theorem Checked.translation
     (checked : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
       fuel index code value demand requirements plan valueRows rows effects) :
     ∃ raw, CoreTranslation.translateFuel graph fuel ownerMap index = .ok raw ∧ raw.instantiate resources = code := by
-  induction checked with
+  induction checked using Checked.rec
+    (motive_2 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows resumeEffects closeEffects code held disposes row family plans rows checked => True)
+    (motive_3 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler effect answer answerRows core clauses table families plans rows checked =>
+      ∀ index, ∃ entries, translateClauseList graph fuel ownerMap handler index core = .ok entries ∧
+        (packClauses entries).instantiate resources = clauses) with
   | unit known kind => exact ⟨_, unitTranslation known kind, rfl⟩
   | boolean known kind => exact ⟨_, booleanTranslation known kind, rfl⟩
   | integer known kind => exact ⟨_, integerTranslation known kind, rfl⟩
@@ -555,6 +783,27 @@ theorem Checked.translation
       refine ⟨_, cleanupTranslation known kind actionShape translated, ?_⟩
       simp [Code.instantiate, instantiated]
 
+  | handler known kind instantiated shapes body declarations coverage unique admitted effectsAdmitted metadata ihBody ihDecl =>
+      obtain ⟨rawBody, translatedBody, instantiatedBody⟩ := ihBody
+      obtain ⟨entries, translatedDecl, instantiatedDecl⟩ := ihDecl _
+      refine ⟨_, handlerTranslation known kind shapes translatedBody translatedDecl, ?_⟩
+      simp [Code.instantiate, instantiated, instantiatedBody, instantiatedDecl]
+  | unavailable | available => trivial
+  | nil _index => exact ⟨[], rfl, rfl⟩
+  | cons operationKnown argumentType distinct mapped witnessFresh witnessInput witnessAnswer witnessResume witnessClose witnessHeld
+      portBody disposeMode usage ordinary protectedMode rest support ihPort ihOrdinary ihProtected ihRest index =>
+      rename_i effect operation argument input coreOwner binder witness answer allowed witnessContract answerRows handler fuel bodyIndex code portDemand portReq portDeps portPlan portRows bodyEffects disposes usageFuel environment environmentRows resumeEffects closeEffects ordinaryRow ordinaryFamily ordinaryPlan ordinaryRows protectedRow protectedFamily protectedPlan protectedRows restCore restClauses restTable restFamilies restPlan restRows supportBound parameter resources contracts owners world ownerMap
+      obtain ⟨rawBody, translatedBody, instantiatedBody⟩ := ihPort
+      obtain ⟨entries, translatedRest, instantiatedRest⟩ := ihRest index
+      refine ⟨(operation, parameter.id, binder, rawBody) :: entries, ?_, ?_⟩
+      · simp only [translateClauseList, List.mapM_cons, distinct, Bool.false_eq_true, if_false]
+        rw [← mapped, translatedBody]
+        change (do let tail ← translateClauseList graph _ _ _ index _; pure (_ :: tail)) = _
+        rw [translatedRest]
+        rfl
+      · simp [packClauses, Clauses.instantiate, instantiatedBody, ← instantiatedRest]
+
+
 /-- A syntactic restriction for the owner-map-independent ordinary subset.
 Owner-bearing terms are handled by the indexed translation theorem instead. -/
 def ticketFree : Code → Bool
@@ -571,7 +820,9 @@ theorem Checked.ticketFreeSyntax
     ∃ raw, (∀ otherMap, CoreTranslation.translateFuel graph fuel otherMap index = .ok raw) ∧
       raw.instantiate resources = code := by
   revert free
-  induction checked with
+  induction checked using Checked.rec
+    (motive_2 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler coreOwner bodyIndex parameter binder argument argumentRows input inputRows answer answerRows resumeEffects closeEffects code held disposes row family plans rows checked => True)
+    (motive_3 := fun resources contracts owners world ownerMap allowed environment environmentRows fuel handler effect answer answerRows core clauses table families plans rows checked => True) with
   | unit known kind => intro free; exact ⟨_, fun otherMap => unitTranslation known kind, rfl⟩
   | boolean known kind => intro free; exact ⟨_, fun otherMap => booleanTranslation known kind, rfl⟩
   | integer known kind => intro free; exact ⟨_, fun otherMap => integerTranslation known kind, rfl⟩
@@ -634,6 +885,9 @@ theorem Checked.ticketFreeSyntax
   | resume => intro free; cases free
   | discard => intro free; cases free
   | cleanup => intro free; cases free
+  | handler => intro free; cases free
+
+  | unavailable | available | nil | cons => trivial
 
 /-- A compiled fragment is tied to the raw graph translation as well as its
 resource-instantiated source. No target derivation is supplied by the caller. -/
@@ -1279,8 +1533,9 @@ theorem setterBindingChecked (issued : identity ∈ world)
     ⟨.integer, by intro effect; change (effect ∈ [Instantiation.freezeEffect (.cell identity)]) ↔
       effect ∈ [Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)]; simp⟩
 
-/-- The complete ordinary resource-body spine is conditional only on the named
-handler41 Core derivation. Resource48 remains a separate effect-node obligation. -/
+/-- Lift a handler derivation through the actual ordinary resource-body spine.
+The concrete `Spine.checked` below constructs that derivation from the graph;
+resource48 remains a separate effect-node obligation. -/
 theorem getterBindingChecked (issued : identity ∈ world)
     (handler : Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
       [.cell identity] .none (Writes.storeEnvironment identity environment) (Writes.storeEnvironmentRows identity environmentRows)
@@ -1487,7 +1742,213 @@ theorem compiled (issued : identity ∈ world) (data : Data) (fresh : contracts 
           source .unit (rows identity owner) :=
   (checked (fuel := fuel) issued data fresh balance).compiled
 
+def Data.ofContract (contract : Contract) : Data :=
+  ⟨contract.resumeDemand, contract.resumeRow, contract.closeDemand, contract.closeRow⟩
+
+def contractRequirements (identity owner : Nat) (contract : Contract)
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :=
+  requirements identity owner (Data.ofContract contract) balance
+
+theorem checkedContract (issued : identity ∈ world) (contract : Contract) (fresh : contracts owner = none)
+    (inputSame : contract.input = .unit) (answerSame : contract.answer = .unit)
+    (resumeSame : contract.resumeEffects = [.cell identity]) (closeSame : contract.closeEffects = [.cell identity])
+    (heldSame : contract.held = false) (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity)
+      (contracts.insert owner contract) (owners.insert owner (inputSame.symm ▸ ValueRows.unit) (answerSame.symm ▸ ValueRows.unit))
+      world (map ownerMap) [.cell identity] (.ticket ticket owner) (environment identity base) (environmentRows identity baseRows)
+      (fuel + 5) 40 code .unit ([] ++ (([] ++ owner :: contract.resumeDemand) ++ []))
+      (contractRequirements identity owner contract balance) (plan identity owner) .unit (rows identity owner)
+      [Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)] := by
+  rcases contract with ⟨input, answer, held, resumeDemand, resumeRow, closeDemand, closeRow, resumeEffects, closeEffects⟩
+  cases inputSame; cases answerSame; cases resumeSame; cases closeSame; cases heldSame
+  exact checked issued ⟨resumeDemand, resumeRow, closeDemand, closeRow⟩ fresh balance
+
+private theorem mergeEmpty (row : Option Footprint) : ProtectionResiduals.merge (some []) row = row := by
+  cases row <;> rfl
+
+theorem yesAdmissionRows {templates : RecursiveRequirements.Store → Prop} {contract : Contract}
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ClauseRowAdmission.Rows ⟨owner, contract.erase.erase, true, Setter.footprint identity⟩
+      (yesRequirements identity owner (Data.ofContract contract)) templates := by
+  intro store tail before requestRow interface exported
+  obtain ⟨checked, bounded⟩ := interface.resume_then_suffix_checked rfl balance exported
+  obtain ⟨firstRow, secondRow, first, suffix, same⟩ := RecursiveRequirements.checked_sequence_parts checked
+  have suffixExport := RecursiveRequirements.checked_complete suffix
+  have expanded : RecursiveRequirements.Checked store (.live owner contract.held :: tail)
+      (OwnerPhaseTransitions.spendAll before ([] ++ owner :: contract.resumeDemand))
+      (Writes.requirements identity) secondRow := by
+    apply RecursiveRequirements.Checked.emitAfter (bodyRow := [])
+    · apply RecursiveRequirements.Checked.sequence (firstRow := []) (secondRow := [])
+      · exact .request (by simp [OwnerSource.exportAt, ProtectionResiduals.residual_empty])
+      · apply RecursiveRequirements.Checked.sequence (firstRow := []) (secondRow := [])
+        · exact .request (by simp [OwnerSource.exportAt, ProtectionResiduals.residual_empty])
+        · exact .request (by simp [OwnerSource.exportAt, ProtectionResiduals.residual_empty])
+    · simpa [RecursiveRequirements.evaluate, RecursiveRequirements.evaluateFuel, OwnerSource.exportAt,
+        ProtectionResiduals.residual_empty, mergeEmpty, SourcePlannedTyping.Contract.erase,
+        SourceDependencyAnnotations.Contract.erase] using suffixExport
+  have complete := RecursiveRequirements.Checked.sequence first expanded
+  obtain ⟨calls, derived, supplied⟩ := ContextualClauseChecks.open_checked complete
+  rw [same] at bounded
+  exact ⟨_, calls, derived, supplied, bounded⟩
+
+theorem admissionRows {templates : RecursiveRequirements.Store → Prop} {contract : Contract}
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ClauseRowAdmission.Rows ⟨owner, contract.erase.erase, true, Setter.footprint identity⟩
+      (contractRequirements identity owner contract balance) templates := by
+  apply ClauseRowAdmission.Rows.pure_prefix
+  apply ClauseRowAdmission.Rows.alternatives
+  · exact yesAdmissionRows balance
+  · exact ClauseRowAdmission.discard_rows
+
+theorem admissionProtectedRows {templates : RecursiveRequirements.Store → Prop} {contract : Contract}
+    (balance : contract.closeDemand.Perm contract.resumeDemand) :
+    ClauseRowAdmission.ProtectedRows ⟨owner, contract.erase.erase, true, Setter.footprint identity⟩
+      (contractRequirements identity owner contract balance) templates := by
+  apply ClauseRowAdmission.ProtectedRows.pure_prefix
+  apply ClauseRowAdmission.ProtectedRows.alternatives
+  · exact .of_unchanged (yesAdmissionRows balance) rfl
+  · exact ClauseRowAdmission.protected_discard_rows
+
 end Clause
+
+namespace Handler
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+def arms : Clauses := .cons 0 9 Clause.ticket Clause.code .nil
+def table (identity : Nat) : List (Nat × ClauseContract) := [(0, ⟨true, some (Setter.footprint identity), none⟩)]
+def declarationPlans (identity : Nat) :=
+  SourceDeclarationPlans.ClausePlans.cons (operation := 0) (parameter := 9) (binder := Clause.ticket) (body := Clause.code)
+    (SourceDeclarationPlans.ModePlans.available (Clause.plan identity)) SourceDeclarationPlans.ModePlans.unavailable
+    SourceDeclarationPlans.ClausePlans.nil
+def declarationRows (identity : Nat) : ClauseRows (SourcePlanSignatures.clauseSignatures (declarationPlans identity)) :=
+  .cons (.available (Clause.rows identity)) .unavailable .nil [identity]
+variable {world : List Nat} {base : Environment} {baseRows : EnvironmentRows base}
+
+theorem ordinary (issued : identity ∈ world) :
+    CheckedOffer CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [.cell identity] (Writes.storeEnvironment identity base) (Writes.storeEnvironmentRows identity baseRows)
+      (fuel + 5) 0 0 40 9 Clause.ticket .boolean .boolean .unit .unit .unit .unit
+      [.cell identity] [.cell identity] Clause.code false true (some (Setter.footprint identity))
+      (.available (Clause.plan identity)) (.available (Clause.rows identity)) := by
+  apply CheckedOffer.available
+    (bodyDemand := fun owner contract => [] ++ (([] ++ owner :: contract.resumeDemand) ++ []))
+    (bodyReq := Clause.contractRequirements identity)
+    (resumeInterface := fun _ => rfl) (closeInterface := fun _ => rfl)
+  · intro owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+    exact Clause.checkedContract issued contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+  · intro owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+    exact Clause.admissionRows balance
+  · intro owner contract fresh inputSame answerSame resumeSame closeSame heldSame balance
+    exact Clause.admissionProtectedRows balance
+
+def witnessContract (identity : Nat) : Contract := Clause.contract identity ⟨[], [], [], none⟩
+
+/-- A finite current registry witness supplies port checking independently of
+whether an offered mode admits row evidence. Both modes remain explicit. -/
+theorem declarations (issued : identity ∈ world) (fresh : contracts witness = none)
+    (distinct : ownerMap.any (fun binding => binding.owner == 0) = false) :
+    CheckedDeclarations CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [.cell identity] (Writes.storeEnvironment identity base) (Writes.storeEnvironmentRows identity baseRows)
+      (fuel + 7) 0 effect .unit .unit [⟨0, .binder ⟨9, .boolean⟩, 0, 40⟩] arms (table identity)
+      (declarationPlans identity) (declarationRows identity) := by
+  apply CheckedDeclarations.cons (operationKnown := (rfl : operations effect 0 = some (.boolean, .unit)))
+    (argumentType := .boolean) (distinct := distinct) (mapped := rfl)
+    (witnessFresh := fresh) (witnessContract := witnessContract identity)
+    (witnessInput := rfl) (witnessAnswer := rfl) (witnessResume := rfl) (witnessClose := rfl) (witnessHeld := rfl)
+    (portBody := Clause.checkedContract (fuel := fuel + 2) issued (witnessContract identity) fresh
+      rfl rfl rfl rfl rfl (List.Perm.refl []))
+    (disposeMode := fun _ => rfl) (usageFuel := 8) (usage := rfl)
+    (ordinary := ordinary (fuel := fuel + 2) issued) (protectedMode := .unavailable) (rest := .nil)
+  simp [Clause.code, Clause.yesCode, Writes.application, Writes.argument, Code.dependencies, Syntax.without,
+    LambdaPortCaptureSupport.portSupport, ScopedPorts.Support.evaluate, Writes.storeEnvironment,
+    applicationEnvironment, savedEnvironment, Environment.extend, Setter.value, Setter.input,
+    Value.erase, SourceDependencyAnnotations.Value.erase, CoherentSourceTypes.Value.port,
+    ScopedPorts.Port.resources, Instance.resources]
+
+theorem coverage : ScopedPorts.Covers operations.erase.erase.ports effect arms := by
+  intro operation input output known
+  cases operation with
+  | zero => simp [arms, ScopedTyping.clauseKeys]
+  | succ operation => simp [operations, effect, SourcePlannedTyping.Operations.erase,
+      SourceDependencyAnnotations.Operations.erase, CoherentSourceTypes.Operations.ports] at known
+
+def code := Code.handle (Instantiation.freezeEffect effect) Guarded.code arms
+def requirements (identity : Nat) : Requirements [] :=
+  (Guarded.requirements identity).prepend [.ordinary (.handler effect 0 (table identity))]
+def plan (identity : Nat) := Plan.handler (effect := effect) (table := table identity)
+  [(.cell identity, 1)] (declarationPlans identity) (Guarded.plan identity)
+def rows (identity : Nat) : Rows (signature (plan identity)) := .handler (declarationRows identity) (Guarded.rows identity)
+
+theorem checked (issued : identity ∈ world) (fresh : contracts witness = none)
+    (distinct : ownerMap.any (fun binding => binding.owner == 0) = false) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [.cell identity] .none (Writes.storeEnvironment identity base) (Writes.storeEnvironmentRows identity baseRows)
+      (fuel + 8) 41 code .unit [] (requirements identity) (plan identity) .unit (rows identity)
+      [Instantiation.freezeEffect (.cell identity)] := by
+  exact Checked.handler (node := node 41) (handler := 0) (rawEffect := .user 0 []) (bodyIndex := 29)
+    (known := rfl) (kind := rfl) (instantiated := rfl) (shapes := rfl)
+    (body := Guarded.checked issued) (declarations := declarations issued fresh distinct)
+    (coverage := coverage) (unique := by simp [arms, ScopedTyping.clauseKeys]) (admitted := List.Subset.refl _)
+    (effectsAdmitted := List.Subset.refl _) ⟨.unit, by intro effect; rfl⟩
+end Handler
+
+namespace Spine
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+variable {world : List Nat} {environment : Environment} {environmentRows : EnvironmentRows environment}
+def code (identity : Nat) :=
+  Code.bind 11 (getter identity) (.bind 3 (Setter.closure identity) (.bind 12 Handler.code getterApplication))
+def requirements (identity : Nat) : Requirements [] :=
+  .sequence empty (.sequence empty (.sequence (Handler.requirements identity) (applicationRequirements identity)))
+def plan (identity : Nat) :=
+  Plan.sequence Plan.pure (Plan.sequence Plan.pure (Plan.sequence (Handler.plan identity) (applicationPlan identity)))
+def rows (identity : Nat) : Rows (signature (plan identity)) := by
+  unfold plan
+  simpa only [signature] using Rows.sequence Rows.pure
+    (Rows.sequence Rows.pure (Rows.sequence (Handler.rows identity) (applicationRows identity)))
+
+/-- Every ordinary node through handler41 is constructed. The only registry
+inputs are finite current freshness/lexical-map checks, not a handler derivation. -/
+theorem checked (issued : identity ∈ world) (fresh : contracts witness = none)
+    (distinct : ownerMap.any (fun binding => binding.owner == 0) = false) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) contracts owners world ownerMap
+      [.cell identity] .none (savedEnvironment identity environment) (environmentRows.extend 4 .reference)
+      (fuel + 11) 47 (code identity) .integer [] (requirements identity) (plan identity) .integer (rows identity)
+      [Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)] := by
+  exact getterBindingChecked (fuel := fuel + 6) issued
+    (Handler.checked (fuel := fuel) (base := environment) (baseRows := environmentRows) issued fresh distinct)
+
+theorem compiled (issued : identity ∈ world) (fresh : contracts witness = none)
+    (distinct : ownerMap.any (fun binding => binding.owner == 0) = false) :
+    ∃ raw, CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 11) ownerMap 47 = .ok raw ∧
+      raw.instantiate (Getter.resources identity) = code identity ∧
+      ∃ source : SourcePlannedSources.Expression operations policy contracts world [.cell identity] .none
+        (savedEnvironment identity environment) (code identity) .integer [] (requirements identity) (signature (plan identity)),
+        Auth operations policy ports owners (environmentRows.extend 4 .reference) source .integer (rows identity) :=
+  (checked (fuel := fuel) issued fresh distinct).compiled
+
+def emptyContracts : Contracts := fun _ => none
+def emptyOwners : ContractRows emptyContracts := by intro _ _ known; cases known
+def emptyEnvironmentRows : EnvironmentRows (fun _ => none) := by intro _ _ known; cases known
+
+/-- The actual resource body at its fresh activation has no supplied structural
+certificate: the finite registry/map witnesses are discharged here. Resource
+entry itself remains a separate Core constructor obligation. -/
+theorem closedChecked (identity fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) emptyContracts emptyOwners [identity] []
+      [.cell identity] .none (savedEnvironment identity (fun _ => none)) (emptyEnvironmentRows.extend 4 .reference)
+      (fuel + 11) 47 (code identity) .integer [] (requirements identity) (plan identity) .integer (rows identity)
+      [Instantiation.freezeEffect (.cell identity), Instantiation.freezeEffect (.cell identity)] :=
+  checked (witness := 0) List.mem_cons_self rfl rfl
+theorem closedCompiled (identity fuel : Nat) :
+    ∃ raw, CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 11) [] 47 = .ok raw ∧
+      raw.instantiate (Getter.resources identity) = code identity ∧
+      ∃ source : SourcePlannedSources.Expression operations policy emptyContracts [identity] [.cell identity] .none
+        (savedEnvironment identity (fun _ => none)) (code identity) .integer [] (requirements identity) (signature (plan identity)),
+        Auth operations policy ports emptyOwners (emptyEnvironmentRows.extend 4 .reference) source .integer (rows identity) :=
+  (closedChecked identity fuel).compiled
+
+end Spine
 
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission
 
@@ -1526,3 +1987,21 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.capability
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Guarded.checked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Handler.checked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Handler.ordinary
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Handler.declarations
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.admissionRows
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Clause.admissionProtectedRows
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.checked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.compiled
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.closedChecked
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.closedCompiled

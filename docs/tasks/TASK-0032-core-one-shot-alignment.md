@@ -380,14 +380,42 @@ remain separate targets. A small first example does not reduce the final scope.
   unfinished extension is outside this increment's verification claim. Staged
   proof sources match the audited manifest. Trust, import order, whitespace and
   artifact checks pass, with no new Markdown lint findings.
+- The handler compiler now constructs actual handler41 and its declaration
+  modes. A separate recursively checked finite clause-body witness supplies
+  port typing and actual translation even when an offered mode is unavailable.
+  The finite usage checker supplies one-shot consumption. `Spine.closedCompiled`
+  constructs resource body47 without an input handler derivation; resource48
+  and the whole initial `Program` remain open. Independent statement review and
+  fresh compilation pass.
+- `CoreHandlerPrefix` extends the same actual initial execution to handler41's
+  body29 in twenty Core transitions, retaining the component relation at every
+  intermediate state and the exact creation ledger. It stops before cleanup
+  registration. `CoreAllocationCorrespondence` derives successor resource
+  history from actual steps and local event matching. Its fixed initial-prefix
+  instance constructs target `RunSteps`, resource world `[0]` and freshness
+  without supplied world equality. Neither result establishes M4 validity or
+  broader owner freshness. Both leaves pass independent compilation and review.
+- The combined handler/history audit passes for 804 registered modules, 11,030
+  exact dependency reports and 1,983 local links or anchors. Three new or
+  changed modules have fresh independent compilation evidence; 801 unchanged
+  verified source/report pairs are retained. The isolated source snapshot now
+  copies and hashes the pinned Lean toolchain file: omitting it initially
+  selected the newer global compiler and failed to load a dependency. The
+  corrected build uses Lean 4.33.1. Trust, import order, whitespace and artifact
+  checks pass. Product Rust remains unchanged since the 2,900-test gate.
+- The next bounded C4 checkpoint is contextual row refinement into actual
+  post-beta body admission. It transports current `Code`, its exact
+  `CodeChecked` certificate and same-root `Accounting.Run`, then reuses actual
+  authenticated substitution. Pre-beta application admission, heterogeneous
+  callable inputs/results and continuation transport remain separate work.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Normalized admission, graph clause40 and guarded-body compiler components verified | Full graph admission, metadata authentication, general compiler | Handler/resource constructors; higher-order refinement gap | Handler41 batch 30–50 minutes; full estimate unresolved |
-| C3 | 0 / 5 | Actual initial prefix and resource history integrated with mapped boundary components | Reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Next handler-entry prefix 45–75 minutes; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; pure callable-plan static certificates verified | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result and M4 preservation transport | Remaining interface design about 1 hour; implementation estimate unresolved |
-| C5 | 0 / 4 | Product gate and 802-module selected-source audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C2 | 0 / 4 | Handler41 and actual resource-body spine compiler integrated | Full graph admission, metadata authentication, general compiler | Resource constructor/root admission; higher-order refinement gap | Resource/root source batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Twenty-transition initial prefix and resource correspondence integrated | Reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Cleanup-registration batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; contextual refinement transport being implemented | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result and M4 preservation transport | Bounded post-beta checkpoint 45–75 minutes; full repair estimate unresolved |
+| C5 | 0 / 4 | Product gate and 804-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

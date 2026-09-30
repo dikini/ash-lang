@@ -127,6 +127,31 @@ establish that an arbitrary continuation is admitted. The next interface work
 must transport the private body refinement through those judgments and their
 preservation boundaries, including retained support at resource exit.
 
+The next bounded implementation separates row refinement from value typing.
+A contextual refinement from contract rows to actual body rows must transport
+three existing static judgments at the same current context: `Code`,
+`CodeChecked` for that transported certificate, and `Accounting.Run` with the
+same root requirements. It must quantify over current worlds, installations,
+actions, phases and budgets. It must not quantify over successful executions or
+take the desired successor invariant as a premise. Identity and composition,
+the existing pure-plan family, and insertion of a pure prefix before arbitrary
+effectful rows are the first required constructors. The latter case checks that
+the interface preserves an actual effectful suffix rather than equating every
+body with an empty contract.
+
+The application checkpoint must combine that transport with the selected
+payload's existing body derivation and authenticated substitution. Given the
+actual receiving context and the contract's current static certificates, it
+must construct `SourceAdmission.Admitted` for the substituted body, its checked
+certificate and exact-root accounting. The Unit, sequenced-Unit and retaining
+payloads must all instantiate it without the refuted old lambda guard. Retain
+this interface only if those constructions compile with no future-state premise.
+This checkpoint does not admit the pre-beta application or change the fixed
+input/result rules: a complete repair must still make callers, branch joins and
+saved continuations accept the same declared contract while retaining each
+selected witness. Shared source judgments and M4 remain unchanged until those
+transport obligations are constructed.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately

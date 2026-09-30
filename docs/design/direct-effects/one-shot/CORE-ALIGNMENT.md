@@ -517,6 +517,27 @@ Its target-world freshness corollary still requires world correspondence; the
 Core history proof does not supply that premise. Both leaves pass fresh
 independent compilation and statement review with standard axioms only.
 
+[CoreHandlerPrefix.lean](CoreHandlerPrefix.lean) extends that same linked
+execution through the getter and setter bindings, the saved ordinary
+continuation and handler41 entry. Twenty actual transitions from `initial`
+reach body29 under the handler, ordinary continuation and cell boundaries.
+The component relation holds at every intermediate state. The exact target
+ledger still creates only `[resource 0]` and discharges nothing. The proof stops
+before evaluating body29 or registering its cleanup callback. Scope and answer
+annotations are supplied runtime-relation data; their authentication remains
+separate from these actual transition equations.
+
+[CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
+that current Core acquisition history and the target's historical resource
+world remain equal when an actual Core step and target raw segment agree on
+their local allocation event. The successor equality is derived, not assumed.
+General event matching is still a simulation obligation. For the fixed initial
+prefix, all matching, world and freshness premises are discharged: the target
+`RunSteps` starts with an empty ledger and ends with resource world `[0]`.
+This covers historical resource keys, not live ownership or other owner
+families. `RunSteps` checks raw transitions and creation freshness; it is not
+M4 validity. Both new leaves pass independent compilation and statement review.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
@@ -779,7 +800,8 @@ obligation.
 static derivation and constructs source typing and row authentication from it.
 The ordinary rules cover literals, variables, lambdas, application, binding,
 binary pairs, Boolean branches, Unit matches and singleton nonrecursive entry
-wrappers; exact operation requests, resume, discard and cleanup are also covered.
+wrappers; exact operation requests, resume, discard, cleanup and handlers are
+also covered.
 The resource environment, owner contracts, issued world and lexical owner map are
 recursive indices. Resume/discard check the actual Core owner mapping, resolved
 source ticket, permission and contract allowances; discard retains the existing
@@ -807,11 +829,23 @@ one-shot usage derivations from actual syntax, including branch agreement,
 callable barriers and nested clauses. `Clause.capability` applies it to the
 translated clause40; duplicate resume and callable ticket escape are rejected.
 
-These remain partial graph admission: handler and resource-entry constructors
-are still open. The ordinary binding spine is conditional on
-handler41, and resource48 is not yet constructed. The static derivation still
-needs to be derived from validated Core metadata in general; this is not an
-executable complete Core validator or an initial `Program` for the exported root.
+The handler rule constructs both declaration modes from recursively checked
+clause bodies. Each declaration also checks one finite fresh-contract body
+independently of mode availability, so unavailable offers cannot make port
+typing or clause translation vacuous. Exact operation lookup, argument type,
+owner-map extension, duplicate-owner exclusion, clause shapes, coverage and
+uniqueness remain explicit checks. Usage comes from the same finite capability
+checker. The compiler builds the source/authentication judgments and actual
+translated clause list; none is an opaque input leaf.
+
+`Handler.checked` constructs handler41 with its ordinary offer and unavailable
+protected offer. Its row-admission proofs retain the actual resume/write suffix
+and discard alternative. `Spine.closedCompiled` then constructs resource body47
+with getter/setter bindings, handler-result binding and final read, discharging
+the empty-registry and lexical-map witnesses. It has no supplied handler proof.
+Resource48 remains unconstructed. The static derivation still needs to be
+derived from validated Core metadata in general; this is not an executable
+complete Core validator or an initial `Program` for the exported root.
 
 ### Initial-admission interface repair
 
