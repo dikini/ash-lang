@@ -168,6 +168,16 @@ private theorem second_cut : MappedHandlerCut graph [] (.user 0 []) u37.annotati
       (.push cleanupFrame (by simp [ExecFrame.erase,ActionData.erase,Frame.target])
         (.hit (site := 41) (environment := methodsEnv) (data := handlerData) (owners := []) header rfl rest))
 
+/-- Captured/outside annotations are retained from the same selected cut;
+framesOf is not inverted to choose new lexical maps. -/
+theorem second_capture_parts :
+    PushedWithMaps graph [] secondCaptured secondCap ∧
+    PushedWithMaps graph [] secondOutside secondTail := by
+  obtain ⟨_,_,_,captured,outside⟩ := second_cut.realizes
+  exact ⟨captured,outside⟩
+
+#print axioms second_capture_parts
+
 private theorem clause_unique {clauses : Clauses}
     (first : ClauseAt operation clauses parameter binder body)
     (second : ClauseAt operation clauses otherParameter otherBinder otherBody) :

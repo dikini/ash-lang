@@ -615,11 +615,32 @@ Nearest-owner lookup selects ticket1; outside lookup still rejects spent0.
 The observations show that callback27 has not entered. All 11 reports pass
 fresh independent compilation with standard axioms.
 
-This prefix still ends in ordinary evaluation. The next discard connection must
-use `LexicalUnwind.Machine` and its explicit unwind transitions: that machine
-excludes the old plan-based `ScopedExecution.RawStep.discard`. Relating Core's
-projected closing frames to retained lexical handlers, callback execution and
-its eventual scope exits remains a C3 obligation.
+[CoreUnwindRelation.lean](CoreUnwindRelation.lean) relates ordinary execution,
+pending Core discard control and the nonempty closing projection to the current
+lexical unwind machine. The projection retains the exact `closeFuel` equation,
+captured and outside stack evidence, close marker and successor counter. The
+named evaluate-to-discard administrative step preserves the same target and
+strictly decreases the existing potential.
+
+[CoreDiscardPrefix.lean](CoreDiscardPrefix.lean) extends the same initial chain
+to 45 actual Core transitions, through false-branch selection and discard of
+ticket1. One current-machine chain includes every inherited related point.
+`CoreInitialPrefix.Positive` now requires the lexical ordinary guard for every
+raw step; direct induction lifts the earlier prefixes, and a negative theorem
+rejects legacy raw discard. A separate no-close ledger induction supplies the
+same guards for the earlier target trace.
+
+The combined target ledger creates
+`[resource 0, cleanup 0, ticket 0, ticket 1, close 0]` and discharges
+`[ticket 1, ticket 0]`. This fixture's projection consumes no nested tickets.
+Core retains cleanup27, close completion and the spent/outside frames; the
+target also retains the captured plain frame and handler41 for lexical unwind.
+The actual callback's cell0 request resolves to the same builtin interpreter
+on both sides. An explicit negative check shows that unrelated user0 dispatch
+does differ, so this is not all-effect dispatch equality. Cleanup has not
+started. All 15 affected modules pass fresh independent compilation with
+standard axioms. Callback execution, general dispatch/close-identity evidence
+and M4 admission through these later states remain open.
 
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
@@ -650,6 +671,18 @@ The selected and nested ticket retirement order is related by permutation; only
 retained cleanup/resource order is claimed exact. Independent review found no
 scope or proof defect. A fresh warnings-as-errors compilation passed with only
 `propext` and `Quot.sound` in reported dependencies.
+
+The general close-identity relation must also cover empty projection.
+`CoreMachine.discardOwner` allocates a close marker and increments `nextClose`
+only when the projected closing list is nonempty. The current
+[lexical unwind machine](SourceResourceRoutes.lean) creates a fresh close owner
+on every discard and later completes it, including when only non-owning frames
+were captured. After an empty discard, using Core's unchanged counter as the
+next target close identity would reuse an issued target identity. The general
+relation therefore needs an explicit correspondence for close identities or a
+proved treatment of these administrative close events. Equality in the
+nonempty fixture does not establish that relation. This is a C3 representation
+obligation, not a demonstrated change to source-visible cleanup behavior.
 
 ### Callable-support component
 

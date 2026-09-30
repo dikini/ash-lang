@@ -1,5 +1,6 @@
 import CoreEffectEntry
 import CoreAllocationHistory
+import SourceResourceRoutes
 
 /-! A fixed related prefix from the actual exported Core initial state through
 wrapper/main/Unit-match/resource entry. Every Core transition is linked to a
@@ -11,10 +12,14 @@ open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreSt
 open CoreStrictPotential CoreAdministrativeTransport CoreOrdinaryCompletion CoreEffectEntry CoreEffectFrames
 open CoreExportedFixture
 
-/-- No zero-length target execution occurs in a positive link. -/
+/-- No zero-length target execution occurs in a positive link. Every raw
+step also carries the current lexical-machine ordinary guard, excluding the
+obsolete plan-based discard from inherited prefixes. -/
 inductive Positive : Configuration → Configuration → Prop where
-  | one (step : RawStep before after created discharged) : Positive before after
-  | next (step : RawStep before middle created discharged) (rest : Positive middle after) : Positive before after
+  | one (step : RawStep before after created discharged)
+      (allowed : LexicalUnwind.ordinary before.expression := by trivial) : Positive before after
+  | next (step : RawStep before middle created discharged) (rest : Positive middle after)
+      (allowed : LexicalUnwind.ordinary before.expression := by trivial) : Positive before after
 
 structure Point where
   state : CoreMachine.State

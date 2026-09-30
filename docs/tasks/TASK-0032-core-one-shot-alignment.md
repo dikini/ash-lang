@@ -626,11 +626,30 @@ remain separate targets. A small first example does not reduce the final scope.
   pairs. Active higher-order and discard files are excluded from this frozen
   snapshot. No Rust code changed.
 
+- `CoreUnwindRelation` and `CoreDiscardPrefix` connect 45 actual Core transitions
+  in one current lexical-machine chain, ending immediately after ticket1's
+  discard. The complete target ledger creates resource0, cleanup0, ticket0,
+  ticket1 and close0; it discharges ticket1 and ticket0. Exact closing spines,
+  the empty nested-consumption list and the delayed callback are proved.
+  Cell0 dispatch agrees for the actual callback; unrelated user0 dispatch is
+  explicitly shown to differ.
+- Review rejected an initial two-phase connection without guards for the
+  inherited raw prefix. A proof-exposure tactic was stopped for excessive
+  reduction cost. The retained repair strengthens `CoreInitialPrefix.Positive`
+  with explicit lexical ordinary guards and lifts it by direct induction.
+  Existing construction sites discharge those guards; the old raw discard is
+  proved unavailable through this interface. All 15 affected modules pass fresh
+  independent warnings-as-errors compilation. Callback execution remains open.
+- The combined lexical-discard audit covers 826 registered modules and 11,279
+  exact dependency reports, retaining 811 unchanged verified source/report
+  pairs. Active admitted-resume and higher-order files are excluded. No Rust
+  code changed.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted first-capture prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Forty-transition second-capture prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Lexical discard/closing-entry batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Forty-five-transition lexical discard prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Cleanup application/beta batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs and indexed effectful source checkpoint independently verified | Migrate effectful callable evidence and retained support through M4 | M4 current/pending/coherent migration and module dependency boundary | Concrete current/saved-frame cell-read checkpoint 1–2 hours; full repair estimate unresolved |
 | C5 | 0 / 4 | Admitted first-capture prefix independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted first-resume batch 1–2 hours; total unresolved |
 
@@ -647,6 +666,13 @@ Independent review covers source semantics before code quality and theorem scope
 Historical proof sections retain old open obligations. Current endpoint code and
 the final M0–M4 evidence determine the baseline; historical prose must not reset
 completed milestones.
+
+Close-identity correspondence must cover both empty and nonempty discard
+projection. Core increments its ghost close counter only for nonempty work;
+the lexical calculus creates a close owner on every discard. The current
+nonempty fixture cannot justify equating these counters in general. This
+refines the existing C3.1/C3.3 ownership obligations without changing the
+fragment or acceptance inventory.
 
 ## Deviations
 
