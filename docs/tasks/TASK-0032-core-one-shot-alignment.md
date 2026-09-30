@@ -850,12 +850,81 @@ remain separate targets. A small first example does not reduce the final scope.
   uniqueness. This finishes the finite-example line; general admission,
   simulation and the integrated theorem remain open.
 
+- The C4 interface review found that universal private checking is too strong:
+  public pure rows admit an empty receiver, while private handler rows retaining
+  a resource require that resource at the receiver. The approved repair uses
+  open body evidence indexed by call world, receiver bound and argument support,
+  with hereditary authentication of the same selected clause rows. Existing
+  code/accounting interfaces and completed M4 theorems remain unchanged.
+  The next integration gate must connect substitution through supported source,
+  saved frames and the current execution site to handler capture. Helper-only
+  results will not close this gate. The bounded estimate is 90–120 active minutes;
+  restored-world rebasing follows and remains outside that estimate.
+- Independent interface review confirms two required current support facts.
+  Overall expression dependencies omit clause formals, so they cannot bound
+  all selected declaration rows. Private checking must also receive the
+  authenticated formal/receiver bound. Capture must then prove actual payload
+  support within the selected formal bound and the post-capture clause receiver;
+  cells inside the dormant capture are not visible there. Existing lower capture
+  checking preserves selected row evidence but does not supply this operand
+  fact. No further saved-frame mismatch was identified when the same selected
+  rows and hereditary support witnesses are retained. These are implementation
+  acceptance requirements, not completed transport theorems.
+- The C3 review found that the original projected relation cannot represent
+  progress after a resource release or a target-only retirement marker. The
+  approved batch adds a residual projection carrier derived from the same
+  mapped capture and successful Core projection. It separates local Core and
+  target close labels, matches each actual resource pop with finite lexical
+  advances, and connects final close completion in one execution chain.
+  Arbitrary nested live/spent captures are included. The resource-only guard is
+  a batch boundary; general cleanup remains in the fragment. Estimated active
+  work is 2–3 hours, running in parallel with C4. Both estimates cover their
+  connected checkpoints, not completion of C2–C5.
+- A separate bounded C3.2 batch completes the missing strict-focus cases:
+  pair and application entry/return, bind and Unit-match initialization,
+  Boolean conditions and resource initialization. Each rule must derive mapped
+  endpoints, actual Core next and its positive target segment from current
+  translation and closing evidence. Existing request/resume and value-ready
+  rules are reused. Validated Core cleanup already holds a closed callback;
+  its non-value target focus case is unreachable and must be proved so.
+  This batch owns one new leaf, has no dependency on the C4 repair or resource
+  cursor, and is estimated at 2–3 active hours in parallel with those batches.
+- Both C3 batches are now implemented and independently compiled. Resource-only
+  nonempty discard connects the same owner cut through `closing.length + 2`
+  actual Core steps, with exact releases, nested retirement and a separately
+  named target close. Its accounted chain supplies both execution and ledger
+  evidence. The strict-focus leaf supplies eight operational rules and proves
+  non-value cleanup registration unreachable for an authenticated callback.
+  Current translation, readiness and mapped-tail evidence remain premises;
+  general admission and callback lifting remain open.
+- The independent rebuild exposed two additional exhaustive matches in the
+  admitted-completion leaf. Both received only an impossible eval/unwind case;
+  its statements and 90-step example are unchanged. The corrected combined
+  build passes for 16 affected modules. The three new leaves add 26 reports,
+  giving 847 registered modules and 11,454 exact reports with 831 unchanged
+  verified pairs. No new fixture or Rust change was added.
+- The C4 connected-gate estimate has slipped. The receiver-conditioned
+  interface and open source-family prefix compile, but general substitution,
+  hereditary formation and the supported-source/frame/site connection remain.
+  The next 30-minute checkpoint is compiled hereditary formation and actual
+  caller specialization; the worker estimates another 90–120 active minutes
+  after that checkpoint. The family must also select the actual lexical support
+  environment: an older conservative bound can retain a resource that a later
+  callable does not read. This refines the existing support obligation without
+  changing the public contract or completed M4 proofs.
+- The cleanup review recommends a general retained cursor with authenticated
+  cleanup nodes, derived from the same captured frames and actual projection.
+  Construction, finite normalization and actual cleanup start/finish are
+  estimated at 2–3 active hours. General callback-body lifting and exact effect
+  dispatch remain separate obligations. Implementation is held pending the next
+  C4 checkpoint; no additional finite examples are planned.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | General empty discard and prior cleanup/cell/completion components independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Empty-discard batch complete; broader lifting, nonempty projection and static derivation unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Hereditary per-clause support authentication, substituted plans and restored-world caller transport | Support-interface review about 20 minutes; connected repair estimate pending its result |
+| C3 | 0 / 5 | Resource-only discard and strict-focus components independently verified, alongside earlier transitions | Cleanup-bearing projection, general callback lifting, state/ownership correspondence | Static readiness/dispatch and annotation authentication | Cleanup construction/start/finish estimated 2–3 active hours; implementation held; full estimate unresolved |
+| C4 | 2 / 3 | Common owner-source checkpoint independently verified; receiver-dependent repair implementing | Migrate handler/owner contracts and retained support through full M4 invariant | Hereditary clause support, selected private rows and restored-world caller transport | Next checkpoint 30 minutes, then connected gate estimated 90–120 active minutes; rebasing and full M4 migration follow |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

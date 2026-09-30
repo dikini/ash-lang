@@ -1,6 +1,7 @@
 import CoreResumeEntry
 import SourceResourceRoutes
 import CoreCleanupRunFrames
+import CoreResourceProjection
 
 /-! A bounded bridge to the current lexical unwind machine. Core closeFuel
 projects captured scopes, while the target retains their lexical order. This
@@ -51,6 +52,14 @@ inductive Related (graph : CoreSyntax.Graph) : Point → Prop where
       (frames : state.frames = .closeCompletion identity :: framesOf annotations)
       (tail : PushedWithMaps graph state.heap annotations target) :
       Related graph ⟨state,.unwind scope (.push (.closing identity callerScope) target),owners,annotations⟩
+  /-- Resource-only residual work keeps separate local physical/target close
+  labels. No global label map or freshness claim is implied by this carrier. -/
+  | resourceProjected (cursor : CoreResourceProjection.Cursor graph state.heap physical lexical)
+      (outside : PushedWithMaps graph state.heap annotations target)
+      (control : state.control = .returned .unit)
+      (frames : state.frames = physical ++ .closeCompletion coreClose :: framesOf annotations) :
+      Related graph ⟨state,.unwind scope (lexical.append (.push (.closing targetClose callerScope) target)),
+        owners,annotations⟩
   | runningCleanup (carrier : CoreCleanupRunFrames.RunningTail graph state.heap physical lexical)
       (component : ComponentMapped graph owners annotations (CoreCleanupRunFrames.isolate state annotations) target)
       (frames : state.frames = framesOf annotations ++ physical) :

@@ -813,6 +813,51 @@ covers 844 modules and 11,428 reports, retaining 841 unchanged verified pairs.
 No Rust behavior, relation representation or finite example was added for this
 general empty-discard proof.
 
+[CoreResourceProjection.lean](CoreResourceProjection.lean) derives a residual
+resource cursor from the same mapped capture and successful `closeFuel` result.
+It retains exact resource nodes, keys and payloads, skipped lexical frames and
+nested live/spent captures. Live expansion introduces the corresponding
+retirement marker. The existing `PopAppend` traversal agrees with this actual
+projection; it does not replace the Core evaluator.
+
+[CoreResourceUnwind.lean](CoreResourceUnwind.lean) connects actual nonempty
+resource-only discard through every release and close completion.
+`discard_resource_segment` constructs one `AccountedChain` of
+`closing.length + 2` Core transitions. Each link derives its related endpoints;
+the same positive transition witness supplies the target trace and ownership
+accounting. Finite lexical advances and retirements precede the matching Core
+resource pop or final close pop. The result preserves exact resource-release
+order and completed-ticket order, and proves ownership multiplicities by
+permutation.
+
+Core and target close labels are independent local parameters. This covers a
+nonempty resource projection after empty discards have separated their counters.
+The physical counter advances once at discard; the target close is created and
+completed within the segment. Current-history freshness and admission do not
+follow from the cursor. Cleanup-bearing projections and general callback
+dispatch remain required coverage, outside this resource-only component.
+
+[CoreStrictFocus.lean](CoreStrictFocus.lean) adds eight general operational rules
+for tuple and application entry/return, bind and Unit-match initialization,
+Boolean condition evaluation and resource initialization. Current translation,
+closing and mapped-tail witnesses construct both related endpoints, actual
+Core next and an assembled positive link. Tuple/function return restores the
+saved owner map and scope through plug followed by focus. Unit match retains
+both dummy-absence facts; Boolean focus covers both actual arm orders.
+
+Existing request/resume and value-ready traversal rules are reused. The tenth
+target focus position, non-value cleanup registration, is unreachable for Core's
+authenticated closed callback. Together these account for all strict-focus
+positions at the current-witness boundary. Deriving those witnesses from general
+admission, and lifting the full transition relation through running callbacks,
+remain open.
+
+The three new leaves report 26 standard-only axiom dependencies. Independent
+verification rebuilds 16 affected modules and retains 831 unchanged verified
+pairs: 847 registered modules and 11,454 exact reports in total. The additive
+unwind relation requires three impossible-case compatibility branches in
+existing consumers. No Rust change or new finite example accompanies this batch.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
@@ -852,8 +897,11 @@ were captured. After an empty discard, using Core's unchanged counter as the
 next target close identity would reuse an issued target identity. The general
 relation therefore needs an explicit correspondence for close identities or a
 proved treatment of these administrative close events. Equality in the
-nonempty fixture does not establish that relation. This is a C3 representation
-obligation, not a demonstrated change to source-visible cleanup behavior.
+nonempty fixture does not establish that relation. The empty-discard and
+resource-only nonempty components above now use independent local labels;
+cleanup-bearing projection still needs that treatment. This is a C3
+representation obligation, not a demonstrated change to source-visible cleanup
+behavior.
 
 ### Callable-support component
 
@@ -1098,10 +1146,21 @@ each stored clause support bound. A bound selected before a resource is acquired
 cannot be preserved by equality when substitution inserts a callable retaining
 that resource. Fixed-bound substitution remains valid when its explicit support
 hypotheses hold; general restoration must authenticate new bounds against the
-actual receiver. A proposed hereditary support companion is under interface
-review. It must also account for the existing lambda refinement's universal
-checking premise: increasing a bound does not justify checking at every old
-receiver. No such transport theorem or full handler admission is claimed yet.
+actual receiver. Review established that the lambda refinement's universal
+checking premise is too strong for this transport: public pure rows can be
+checked at an empty receiver, while private handler rows retaining a resource
+cannot. Reannotating the rows alone cannot repair that premise.
+
+The approved experimental repair selects private rows from open body evidence
+indexed by the call world, receiving support bound and actual argument support.
+A hereditary companion authenticates each clause bound using the same source
+derivation and support environment. Private checking consumes evidence for the
+actual receiver; the existing code and accounting interfaces remain unchanged,
+and universal refinements embed into the conditional interface. This is an
+implementation decision, not a completed theorem. Its integration gate connects
+substitution, supported source, saved frames and the current execution site
+through handler capture. General restored-world transport remains required.
+No such transport theorem or full handler admission is claimed yet.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
