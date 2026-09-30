@@ -53,6 +53,9 @@ remain separate targets. A small first example does not reduce the final scope.
   initial admission and constructive calculus execution, not Core admission or
   arbitrary-annotation preservation. Fresh baseline verification passed.
 - No C1–C5 deliverable is yet marked integrated.
+- Intermediate commit `76380f4` retains the reviewed comparison, CP-0021 repair
+  and first proof components. This does not close the product checkpoint or
+  complete Core alignment.
 
 ### Increment 1 local results
 
@@ -83,8 +86,27 @@ remain separate targets. A small first example does not reduce the final scope.
   763 modules, 10,622 exact dependency reports and 1,885 local links/anchors.
   Only `propext`, `Quot.sound` and `Classical.choice` occur in the reports.
   New alignment modules receive separate checks before registration.
+  The combined audit including `CoreClosing` and `CoreCallableSupport` also
+  passed: 765 modules, 10,636 dependency reports and 1,891 links/anchors. For
+  149 worktree files with newer copy timestamps, the audit verified byte equality
+  with the baseline source and cache freshness against that source.
   A duplicate uncached baseline build was stopped deliberately; its exit 143 is
   not a verification result. No failing proof was bypassed.
+
+### Increment 2 components
+
+- `CoreSyntax` and `CoreTranslation` passed fresh independent compilation.
+  They retain the finite graph and metadata, check the supported local shapes,
+  and translate strict syntax with lexical owner mapping. Request, resource and
+  cleanup equations and administrative-name separation are proved. Metadata
+  authentication, fuel sufficiency and initial admission remain open.
+- The test-only Rust exporter is being implemented against an actual validated
+  graph. The independent Core machine is a separate worker batch; its step
+  definition must not assume calculus execution or validity.
+- The complete kernel admission fixture exposed a failed phase-transport
+  argument: consuming saved owner demand can change a suffix request's protection
+  bit. A negative row-certificate witness is under construction. The admitted
+  fragment has not been reduced, and no calculus interface change is yet chosen.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |

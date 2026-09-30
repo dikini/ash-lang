@@ -245,3 +245,59 @@ Core-row equality, arbitrary callable refinement or Rust closure correspondence.
 Independent review and warnings-as-errors compilation passed. The Program
 construction uses only `propext` and `Quot.sound`; its existing initial-state
 wrapper additionally depends on `Classical.choice`.
+
+### Runtime capacity boundary
+
+The [runtime failure representation](../../../../src/eval/failure.rs)
+distinguishes configured capacity, allocator refusal, storage reservation failure
+and exhausted work. These are separate from malformed-control, missing-binding
+and invalid-location failures. A correspondence theorem must not admit the latter
+as progress alternatives for a related validated state.
+
+The successful-step comparison must include every fallible preparation used by
+that step: frame and heap storage, environment and instantiation storage, live
+owner limits, finite activation keys, work charges and enabled trace storage.
+Mathematical freshness does not imply that a representable Rust key is available.
+Registration and native-buffer capacities remain outside the declared fragment.
+
+Capture reserves before draining active frames; resume reserves before taking
+the captured continuation. Discard additionally checks host disposal while
+walking frames after consumption. Thus successful preflight alone does not
+justify successful discard projection. The existing
+`owned_discard_preflight_is_exact_atomic_and_fresh_retryable` regression checks
+preflight refusal, not a theorem that every possible failure is atomic.
+
+Under [cleanup semantics](../../../../spec/dynamic-semantics.md#scoped-cleanup-actions),
+internal exhaustion gives no source-callback completion guarantee. Host teardown
+does not replay source cleanup or roll back writes. Its separately reported
+`CleanupStatus::Complete` means host destruction completed, not that source
+callbacks ran. The final Rust claim must distinguish a matching successful run
+from a capacity-stopped prefix and account for any observations made within a
+failing operation before asserting prefix correspondence. This failure boundary
+is identified; its connection to the independent Core machine remains open.
+
+### Core syntax translation component
+
+[CoreSyntax.lean](CoreSyntax.lean) retains a distinct finite Core graph with
+postorder child references, original node identities, structural types, effect
+rows, binders, clause owners and source spans. Its shape checker rejects cycles,
+missing children, duplicate original identities and unsupported local forms.
+Stored resume/discard use outcomes must be `Consumed`, as required by the Rust
+validator; this field does not describe a runtime owner's current liveness.
+
+[CoreTranslation.lean](CoreTranslation.lean) translates that graph through an
+explicit lexical owner map. Request operands remain nested and strict. Resource
+translation binds the Core handle to the fresh resource reference. Cleanup
+checks its stored callback invocation before translating the callback variable.
+Unit matches retain scrutinee evaluation; exhaustive Boolean matches become
+branches. A singleton global wrapper becomes an ordinary binding only when its
+initializer has no free self-reference.
+
+The checked component proves request/resource/cleanup equations, entry through
+the shape check, and fresh administrative-name separation. Concrete reductions
+cover the supported constructor transformations and structured rejection cases.
+Types, exact rows, declaration signatures, lexical support and source provenance
+are retained data, not authenticated static judgments. Fuel exhaustion is an
+explicit error; shape checking has not yet been proved to supply sufficient
+fuel. No initial admission or execution correspondence follows from this syntax
+component alone. Independent warnings-as-errors compilation passed.

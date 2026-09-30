@@ -769,3 +769,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/SourceAnnotatedCodeRecords.olean
 lean -DwarningAsError=true -o "$proof_build_dir/SourceAnnotatedStoredUseExecutionCapture.olean" SourceAnnotatedStoredUseExecutionCapture.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreClosing.olean" CoreClosing.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSupport.olean" CoreCallableSupport.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreSyntax.olean" CoreSyntax.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreTranslation.olean" CoreTranslation.lean
