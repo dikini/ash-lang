@@ -1,17 +1,18 @@
 import CoreStrictFrames
 import CoreEffectFrames
+import CoreCleanupFrames
 
 /-! Bounded ordinary-stack components for TASK-0032.
 Only a contiguous inner prefix may be flattened. Each flattened hole must be
 closed and value-ready; plugging app/bind/branch produces a non-value, so such
 a frame terminates that prefix. This is not generic reachable-stack coverage.
 Pushed frames carry explicit PlainData scopes and annotations. Authentication
-against Core validation remains a static obligation. Captured owners, cleanup,
-and discard have no relation constructors; exact handler/cell boundaries and
+against Core validation remains a static obligation. Captured owners, running cleanup,
+and discard have no relation constructors; exact armed cleanup, handler/cell boundaries and
 resource initializers are explicit constructors, never opaque related suffixes.
 No full simulation theorem or future configuration validity is assumed. -/
 namespace Ash.OneShot.CoreStrictStack
-open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames
+open ScopedExpressions ScopedExecution CoreValueRelation CoreStrictFrames CoreEffectFrames CoreCleanupFrames
 
 abbrev MappedFrame := CoreTranslation.OwnerMap × CoreMachine.Frame
 
@@ -36,6 +37,9 @@ inductive PushedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) : List MappedF
   | boundary (frame : BoundaryRel graph owners heap core effectFrame)
       (tail : PushedWithMaps graph heap cores target) :
       PushedWithMaps graph heap ((owners, core) :: cores) (.push effectFrame target)
+  | cleanup (frame : CleanupRel graph owners heap core data)
+      (tail : PushedWithMaps graph heap cores target) :
+      PushedWithMaps graph heap ((owners, core) :: cores) (.push (.armed data) target)
 
 inductive FlattenedWithMaps (graph : CoreSyntax.Graph) (heap : Heap) :
     List MappedFrame → Code → Scope → Code → Scope → Prop where
@@ -104,6 +108,7 @@ theorem PushedWithMaps.heap_weaken (related : PushedWithMaps graph heap cores ta
   | cons frame tail ih => exact .cons (PlainFrameRel.heap_weaken frame extension) ih
   | initializer frame tail ih => exact .initializer (InitializerRel.heap_weaken frame extension) ih
   | boundary frame tail ih => exact .boundary (BoundaryRel.heap_weaken frame extension) ih
+  | cleanup frame tail ih => exact .cleanup (CleanupRel.heap_weaken frame extension) ih
 
 theorem FlattenedWithMaps.heap_weaken
     (related : FlattenedWithMaps graph heap cores code scope result resultScope)

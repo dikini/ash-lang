@@ -177,6 +177,16 @@ future-state premises. It remains a prerequisite to changing callable value
 typing: common helper admission, returned closures, saved continuations and
 retained-resource transport are still open.
 
+The [checked-root result](direct-effects/one-shot/CoreCallableRootRefinement.lean)
+passes independent compilation and review for these constructors and both
+Unit/sequence and Unit/retaining row choices. It constructs actual normal and
+annotated roots, checks and budget bounds under the original current checking
+parameters. Retain it as the branch-accounting prerequisite. A row choice is
+not yet a common type for a branch returning either closure: the old rich
+value and authentication judgments are unchanged. The next design decision
+must address those value judgments and substitution, rather than add further
+post-beta wrappers to this result.
+
 ## Question
 
 Can one expression language, an ordered stack of interpretations, and separately

@@ -527,6 +527,23 @@ before evaluating body29 or registering its cleanup callback. Scope and answer
 annotations are supplied runtime-relation data; their authentication remains
 separate from these actual transition equations.
 
+[CoreCleanupFrames.lean](CoreCleanupFrames.lean) relates an armed cleanup
+boundary to its actual delayed Core action, saved environment and callback.
+The cleanup shape check constructs the delayed invocation's translation;
+callback lookup and body interpretation follow from one current lexical
+closing derivation. The ordinary stack relation now has this exact armed
+constructor and transports it under heap extension.
+
+[CoreCleanupEntry.lean](CoreCleanupEntry.lean) extends the same initial chain
+to 24 actual Core transitions. It constructs the callback binding and registers
+cleanup, reaching guarded body24 with action27 saved at key0. Every intermediate
+state remains related; silent links use the existing strict potential and
+registration takes a positive target step. The exact target ledger creates
+`[resource 0, cleanup 0]` and discharges nothing. The action has not been entered,
+and a missing callback is proved to reject rather than register. Supplied action
+scope, answer and request annotations still need authentication. Cleanup
+execution, general owner freshness, capture and M4 validity remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
@@ -664,10 +681,21 @@ dependency source hashes match the verified baseline.
 This is still admission of the substituted body, not of the whole application.
 The old lambda guard and fixed rich input/result rules remain unchanged.
 Moreover, `Accounting.Run.choice` constructs a different requirement tree, so
-the identical-root interface does not cover arbitrary branches. The next
-DN-0033 checkpoint transports normal roots, disposal annotations and checked
-budgets together while preserving owner demand. Common helper, branch-result
-and continuation admission remain open.
+the identical-root interface does not cover arbitrary branches.
+
+[CoreCallableRootRefinement.lean](CoreCallableRootRefinement.lean) resolves that
+accounting restriction. Its refinement constructs an actual normal root with
+the same owner-demand index, together with accounting and a transport of
+`RowAnnotation`, the disposal-annotated check and the current budget bound.
+Identity, composition and embedding of identical-root refinement are proved.
+The choice constructor checks both actual alternatives at the same store,
+receiver and phases, then bounds their appended footprint by the same budget.
+It preserves alternative owner demand rather than consuming both branches.
+Unit/sequence and Unit/retaining row choices instantiate the common pure
+contract at arbitrary continuations. All eleven reports pass fresh independent
+compilation with standard axioms; all 437 dependency source hashes match the
+verified baseline. This changes no value-typing rule: common helper,
+branch-result, continuation and resource-exit admission remain open.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)
@@ -864,9 +892,22 @@ protected offer. Its row-admission proofs retain the actual resume/write suffix
 and discard alternative. `Spine.closedCompiled` then constructs resource body47
 with getter/setter bindings, handler-result binding and final read, discharging
 the empty-registry and lexical-map witnesses. It has no supplied handler proof.
-Resource48 remains unconstructed. The static derivation still needs to be
-derived from validated Core metadata in general; this is not an executable
-complete Core validator or an initial `Program` for the exported root.
+The resource constructor now recursively checks the actual initializer and
+fresh-activation body, including its handle binding. It retains the original
+Core type/row checks, masked raw template translation, lexical opening equation
+and resource hiding evidence for the actual body requirements. The compiler
+constructs source and authentication evidence using the existing resource
+opening lemma; neither judgment is a supplied semantic leaf.
+
+`Resource.hidden`, `Resource.checked` and `Resource.compiled` instantiate this
+rule for resource48. The fixture-local requirement transformation is justified
+by its explicit hiding derivation, not assumed valid for arbitrary trees.
+`Main.rootCompiled` then constructs translation and source/authentication for
+the actual exported root54, including Unit match49, main50 and application53.
+It takes no handler or resource certificate. The static derivation still needs
+to be derived from validated Core metadata in general. Actual-root declaration,
+contextual code, resource-checking and accounting certificates remain necessary
+to assemble a complete initial `Program`.
 
 ### Initial-admission interface repair
 

@@ -425,13 +425,41 @@ remain separate targets. A small first example does not reduce the final scope.
   whitespace and artifact checks pass; changed Markdown is clean except for
   the same 14 pre-existing DN-0033 lint findings.
 
+- The resource compiler now constructs Source/Auth and translation for actual
+  resource48 and exported root54, retaining the handle binding, Unit match,
+  main closure and invocation. Resource hiding is proved over the actual body
+  requirements. `Main.rootCompiled` has no supplied handler/resource or desired
+  invariant premise. The worker's 464-module focused gate passes; complete
+  actual-root `Program` certificates are the next C2 batch.
+- The armed-cleanup relation retains the actual delayed action, lexical
+  environment and callback. Its generic registration proof derives both body
+  and callback interpretations from one current environment derivation. The
+  concrete initial chain now reaches guarded body24 in 24 Core transitions,
+  with exact created ledger `[resource 0, cleanup 0]` and no discharged owners.
+  Action27 remains unevaluated; a missing callback rejects. The worker's
+  eleven-module focused gate passes. Capture, cleanup execution and M4 validity
+  remain separate obligations.
+- `CoreCallableRootRefinement` constructs changed normal/annotated roots and
+  checked accounting while preserving owner demand and the current budget.
+  Choice combines independently checked alternatives at the same phases.
+  All eleven reports pass independent compilation with standard axioms, all
+  437 dependency source hashes match the baseline, and peer review passes.
+  This completes the bounded branch-accounting checkpoint, not callable value
+  typing. The next C4 decision must address value judgments and substitution.
+- The combined root/cleanup/refinement audit passes for 808 registered modules,
+  11,074 exact dependency reports and 1,988 local links or anchors. Thirteen new
+  or affected modules have
+  fresh independent compilation evidence; 795 unchanged verified source/report
+  pairs are retained. Trust, import order, whitespace and artifact checks pass.
+  Rust is unchanged since the 2,900-test product gate.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Handler41 and actual resource-body spine compiler integrated | Full graph admission, metadata authentication, general compiler | Resource constructor/root admission; higher-order refinement gap | Resource/root source batch 1–2 hours; full estimate unresolved |
-| C3 | 0 / 5 | Twenty-transition initial prefix and resource correspondence integrated | Reachable annotations, remaining phases, captured owners, cleanup and full simulation | Static annotations and state/ownership relation | Cleanup-registration batch 1–2 hours; full estimate unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs verified; post-beta contextual transport independently verified | Resolve retained support and callable refinements without changing declared ports | Checked-root transport for branching, lambda/application/result and M4 preservation transport | Next checked-root checkpoint about 1 hour; full repair estimate unresolved |
-| C5 | 0 / 4 | Product gate and 805-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C2 | 0 / 4 | Actual root Source/Auth compiler independently verified | Initial Program certificates, metadata authentication, general compiler | Contextual code/accounting assembly; higher-order refinement gap | Actual-root Program batch 1–2 hours; full estimate unresolved |
+| C3 | 0 / 5 | Twenty-four-transition cleanup-registration prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Request/capture batch 1–2 hours; full estimate unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs verified; checked-root refinement independently verified and reviewed | Resolve retained support and callable refinements without changing declared ports | Lambda/application/result judgments, substitution and M4 preservation transport | Next bounded value-interface decision about 1 hour; full repair estimate unresolved |
+| C5 | 0 / 4 | Product gate and 808-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

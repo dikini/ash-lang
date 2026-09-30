@@ -1,11 +1,11 @@
 import CoreExportedAdmission
 import CoreGraphCapabilities
+import CoreEffectFrames
 
 /-! A static graph derivation for the supported ordinary, ticket, cleanup and
-handler constructors. Core node equations, declared annotations and lexical
+handler and resource constructors. Core node equations, declared annotations and lexical
 checks are inputs; translated source typing, row authentication and clause
-usage are constructed outputs. Deriving these annotations from Core validation
-and admitting resource entry remain separate obligations. -/
+usage are constructed outputs. Deriving these annotations from Core validation remains a separate obligation. -/
 namespace Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission
 open ScopedExpressions ScopedExecution ProtectionContracts
 open SourcePlannedTyping (Value Environment Operations Contracts Contract)
@@ -250,6 +250,39 @@ inductive Checked (graph : Graph)
         (by simpa only [signature] using Rows.sequence callbackRows (Rows.cleanup latent callbackBodyRows bodyRows))
         (callbackEffects ++ bodyEffects ++ allowanceEffects requests)
 
+  | resource {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
+      {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
+      {bodyRequirements : Nat → Requirements bodyDemand}
+      {bodyDependencies : Nat → SourceDependencyAnnotations.Dependencies}
+      {bodyPlans : ∀ identity, Plan (bodyDependencies identity)}
+      {bodyRows : ∀ identity, Rows (signature (bodyPlans identity))}
+      {bodyCode : Nat → Code} {bodyEffects : Nat → List Instantiation.Effect}
+      (known : graph.node index = some node)
+      (kind : node.kind = .resource binder handle initialIndex bodyIndex)
+      (handleType : ∀ identity, TypeAgreement (resources.bind binder identity) handle.type (.reference identity))
+      (initializer : Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        fuel initialIndex initial .integer initialDemand initialRequirements initialPlan .integer initialRows initialEffects)
+      (rawTranslated : CoreTranslation.translateFuel graph fuel ownerMap bodyIndex = .ok rawBody)
+      (body : ∀ identity, identity ∉ world →
+        Checked graph operations policy ports (resources.bind binder identity) contracts owners (world ++ [identity]) ownerMap
+          (.cell identity :: residual) scope (environment.extend handle.id (.reference identity))
+          (environmentRows.extend handle.id .reference)
+          fuel bodyIndex (bodyCode identity) output bodyDemand (bodyRequirements identity)
+          (bodyPlans identity) outputRows (bodyRows identity) (bodyEffects identity))
+      (opening : ∀ identity, identity ∉ world →
+        (rawBody.instantiate (Instantiation.Environment.empty.bind binder identity)).instantiate resources = bodyCode identity)
+      (formed : ScopedPorts.InWorld world output.erase.erase.port)
+      (effectsBound : residual.flatMap Instance.resources ⊆ world) (admitted : residual ⊆ allowed)
+      (hidden : ∀ identity, identity ∉ world →
+        ResourceRequirements.Hides identity (.sequence CoreInitialExample.empty (bodyRequirements identity)) outward)
+      (metadata : Metadata resources node output (initialEffects ++ allowanceEffects residual)) :
+      Checked graph operations policy ports resources contracts owners world ownerMap allowed scope environment environmentRows
+        (fuel + 1) index
+        (.resource binder initial ((Code.bind handle.id (.resourceRef (.bound binder)) rawBody).instantiate (resources.mask binder)))
+        output (initialDemand ++ bodyDemand) (.sequence initialRequirements outward)
+        (.sequence initialPlan (.resource (fun identity => .sequence .pure (bodyPlans identity)))) outputRows
+        (by simpa only [signature] using Rows.sequence initialRows (Rows.resource (fun identity => Rows.sequence Rows.pure (bodyRows identity))))
+        (initialEffects ++ allowanceEffects residual)
   | handler {resources : Instantiation.Environment} {contracts : Contracts} {owners : ContractRows contracts}
       {world : List Nat} {ownerMap : CoreTranslation.OwnerMap}
       (known : graph.node index = some node) (kind : node.kind = .handler handler rawEffect bodyIndex coreClauses)
@@ -487,6 +520,29 @@ theorem Checked.sourceAuth
       obtain ⟨sourceB, authB⟩ := ihBody
       exact ⟨.cleanup sourceC sourceB admitted, .cleanup (admitted := admitted) authC authB⟩
 
+  | resource known kind handleType initializer rawTranslated body opening formed effectsBound admitted hidden metadata ihI ihB =>
+      obtain ⟨initialSource, initialAuth⟩ := ihI
+      rename_i bodyDemand index node binder handle initialIndex bodyIndex allowed scope environment environmentRows fuel initial initialDemand initialRequirements initialDeps initialPlan initialRows initialEffects rawBody residual output outputRows outward resources contracts owners world ownerMap bodyRequirements bodyDependencies bodyPlans bodyRows bodyCode bodyEffects
+      have opened (identity : Nat) (fresh : identity ∉ world) :
+          (((Code.bind handle.id (.resourceRef (.bound binder)) rawBody).instantiate (resources.mask binder)).instantiate
+            (Instantiation.Environment.empty.bind binder identity)) =
+          .bind handle.id (.resourceRef (.activation identity)) (bodyCode identity) := by
+        rw [CoreEffectFrames.resource_open_commute]
+        simp only [Code.instantiate]
+        rw [opening identity fresh]
+        simp [Instantiation.ResourceName.instantiate, Instantiation.Environment.bind]
+      refine (let sourceBodies := ?_;
+        ⟨.resource initialSource sourceBodies formed effectsBound admitted hidden,
+          Auth.resource initialAuth (body := sourceBodies) (formed := formed)
+            (effectsBound := effectsBound) (admitted := admitted) (hidden := hidden) ?_⟩)
+      · intro identity fresh
+        rw [opened identity fresh]
+        obtain ⟨source, authenticated⟩ := ihB identity fresh
+        exact .bind (.reference (by simp)) source
+      · intro identity fresh
+        obtain ⟨source, authenticated⟩ := ihB identity fresh
+        simpa only [opened identity fresh, List.nil_append, signature, CoreInitialExample.empty] using
+          (Auth.bind (Auth.reference (issued := by simp)) authenticated)
   | handler known kind instantiated shapes body declarations coverage unique admitted effectsAdmitted metadata ihBody ihDecl =>
       obtain ⟨sourceB, authB⟩ := ihBody
       obtain ⟨sourceD, authD, typed, capabilities, modes⟩ := ihDecl
@@ -783,6 +839,14 @@ theorem Checked.translation
       refine ⟨_, cleanupTranslation known kind actionShape translated, ?_⟩
       simp [Code.instantiate, instantiated]
 
+  | resource known kind handleType initializer rawTranslated body opening formed effectsBound admitted hidden metadata ihI ihB =>
+      obtain ⟨rawInitial, translatedInitial, instantiatedInitial⟩ := ihI
+      rename_i bodyDemand index node binder handle initialIndex bodyIndex allowed scope environment environmentRows fuel initial initialDemand initialRequirements initialDeps initialPlan initialRows initialEffects rawBody residual output outputRows outward resources contracts owners world ownerMap bodyRequirements bodyDependencies bodyPlans bodyRows bodyCode bodyEffects
+      refine ⟨.resource binder rawInitial (.bind handle.id (.resourceRef (.bound binder)) rawBody), ?_, ?_⟩
+      · rw [CoreTranslation.resource_equation _ _ _ _ _ _ _ _ _ known kind]
+        simp only [translatedInitial, rawTranslated]
+        rfl
+      · simp only [Code.instantiate, instantiatedInitial]
   | handler known kind instantiated shapes body declarations coverage unique admitted effectsAdmitted metadata ihBody ihDecl =>
       obtain ⟨rawBody, translatedBody, instantiatedBody⟩ := ihBody
       obtain ⟨entries, translatedDecl, instantiatedDecl⟩ := ihDecl _
@@ -885,6 +949,7 @@ theorem Checked.ticketFreeSyntax
   | resume => intro free; cases free
   | discard => intro free; cases free
   | cleanup => intro free; cases free
+  | resource => intro free; cases free
   | handler => intro free; cases free
 
   | unavailable | available | nil | cons => trivial
@@ -1932,8 +1997,8 @@ def emptyOwners : ContractRows emptyContracts := by intro _ _ known; cases known
 def emptyEnvironmentRows : EnvironmentRows (fun _ => none) := by intro _ _ known; cases known
 
 /-- The actual resource body at its fresh activation has no supplied structural
-certificate: the finite registry/map witnesses are discharged here. Resource
-entry itself remains a separate Core constructor obligation. -/
+certificate: the finite registry/map witnesses are discharged here. The
+resource entry is constructed by `Resource.checked` below. -/
 theorem closedChecked (identity fuel : Nat) :
     Checked CoreExportedFixture.graph operations policy ports (Getter.resources identity) emptyContracts emptyOwners [identity] []
       [.cell identity] .none (savedEnvironment identity (fun _ => none)) (emptyEnvironmentRows.extend 4 .reference)
@@ -1949,6 +2014,219 @@ theorem closedCompiled (identity fuel : Nat) :
   (closedChecked identity fuel).compiled
 
 end Spine
+
+namespace Resource
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+
+/-- Finite raw graph syntax, retained independently of its fresh activation. -/
+def rawBody : Code := (CoreTranslation.translateFuel CoreExportedFixture.graph 11 [] 47).toOption.getD .unit
+
+theorem translatedBody (fuel : Nat) :
+    CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 11) [] 47 = .ok rawBody := by
+  rfl
+
+/-- Fixture-local requirement shape; its cell erasure is justified only by
+`hidden` below, not by this syntax function alone. -/
+private def closedShape : {demand : List Nat} → Requirements demand → Requirements demand
+  | _, .request _ _ => .request [] []
+  | _, .retire owner => .retire owner
+  | _, .spent owner => .spent owner
+  | _, .invoke key demand nearer => .invoke key demand nearer
+  | _, .sequence first second => .sequence (closedShape first) (closedShape second)
+  | _, .emitAfter body _ _ => .emitAfter (closedShape body) [] []
+  | _, .choice first second same => .choice (closedShape first) (closedShape second) same
+
+def outward : Requirements [] := closedShape (.sequence empty (Spine.requirements 0))
+
+theorem hidden (identity : Nat) :
+    ResourceRequirements.Hides identity (.sequence empty (Spine.requirements identity)) outward := by
+  unfold outward Spine.requirements Handler.requirements Guarded.requirements Guarded.cleanupReq
+    Guarded.bodyReq Guarded.afterSecondReq Writes.requirements Writes.tupleRequirements applicationRequirements
+    requestRequirements empty
+  simp only [Requirements.prepend, List.nil_append, closedShape]
+  have pure : ResourceRequirements.Hides identity (.request [] []) (.request [] []) :=
+    .request
+  have guardedPure : ResourceRequirements.Hides identity
+      (.request [.ordinary (.handler effect 0 (Handler.table identity))] []) (.request [] []) :=
+    .requestThrough (layers := [.handler effect 0 (Handler.table identity)]) (raw := []) (interpreted := []) rfl
+  have emit {a b : Requirements []} {raw interpreted : Footprint}
+      (body : ResourceRequirements.Hides identity a b)
+      (exported : ProtectionResiduals.residualize [.handler effect 0 (Handler.table identity)] raw = some interpreted)
+      (closed : CallableProtection.outsideCell identity interpreted = []) :
+      ResourceRequirements.Hides identity
+        (.emitAfter a [.ordinary (.handler effect 0 (Handler.table identity))] raw) (.emitAfter b [] []) := by
+    simpa only [closed, List.map_cons, List.map_nil] using ResourceRequirements.Hides.emitThrough body exported
+  have outside : CallableProtection.outsideCell identity (Setter.footprint identity) = [] := by
+    simp [CallableProtection.outsideCell, Setter.footprint]
+  have qualified : CallableProtection.outsideCell identity (qualify true (Setter.footprint identity)) = [] := by
+    simp [CallableProtection.outsideCell, Setter.footprint, qualify]
+  refine .sequence pure (.sequence pure (.sequence pure (.sequence (.sequence guardedPure ?_) ?_)))
+  · apply emit (interpreted := qualify true (Setter.footprint identity)) _ rfl qualified
+    refine .sequence guardedPure (.sequence ?_ (.sequence ?_ ?_))
+    · exact emit guardedPure rfl outside
+    · exact emit guardedPure rfl outside
+    · exact emit (.sequence guardedPure (.sequence guardedPure guardedPure)) rfl outside
+  · simpa [CallableProtection.outsideCell, getterFootprint] using
+      (ResourceRequirements.Hides.emitAfter (identity := identity) (.sequence pure pure)
+        (raw := getterFootprint identity))
+
+
+def template : Code := .bind 4 (.resourceRef (.bound 0)) rawBody
+def code : Code := .resource 0 (.integer 0) (template.instantiate (Instantiation.Environment.empty.mask 0))
+def requirements : Requirements [] := .sequence empty outward
+def plan := Plan.sequence Plan.pure (Plan.resource (fun identity => Plan.sequence Plan.pure (Spine.plan identity)))
+def rows : Rows (signature plan) := .sequence .pure (.resource (fun identity => .sequence .pure (Spine.rows identity)))
+
+variable {environment : Environment} {environmentRows : EnvironmentRows environment}
+
+theorem checked (fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports Instantiation.Environment.empty
+      Spine.emptyContracts Spine.emptyOwners [] [] [] .none environment environmentRows
+      (fuel + 12) 48 code .integer [] requirements plan .integer rows [] := by
+  apply Checked.resource (node := node 48) (binder := 0) (handle := ⟨4, .reference (.bound 0)⟩)
+    (initialIndex := 1) (bodyIndex := 47) (fuel := fuel + 11)
+    (bodyRequirements := Spine.requirements) (bodyPlans := Spine.plan) (bodyRows := Spine.rows)
+    (bodyCode := Spine.code) (residual := []) (rawBody := rawBody)
+    (known := rfl) (kind := rfl)
+    (handleType := fun identity => .reference rfl)
+    (initializer := Checked.integer (node := node 1) (known := rfl) (kind := rfl) ⟨.integer, by intro effect; rfl⟩)
+    (rawTranslated := translatedBody fuel)
+    (formed := by intro identity member; cases member)
+    (effectsBound := List.nil_subset _) (admitted := List.nil_subset _)
+    (hidden := fun identity _ => hidden identity)
+  · intro identity fresh
+    exact Spine.checked (fuel := fuel) (witness := 0) List.mem_cons_self rfl rfl
+  · intro identity fresh
+    rfl
+  · exact ⟨.integer, by intro effect; rfl⟩
+
+theorem compiled (fuel : Nat) :
+    ∃ raw, CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 12) [] 48 = .ok raw ∧
+      raw.instantiate Instantiation.Environment.empty = code ∧
+      ∃ source : SourcePlannedSources.Expression operations policy Spine.emptyContracts [] [] .none
+        environment code .integer [] requirements (signature plan),
+        Auth operations policy ports Spine.emptyOwners environmentRows source .integer rows :=
+  (checked (environmentRows := environmentRows) fuel).compiled
+
+theorem outwardClosed : RecursiveOutward.Outward requirements (some []) := by
+  unfold requirements outward Spine.requirements Handler.requirements Guarded.requirements Guarded.cleanupReq
+    Guarded.bodyReq Guarded.afterSecondReq Writes.requirements Writes.tupleRequirements applicationRequirements
+    requestRequirements empty
+  simp only [Requirements.prepend, List.nil_append, closedShape]
+  repeat (any_goals (first
+    | apply RecursiveOutward.Outward.sequence (left := some []) (right := some [])
+    | apply RecursiveOutward.Outward.emitAfter (row := some []) (layers := []) (raw := [])
+    | exact RecursiveOutward.Outward.request (layers := []) (raw := [])))
+
+end Resource
+
+namespace Main
+open CoreInitialExample CoreExportedAdmission CoreKernelProgram
+private def node (index : Nat) : Node :=
+  (CoreExportedFixture.graph.node index).getD ⟨0, .unit, [], none, .unit⟩
+def dummy := CoreTranslation.dummy CoreExportedFixture.graph 49
+def body : Code := .bind dummy (.variable 0) Resource.code
+def bodyRequirements : Requirements [] := .sequence empty Resource.requirements
+def bodyPlan := Plan.sequence Plan.pure Resource.plan
+def bodyRows : Rows (signature bodyPlan) := by
+  unfold bodyPlan
+  simpa only [signature] using Rows.sequence Rows.pure Resource.rows
+
+def unitEnvironment : Environment := Environment.extend (fun _ => none) 0 .unit
+def unitEnvironmentRows : EnvironmentRows unitEnvironment := Spine.emptyEnvironmentRows.extend 0 .unit
+
+theorem bodyChecked (fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports Instantiation.Environment.empty
+      Spine.emptyContracts Spine.emptyOwners [] [] [] .none unitEnvironment unitEnvironmentRows
+      (fuel + 13) 49 body .integer [] bodyRequirements bodyPlan .integer bodyRows [] := by
+  apply Checked.unitMatch (index := 49) (fuel := fuel + 12)
+    (environment := unitEnvironment) (environmentRows := unitEnvironmentRows)
+    (node := node 49) (initialIndex := 0) (bodyIndex := 48)
+    (known := rfl) (kind := rfl)
+    (initializer := Checked.variable (index := 0) (name := 0) (value := .unit)
+      (environment := unitEnvironment) (environmentRows := unitEnvironmentRows) (node := node 0) (known := rfl) (kind := rfl)
+      (binding := rfl) (formed := by intro identity member; cases member) ⟨.unit, by intro effect; rfl⟩)
+    (body := Resource.checked fuel)
+  exact ⟨.integer, by intro effect; rfl⟩
+
+def code := Code.lambda 0 body
+def value := Value.function .unit .integer [] [] (signature bodyPlan)
+def valueRows : ValueRows value := .function .unit .integer bodyRows
+
+theorem checked (fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports Instantiation.Environment.empty
+      Spine.emptyContracts Spine.emptyOwners [] [] [] .none (fun _ => none) Spine.emptyEnvironmentRows
+      (fuel + 14) 50 code value [] empty .pure valueRows .pure [] := by
+  apply Checked.lambda (node := node 50) (binder := ⟨0, .unit⟩) (bodyIndex := 49)
+    (known := rfl) (kind := rfl) .unit (bodyChecked fuel)
+    (bodyBound := List.Subset.refl _)
+    (outward := RecursiveOutward.Outward.sequence (RecursiveOutward.Outward.request (layers := []) (raw := [])) Resource.outwardClosed)
+    (formed := by intro identity member; cases member)
+    (latentBound := by intro request member; cases member)
+  · change ([] : List Nat) ⊆ []
+    exact List.Subset.refl _
+  · exact ⟨.function .unit .integer (by intro effect; rfl) (by intro request member; cases member), by intro effect; rfl⟩
+/-- Raw initializer syntax is finite translation evidence for the actual
+singleton recursive wrapper's nonrecursive dependency check. -/
+def raw : Code := (CoreTranslation.translateFuel CoreExportedFixture.graph 14 [] 50).toOption.getD .unit
+theorem translated (fuel : Nat) :
+    CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 14) [] 50 = .ok raw := rfl
+
+def application := Code.app (.variable 13) .unit
+def applicationRequirements : Requirements [] := .emitAfter (.sequence empty empty) [] []
+def applicationPlan := Plan.sequence Plan.pure (Plan.sequence Plan.pure bodyPlan)
+def applicationRows : Rows (signature applicationPlan) := by
+  unfold applicationPlan
+  simpa only [signature] using Rows.sequence Rows.pure (Rows.sequence Rows.pure bodyRows)
+def callEnvironment : Environment := Environment.extend (fun _ => none) 13 value
+def callEnvironmentRows : EnvironmentRows callEnvironment := Spine.emptyEnvironmentRows.extend 13 valueRows
+
+theorem applicationChecked (fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports Instantiation.Environment.empty
+      Spine.emptyContracts Spine.emptyOwners [] [] [] .none callEnvironment callEnvironmentRows
+      (fuel + 14) 53 application .integer [] applicationRequirements applicationPlan .integer applicationRows [] := by
+  apply Checked.app (index := 53) (fuel := fuel + 13)
+    (environment := callEnvironment) (environmentRows := callEnvironmentRows)
+    (node := node 53) (functionIndex := 51) (argumentIndex := 52)
+    (known := rfl) (kind := rfl)
+    (function := Checked.variable (index := 51) (name := 13) (value := value)
+      (environment := callEnvironment) (environmentRows := callEnvironmentRows) (node := node 51) (known := rfl) (kind := rfl)
+      (binding := rfl) (formed := by intro identity member; cases member)
+      ⟨.function .unit .integer (by intro effect; rfl) (by intro request member; cases member), by intro effect; rfl⟩)
+    (argument := Checked.unit (node := node 52) (known := rfl) (kind := rfl) ⟨.unit, by intro effect; rfl⟩)
+    (admitted := List.nil_subset _)
+  exact ⟨.integer, by intro effect; rfl⟩
+
+def root := Code.bind 13 code application
+def rootRequirements : Requirements [] := .sequence empty applicationRequirements
+def rootPlan := Plan.sequence Plan.pure applicationPlan
+def rootRows : Rows (signature rootPlan) := by
+  unfold rootPlan
+  simpa only [signature] using Rows.sequence Rows.pure applicationRows
+
+/-- Full exported root syntax, including its main wrapper and resource entry,
+is recursively admitted from finite Core checks. No target certificate is an input. -/
+theorem rootChecked (fuel : Nat) :
+    Checked CoreExportedFixture.graph operations policy ports Instantiation.Environment.empty
+      Spine.emptyContracts Spine.emptyOwners [] [] [] .none (fun _ => none) Spine.emptyEnvironmentRows
+      (fuel + 15) 54 root .integer [] rootRequirements rootPlan .integer rootRows [] := by
+  exact Checked.nonrecursive (node := node 54) (binder := ⟨13, .function .unit .integer []⟩)
+    (initialIndex := 50) (bodyIndex := 53) (known := rfl) (kind := rfl)
+    (functionShape := ⟨node 50, ⟨0, .unit⟩, 49, rfl, rfl⟩)
+    (.function .unit .integer (by intro effect; rfl) (by intro request member; cases member))
+    (checked fuel) (translated fuel) (by rfl) (applicationChecked fuel) ⟨.integer, by intro effect; rfl⟩
+
+theorem rootCompiled (fuel : Nat) :
+    ∃ raw, CoreTranslation.translateFuel CoreExportedFixture.graph (fuel + 15) [] CoreExportedFixture.graph.root = .ok raw ∧
+      raw.instantiate Instantiation.Environment.empty = root ∧
+      ∃ source : SourcePlannedSources.Expression operations policy Spine.emptyContracts [] [] .none
+        (fun _ => none) root .integer [] rootRequirements (signature rootPlan),
+        Auth operations policy ports Spine.emptyOwners Spine.emptyEnvironmentRows source .integer rootRows :=
+  (rootChecked fuel).compiled
+
+end Main
 
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission
 
@@ -2005,3 +2283,14 @@ end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.C
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.closedChecked
 
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Spine.closedCompiled
+
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Resource.translatedBody
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Resource.hidden
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Resource.checked
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Resource.compiled
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Resource.outwardClosed
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Main.bodyChecked
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Main.checked
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Main.applicationChecked
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Main.rootChecked
+#print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InitialAdmission.CoreGraphAdmission.Main.rootCompiled
