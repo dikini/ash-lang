@@ -6,6 +6,10 @@ use std::{error::Error, fmt, sync::Arc};
 mod instantiation;
 use instantiation::Instantiation;
 
+#[cfg(test)]
+#[path = "machine/alignment_trace.rs"]
+mod alignment_trace;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -744,6 +748,8 @@ pub struct Machine {
     next_registration: u32,
     #[cfg(test)]
     work_trace: Option<WorkTrace>,
+    #[cfg(test)]
+    alignment_trace: Option<alignment_trace::SharedTrace>,
 }
 
 impl Machine {
@@ -769,6 +775,8 @@ impl Machine {
             next_registration: 0,
             #[cfg(test)]
             work_trace: None,
+            #[cfg(test)]
+            alignment_trace: None,
         }
     }
 
@@ -801,6 +809,8 @@ impl Machine {
             next_registration: 0,
             #[cfg(test)]
             work_trace: None,
+            #[cfg(test)]
+            alignment_trace: None,
         }
     }
 
@@ -811,6 +821,10 @@ impl Machine {
 
     fn run_loop(mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
+            #[cfg(test)]
+            if let Some(trace) = &self.alignment_trace {
+                alignment_trace::capture(&self, trace);
+            }
             disposal::check()?;
             let control = self
                 .control

@@ -16,12 +16,12 @@ fn fixture(name: &str) -> PathBuf {
         .join(format!("core-cleanup-{name}.ash"))
 }
 
-struct CompiledFixture {
-    program: ValidatedEffectProgram,
-    sources: Vec<(SourceId, ModuleId, String)>,
+pub(crate) struct CompiledFixture {
+    pub(crate) program: ValidatedEffectProgram,
+    pub(crate) sources: Vec<(SourceId, ModuleId, String)>,
 }
 
-fn effect_program(name: &str) -> CompiledFixture {
+pub(crate) fn effect_program(name: &str) -> CompiledFixture {
     let graph = load_module_graph(&fixture(name), &ModuleRoots::empty()).expect("fixture loads");
     let mut checked: Vec<CheckedModule> = Vec::new();
     for module in graph.modules() {

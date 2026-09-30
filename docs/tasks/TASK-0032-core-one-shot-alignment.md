@@ -124,12 +124,19 @@ remain separate targets. A small first example does not reduce the final scope.
   kernel-checked `decide` passes the same assertions. Both modules are registered
   in `check.sh`. The general value/configuration relation and simulation remain
   open, so C3's completed-deliverable count stays unchanged.
+- Commit `042af37` retains the independent machine and registered checks. The
+  actual-loop Rust observer also passed ten focused tests, a fresh independent
+  rerun, clippy with warnings denied and formatting checks. It retains structured
+  configurations and explicit observer exclusions. Review corrected the resume
+  expectation to use nearest exact owner selection and made module normalization
+  consistent across each trace. Snapshot-to-model conversion is the next batch;
+  general correspondence is not established by these tests.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Syntax/export components verified; admission repair underway | General static compiler and full admission | Current batch 1–2 active hours; generalization estimate unresolved |
-| C3 | 0 / 5 | Closing projection verified; independent machine underway | Complete state relation, transitions and observations | Machine/snapshot batch 1–2 active hours; full proof estimate unresolved |
+| C3 | 0 / 5 | Closing projection, independent machine and Rust snapshots locally verified | Value/configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
 | C4 | 2 / 3 locally complete | D2 verified; C4.1 reopened for D8 | Integrate and verify experimental admission repair | C2; current repair about 1–2 active hours |
 | C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 

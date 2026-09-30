@@ -36,4 +36,4 @@ pub use validate::{ValidationError, ValidationReason, validate, validate_modules
 pub use variable::TypedBinder;
 
 #[cfg(test)]
-mod alignment_export;
+pub(crate) mod alignment_export;

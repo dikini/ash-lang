@@ -237,6 +237,33 @@ do not prove graph admission, a general state relation or simulation. Dynamic
 occurrence counters are ghost metadata, and internal `entered` observations
 are not Rust's dispatch trace, which omits cleanup registration entries.
 
+### Actual Rust configurations
+
+The test-only [alignment observer](../../../../src/eval/machine/alignment_trace.rs)
+records pre-step configurations in the actual `Machine::run_loop`. It retains
+structured controls, lexical environment entries and recursive function
+templates, resource instantiations, heap contents, active and captured frame
+vectors, live/consumed clauses, counters, limits, work accounting and traces.
+Raw snapshots retain identity tokens. A separate comparison view renumbers
+environment references and uses a consistent module map across the observed
+run; it preserves distinct modules and rejects foreign closure arenas.
+
+Ten focused tests pass, including a fresh independent run. They check result
+and trace agreement with observation disabled, result 11 and cell writes 7 then
+11, nearest exact owner selection and full-prefix restoration, lexical cell
+capture, deterministic comparison across independent compilation, and an
+unchanged resource-capacity failure with its observed prefix. Clippy with
+warnings denied and formatting checks also pass.
+
+The observer explicitly rejects arithmetic frames, general data, polymorphism,
+hooks and native buffers. Such a rejection stops observation while evaluation
+continues; two arithmetic cleanup fixtures exercise this distinction. Tests of
+native/hook/polymorphic rejection use constructed states. These exclusions are
+observer coverage limits, not new exclusions from Ash or changes to the declared
+Core fragment. Snapshot-to-model conversion and step correspondence remain
+unproved. The capacity test concerns a failed acquisition; it does not establish
+discard atomicity or observation accounting inside every failing step.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard

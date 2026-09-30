@@ -121,6 +121,20 @@ fn clone_row(
 }
 
 impl Instantiation {
+    #[cfg(test)]
+    pub(super) fn alignment_bindings(&self) -> (Vec<(TypeVariableId, Type)>, bool) {
+        let Some(bindings) = &self.0 else {
+            return (Vec::new(), false);
+        };
+        let mut types = bindings
+            .types
+            .iter()
+            .map(|(identity, ty)| (*identity, ty.clone()))
+            .collect::<Vec<_>>();
+        types.sort_by_key(|(identity, _)| *identity);
+        (types, !bindings.rows.is_empty())
+    }
+
     // Validated Core contains no inference variables. Within this private
     // runtime context only, that disjoint leaf namespace encodes activation
     // atoms. Substitution and exact equality treat them opaquely; runtime
