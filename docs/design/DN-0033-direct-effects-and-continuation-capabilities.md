@@ -232,7 +232,17 @@ shared judgments, map the constructed interface to `ExecutionSite.current`,
 `pending` and `coherent`, and the application, capture, resume and resource-exit
 preservation boundaries. Exact operation input/output contracts and saved
 continuations must then use the same value interface; an operation-input-only
-repair is insufficient. Retain the prototype only with that explicit migration
+repair is insufficient. `ExecutionSite.certified` is another distinct field:
+it certifies the actual declaration plan, whereas the current row refinement
+transports `Code`, `CodeChecked` and accounting. The old application exposes
+the exact body plan, so its certification can be decomposed at beta. A common
+contract no longer supplies that equality. The ordinary prototype examples
+must construct certification structurally; private bodies containing handlers must
+retain their actual plan and declaration certification, or construct a
+certification transport, before they can form the successor execution site.
+Row refinement alone does not establish this obligation.
+
+Retain the prototype only with that explicit migration
 boundary and its positive compositional substitution evidence. General
 higher-order admission remains open until the full invariant is connected.
 

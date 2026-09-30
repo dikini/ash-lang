@@ -916,9 +916,25 @@ by its explicit hiding derivation, not assumed valid for arbitrary trees.
 `Main.rootCompiled` then constructs translation and source/authentication for
 the actual exported root54, including Unit match49, main50 and application53.
 It takes no handler or resource certificate. The static derivation still needs
-to be derived from validated Core metadata in general. Actual-root declaration,
-contextual code, resource-checking and accounting certificates remain necessary
-to assemble a complete initial `Program`.
+to be derived from validated Core metadata in general.
+
+[CoreGraphProgram.lean](CoreGraphProgram.lean) now assembles a complete initial
+`Program` for that actual exported root. Its declaration certificate retains
+clause40's resume/write suffix and discard branch. A structural builtin-row
+grammar and receiving-tail judgment construct the contextual code and resource
+checks through both captures, protected cleanup and the final read. Independent
+accounting interprets those same actual rows and constructs the checked root.
+No execution, desired invariant or external source certificate is an input.
+
+`closed_initial_state` constructs the M4 invariant, and `initial_target`
+identifies its machine with the runtime relation's actual root target.
+`finite_prefix` applies existing M4 progress to this admitted source. It does
+not identify the resulting trace with the fixed Core execution: source-selected
+successor metadata must still be connected at resource entry, handler
+installation, cleanup registration and capture. All 23 dependency reports pass
+fresh independent compilation with standard axioms; 475 dependency sources
+match the integrated baseline. General metadata authentication and higher-order
+admission remain open.
 
 ### Initial-admission interface repair
 

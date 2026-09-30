@@ -473,14 +473,35 @@ remain separate targets. A small first example does not reduce the final scope.
   from this integration snapshot. Import order, trust, whitespace and artifact
   checks pass. Historical freshness does not establish live-owner uniqueness
   or agreement with the target ticket world.
+- Review of the contract-source migration identifies a separate declaration
+  obligation: `ExecutionSite.certified` certifies the actual plan. Existing row
+  refinement transports code, resource checks and accounting, but does not
+  construct that field for a different private body plan. The ordinary
+  prototype must expose structural certification; handler-bearing private
+  bodies must retain actual declaration evidence or prove its transport before
+  M4 migration. This refines the existing D4 acceptance boundary without
+  changing the supported fragment.
+- `CoreGraphProgram` now constructs complete initial admission for actual
+  exported root54, including declaration recipes, contextual code/resource
+  certificates and independent accounting for its exact rows. The initial M4
+  state is constructed and its machine equals the runtime relation's root
+  target. All 23 reports pass fresh independent compilation with standard
+  axioms; 475 dependency sources match the integrated baseline. The worker's
+  477-module gate also passes. General metadata authentication and D4 remain
+  open. The next bounded integration batch connects this state to actual Core
+  execution through resource entry, using source-selected successor metadata.
+  The combined audit passes for 810 registered modules, 11,110 exact dependency
+  reports and 1,991 local links or anchors. The new leaf has independent
+  compilation evidence; 809 unchanged verified source/report pairs are retained.
+  Active runtime and callable-source work is excluded from the snapshot.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual root Source/Auth compiler independently verified | Initial Program certificates, metadata authentication, general compiler | Contextual code/accounting assembly; higher-order refinement gap | Actual-root Program batch 1–2 hours; full estimate unresolved |
+| C2 | 0 / 4 | Complete actual-root Program independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits contract-source result |
 | C3 | 0 / 5 | Twenty-four-transition cleanup-registration prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Request/capture batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs verified; contract-source prototype assigned | Resolve retained support and callable refinements without changing declared ports | Compositional substitution, common helper/result derivations and M4 preservation transport | Contract-source prototype 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Product gate and 809-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C5 | 0 / 4 | Actual admitted root and 810-module audit verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Admitted resource-entry prefix 1–2 hours; total unresolved |
 
 ## Verification
 

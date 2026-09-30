@@ -813,3 +813,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRootRefinement.olean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreRefinementJoins.olean" CoreRefinementJoins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphCapabilities.olean" CoreGraphCapabilities.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphAdmission.olean" CoreGraphAdmission.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGraphProgram.olean" CoreGraphProgram.lean
