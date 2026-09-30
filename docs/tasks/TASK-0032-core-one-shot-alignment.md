@@ -52,7 +52,8 @@ remain separate targets. A small first example does not reduce the final scope.
 - M0–M4 endpoints have been inspected. Their theorem boundary is annotated
   initial admission and constructive calculus execution, not Core admission or
   arbitrary-annotation preservation. Fresh baseline verification passed.
-- No C1–C5 deliverable is yet marked integrated.
+- C1 and verified C2–C4 components are integrated. General admission, full
+  simulation and the integrated correctness theorem remain open.
 - Intermediate commit `76380f4` retains the reviewed comparison, CP-0021 repair
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
@@ -168,7 +169,9 @@ remain separate targets. A small first example does not reduce the final scope.
   compilation and review. Static request footprints and receiver checks derive
   the inserted suffix's pending checks, including resumed and discarded owner
   contexts. The actual plain frame is retained, with ordinary/unwind behavior
-  distinguished. Declaration-recipe integration remains in progress.
+  distinguished. The verified `ClauseRecipe.suffix` extension now constructs the
+  exact normalized declaration certificate. The affected M4 gate passed across
+  450 dependency modules. Full kernel `Program` construction remains open.
 - The actual Rust trace bridge passed independent verification: 91 snapshots,
   exactly 90 independent model transitions, terminal 11, writes `[7, 11]`,
   cleanup-start order and final resource release. Checker/comparison soundness
@@ -176,13 +179,19 @@ remain separate targets. A small first example does not reduce the final scope.
   The fresh combined Rust run passed 18 observer/exporter tests. This is finite
   implementation evidence; full model/calculus simulation remains open.
 
+- `CoreStrictFrames` passed fresh independent compilation and statement review.
+  Ordinary saved frames retain lexical interpretations, and actual application
+  focus/return has positive target transitions. Value-ready arguments retain the
+  whole application until Core completes argument evaluation. Static PlainData
+  authentication and the whole-stack relation remain open.
+
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Syntax/export and interface repair locally verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Closing projection, independent machine, value relation and Rust snapshots locally verified | Reachable configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
-| C4 | 2 / 3 locally complete | D2 verified; D8 interface repair and M4 endpoints verified | D9 declaration suffix and complete kernel admission | C2; suffix transport batch about 1–2 active hours |
-| C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
+| C4 | 2 / 3 locally complete | D2 verified; D8/D9 evidence repairs and M4 endpoints verified | Complete kernel admission to close discrepancy resolution | C2; kernel Program batch about 1–2 active hours |
+| C5 | 0 / 4 | Current product gate rerunning after verified test-file layout repair | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification
 

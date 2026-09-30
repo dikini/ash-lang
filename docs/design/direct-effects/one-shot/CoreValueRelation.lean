@@ -436,6 +436,57 @@ theorem ValueRel.closure_view
   cases related with
   | closure translated environment closed => exact ⟨_, _, translated, environment, closed⟩
 
+/-- Decompose one closing derivation, retaining its exact lexical replacements. -/
+theorem EnvCloses.app_components_at
+    (related : EnvCloses graph owners heap environment source target) :
+    ∀ rawFunction rawArgument function argument,
+      source = .app rawFunction rawArgument → target = .app function argument →
+      EnvCloses graph owners heap environment rawFunction function ∧
+      EnvCloses graph owners heap environment rawArgument argument := by
+  induction related using EnvCloses.rec (motive_1 := fun _ _ _ => True) with
+  | unit | boolean | integer | handle | location | closure => trivial
+  | empty =>
+      intro rf ra f a sourceEq targetEq
+      have same : rf = f ∧ ra = a := by simpa [sourceEq] using targetEq
+      rcases same with ⟨rfl, rfl⟩
+      exact ⟨.empty, .empty⟩
+  | @binding value valueCode rest output binder code replacement tail ihReplacement ihTail =>
+      intro rf ra f a sourceEq targetEq
+      obtain ⟨left, right⟩ := ihTail (rf.subst binder valueCode) (ra.subst binder valueCode) f a
+        (by simp only [sourceEq, Code.subst]) targetEq
+      exact ⟨.binding replacement left, .binding replacement right⟩
+  | @resource rest output binder key code tail ihTail =>
+      intro rf ra f a sourceEq targetEq
+      obtain ⟨left, right⟩ := ihTail
+        (rf.instantiate (Instantiation.Environment.empty.bind binder key))
+        (ra.instantiate (Instantiation.Environment.empty.bind binder key)) f a
+        (by simp only [sourceEq, Code.instantiate]) targetEq
+      exact ⟨.resource left, .resource right⟩
+  | @templateUnused binder rest code output parameter body absent tail ihTail =>
+      intro rf ra f a sourceEq targetEq
+      obtain ⟨left, right⟩ := ihTail rf ra f a sourceEq targetEq
+      have absentLeft : Dependency.variable binder ∉ rf.dependencies := by
+        intro member; apply absent
+        simpa only [sourceEq, Code.dependencies] using List.mem_append_left ra.dependencies member
+      have absentRight : Dependency.variable binder ∉ ra.dependencies := by
+        intro member; apply absent
+        simpa only [sourceEq, Code.dependencies] using List.mem_append_right rf.dependencies member
+      exact ⟨.templateUnused absentLeft left, .templateUnused absentRight right⟩
+  | @templateExpand fuel body bodyCode parameter binder rest valueCode output code translated nonrecursive replacement closed tail ihReplacement ihTail =>
+      intro rf ra f a sourceEq targetEq
+      obtain ⟨left, right⟩ := ihTail (rf.subst binder valueCode) (ra.subst binder valueCode) f a
+        (by simp only [sourceEq, Code.subst]) targetEq
+      exact ⟨.templateExpand translated nonrecursive replacement closed left,
+        .templateExpand translated nonrecursive replacement closed right⟩
+
+theorem EnvCloses.app_components
+    (related : EnvCloses graph owners heap environment (.app rawFunction rawArgument) (.app function argument)) :
+    EnvCloses graph owners heap environment rawFunction function ∧
+      EnvCloses graph owners heap environment rawArgument argument :=
+  related.app_components_at _ _ _ _ rfl rfl
+
+#print axioms EnvCloses.app_components
+
 namespace Examples
 open CoreMachineExamples
 

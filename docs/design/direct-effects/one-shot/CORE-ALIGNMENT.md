@@ -144,7 +144,7 @@ least-handler-output traversal already retain the operand's direct requirements.
 | D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
 | D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
 | D8 | Admission-interface gap | A sourced store and a row-checking context could disagree about a nested owner's protection. The earlier interface refuted the chosen post-resume suffix certificate. | The conditional `Interface.closingSeparate` field now excludes that mismatch; actual capture constructors derive it from ownership and uniqueness. Full kernel initial admission remains open. This is not a coherent Rust runtime counterexample. |
-| D9 | Declaration-recipe gap | The current `ClauseRecipe` grammar puts the consuming invocation at the end of its branch; it cannot directly describe the normalized clause's resume followed by a cell write. | Preserve a finite rejection witness, then derive a structural suffix extension from existing request footprints and receiving-tail checks. The consuming prefix must remain valid with the suffix pending. This is separate from D8's row-certificate repair and does not justify weakening the fixture. |
+| D9 | Declaration-recipe gap | The earlier `ClauseRecipe` grammar could not describe the normalized clause's resume followed by a cell write. | The structural suffix extension now constructs the exact declaration certificate from request footprints and receiving-tail checks. Complete kernel initial admission remains open. Historical rejection evidence is retained in commit `f44ff78`; the fixture is unchanged. |
 
 ## C1.5 finite case inventory
 
@@ -357,6 +357,22 @@ only. The rank justifies these specific zero-step target matches; it does not
 permit arbitrary Core steps to match by stuttering. Whole-frame and configuration
 relations and construction of the current static premises remain open.
 
+### Ordinary saved frames
+
+[CoreStrictFrames.lean](CoreStrictFrames.lean) relates saved bind, application,
+binary tuple, Boolean-match and Unit-match frames to calculus contexts. The
+relation retains lexical closing evidence and transports it under heap extension.
+Application focus decomposes one closing derivation, preserving its exact lexical
+replacements. Returning a function takes positive plug and focus steps when its
+argument is not a value. With a value-ready argument, the target reconstructs the
+application and delays beta until Core finishes the argument.
+
+Fresh independent compilation and statement review pass with standard axioms
+only. Examples cover lexical capture, the entry template, positive application
+focus/return and rejection of premature value-argument focus. Static
+authentication of supplied `PlainData`, the whole-stack relation and integration
+of flattened value-ready frames remain open.
+
 ### Closing projection component
 
 [CoreClosing.lean](CoreClosing.lean) models the successful Rust discard
@@ -451,9 +467,9 @@ component alone. Independent warnings-as-errors compilation passed.
 
 ### Actual Core export
 
-The [test-only exporter](../../../../src/core/alignment_export_tests.rs) compiles and
-independently validates the restored-clause-suffix fixture before exporting its
-55 reachable nodes to [CoreExportedFixture.lean](CoreExportedFixture.lean).
+The [test-only exporter](../../../../src/core/alignment_export_tests.rs)
+compiles and independently validates the restored-clause-suffix fixture before
+exporting its 55 reachable nodes to [CoreExportedFixture.lean](CoreExportedFixture.lean).
 Ordinary cell helper functions remain in the graph. A separate manifest retains
 qualified identities, instantiated operation signatures and provenance.
 The current exporter accepts nullary and resource user-effect arguments;
@@ -516,15 +532,19 @@ both requests, both clause branches and final read. Its resource-discharge proof
 retains the cell-dependent request requirements inside the resource. Fresh
 independent compilation passes with standard axioms only.
 
-The remaining declaration certificate exposes D9. The existing consuming recipe
-grammar ends each branch in an invocation; the actual resume branch ends in the
-cell write. `effectfulSuffixRecipeRejected` proves rejection of that dependency
-family, and `resourcePlanCertificateRejected` lifts it to this exact plan. These
-theorems do not refute every possible decoration of the source expression.
-The next extension must transport a consuming prefix across a pending plain
-suffix using static request footprints and receiver checks. Full `Program`
+The D9 declaration gap is repaired by `ClauseRecipe.suffix`. The constructor
+retains the consuming prefix and its actual suffix, and adds the suffix's external
+request requirements. Its compiler derives the receiving-tail checks using the
+structural transport below. `clauseRecipe` and `resourceCertified` construct the
+exact normalized plan's declaration evidence. `effectfulPlainResume` checks a
+resumed prefix with the write still pending; `suffixMissingReceiver` rejects a
+missing receiver. The previous rejection proofs are retained in commit `f44ff78`.
+
+Fresh independent compilation of the kernel fixture and affected M4 endpoints
+passed across 450 dependency modules with standard axioms only. Full `Program`
 construction, the actual graph-translation bridge and general admission remain
-open.
+open. This is an experimental evidence extension under DN-0033, not a change to
+specified Ash behavior.
 
 [SourcePlainSuffixTransport.lean](SourcePlainSuffixTransport.lean) supplies the
 standalone transport needed by D9. `plain_suffix_admission` constructs checking
@@ -534,5 +554,5 @@ actual receiver. It transports selected handlers and owners, retained captures,
 resume restoration and discard waiting contexts while retaining the actual plain
 frame. The inserted suffix executes during ordinary return and is skipped during
 unwind. No constructor takes successful future execution or a future `Pending`
-proof. Fresh independent compilation and review pass with standard axioms only;
-declaration-recipe integration and full initial admission remain open.
+proof. Fresh independent compilation and review pass with standard axioms only.
+Declaration-recipe integration is verified; full initial admission remains open.
