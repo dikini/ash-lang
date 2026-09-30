@@ -64,10 +64,11 @@ relation. Its focused examples and the opt-in snapshots taken by Rust's actual
    does not prove callback execution correspondence.
 4. Prove each transition match with an explicit rank for administrative steps.
    In particular, Core evaluates literals and variables into return controls
-   where the calculus can already have a value. Internal `entered` observations
-   are not Rust's dispatch trace: Rust omits cleanup registration entries.
-   State which projection supplies observable results, cell operations and
-   cleanup order.
+   where the calculus can already have a value. Rust records node entries before
+   intercepting cleanup registration, so the actual loop entry trace includes
+   those nodes even though they bypass `dispatch_entry`. State which projection
+   supplies observable results, cell operations and cleanup order; keep model
+   ghost labels separate from source-visible events.
 5. Compare structured Rust snapshots with this relation, retaining raw identity
    distinctions before any deterministic normalization. Successful preparation
    includes disposal checks during mutation. Keep failed execution prefixes

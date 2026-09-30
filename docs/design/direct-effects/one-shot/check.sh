@@ -778,3 +778,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreMachine.olean" CoreMachine.l
 lean -DwarningAsError=true -o "$proof_build_dir/CoreMachineExamples.olean" CoreMachineExamples.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreValueRelation.olean" CoreValueRelation.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreStrictSteps.olean" CoreStrictSteps.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreKernelAdmission.olean" CoreKernelAdmission.lean

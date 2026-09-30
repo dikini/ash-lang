@@ -144,6 +144,7 @@ least-handler-output traversal already retain the operand's direct requirements.
 | D6 | Explicit implementation boundary | Fallible reservation, work limits and bounded identities are not mathematical freshness. | State/model successful preparation and failure outcomes; do not count malformed-state failures as allowed progress. |
 | D7 | Unsupported families | General recursion, unresolved polymorphism, registration and native buffers lack direct initial-calculus cases. | Keep coverage explicit; justify any subsequently required extension. |
 | D8 | Admission-interface gap | A sourced store and a row-checking context could disagree about a nested owner's protection. The earlier interface refuted the chosen post-resume suffix certificate. | The conditional `Interface.closingSeparate` field now excludes that mismatch; actual capture constructors derive it from ownership and uniqueness. Full kernel initial admission remains open. This is not a coherent Rust runtime counterexample. |
+| D9 | Declaration-recipe gap | The current `ClauseRecipe` grammar puts the consuming invocation at the end of its branch; it cannot directly describe the normalized clause's resume followed by a cell write. | Preserve a finite rejection witness, then derive a structural suffix extension from existing request footprints and receiving-tail checks. The consuming prefix must remain valid with the suffix pending. This is separate from D8's row-certificate repair and does not justify weakening the fixture. |
 
 ## C1.5 finite case inventory
 
@@ -455,6 +456,20 @@ coherence module and `SourceScheduledM4` also passed, with only `propext`,
 not a substitute for the final registered audit.
 
 This changes experimental admission evidence under DN-0033, not Ash's specified
-runtime behavior. Full admission still requires constructing the handler source
-and authentication and the enclosing resource, declaration, admission and
-accounting judgments, then connecting the actual graph translation to them.
+runtime behavior.
+
+[CoreKernelAdmission.lean](CoreKernelAdmission.lean) now constructs source and
+authentication evidence for the complete normalized resource, handler, cleanup,
+both requests, both clause branches and final read. Its resource-discharge proof
+retains the cell-dependent request requirements inside the resource. Fresh
+independent compilation passes with standard axioms only.
+
+The remaining declaration certificate exposes D9. The existing consuming recipe
+grammar ends each branch in an invocation; the actual resume branch ends in the
+cell write. `effectfulSuffixRecipeRejected` proves rejection of that dependency
+family, and `resourcePlanCertificateRejected` lifts it to this exact plan. These
+theorems do not refute every possible decoration of the source expression.
+The next extension must transport a consuming prefix across a pending plain
+suffix using static request footprints and receiver checks. Full `Program`
+construction, the actual graph-translation bridge and general admission remain
+open.

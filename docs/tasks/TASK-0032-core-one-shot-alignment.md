@@ -152,13 +152,20 @@ remain separate targets. A small first example does not reduce the final scope.
   steps and related lexical results. Both stack tails remain explicit and
   unchanged; their relation is still a separate obligation. The modules use
   standard axioms only and are registered in `check.sh`.
+- Full normalized resource source/authentication construction reached a second
+  declaration boundary, D9: the current consuming-recipe grammar has no suffix
+  after resume. Fresh independent compilation verifies full normalized source/
+  authentication evidence and rejection of the exact declaration plan. The
+  structural request-footprint extension is the next bounded C2.4/C4.1 batch.
+  The complete fixture and scope remain unchanged; no `Program` completion is
+  claimed.
 
 | Package | Completed / identified | State | Outstanding | Dependency / next estimate |
 | --- | --- | --- | --- | --- |
-| C1 | 5 / 5 | Committed, verified and reviewed; D8 classified | Maintain findings through integration | Under 1 active hour for records |
+| C1 | 5 / 5 | Committed, verified and reviewed; D8/D9 classified | Maintain findings through integration | Under 1 active hour for records |
 | C2 | 0 / 4 | Syntax/export and interface repair locally verified | General static compiler and full admission | Complete kernel admission next, about 1–2 active hours; generalization estimate unresolved |
 | C3 | 0 / 5 | Closing projection, independent machine, value relation and Rust snapshots locally verified | Reachable configuration relation, transitions and observations | Relation/trace bridge batch 1–2 active hours; full proof estimate unresolved |
-| C4 | 2 / 3 locally complete | D2 verified; D8 interface repair and M4 endpoints verified | Check repair in complete kernel admission | C2; about 1–2 active hours |
+| C4 | 2 / 3 locally complete | D2 verified; D8 interface repair and M4 endpoints verified | D9 declaration suffix and complete kernel admission | C2; suffix transport batch about 1–2 active hours |
 | C5 | 0 / 4 | Prior increment's baseline/product gates passed | Integrated theorem, current checks and final scope audit | Depends on C2–C4 |
 
 ## Verification

@@ -72,6 +72,8 @@ open InstallationSupport
  def readRequirements (identity : Nat) : Requirements [] := .emitAfter empty [] [⟨.cell identity, 0, false⟩]
  def requestRequirements : Requirements [] := .emitAfter empty [] [⟨effect, 0, false⟩]
 
+ variable {contracts : SourcePlannedTyping.Contracts} {owners : ContractRows contracts}
+
  variable {world : List Nat} {allowed : List Instance} {scope : Execution.Scope}
   {environment : Environment} {environmentRows : EnvironmentRows environment}
 
