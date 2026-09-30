@@ -465,8 +465,14 @@ remain separate targets. A small first example does not reduce the final scope.
   and history preservation through resume/discard. The repeated static
   handler/owner fixture issues distinct tickets; missing-clause dispatch issues
   none. Thirteen reports use standard axioms, and 26 dependency source hashes
-  match the integrated baseline. The leaf remains pending grouped integration;
-  its worker has moved to the central C4 prototype.
+  match the integrated baseline. The leaf is now registered and integrated;
+  its worker has moved to the central C4 prototype. The grouped audit covers
+  809 registered modules, 11,087 exact dependency reports and 1,990 local links
+  or anchors. Fresh independent compilation covers the new leaf; 808 unchanged
+  verified source/report pairs are retained. Active worker changes are excluded
+  from this integration snapshot. Import order, trust, whitespace and artifact
+  checks pass. Historical freshness does not establish live-owner uniqueness
+  or agreement with the target ticket world.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
@@ -474,7 +480,7 @@ remain separate targets. A small first example does not reduce the final scope.
 | C2 | 0 / 4 | Actual root Source/Auth compiler independently verified | Initial Program certificates, metadata authentication, general compiler | Contextual code/accounting assembly; higher-order refinement gap | Actual-root Program batch 1–2 hours; full estimate unresolved |
 | C3 | 0 / 5 | Twenty-four-transition cleanup-registration prefix independently verified | Reachable annotations, remaining phases, captured owners, cleanup execution and full simulation | Static annotations and state/ownership relation | Request/capture batch 1–2 hours; full estimate unresolved |
 | C4 | 2 / 3 | D2/D8/D9 repairs verified; contract-source prototype assigned | Resolve retained support and callable refinements without changing declared ports | Compositional substitution, common helper/result derivations and M4 preservation transport | Contract-source prototype 1–2 hours; full repair estimate unresolved |
-| C5 | 0 / 4 | Product gate and 808-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
+| C5 | 0 / 4 | Product gate and 809-module combined audit passed | Integrated theorem, final coverage, grouped verification and independent review | C2–C4 | No useful total until the higher-order interface is settled |
 
 ## Verification
 

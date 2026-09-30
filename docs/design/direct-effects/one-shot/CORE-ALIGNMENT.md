@@ -517,6 +517,17 @@ Its target-world freshness corollary still requires world correspondence; the
 Core history proof does not supply that premise. Both leaves pass fresh
 independent compilation and statement review with standard axioms only.
 
+[CoreTicketHistory.lean](CoreTicketHistory.lean) separately derives the capture
+ticket history from actual Core transitions: issued tickets are exactly
+`List.range nextOwner`. Successful capture issues the previous counter;
+resume, discard and nested closing preserve the history. Therefore a capture
+reached from the initial state receives a fresh ticket, even when the same
+static handler and owner are used repeatedly. A missing-clause dispatch issues
+none. The proof covers historical ticket issuance, not live-owner uniqueness,
+target-world correspondence, capacity failures or M4 validity. The leaf is
+registered in the grouped check and passes independent warnings-as-errors
+compilation and statement review with standard axioms only.
+
 [CoreHandlerPrefix.lean](CoreHandlerPrefix.lean) extends that same linked
 execution through the getter and setter bindings, the saved ordinary
 continuation and handler41 entry. Twenty actual transitions from `initial`
