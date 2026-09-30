@@ -801,12 +801,34 @@ remain separate targets. A small first example does not reduce the final scope.
   projected-handler dispatch and static authentication remain open. This batch
   adds no example variant or Rust implementation change.
 
+- `CoreCompletionSteps` generalizes consumed-clause return and Unit close
+  completion from the current frame/value evidence. Both construct actual Core
+  successors and positive lexical transitions; rejection lemmas exclude live
+  clause returns and non-Unit close results. No relation representation changed.
+  Outside tails must have ordinary mapped interpretations, and close labels match
+  locally. General close-name mapping and nested retirement remain open.
+- The new leaf passes independent compilation with six standard-only reports.
+  The combined audit covers 841 modules and 11,418 exact reports, retaining 840
+  unchanged verified pairs. No additional example or Rust change was introduced.
+
+- Handler review identified an authentication gap before caller transport:
+  aggregate `Supported` and actual-plan certification do not authenticate each
+  stored clause support bound. The existing declaration-support substitution
+  proof relies on port-bounded values, which cannot be reused for a pure callable
+  retaining resources absent from its public port. The required per-clause
+  evidence must use actual support environments and remain available inside
+  private lambda bodies. A bounded interface review must establish how actual
+  receiving bounds and changed worlds instantiate that evidence before adding
+  a companion judgment. The earlier one-hour connected-handler estimate is no
+  longer supported; the next twenty-minute review resolves this representation
+  question. No helper-only Source checkpoint will be integrated.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Full runtime example, generic normal cleanup and cell transitions independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Cell-transition batch complete; next general batch requires a bounded statement; total unresolved |
-| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Certified actual-plan substitution and saved-frame transport under restored world/context | Connected substituted-handler/caller checkpoint active, about 1–1.5 hours; capture and changing-world transport remain |
+| C3 | 0 / 5 | Full runtime example and generic cleanup, cell and completion components independently verified | Remaining general transitions, projection/retirement and ownership correspondence | Static readiness/dispatch evidence and general state relation | Completion batch complete; general lifting, projection/retirement and static derivation remain; total unresolved |
+| C4 | 2 / 3 | D2/D8/D9 repairs and common owner-source checkpoint independently verified | Migrate handler/owner contracts and retained support through full M4 invariant | Hereditary per-clause support authentication, substituted plans and restored-world caller transport | Support-interface review about 20 minutes; connected repair estimate pending its result |
 | C5 | 0 / 4 | Admitted discard independently verified; admitted completion through s67 locally verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Remaining admitted suffix to s90 about 45–60 minutes, then independent review; total unresolved |
 
 ## Verification

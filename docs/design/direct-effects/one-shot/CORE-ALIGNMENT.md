@@ -748,6 +748,25 @@ combined audit covers 840 modules and 11,412 exact standard-axiom reports,
 retaining 835 unchanged verified pairs. These are general C3.2 components;
 they do not complete admission or the full simulation theorem.
 
+[CoreCompletionSteps.lean](CoreCompletionSteps.lean) proves generic consumed-clause
+return and Unit close completion. Clause return retains the same related value,
+restores the saved handler scope and caller map, and records the actual Core
+clause-return observation. Close completion uses the current lexical
+`finishClose` transition and discharges its close owner. Both construct the
+actual Core successor and its interpretation from current frame evidence.
+
+These rules require an ordinary mapped outside stack. Close completion uses
+one locally matching Core/target identity, as required by `Related.awaitingClose`;
+it does not establish the general close-name mapping or empty-discard case.
+Returning across a live clause and finishing a close with a non-Unit value are
+proved rejected and cannot count as successful Core steps. Nested retirement
+and reachable annotation authentication remain separate obligations.
+
+The new leaf passes independent warnings-as-errors compilation with six exact
+standard-axiom reports. The combined audit covers 841 modules and 11,418 reports,
+retaining 840 unchanged verified pairs. This adds two C3.2 transition components;
+it does not complete the general simulation obligation.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on
