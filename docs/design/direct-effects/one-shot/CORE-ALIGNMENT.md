@@ -1554,9 +1554,10 @@ saved cleanup receipt from actual registration's current scope and callback
 lookup. Normal callback entry retains the entire ActionData and saved caller
 receipt while clearing current scope. Unit return restores the same saved
 value, installation map and scope over an arbitrary outside general segment.
-CleanupRel alone does not supply scope provenance. Movement of running receipts
-through later capture/projection, disposal and the combined reachable invariant
-remains open; these factories do not prove callback termination.
+CleanupRel alone does not supply scope provenance. The running-cleanup transport below extends these receipts through actual
+capture and inside-anchored restoration. Outside-anchored restoration, armed
+projection, disposal history and the combined reachable invariant remain open;
+these factories do not prove callback termination.
 
 Independent reviews pass for these bounded components. Integration additionally
 detected historical source/artifact association errors in the saved frame and
@@ -1615,9 +1616,47 @@ association and identical direct-import hashes. This is an assembly of verified
 current-source results, not a second fresh build of every unchanged module.
 The returned-storage producer adds sixteen standard reports and checked actual
 initializer/domain/substitution origins; control/resource/cleanup and runtime
-origins remain open. The task records the running-cleanup checkpoint awaiting
-review/adoption. General admission, reachability, simulation,
+origins remain open. The following bounded running-cleanup and literal-site components are retained
+by the next checkpoint. General admission, reachability, simulation,
 preparation and the integrated theorem remain open.
+
+### Running cleanup transport and literal-site ancestry
+
+[CoreCallableCleanupReachableTransport.lean](CoreCallableCleanupReachableTransport.lean)
+keeps the same running callback, full ActionData, saved value and original
+registration map/scope through actual capture. A physical captured running
+completion is protected: `closeFuel` cannot successfully project it, including
+nested captures. `resume_then_finish_inside` constructs the actual full-prefix
+resume and Unit-completion chain, its positive target steps and restored
+CurrentOwnership. The original first matching owner must lie inside the retained
+captured suffix. New front frames and the spent marker then occur below that
+same first match. Actual current cuts, frame/context/resolve and TicketBound
+remain premises; a desired future scope or ownership proof is not an input.
+
+[CoreCallableSiteLineage.lean](CoreCallableSiteLineage.lean) checks unique literal
+handler sites for the same finite graph. The existing exported fixture passes;
+the checker does not establish general Rust validator/export correspondence or
+dynamic activation uniqueness. Initial, selected-clause and ordinary-child receipts retain enclosing-handler
+metadata and a strict postorder site bound. They are paired with actual capture,
+beta, bind entry and bind return; they do not record a whole execution ancestry
+trace. Beta clears the current owner map; saved bind continuations
+retain their own literal site, map and scope. Literal descent cannot reinstall
+its own enclosing handler without crossing a reset or saved-site boundary.
+
+Neither leaf proves that an arbitrary inserted resume front misses the original
+outside owner. Existing general segments do not retain the past installation
+site of every moved handler frame. A generic static-pair shadow obstruction
+identifies this missing premise without claiming a reachable counterexample.
+Outside-anchored restoration, armed projection, disposal history, general
+reachability and whole-fragment simulation remain open.
+
+Independent leaf/interface reviews pass for both components. Fresh integration
+compilation reproduces their same reviewed sources, artifacts and 25 reports.
+All 893 unchanged modules retain exact parent source/log/artifact associations
+and identical direct-import hashes in one current-source cache. The assembled
+registered result has 895 modules and 11,867 ordered standard-only reports;
+this is not another uncached build of every unchanged module. No Rust sources
+change in this increment.
 
 ### Runtime capacity boundary
 

@@ -254,9 +254,29 @@ interior metadata, registry/owner origin and runtime captured-value admission
 remain open. Rich cleanup source/authentication and its required transports are
 retained with the same full callback contract and public suffix. Resource source
 construction still needs paired returned-storage and exact replacement evidence.
-The audited current-source assembly contains 893 registered modules and 11,842
+The preceding checker/storage checkpoint assembled 893 modules and 11,842
 standard-only reports, including the full changed reverse closure; this does not
 close general admission, cleanup preservation or the integrated theorem.
+
+The [running-cleanup transport](CoreCallableCleanupReachableTransport.lean)
+retains the same registration receipt, full callback data and saved value through
+actual capture. It proves physical disposal rejection and constructs actual
+full-prefix resume/Unit completion with CurrentOwnership when the original first
+owner match is inside the retained suffix. Arbitrary front insertion below that
+match is covered. Outside-anchored paths, armed projection and disposal history
+remain open.
+
+The [literal-site lineage producer](CoreCallableSiteLineage.lean) checks unique
+handler sites in the same exported graph and derives current ancestry through
+actual capture/beta/bind transitions. It preserves each saved bind's own literal
+site and map. This supplies current ancestry, not the past installation history
+of every moved handler frame or a general Rust/export soundness theorem.
+
+Both bounded leaves pass independent source/interface review and fresh integration
+compilation, reproducing the same artifact bytes and 25 standard-only reports.
+The current audited assembly has 895 registered modules and 11,867 ordered
+reports; unchanged dependency results retain their exact source associations.
+Whole-fragment admission, reachability, simulation and integration remain open.
 
 ## Direct control representation
 

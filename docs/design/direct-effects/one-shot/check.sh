@@ -897,3 +897,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralRestoration.olean" Co
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCleanupOrigins.olean" CoreCallableCleanupOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralUnwind.olean" CoreGeneralUnwind.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralProjection.olean" CoreGeneralProjection.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCleanupReachableTransport.olean" CoreCallableCleanupReachableTransport.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSiteLineage.olean" CoreCallableSiteLineage.lean

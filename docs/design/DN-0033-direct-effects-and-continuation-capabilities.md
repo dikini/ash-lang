@@ -77,6 +77,17 @@ reviewed and retained, with remaining control/runtime origin obligations explici
 stated instruction grammar, not full composition completeness, runtime value
 origins or general simulation.
 
+The [running-cleanup transport](direct-effects/one-shot/CoreCallableCleanupReachableTransport.lean)
+retains the same installed callback and saved caller receipt through actual
+capture, rejects physical disposal of running completion and restores ownership
+through full-prefix resume/Unit completion when the original owner match remains
+inside the captured suffix. The [literal-site lineage producer](direct-effects/one-shot/CoreCallableSiteLineage.lean)
+derives current clause/child ancestry and actual capture/beta/bind site receipts.
+Outside-anchored restoration still needs past installation receipts for moved
+handler frames; current ancestry and fresh dynamic tickets alone do not supply
+that history. These bounded components do not close general reachability or
+whole-fragment simulation.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,
