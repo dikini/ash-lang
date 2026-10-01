@@ -1792,10 +1792,48 @@ control storage and actual-return observer transport remain open.
 
 Independent same-cwd replay passes seven reports, sixteen public probes and both
 existing retaining negatives. Fresh integration reproduces exact reviewed
-source/artifact bytes and reports. The current assembly contains 900 registered
+source/artifact bytes and reports. Checkpoint `d03a333` assembled 900 registered
 modules and 11,933 ordered standard-only reports; all 899 unchanged modules retain
 exact preceding source/log/artifact/direct-import associations. No Rust sources
 change. Whole-fragment admission and simulation remain open.
+
+### Exact physical handler selection and checked outside restoration
+
+[CoreGeneralHandlerSelection.lean](CoreGeneralHandlerSelection.lean) proves the
+same history's candidate inventory equals the active physical handler occurrences.
+Actual successful findInterpreter lookup supplies an exact inventory index,
+inside/site/environment/activation/outside and effect from that candidate's own
+BoundaryRel. Intrinsic cell matches cannot yield source-handler selection;
+dormant captures and retained logical handlers are not physical candidates.
+`capture_from_lookup` constructs the actual Core/positive target capture and
+same installed Clause/full header/deterministic live successor. Current successful
+lookup, source Scope/Route, operation selection, value/environment carriers and
+readiness remain. No private-family equality from independent cuts is inferred.
+
+[CoreCallableOutsideOrigin.lean](CoreCallableOutsideOrigin.lean) scans the same
+front history plus selected spent receipt at the original caller pair. It rejects
+found/blocked results. Missing derives literal prefix misses. The original
+ScopeOutside position and live-or-spent OwnerPath produce restored origin without
+a desired future-origin or lookup premise. The same delayed action and saved value
+remain in RunningReceipt. `resume_outside_checked` composes actual full-prefix
+resume with this constructed receipt and exact running-head physical endpoint.
+Current original receipt/head/suffix/position, frame/value/resolve and scan guards
+remain explicit. Normal-finish TicketBound is not derived here.
+
+This checked immediate path does not prove every intermediate resume passes the
+scan. GeneralHistory.running keeps an ORIGINAL receipt suffix while its caller
+scope is dormant. Normal cleanup finish needs actual completion tail/original
+suffix agreement; changed-tail activation requires combined actual bind/marker
+return history. Caller-barrier factories are in progress. Rich Source/Auth,
+retained projection, disposal and whole reachability remain open.
+
+Both leaves pass independent fresh replay, with three/nine reports and six/eight
+public probes respectively. Fresh integration reproduces their exact reviewed
+source/artifact bytes and twelve reports. The current assembly contains 902
+registered modules and 11,945 ordered standard-only reports; all 900 unchanged
+modules retain exact preceding source/log/artifact/direct-import associations.
+No Rust sources change. Whole-fragment admission, simulation and C4/C5 acceptance
+remain open.
 
 ### Runtime capacity boundary
 

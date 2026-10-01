@@ -905,3 +905,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallablePairedOrigin.olean" 
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneralHistory.olean" CoreCallableGeneralHistory.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableStorageRecipes.olean" CoreCallableStorageRecipes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallablePairedCall.olean" CoreCallablePairedCall.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralHandlerSelection.olean" CoreGeneralHandlerSelection.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableOutsideOrigin.olean" CoreCallableOutsideOrigin.lean

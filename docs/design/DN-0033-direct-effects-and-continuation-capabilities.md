@@ -119,6 +119,16 @@ and fresh integration. Runtime closure origin, deterministic captured recipe
 substitution and universal varying-storage families remain open; a current
 concrete call does not close rich resource admission.
 
+The [physical handler selector](direct-effects/one-shot/CoreGeneralHandlerSelection.lean)
+now derives the exact same-history candidate and effect from actual successful
+lookup and feeds actual capture. The [checked outside restoration](direct-effects/one-shot/CoreCallableOutsideOrigin.lean)
+derives the original live/spent caller path and same running receipt from the
+current front/spent scan. Both pass independent review and current-source
+integration. Current route/readiness and scan guards remain. Dormant running
+history retains original origin; changed-tail caller activation needs actual
+return history at completion, not a universal immediate scan-success assumption.
+Rich admission, projection/disposal and whole simulation remain open.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

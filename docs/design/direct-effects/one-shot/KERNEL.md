@@ -344,9 +344,31 @@ open.
 
 Independent replay passes seven reports, sixteen interfaces and both existing
 retaining negatives. Fresh integration matches exact reviewed source/artifact
-bytes. The current assembly contains 900 modules and 11,933 ordered standard-only
+bytes. Checkpoint `d03a333` assembled 900 modules and 11,933 ordered standard-only
 reports; all 899 unchanged modules retain exact preceding source/log/artifact and
 direct-import associations. Whole-fragment admission/simulation remains open.
+
+The [same-history handler selector](CoreGeneralHandlerSelection.lean) derives
+exact inventory index/effect from actual successful physical lookup. Intrinsic
+cell matches and dormant/retained logical handlers cannot become candidates.
+The connected capture factory retains the same installed Clause/header and
+positive actual execution. Current route/scope/selection/readiness remain.
+
+The [checked outside-origin consumer](CoreCallableOutsideOrigin.lean) derives
+old live-or-spent caller origin from the same current front/spent scan and
+original receipt/suffix/position. It constructs the same restored running receipt
+and actual full-prefix resume endpoint. The scan remains an explicit guard;
+normal-finish TicketBound, rich Source/Auth and whole reachability are open.
+Dormant running history retains ORIGINAL origin, not active lookup at each
+intermediate resume. Changed-tail caller activation needs combined actual
+bind/marker-return history at the actual return boundary. Retained projection
+and disposal remain open.
+
+Independent replay passes twelve reports and fourteen public probes across both
+leaves. Fresh integration reproduces exact reviewed source/artifact bytes. The
+current assembly contains 902 modules and 11,945 ordered standard-only reports;
+all 900 unchanged modules retain exact preceding source/log/artifact/direct-import
+associations. Whole-fragment admission and simulation remain open.
 
 ## Direct control representation
 
