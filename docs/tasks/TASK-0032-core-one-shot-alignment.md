@@ -1284,6 +1284,24 @@ remain separate targets. A small first example does not reduce the final scope.
   estimates can overlap: 60–90 minutes for frame migration and 90–150 minutes
   for capture, followed by their join and verification. The previous sequential
   2.5–4 hour estimate therefore no longer describes the parallel schedule.
+- C4 now has a third worker for the two existing admission and execution
+  example modules. Ownership is disjoint: shared definitions, selected capture,
+  and existing examples. The examples retain their acceptance and rejection
+  cases; this split adds no new finite execution variant. Their migration is
+  estimated at 60–90 active minutes and overlaps the two proof workers.
+- Lean rejected the proposed mutual witness indexed by exact `Pending` proofs
+  before constructor elaboration. The approved local encoding experiment uses
+  one structural `SelectedPending` witness for the predecessor, exact selected
+  handler source and outside tail. Its indices retain the full answer, private
+  source families, plans and rows. Capture must derive all three together from
+  the current site; an independently chosen same-port source is insufficient.
+  This is local execution evidence, with no change to M4 or source contracts.
+  The six constructor cases and joint predecessor/outside projections now
+  compile under the pinned compiler, and parent source review accepts the
+  encoding. Owner insertion and cell updates still require joint transport of
+  that evidence. The shared worker estimates 45–75 active minutes for these
+  transports, rebuilding ordinary consumers and promotion. Final independent
+  review and connected verification remain required before integration.
 - C3's restored-tail batch is implemented and passes both stages of independent
   review. Connected chains cover resume followed by normal cleanup completion,
   unwinding cleanup followed by close completion, and local discard followed by
@@ -1297,13 +1315,37 @@ remain separate targets. A small first example does not reduce the final scope.
   estimate. Current Unit redexes and structural projection preflight remain
   explicit; callback termination and arbitrary selected-segment projection are
   not established by this batch.
+- C4's connected fixed-world gate is implemented and passes both stages of
+  independent review. The promoted source/authentication/substitution layers
+  reach receiver-aware saved frames and execution sites, then actual selected
+  handler capture. The successor site, guarded capture and actual Core step
+  retain the same full contract, private family and complete rows. Joint owner
+  and cell-update transport preserves the predecessor and active outside tail;
+  all ordinary builtin and cell-reply methods remain. The existing twelve
+  admission and five execution reports and negative cases are retained.
+- Fresh parent compilation verifies 21 affected modules with 96 standard-only
+  reports under Lean 4.33.1. The worker's version metadata was collected outside
+  its compilation directory and selected a different toolchain. That record is
+  retained; fresh parent builds and same-directory compiler, library and
+  standard-library hashes supply the authoritative pinned evidence. Review
+  accepts the complete source/artifact closure. Grouped verification covers 875
+  registered modules and 11,623 exact reports, retaining 854 unchanged verified
+  pairs. All 2,061 local links and anchors, import order, trust, whitespace,
+  artifact scans and changed-document Markdown lint pass. One trailing space in
+  Execution was removed and its three dependent modules freshly rebuilt.
+- Existing structural proofs completed the joint transport sooner than the
+  revised 45–75 minute estimate. The requested C3 restoration batch and C4
+  consumer connection now require no further implementation. C4.1 stays open
+  for higher-order saved-support transport after restoration; current request
+  metadata/origin production remains C2 work. No new finite example or unrelated
+  work package was added.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication, callback request/route producer and general admission compiler | Connected higher-order consumers and general static derivation | Full estimate awaits connected Core admission bridge |
+| C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication, callback request/route producer and general admission compiler | Validated request/origin producers, restored-world support and general static derivation | Full estimate awaits connected Core admission bridge |
 | C3 | 0 / 5 | Capture/resume and restored-tail completion/unwind/local-discard batches integrated | Admitted state/ownership correspondence and remaining general transition coverage | Current request routes, resume scope resolution, readiness and ledger evidence | Requested restored-tail batch complete; full simulation estimate remains open |
-| C4 | 2 / 3 | Support preservation verified; frame/site and selected-capture consumers active in parallel | Restored-world transport and complete discrepancy closure | Shared execution interface, same selected private source and receiving support | Frame migration 60–90 min and capture 90–150 min overlap, then join/verification; restoration unestimated |
+| C4 | 2 / 3 | Connected fixed-world consumer gate integrated | Restored-world transport and complete discrepancy closure | Saved support must admit receiving resources acquired in the clause | Requested consumer batch complete; restoration estimate awaits its transport interface |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

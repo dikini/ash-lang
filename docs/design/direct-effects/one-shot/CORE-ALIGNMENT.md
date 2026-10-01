@@ -1302,11 +1302,10 @@ request must check that tail. The refinement must therefore also consume the
 current retained-stack certificate and its support check, already carried by
 the execution site. Existing return-mode and installation-history lemmas provide
 the required transport. Accounting remains unchanged, and universal refinements
-embed into the conditional interface. This is an implementation decision, not a
-completed theorem. Its integration gate connects
-substitution, supported source, saved frames and the current execution site
-through handler capture. General restored-world transport remains required.
-No such transport theorem or full handler admission is claimed yet.
+embed into the conditional interface. The connected fixed-world gate below now
+implements this interface through substitution, supported source, saved frames,
+the current execution site and actual handler capture. General restored-world
+transport and full handler admission remain open.
 
 Operation payload transfer also needs current request-flow evidence. Rust's
 capture analysis checks hidden value dependencies against each acquisition in
@@ -1317,6 +1316,45 @@ map and the actual handler cut. It does not authenticate the current request's
 table index or construct the operand/prefix realization. C2 must derive those
 facts from validated Core; the connected C4 admission gate must preserve them.
 Public callable ports and aggregate receiver bounds do not supply them.
+
+The connected higher-order gate promotes
+[CoreCallableSourceSubstitution.lean](CoreCallableSourceSubstitution.lean) and
+[CoreCallableSupportedSubstitution.lean](CoreCallableSupportedSubstitution.lean)
+with their hereditary authentication dependencies. Substitution constructs the
+deterministic transformed plan and preserves its signature and complete rows.
+The concrete declaration policy supplies signature stability. The admission
+companion retains request inversion; its former Source-only beta wrappers are
+replaced by receiver-aware Supported substitution.
+
+[CoreCallableContractExecution.lean](CoreCallableContractExecution.lean) carries
+the full issued receiver through current code, saved bind suffixes and installed
+handler declarations. Aggregate result bounds remain separate. Its local
+`SelectedPending` witness jointly retains the predecessor, exact installed
+private source family and active outside continuation. Owner insertion
+transports that joint evidence. Cell updates rebuild the same predecessor path
+and physical cut around the updated active outside stack, preserving dormant
+saved prefixes. Existing focus, bind, plug, builtin selection and cell reply
+methods remain available.
+
+The `capture` theorem in
+[CoreCallableContractCaptureConnection.lean](CoreCallableContractCaptureConnection.lean)
+inverts the current pending stack and actual cut to select the same declaration,
+full answer contract, owner-indexed private plan family and complete rows.
+Actual operand support and current origin separation derive its post-cut
+receiver. Authentication and substitution then construct the successor `Site`,
+guarded calculus capture and actual Core `RawStep`, with exact transformed plan,
+signature and row equalities. A desired successor or chosen private source is
+not a premise. Readiness, current owner/action freshness, finite request-flow
+evidence and policy stability remain explicit current assumptions.
+
+This is a fixed-world formal companion gate. C2 still must authenticate the
+request index and produce operand/prefix realization from validated Core.
+Higher-order resume after the clause acquires resources still requires saved
+support transport under the restored world. General M4 admission, Rust execution
+correspondence and runtime capacity success do not follow from this result.
+Independent pinned compilation covers 21 affected modules with 96 standard-only
+reports; the existing twelve admission and five execution example reports and
+negative cases are retained. No Rust or M4 behavior changes accompany this gate.
 
 Four focused Rust regressions in
 [core_alignment_cleanup.rs](../../../../tests/core_alignment_cleanup.rs)

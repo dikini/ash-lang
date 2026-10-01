@@ -1,8 +1,7 @@
 import CoreCallableContractExecution
 
 /-! Finite effect-boundary gate for the indexed experimental judgment. All
-functions and requests share one global exact operation contract. This does
-constructs bounded plain/cell pending evidence; handler/owner pending, capture
+functions and requests share one global exact operation contract. This constructs bounded plain/cell pending evidence; handler/owner pending, capture
 and full M4 admission remain open. -/
 namespace Ash.OneShot.CoreCallableContractExecutionExamples
 open ScopedExpressions ScopedExecution ProtectionContracts
@@ -37,10 +36,9 @@ private def simple : Code := .lambda 2 run
 private def sequenced : Code := .lambda 2 (.bind 3 .unit run)
 
 section
-variable [DeclarationPolicy]
+local instance : DeclarationPolicy := SourceScheduledCleanupInterfaces.Lexical.Recursive.declarationPolicy
 
 private theorem planCertified : Certified outward world operationPlan := .sequence .pure .request
-omit [DeclarationPolicy] in
 private theorem actionFormed : ScopedPorts.InWorld world action.port := by
   change [0] ⊆ world
   exact List.Subset.refl _
@@ -48,7 +46,6 @@ private theorem actionFormed : ScopedPorts.InWorld world action.port := by
 private theorem run_source : Source globals outward world [effect] scope environment run .integer [] operationReq operationPlan operationRows :=
   .perform (by simp [globals, Globals.registry]) (by simp) (.reference (by simp [world])) (by change [] ⊆ world; intro identity member; cases member)
 
-omit [DeclarationPolicy] in
 private theorem operation_outward : RecursiveOutward.Outward operationReq (some [request]) := by
   exact .emitAfter (layers := []) (.request (layers := []))
 
@@ -127,63 +124,184 @@ private def root : Requirements [] := .request [] []
 private def noActions : Syntax.UsageTickets := fun _ => none
 private def phases : OwnerPhaseTransitions.Phases := OwnerPhaseTransitions.empty
 
-omit [DeclarationPolicy] in
 private theorem operation_structural : ReadRows operationRows := .sequence .pure .read
-omit [DeclarationPolicy] in
 private theorem helper_structural : ReadRows helperRows := .sequence .pure (.sequence .pure operation_structural)
-omit [DeclarationPolicy] in
 private theorem call_structural : ReadRows callRows := .sequence .pure (.sequence .pure helper_structural)
-omit [DeclarationPolicy] in
 private theorem both_structural : ReadRows bothRows := .sequence .pure (.sequence call_structural call_structural)
-omit [DeclarationPolicy] in
 private theorem before_structural : ReadRows beforeRows := .sequence operation_structural both_structural
 
 private theorem before_source : Source globals [] world [effect] .none Environment.empty before .integer [] beforeReq beforePlan beforeRows :=
   .bind run_source both_source
 
+open CoreCallableReceiverRefinement (LexicalBounds)
+open SourceScheduledCleanupInterfaces.Lexical.Recursive
+
+private theorem run_authenticated (source : Source globals outward currentWorld [effect] scope environment
+    run .integer [] operationReq operationPlan operationRows) (issued : 0 ∈ currentWorld) (received : 0 ∈ receiver) :
+    Authenticated globals.registry outward source lexical receiver := by
+  refine .checked ?_ (.perform (known := by simp [globals, Globals.registry]) (admitted := by simp)
+    (formed := by change [] ⊆ currentWorld; simp) (.checked ?_ (.reference (issued := issued))))
+  all_goals apply SourceSupport.bounds_iff.mpr
+  all_goals simp [run, effect, Code.dependencies, ScopedPorts.Support.evaluate,
+    Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources, received]
+
+private theorem simple_authenticated (source : Source globals outward currentWorld allowed scope environment
+    simple action [] emptyReq .pure Rows.pure) (issued : 0 ∈ currentWorld) (received : 0 ∈ receiver) :
+    Authenticated globals.registry outward source lexical receiver := by
+  refine .checked ?_ (.lambda (bodySource := .perform (by simp [globals, Globals.registry]) (by simp)
+    (.reference issued) (by change [] ⊆ currentWorld; simp)) (Refines.identity operationRows)
+    operation_outward (by simp [request]) (.sequence .pure .request) ?_ ?_ ?_)
+  · apply SourceSupport.bounds_iff.mpr
+    simp [simple, run, effect, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate,
+      Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources, received]
+  · change [0] ⊆ currentWorld
+    simpa using issued
+  · intro name member
+    simp [effect, Code.dependencies, Syntax.without, Instantiation.freezeEffect,
+      effectAtoms, Instantiation.Effect.resources] at member
+  · intro nextLexical call _ captured
+    apply run_authenticated _ (call.worldExtended issued)
+    apply captured
+    simp [effect, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate,
+      Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources]
+
+private theorem sequenced_authenticated (source : Source globals outward currentWorld allowed scope environment
+    sequenced action [] emptyReq .pure Rows.pure) (issued : 0 ∈ currentWorld) (received : 0 ∈ receiver) :
+    Authenticated globals.registry outward source lexical receiver := by
+  let bodySource : Source globals outward currentWorld [effect] .none (environment.extend 2 Contract.unit)
+      (.bind 3 .unit run) .integer [] (.sequence emptyReq operationReq)
+      (.sequence .pure operationPlan) (sequenceRows Rows.pure operationRows) :=
+    .bind .unit (.perform (by simp [globals, Globals.registry]) (by simp) (.reference issued) (by change [] ⊆ currentWorld; simp))
+  refine .checked ?_ (.lambda (bodySource := bodySource)
+    (Refines.of_exact (CoreCallableRefinementTransport.Refines.pure_prefix CorePayloadRefinement.PurePlan.pure Rows.pure operationRows))
+    (.sequence (.request (layers := [])) operation_outward) (by simp [request]) (.sequence .pure .request) ?_ ?_ ?_)
+  · apply SourceSupport.bounds_iff.mpr
+    simp [sequenced, run, effect, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate,
+      Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources, received]
+  · change [0] ⊆ currentWorld
+    simpa using issued
+  · intro name member
+    simp [run, effect, Code.dependencies, Syntax.without, Instantiation.freezeEffect,
+      effectAtoms, Instantiation.Effect.resources] at member
+  · intro nextLexical call _ captured
+    have cellReceived : 0 ∈ call.receiver := by
+      apply captured
+      simp [run, effect, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate,
+        Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources]
+    refine .checked ?_ (.bind (initialSource := .unit) (bodySource := .perform (by simp [globals, Globals.registry])
+      (by simp) (.reference (call.worldExtended issued)) (by change [] ⊆ call.world; simp))
+      (.checked ?_ .unit) (run_authenticated _ (call.worldExtended issued) cellReceived))
+    all_goals apply SourceSupport.bounds_iff.mpr
+    all_goals simp [run, effect, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate,
+      Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources, cellReceived]
+
+private theorem helper_authenticated (source : Source globals [] world allowed scope environment
+    helper helperContract [] emptyReq .pure Rows.pure) (_received : 0 ∈ receiver) :
+    Authenticated globals.registry [] source lexical receiver := by
+  let bodySource : Source globals [] world [effect] .none (environment.extend 0 action)
+      helperBody .integer [] helperReq helperPlan helperRows :=
+    .app (.variable (by simp [Environment.extend, action]) actionFormed) .unit (by simp) planCertified
+  refine .checked ?_ (.lambda (bodySource := bodySource) (Refines.identity helperRows)
+    (.emitAfter (layers := []) (.sequence (.request (layers := [])) (.request (layers := []))))
+    (by simp [request]) helperCertified ?_ ?_ ?_)
+  · apply SourceSupport.bounds_iff.mpr
+    simp [helper, helperBody, Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate]
+  · change [0, 0] ⊆ world
+    simp [world]
+  · intro name member
+    simp [helperBody, Code.dependencies, Syntax.without] at member
+  · intro nextLexical call _ _
+    refine .checked ?_ (.app (admitted := by simp) (publicCertified := .sequence .pure .request)
+      (functionSource := .variable (contract := action) (by simp [Environment.extend, action])
+      (by change [0] ⊆ call.world; exact call.worldExtended)) (argumentSource := .unit)
+      (.checked ?_ (.variable (known := by simp [Environment.extend, action])
+        (formed := by change [0] ⊆ call.world; exact call.worldExtended) ⟨call.argument, by simp [LexicalBounds.lookup, LexicalBounds.extend]⟩))
+      (.checked ?_ .unit))
+    all_goals apply SourceSupport.bounds_iff.mpr
+    all_goals simp [helperBody, Code.dependencies, ScopedPorts.Support.evaluate,
+      LexicalBounds.environment, LexicalBounds.lookup, LexicalBounds.extend, call.argumentReceived]
+
+private theorem both_authenticated (source : Source globals [] world [effect] scope environment
+    both .integer [] bothReq bothPlan bothRows) (received : 0 ∈ receiver) :
+    Authenticated globals.registry [] source lexical receiver := by
+  have formed : ScopedPorts.InWorld world helperContract.port := by
+    change [0, 0] ⊆ world
+    simp [world]
+  let first : Source globals [] world [effect] scope (environment.extend 10 helperContract)
+      (.app (.variable 10) simple) .integer [] callReq callPlan callRows :=
+    .app (.variable (by simp [Environment.extend, helperContract]) formed) simple_source (by simp) helperCertified
+  let second : Source globals [] world [effect] scope ((environment.extend 10 helperContract).extend 11 Contract.integer)
+      (.app (.variable 10) sequenced) .integer [] callReq callPlan callRows :=
+    .app (.variable (by simp [Environment.extend, helperContract]) formed) sequenced_source (by simp) helperCertified
+  refine .checked ?_ (.bind (initialSource := helper_source) (bodySource := .bind first second)
+    (helper_authenticated _ received) (.checked ?_ (.bind (initialSource := first) (bodySource := second)
+      (.checked ?_ (.app (admitted := by simp) (publicCertified := helperCertified) (functionSource := .variable (contract := helperContract) (by simp [Environment.extend, helperContract]) formed)
+        (argumentSource := simple_source) (.checked ?_ (.variable (known := by simp [Environment.extend, helperContract]) (formed := formed) ⟨receiver, by simp [LexicalBounds.lookup, LexicalBounds.extend]⟩))
+        (simple_authenticated _ (by simp [world]) received)))
+      (.checked ?_ (.app (admitted := by simp) (publicCertified := helperCertified) (functionSource := .variable (contract := helperContract) (by simp [Environment.extend, helperContract]) formed)
+        (argumentSource := sequenced_source) (.checked ?_ (.variable (known := by simp [Environment.extend, helperContract]) (formed := formed) ⟨receiver, by simp [LexicalBounds.lookup, LexicalBounds.extend]⟩))
+        (sequenced_authenticated _ (by simp [world]) received))))))
+  all_goals apply SourceSupport.bounds_iff.mpr
+  all_goals simp [both, bothBody, helper, helperBody, simple, sequenced, run, effect,
+    Code.dependencies, Syntax.without, ScopedPorts.Support.evaluate, LexicalBounds.environment,
+    LexicalBounds.lookup, LexicalBounds.extend, Instantiation.freezeEffect, effectAtoms,
+    Instantiation.Effect.resources, received]
+
 private theorem before_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none Environment.empty
-    ScopedPorts.Support.empty before .integer [] beforeReq beforePlan beforeRows [0] := by
-  refine ⟨before_source, ?_, List.Subset.refl _⟩
-  apply SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mpr
-  simp [before, both, bothBody, helper, helperBody, simple, sequenced, run, effect, Code.dependencies,
+    ScopedPorts.Support.empty before .integer [] beforeReq beforePlan beforeRows [0] [0] := by
+  refine ⟨before_source, ?_, List.Subset.refl _, ⟨[], rfl, .checked ?_
+    (.bind (initialSource := run_source) (bodySource := both_source)
+      (run_authenticated _ (by simp [world]) (by simp)) (both_authenticated _ (by simp)))⟩, List.Subset.refl _⟩
+  all_goals apply SourceSupport.bounds_iff.mpr
+  all_goals simp [before, both, bothBody, helper, helperBody, simple, sequenced, run, effect, Code.dependencies,
     Syntax.without, ScopedPorts.Support.evaluate, ScopedPorts.Support.empty, Instantiation.freezeEffect, effectAtoms,
     Instantiation.Effect.resources]
 
 private theorem suffix_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none
     (Environment.empty.extend 99 Contract.integer) (ScopedPorts.Support.extend ScopedPorts.Support.empty 99 [0])
-    both .integer [] bothReq bothPlan bothRows [0] := by
-  refine ⟨both_source, ?_, List.Subset.refl _⟩
+    both .integer [] bothReq bothPlan bothRows [0] [0] := by
+  refine ⟨both_source, ?_, List.Subset.refl _, ⟨[(99, [0])], by funext name; by_cases same : name = 99 <;> simp [same, LexicalBounds.environment, LexicalBounds.lookup, ScopedPorts.Support.extend, ScopedPorts.Support.empty], both_authenticated _ (by simp)⟩, List.Subset.refl _⟩
   apply SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mpr
   simp [both, bothBody, helper, helperBody, simple, sequenced, run, effect, Code.dependencies,
     Syntax.without, ScopedPorts.Support.evaluate, Instantiation.freezeEffect, effectAtoms,
     Instantiation.Effect.resources]
 
 private theorem frame_source : FrameSource globals [] world [effect] plain Contract.integer Contract.integer
-    99 both [] bothReq bothPlan bothRows [0] [0] := ⟨rfl, rfl, rfl, by simp [world], suffix_supported⟩
+    99 both [] bothReq bothPlan bothRows [0] [0] [0] := ⟨rfl, rfl, rfl, by simp [world], suffix_supported⟩
 
 private theorem read_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none Environment.empty
-    ScopedPorts.Support.empty run .integer [] operationReq operationPlan operationRows [0] := by
-  refine ⟨run_source, ?_, List.Subset.refl _⟩
+    ScopedPorts.Support.empty run .integer [] operationReq operationPlan operationRows [0] [0] := by
+  refine ⟨run_source, ?_, List.Subset.refl _, ⟨[], rfl, run_authenticated _ (by simp [world]) (by simp)⟩, List.Subset.refl _⟩
   apply SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mpr
   simp [run, effect, Code.dependencies, ScopedPorts.Support.evaluate, Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources]
 
 private theorem reply_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none Environment.empty
-    ScopedPorts.Support.empty reply .integer [] emptyReq .pure Rows.pure [] :=
-  ⟨.integer, SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.Bounds.canonical _ _, by simp⟩
+    ScopedPorts.Support.empty reply .integer [] emptyReq .pure Rows.pure [] [0] :=
+  ⟨.integer, SourceSupport.Bounds.canonical _ _, by simp, ⟨[], rfl, .checked (by apply SourceSupport.bounds_iff.mpr; simp [reply, Code.dependencies, ScopedPorts.Support.evaluate]) .integer⟩, List.Subset.refl _⟩
 
-omit [DeclarationPolicy] in
 private theorem reply_closed : ClosedValue reply := by simp [reply, ClosedValue, Code.IsValue, Code.ResourceClosed, Code.freeNames, Code.dependencies]
 
 private theorem plugged_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none Environment.empty
-    ScopedPorts.Support.empty plugged .integer [] (.sequence emptyReq bothReq) pluggedPlan pluggedRows [0] := by
-  refine ⟨.bind reply_supported.source suffix_supported.source, ?_, List.Subset.refl _⟩
-  apply SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mpr
-  simp [plugged, reply, both, bothBody, helper, helperBody, simple, sequenced, run, effect, Code.dependencies,
+    ScopedPorts.Support.empty plugged .integer [] (.sequence emptyReq bothReq) pluggedPlan pluggedRows [0] [0] := by
+  refine ⟨.bind reply_supported.source suffix_supported.source, ?_, List.Subset.refl _,
+    ⟨[], rfl, .checked ?_ (.bind (initialSource := reply_supported.source) (bodySource := suffix_supported.source)
+      (.checked (by apply SourceSupport.bounds_iff.mpr; simp [reply, Code.dependencies, ScopedPorts.Support.evaluate]) .integer) (both_authenticated _ (by simp)))⟩, List.Subset.refl _⟩
+  all_goals apply SourceSupport.bounds_iff.mpr
+  all_goals simp [plugged, reply, both, bothBody, helper, helperBody, simple, sequenced, run, effect, Code.dependencies,
     Syntax.without, ScopedPorts.Support.evaluate, ScopedPorts.Support.empty, Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources]
 
 private theorem after_supported : CoreCallableContractAdmission.Supported globals [] world [effect] .none Environment.empty
-    ScopedPorts.Support.empty (both.subst 99 reply) .integer [] bothReq bothPlan bothRows [0] :=
-  (frame_source.plug ⟨reply_supported.source, .nil, List.Subset.refl _⟩ reply_closed).1
+    ScopedPorts.Support.empty (both.subst 99 reply) .integer [] bothReq bothPlan bothRows [0] [0] := by
+  obtain ⟨nextPlan, nextRows, supported, exactPlan, sameSignature, sameRows, _⟩ :=
+    FrameSource.plug (fun recipes same => ClauseDeclarations.signature_congr recipes same) frame_source
+      ⟨reply_supported.source, .nil, List.Subset.refl _, reply_supported.authentication, List.Subset.refl _⟩ reply_closed
+  have planSame : nextPlan = bothPlan := by
+    rw [exactPlan]
+    simp [both, bothBody, helper, helperBody, simple, sequenced, run, CoreCallablePlanSubstitution.plan,
+      bothPlan, callPlan, helperPlan]
+  cases planSame
+  cases eq_of_heq sameRows
+  exact supported
 
 
 /-- One connected segment. All five sites carry actual source, saved recursive
@@ -293,7 +411,7 @@ theorem transported_segment :
   subst parameter
   subst body
   rw [sameScope] at pluggedSite plugStep
-  obtain ⟨finalSite, bindStep⟩ := Site.bind_value pluggedSite reply_closed (by
+  obtain ⟨finalSite, bindStep⟩ := Site.bind_value (fun recipes same => ClauseDeclarations.signature_congr recipes same) pluggedSite reply_closed (by
     simp [both, bothBody, helper, helperBody, simple, sequenced, run, effect, ClosedExcept, Code.dependencies,
       Instantiation.freezeEffect, effectAtoms, Instantiation.Effect.resources, Syntax.without])
   exact ⟨output, finalSite, .next focusStep (.next readStep (.next plugStep (.next bindStep (.refl _))))⟩
