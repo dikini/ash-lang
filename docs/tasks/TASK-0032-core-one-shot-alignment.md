@@ -63,14 +63,14 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-01 18:40 UTC
+### Current deliverable board — 2026-10-01 19:35 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
 its phase changes only when the corresponding evidence exists. Constructor
 counts measure implemented cases, not equal effort or a percentage of C2.
 
-| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 18:26 UTC |
+| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 18:40 UTC |
 | --- | --- | --- | --- | --- | --- |
 | Same-graph callable annotation gate | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | Rich initial Site and first-step connection | Yes | Passed | Passed | `d2f26e1` | Unchanged |
@@ -97,10 +97,16 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Checked outside-anchor running receipt restoration through actual full-prefix resume | Implemented | Passed | Passed | `9ccc2fb` | Unchanged |
 | **Handler-selection/outside two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`9ccc2fb`** | Unchanged |
 | Actual caller bind/reset/return factories: five named reports | **5 / 5** | **5 / 5** | **5 / 5** | **`0d6965c`** | Unchanged |
-| Guarded cleanup activation: two named marker-return/finish factories | **2 / 2, frozen** | **2 / 2, passed** | Independent current-parent replay passed | Pending | Unchanged |
-| Original closed initializer runtime binding: two named reports | Static inversion valid; combined consumer vacuous | **Rejected: contradictory inputs** | Kernel contradiction confirmed independently | Excluded | **Frozen → reviewed → repair required** |
-| Runtime binding repair: three named value-ready/check-lambda reports | **3 / 3, frozen** | Pending | Worker current-parent replay passed | Pending | **Vacuous consumer replaced; independent review required** |
-| Captured substitution: eight named replacement/body receipts | **8 / 8, frozen** | **8 / 8, passed** | Independent current-parent replay passed | Pending | **Frozen → reviewed; whole-lambda family coupling open** |
+| Guarded cleanup activation: two named marker-return/finish factories | **2 / 2** | **2 / 2, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
+| Original closed initializer runtime binding v1: two named reports | Static inversion valid; combined consumer vacuous | **Rejected: contradictory inputs** | Kernel contradiction confirmed independently | Excluded | Unchanged; v2 repair is a separate applicable path |
+| Runtime binding repair v2: three named value-ready/check-lambda reports | **3 / 3** | **3 / 3, passed** | **Exact current-source replay passed** | **This checkpoint** | **Frozen → reviewed → registered and verified** |
+| Captured substitution: eight named replacement/body receipts | **8 / 8** | **8 / 8, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
+| Running occurrence: four actual start/bind/beta/history reports | **4 / 4** | **4 / 4, passed** | **Exact current-source replay passed** | **This checkpoint** | **New local occurrence factories verified** |
+| Captured lambda constructor: nine same-family reconstruction reports | **9 / 9** | **9 / 9, passed** | **Exact current-source replay passed** | **This checkpoint** | **Whole returned lambda now uses the exact transformed body family** |
+| **Five-component capture/origin batch** | **5 / 5** | **5 / 5** | **5 / 5; 26 reports** | **This checkpoint** | **Five components advanced to registered current-source verification** |
+| Captured recipe transport: thirteen named checker reports | **13 / 13, frozen** | **13 / 13, passed** | Independent replay against current 908-module cache passed | Pending | **New recursive finite annotation substitution verified** |
+| Running capture/resume: eight named generated-marker reports | **8 / 8, frozen** | **8 / 8, passed** | Independent replay against current 908-module cache passed | Pending | **Actual capture and immediate resume generate the same spent marker** |
+| Runtime closure connection: initializer-head producer | Locally compiled | Pending | Worker local check only | Pending | **In development: original left initializer checks and full bind path recovered** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -190,89 +196,66 @@ Checkpoint `0d6965c` retains [CoreCallableCallerBarriers.lean](../design/direct-
 Its five named reports cover actual bind entry, current heap transport, beta
 reset, original-suffix bind return and a same-active-caller clause miss.
 Independent replay passes five reports and seven public probes. Fresh integration
-reproduces its exact reviewed source/artifact bytes and five reports. The current
+reproduces its exact reviewed source/artifact bytes and five reports. That preceding
 assembly has 903 registered modules and 11,950 ordered standard-only reports;
 all 902 unchanged modules retain exact preceding source/log/artifact/direct-import
 associations. This is one fresh added leaf, not an uncached build of every module.
 No Rust sources change. Whole-fragment acceptance counts remain unchanged.
 
+The current five-component checkpoint registers guarded cleanup activation,
+captured substitution, corrected runtime binding, running occurrence and the
+direct captured-lambda constructor. All five pass independent semantic review.
+Fresh integration reproduces their exact reviewed source/artifact bytes and
+26 ordered standard-only reports. The audited assembly contains 908 registered
+modules and 11,976 reports. All 903 unchanged modules retain exact preceding
+source/log/artifact/direct-import associations. This is five fresh leaves in an
+audited assembly, not an uncached build of every module. No Rust sources change;
+the earlier full Rust verification remains the Rust evidence.
+
 Current parallel checkpoints:
 
 | Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
 | --- | --- | --- | --- | --- |
-| C2.3 / C4.1 | Literal captured-callee call integrated | **Unchanged:** exact stored domain/result and substituted-body storage retained | Captured substitution and private-family lineage | Whole-package estimate open: universal storage/resource body scheme unresolved |
-| C3.2 | Physical handler selection integrated | **Unchanged:** actual successful interpreter lookup derives exact inventory candidate/effect | Current route/operation/readiness production through general admission | Depends on C2; whole-package estimate open |
-| C3.1 / C3.2 | Checked outside restoration integrated | **Interface identified:** same receipt occurrence must follow actual start/bind/reset/capture/resume/returns; scan stays explicit | Construct occurrence from actual start and preserve it through actual bind/beta; add marker-producing capture/resume before spent return | First factories: 90–150 minutes; changed-tail capture/resume: 2–4 hours provisional |
-| C3.1 / C3.2 | Caller/reset/bind factories worker-verified | **Integrated:** five reviewed reports retain actual bind entry, beta reset, same-suffix return and original caller site/scope | Combine actual return history with running completion activation | First occurrence factories: 90–150 minutes; changed-tail splice estimate provisional |
-| C3.1 / C3.2 | Cleanup activation not frozen | **Reviewed, not integrated:** two spent-marker Unit return/normal-finish factories reconstruct current inside or checked-outside caller ownership | Integrate both factories; current guards remain inputs | Integration: 20–30 minutes; chronology guard production remains open |
-| C2.3 / C4.1 | Runtime binding v1 frozen | **V1 rejected; v2 frozen:** actual value-ready bind and checked-lambda evaluation replace the contradictory focus premise; static initializer inversion retained | Independently review three-report repair; open/evaluating initializer lineage remains unresolved | Repair review: 20–30 minutes; general captured initializer estimate open |
-| C2.3 / C4.1 | Captured substitution frozen | **Reviewed, not integrated:** eight replacement/body receipts preserve exact restored-lexical private Plan/full Rows; outer lambda constructor coupling remains unproved | Integrate bounded receipts; directly construct returned lambda from the same transformed family | Integration: 20–30 minutes; direct constructor producer estimate pending |
+| C2.3 / C4.1 | Captured substitution reviewed, constructor coupling open | **Registered and verified:** eight substitution reports and nine direct-constructor reports use the same transformed private family in the whole returned lambda | Connect finite annotation substitution and actual runtime captured environments | Next bounded connection: 1–2 hours provisional; full admission estimate open |
+| C2.3 / C3.5 | Runtime binding v1 rejected; v2 frozen | **V2 registered and verified:** three reports derive actual checked-lambda evaluation, value-ready bind entry and returned binding; v1 remains excluded | Join original initializer-head checks to the constructor and runtime closure relation | First producer locally compiles; connection estimate 1–2 hours provisional |
+| C3.1 / C3.2 | Activation reviewed; occurrence factories outstanding | **Registered and verified:** two guarded marker-return/finish reports and four actual start/bind/beta occurrence reports | Preserve the occurrence through intervening clause/callback steps and heap changes, then derive current activation guards | Next bounded transport: 2–4 hours provisional; whole simulation estimate open |
+| C2.3 | Finite recipe substitution outstanding | **Reviewed, not registered:** thirteen reports preserve the exact full captured input/result using the frozen caller-specialized annotation tree | Register and freshly integrate the unchanged reviewed source | Packaging alongside next C3 leaf: 30–60 minutes |
+| C3.1 / C3.2 | Marker-producing capture/resume outstanding | **Reviewed, not registered:** eight reports derive capture from the same occurrence and immediate live-head resume with its generated spent marker | Register and freshly integrate; extend through intervening clause work | Packaging alongside next C2 leaf: 30–60 minutes |
+| C3.2 | Physical selection and outside restoration integrated | **Unchanged:** selected handler and outside-anchor receipts remain available | Supply current route/readiness from general admission; supply activation guards from chronological history | Depends on C2 and occurrence transport; whole-package estimate open |
 
-The handler-selection proof relates the same history's inventory keys to every
-active physical handler occurrence. Actual findInterpreter success constructs
-the exact candidate index and effect from its own BoundaryRel. Intrinsic cell
-hits cannot become source-handler candidates; dormant captures and retained
-logical handlers are excluded. The connected capture factory retains the same
-original installation, full selected Clause/header and deterministic live
-history. Current successful lookup, source route/scope, operation selection,
-operand/environment carriers and readiness remain explicit. No arbitrary
-request-success or future-source premise is introduced.
+The new constructor closes the particular coupling gap between substituted body
+receipts and the private family of the whole returned lambda. It evaluates the
+original family at the exact restored lexical environment and actual call,
+computes the new private Plan/full Rows, and constructs that whole lambda from
+the same transformed family. This is existing C2.3 work, not a new acceptance
+item. General higher-order admission still needs recursive closure origins,
+varied full storage contracts, resource construction and the remaining handlers.
 
-The checked outside-origin proof scans the same current front plus selected spent
-receipt at the original caller pair. It rejects found/blocked results. A missing
-result derives literal prefix misses; the original live or spent outside anchor
-and its position reconstruct the old caller path. The same delayed cleanup and
-saved value are retained. Actual full-prefix resume produces the restored running
-receipt and exact physical endpoint. Current frame/value/resolve, original
-receipt/head/suffix/position and scan guards remain explicit.
+Runtime binding v1 remains excluded: its nonvalue initializer focus contradicted
+ValueRel for the same original Code. The repaired v2 proves an applicable path
+for a current closed original lambda initializer, using its actual successful
+check and evaluation; the administrative rank decreases. It does not establish
+open/evaluating or capture-substituted initializer lineage.
 
-The next history obligation is caller activation. GeneralHistory.running retains
-an ORIGINAL receipt suffix while the caller scope is dormant; it need not assert
-that saved scope is active at every intermediate resume. The normal-finish
-consumer requires the actual completion tail to match the receipt suffix.
-Combined actual bind/marker-return history must establish the origin when that
-caller becomes current, including changed tails. Whether a checked immediate
-restoration applies is distinct from proving every intermediate scan succeeds.
-No universal immediate scan-success, reachable counterexample or whole C3 claim
-is made. The first barrier factories now construct actual bind entry/reset/return
-receipts and are integrated after independent review. Bind return restores the
-original caller only when the actual bind head and unchanged original suffix are
-current. Changed-tail cleanup activation still needs chronological occurrence
-history; the reviewed activation factories retain explicit current guards.
-
-For captured substitution, authenticated private-family lineage uses the exact
-restored lexical environment: nextLexical extended at the captured name with the
-actual replacement's resource dependencies. The same original private Plan/Rows
-family must be evaluated at that restored environment and actual call before
-body substitution. Outer pure-plan equality is insufficient. Universal varying
-storage families, rich resource Source/Auth and actual-return observer transport
+RunningOccurrence constructs local actual start/bind/beta factories from the
+same original running receipt and current histories. CleanupActivation derives
+actual spent-marker Unit return and normal finish with current inside or checked
+outside guards. Those guards remain inputs. The newly reviewed RunningCapture
+checkpoint derives actual capture above the selected tail handler and immediate
+live-head resume with a generated marker. These local factories do not yet
+establish continuous callback/clause chronology or heap-changing transport.
+No universal intermediate scan-success claim is made. Changed-tail activation,
+armed projection, disposal, rich successor preservation and whole simulation
 remain open.
 
-Caller-barrier and guarded cleanup-activation reviews have passed. Caller5 is
-retained here; Activation2 integration remains next. RuntimeBinding2
-has a rejected combined consumer: the nonvalue bind-focus guard conflicts with
-ValueRel to that same original initializer Code. Independent kernel replay
-proves the contradiction; compiler success alone did not establish applicable
-inputs. The static initializer-contract inversion remains valid. Repair will
-use a distinct actual value-ready bind path with bounded administrative steps
-or prove the original initializer-to-returned Code lineage. The value-ready
-repair is now frozen with three worker-verified reports, three interfaces and
-an explicit decreasing administrative rank; independent review remains pending.
-It covers a current closed original lambda initializer. Open/evaluating and
-capture-substituted initializers still need lineage. The eight-report
-captured-substitution checkpoint passed independent review and awaits integration.
-
-The direct whole-lambda constructor producer can expose the transformed private
-family already constructed inside an existing proof; it is now the
-bounded C2 implementation target. C3 next constructs the same running occurrence
-through actual start/bind/reset. Spent return is deferred until actual
-capture/resume constructs a marker-bearing occurrence; accepting an independent
-current prefix would not establish chronological provenance.
-The current package table below records the 90–150 minute first C3 stage and
-provisional 2–4 hour next stage, alongside C2. Full C2/C3 estimates remain open
-until whole-lambda coupling, universal storage-family success and changed-tail
-activation guards are proved. The supported fragment and package acceptance
-inventory remain unchanged.
+The next work runs in parallel: C2 connects initializer-head checks, captured
+recipes and the same-family constructor to actual closure origins; C3 derives
+occurrence transport through intervening clause work and heap changes. The
+previous 90–150 minute occurrence-factory stage is discharged; the private-family
+constructor stage is also discharged. The next transport estimate remains
+provisional because coupling heap changes to the generated occurrence has not
+yet been proved. Full C2/C3 finish estimates remain open for these named gaps.
+The supported fragment and package acceptance inventory remain unchanged.
 
 ### Increment 1 local results
 
@@ -1719,22 +1702,25 @@ inventory remain unchanged.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | 14/16 checker forms and recipes retained; captured substitution reviewed; runtime v1 rejected and v2 frozen | Recursive static body and captured-environment admission producer; whole initial admission | Review runtime value-ready repair; expose transformed private family; general initializer, handler/resource, metadata/registry and storage control gaps remain | Runtime v2 review: 20–30 minutes; constructor producer in parallel, estimate pending; whole-package estimate open |
-| C3 | 0 / 5 | General history, owner/resume, handler selection, checked outside restoration and caller bind/reset/return retained; activation reviewed | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | Derive current activation guards from chronological occurrence history; projection/disposal remain | First occurrence factories: 1.5–2.5 active hours; changed-tail splice: 2–4 more, provisional; whole-package estimate open |
+| C2 | 0 / 4 | 14/16 checker forms retained; captured substitution, same-family whole-lambda constructor and repaired runtime binding registered and verified; finite recipe transport reviewed | General initializer/captured-environment admission; handler/resource constructors; whole initial admission | Connect actual closure origins and the exact finite annotation tree; varied full storage/resource and metadata/registry gaps remain | Next bounded runtime closure connection: 1–2 active hours provisional; full-package estimate open |
+| C3 | 0 / 5 | Caller barriers, guarded activation and local running occurrence registered and verified; generated-marker capture/resume reviewed | Continuous reachable relation across callback/clause work, cleanup and disposal; full simulation and preparation bridge | Heap-changing occurrence transport and derived activation guards; armed projection/disposal; C2 rich successor evidence | Next bounded occurrence transport: 2–4 active hours provisional; full-package estimate open |
 | C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
-The earlier caller-barrier, guarded activation and captured-substitution reviews
-are discharged. Runtime binding review found a semantic vacuity and requires
-repair; no integration or acceptance credit is recorded for its combined
-consumer. This is a new failed approach within the existing C2.3/C3.5 obligations.
-The chronology assessment now identifies a concrete missing occurrence path;
-its first actual start/bind/beta occurrence factories are estimated at
-90–150 active minutes, followed by 2–4 hours for capture/resume and changed-tail
-guard production. Those stages are sequential within C3 and can run alongside
-C2. The second bound remains provisional until the reset/front ancestry theorem
-passes. Whole-package finish estimates remain open: outer transformed-lambda
-family coupling and full projection/disposal coverage are still unresolved.
+Five components have advanced from frozen or reviewed checkpoints to exact
+current-source registration and verification; the two next leaves have also
+passed independent review. Package counts stay unchanged because these are
+components of the existing whole-fragment acceptance obligations, not complete
+admission or simulation. The rejected runtime v1 consumer receives no acceptance
+credit. Its corrected v2 covers a distinct actual checked-lambda path.
+
+Recipe/capture packaging is estimated at 30–60 active minutes. The next C2 closure
+connection and C3 occurrence transport can proceed in parallel: 3–6 combined
+active hours, approximately 2–4 elapsed hours if their current interfaces suffice.
+These are bounded checkpoint estimates, not a goal finish date. Compared with
+the preceding report, constructor coupling and the first occurrence factories
+are discharged; continuous chronology, varied storage/resource admission and
+projection/disposal remain unresolved.
 
 ### Acceptance detail at the current checkpoint
 

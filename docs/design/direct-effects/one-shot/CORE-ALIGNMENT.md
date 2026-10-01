@@ -1860,10 +1860,51 @@ Source/Auth and whole reachability remain open.
 
 Independent replay passes five standard reports and seven public probes. Fresh
 integration reproduces exact reviewed source/artifact bytes and all five reports.
-The current assembly contains 903 registered modules and 11,950 ordered
+The preceding caller-barrier assembly contains 903 registered modules and 11,950 ordered
 standard-only reports; all 902 unchanged modules retain exact preceding
 source/log/artifact/direct-import associations. No Rust sources change.
 Whole-fragment admission, simulation and C4/C5 acceptance remain open.
+
+### Captured values and running cleanup: current checkpoint
+
+Five independently reviewed components now have exact current-source integration:
+
+- [CoreCallableCapturedSubstitution.lean](CoreCallableCapturedSubstitution.lean)
+  derives replacement support from actual lexical origins and substitutes the
+  full captured storage contract. Its body receipt selects the original private
+  Plan/full Rows at the exact restored lexical environment and actual call.
+- [CoreCallableCapturedLambdaConstructor.lean](CoreCallableCapturedLambdaConstructor.lean)
+  constructs the whole returned lambda from that same transformed private family.
+  This closes the body/whole-lambda coupling gap for the produced substitution;
+  it does not prove general captured-environment admission.
+- [CoreCallableRuntimeBindingOrigins.lean](CoreCallableRuntimeBindingOrigins.lean)
+  retains original initializer contracts and derives actual checked-lambda
+  evaluation, value-ready bind entry and the returned binding. This repaired v2
+  covers a current closed original lambda initializer. The contradictory v1
+  nonvalue-focus/value consumer remains excluded.
+- [CoreCallableRunningOccurrence.lean](CoreCallableRunningOccurrence.lean)
+  produces local actual normal-start/bind/beta occurrence factories with the same
+  running receipt and original history. Continuous callback/clause chronology
+  and heap-changing occurrence transport remain open.
+- [CoreCallableCleanupActivation.lean](CoreCallableCleanupActivation.lean)
+  derives actual spent-marker Unit return and normal finish from current inside
+  or checked outside guards. Deriving those guards from continuous occurrence
+  history remains open.
+
+Fresh integration reproduces all five exact reviewed source/artifact sets and
+26 ordered standard-only reports: 2 activation, 8 captured substitution,
+3 runtime binding, 4 occurrence and 9 lambda constructor. The audited assembly
+contains 908 registered modules and 11,976 reports. All 903 unchanged modules
+retain exact preceding source/log/artifact/direct-import associations. This is
+five fresh leaves, not an uncached rebuild of every module. Rust sources are
+unchanged. These are DN-0033 prototype results, not new normative Ash semantics.
+
+Two next checkpoints have passed independent replay against that same sole
+908-module cache but are not registered here: thirteen finite captured-recipe
+substitution reports and eight same-occurrence capture/immediate-resume reports.
+The latter generates its spent marker through actual capture and resume; it
+still does not supply intervening clause chronology or changed-tail activation.
+General admission, armed projection, disposal and whole simulation remain open.
 
 ### Runtime capacity boundary
 

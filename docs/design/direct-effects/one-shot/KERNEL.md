@@ -379,11 +379,34 @@ The local clause miss uses the same active caller lineage; it does not prohibit
 repeated dynamic reset activations or assert universal intermediate scan success.
 
 Independent replay passes five reports and seven probes. Fresh integration
-reproduces exact reviewed source/artifact bytes. The current assembly contains
+reproduces exact reviewed source/artifact bytes. The preceding caller-barrier assembly contains
 903 modules and 11,950 ordered standard-only reports; all 902 unchanged modules
 retain exact preceding source/log/artifact/direct-import associations.
 Changed-tail cleanup activation guards require combined chronological occurrence
 history. Projection, disposal, rich admission and whole simulation remain open.
+
+The current captured-value/running-cleanup checkpoint adds five reviewed leaves.
+[CapturedSubstitution](CoreCallableCapturedSubstitution.lean) preserves the full
+captured storage contract and restored-lexical private body family.
+[CapturedLambdaConstructor](CoreCallableCapturedLambdaConstructor.lean) constructs
+the whole returned lambda from exactly that transformed family, closing their
+specific coupling gap. [RuntimeBindingOrigins](CoreCallableRuntimeBindingOrigins.lean)
+derives actual checked-lambda evaluation and value-ready binding for a current
+closed original lambda; the contradictory nonvalue-focus v1 consumer is excluded.
+[RunningOccurrence](CoreCallableRunningOccurrence.lean) constructs local actual
+start/bind/beta history, and [CleanupActivation](CoreCallableCleanupActivation.lean)
+derives spent-marker return/finish with explicit current inside/outside guards.
+
+Fresh integration reproduces exact reviewed source/artifact bytes and 26 reports.
+The audited assembly has 908 registered modules and 11,976 ordered standard-only
+reports; all 903 unchanged modules retain exact preceding source/log/artifact/
+direct-import associations. Five leaves are fresh; this is not an uncached build
+of all 908 modules. No Rust sources change. The next finite recipe substitution
+and generated-marker capture/resume leaves have passed independent review but
+are not registered here. Continuous callback/clause history, heap-changing
+transport, derived activation guards, general runtime closure admission,
+projection/disposal and whole simulation remain open. These components do not
+extend M0–M4's original theorem boundary or define Ash semantics.
 
 ## Direct control representation
 

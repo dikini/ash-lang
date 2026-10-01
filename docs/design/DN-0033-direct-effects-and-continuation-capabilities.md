@@ -138,6 +138,30 @@ remain allowed. These five reports pass independent review and current-source
 integration. Combined chronological occurrence history for changed-tail cleanup
 activation, projection, disposal and whole simulation remain open.
 
+The current checkpoint also integrates five independently reviewed proof leaves.
+[Captured substitution](direct-effects/one-shot/CoreCallableCapturedSubstitution.lean)
+retains the full storage contract and exact restored-lexical private family;
+the [direct lambda constructor](direct-effects/one-shot/CoreCallableCapturedLambdaConstructor.lean)
+now constructs the whole returned lambda from that same transformed family.
+This discharges their particular family-coupling gap, not general admission.
+[Runtime binding v2](direct-effects/one-shot/CoreCallableRuntimeBindingOrigins.lean)
+derives actual checked-lambda evaluation and value-ready bind installation.
+Its original nonvalue-focus/value consumer was vacuous and remains excluded;
+open/evaluating and capture-substituted initializer lineage remain open.
+[Running occurrence](direct-effects/one-shot/CoreCallableRunningOccurrence.lean)
+constructs local actual start/bind/beta history;
+[cleanup activation](direct-effects/one-shot/CoreCallableCleanupActivation.lean)
+derives actual marker return/finish with explicit current guards.
+
+Their 26 fresh standard-only reports join an audited 908-module, 11,976-report
+assembly, preserving the 903 unchanged dependency associations. Finite captured
+recipe substitution and generated-marker capture/immediate resume have passed
+independent review but await registration. Continuous clause/callback history,
+heap-changing transport, derived activation guards, varied storage/resource
+admission, projection/disposal and whole correspondence remain open. These are
+bounded prototype results within the existing C2/C3 obligations; the supported
+fragment, whole-package inventory and normative semantics are unchanged.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,
