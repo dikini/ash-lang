@@ -1571,6 +1571,54 @@ whole-fragment simulation and Rust preparation remain separate acceptance
 obligations. The task's current phase board records locally verified producer
 and cleanup-extension work separately from this retained integration.
 
+### Recursive source production and rich cleanup construction
+
+[CoreCallableStaticProducer.lean](CoreCallableStaticProducer.lean) constructs
+same-code IndexedSource and authentication for fourteen constructor forms: scalar
+values, activation references, variables, pairs, bind, application, requests,
+branch, receiver-aware lambda, cleanup, resume and discard. Typed annotation indices preserve the
+literal full contracts, actual private body plans and complete rows. Structural
+lookup, recipe, refinement and permutation tags derive their corresponding
+judgments; annotations do not contain Source/Auth/Certified proofs. Recursive
+body evidence is now produced for the accepted templates. `checkGraph` additionally
+checks whole graph shape, root metadata and the exact translated/instantiated
+literal Code. Interior metadata, actual bound/captured values, registry/owner
+origin and arbitrary full contract/private-family origin remain unproved.
+Supported constructor forms do not imply completeness for every composition:
+the instruction and recipe grammars remain bounded.
+
+The rich source grammar now has cleanup. Its full Unit→Unit callback contract,
+requests, latent row, public plan and complete public rows remain fixed; callback
+and body Source/Auth are recursively supplied by the producer. Actual execution
+plans retain `sequence callbackPlan (cleanup publicPlan bodyPlan)` and the matching
+complete rows. Environment, owner, scope, world, allowance, substitution and
+restored-support transports derive the same target children and keep the immutable
+public callback suffix. Resource construction remains absent until actual
+returned-storage evidence and its exact substitution contract are available.
+Source/transport coverage does not establish general cleanup execution preservation.
+
+[CoreCallableReturnStorageProducer.lean](CoreCallableReturnStorageProducer.lean)
+constructs the independent CallableContracts storage/domain/result derivation for
+its bounded ordinary and higher-order forms. Checked actual bind initializers
+build the nearest environment from empty; `BindingAt` fixes open entries to the
+same literal enclosing binds. Application and substitution check the same actual
+argument/replacement at the exact domain. Returned bounds reject the existing
+closure retaining the fresh resource. This companion judgment does not establish
+full typing or runtime origins; control/resource/cleanup remain open there.
+
+Independent reviews reproduce the cleanup closure and checker. All 29 changed
+reverse consumers occur in the 38-module cleanup replay with 299 standard reports.
+The new checker compiles against a sole coherent current-source cache with twelve
+standard reports. The complete audited assembly contains 893 modules and 11,842
+exact reports; 862 unchanged modules retain the preceding fresh source/artifact
+association and identical direct-import hashes. This is an assembly of verified
+current-source results, not a second fresh build of every unchanged module.
+The returned-storage producer adds sixteen standard reports and checked actual
+initializer/domain/substitution origins; control/resource/cleanup and runtime
+origins remain open. The task records the running-cleanup checkpoint awaiting
+review/adoption. General admission, reachability, simulation,
+preparation and the integrated theorem remain open.
+
 ### Runtime capacity boundary
 
 The [runtime failure representation](../../../../src/eval/failure.rs)

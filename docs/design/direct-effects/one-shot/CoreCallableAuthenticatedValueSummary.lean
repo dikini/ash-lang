@@ -32,7 +32,7 @@ theorem Authenticated.value_summary
       exact .lambda (bodySource := by assumption) refinement bodyOutward latentBound publicCertified formed known body
     | receiverLambda bodyOutward latentBound publicCertified formed known body refinement =>
       exact .receiverLambda bodyOutward latentBound publicCertified formed known body refinement
-    | «variable» | app | bind | branch | perform | resume | discard | handler => exact False.elim isValue
+    | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup => exact False.elim isValue
 termination_by sizeOf value
 end
 end Ash.OneShot.CoreCallableContractAdmission

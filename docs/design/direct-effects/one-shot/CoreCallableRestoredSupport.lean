@@ -42,6 +42,14 @@ def restoredRows (code : Code) (plan : Plan dependencies) (rows : Rows (signatur
             (.choice (restoredRows yes yesPlan (choiceLeft right) lexical receiver)
               (restoredRows no noPlan (choiceRight right) lexical receiver))
         | _ => .sequence left right
+      | .cleanup action body =>
+        match second with
+        | .cleanup _publicPlan bodyPlan =>
+          match right with
+          | .cleanup latent publicRows bodyRows =>
+            .sequence (restoredRows action first left lexical receiver)
+              (.cleanup latent publicRows (restoredRows body bodyPlan bodyRows lexical receiver))
+        | _ => .sequence left right
       | .perform _ _ operand | .resume _ operand => .sequence (restoredRows operand first left lexical receiver) right
       | _ => .sequence left right
   | .handler _required declarations bodyPlan =>
@@ -149,6 +157,15 @@ theorem erase_restoredRows (code : Code) (plan : Plan dependencies) (rows : Rows
         congr 1; apply erase_restoredRows
       · change Rows.sequence _ _ = Rows.sequence _ _
         congr 1; apply erase_restoredRows
+      · cases second <;> try rfl
+        cases right with
+        | cleanup latent publicRows bodyRows =>
+          change Rows.sequence _ _ = Rows.sequence _ _
+          congr 1
+          · apply erase_restoredRows
+          · change Rows.cleanup _ _ _ = Rows.cleanup _ _ _
+            congr 1
+            apply erase_restoredRows
   | handler required declarations bodyPlan =>
     cases rows with
     | handler clauseRows bodyRows =>
@@ -342,6 +359,12 @@ theorem Authenticated.restore_receiver
       obtain ⟨sourceA, authA⟩ := ihA receiverLarger domain received
       exact ⟨.app sourceF sourceA (by assumption) (by assumption),
         .app (admitted := by assumption) (publicCertified := by assumption) authF authA⟩
+  | cleanup callback body ihC ihB =>
+      rename_i nextLexical nextReceiver receiverLarger domain received
+      obtain ⟨sourceC, authC⟩ := ihC receiverLarger domain received
+      obtain ⟨sourceB, authB⟩ := ihB receiverLarger domain received
+      exact ⟨.cleanup sourceC sourceB (by assumption) (by assumption),
+        .cleanup (admitted := by assumption) (publicCertified := by assumption) authC authB⟩
   | bind initial body ihI ihB =>
       rename_i nextLexical nextReceiver receiverLarger domain received
       obtain ⟨sourceI, authI⟩ := ihI receiverLarger domain received
@@ -455,6 +478,10 @@ theorem Authenticated.world_transport
       rename_i nextWorld larger nextSource
       exact .app (admitted := by assumption) (publicCertified := certified_world (by assumption) larger)
         (ihF larger (IndexedSource.world_weaken (by assumption) larger)) (ihA larger (IndexedSource.world_weaken (by assumption) larger))
+  | cleanup callback body ihC ihB =>
+      rename_i nextWorld larger nextSource
+      exact .cleanup (admitted := by assumption) (publicCertified := certified_world (by assumption) larger)
+        (ihC larger (IndexedSource.world_weaken (by assumption) larger)) (ihB larger (IndexedSource.world_weaken (by assumption) larger))
   | bind initial body ihI ihB =>
       rename_i nextWorld larger nextSource
       refine .bind (ihI larger ?_) (ihB larger ?_)

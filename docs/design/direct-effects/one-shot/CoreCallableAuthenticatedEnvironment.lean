@@ -80,6 +80,11 @@ theorem Authenticated.environment_congr
       refine .app (admitted := by assumption) (publicCertified := by assumption) (ihF (fun n mem => agree n (List.mem_append_left _ mem)) ?_) (ihA (fun n mem => agree n (List.mem_append_right _ mem)) ?_)
       · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_left _ mem)
       · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_right _ mem)
+  | cleanup callback body ihF ihA =>
+      rename_i destination agree nextSource
+      refine .cleanup (admitted := by assumption) (publicCertified := by assumption) (ihF (fun n mem => agree n (List.mem_append_left _ mem)) ?_) (ihA (fun n mem => agree n (List.mem_append_right _ mem)) ?_)
+      · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_left _ mem)
+      · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_right _ mem)
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree nextSource
       refine .branch (ihC (fun n mem => agree n (List.mem_append_left _ (List.mem_append_left _ mem))) ?_)

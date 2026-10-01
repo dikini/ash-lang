@@ -72,6 +72,10 @@ theorem Authenticated.owners_congr
       rename_i destination agree nextSource
       refine .app (admitted := by assumption) (publicCertified := by assumption) (ihF agree ?_) (ihA agree ?_)
       all_goals apply IndexedSource.owners_congr (by assumption); exact agree
+  | cleanup callback body ihF ihA =>
+      rename_i destination agree nextSource
+      refine .cleanup (admitted := by assumption) (publicCertified := by assumption) (ihF agree ?_) (ihA agree ?_)
+      all_goals apply IndexedSource.owners_congr (by assumption); exact agree
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree nextSource
       refine .branch (ihC agree ?_) (ihY agree ?_) (ihN agree ?_)
@@ -154,7 +158,7 @@ private theorem authenticated_value_allowed
       exact .lambda (bodySource := by assumption) refinement bodyOutward latentBound publicCertified formed known body
     | receiverLambda bodyOutward latentBound publicCertified formed known body refinement =>
       exact .receiverLambda bodyOutward latentBound publicCertified formed known body refinement
-    | «variable» | app | bind | branch | perform | resume | discard | handler => exact False.elim isValue
+    | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup => exact False.elim isValue
 termination_by sizeOf value
 
 theorem Authenticated.value_allowed

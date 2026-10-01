@@ -37,6 +37,18 @@ private theorem sequence_rows_heq
   rfl
 
 omit evidence in
+private theorem cleanup_rows_heq
+    {callback : SourcePlanSignatures.Signature callbackDependencies}
+    {body nextBody : SourcePlanSignatures.Signature bodyDependencies}
+    {callbackRows : Rows callback} {bodyRows : Rows body} {nextBodyRows : Rows nextBody}
+    (same : nextBody = body) (aligned : HEq nextBodyRows bodyRows) :
+    HEq (Rows.cleanup (needs := needs) latent callbackRows nextBodyRows)
+      (Rows.cleanup (needs := needs) latent callbackRows bodyRows) := by
+  cases same
+  cases eq_of_heq aligned
+  rfl
+
+omit evidence in
 private theorem choice_rows_heq
     {first nextFirst : SourcePlanSignatures.Signature firstDependencies}
     {second nextSecond : SourcePlanSignatures.Signature secondDependencies}
@@ -192,6 +204,7 @@ private theorem IndexedSource.usage_for_substitution
   | purePair left right ihL ihR | pair left right ihL ihR => exact .pair (ihL empty) (ihR empty)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF empty) (ihA empty)
   | bind initial body ihI ihB => exact .bind (ihI empty) (ihB empty)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC empty) (ihB empty)
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC empty) (ihY empty) (ihN empty)
   | perform known admitted operand formed ih => exact .perform (ih empty)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl => exact .handle (ihBody empty) capabilities
@@ -335,6 +348,20 @@ theorem Authenticated.substitution_reannotated_at
       · simp only [CoreCallablePlanSubstitution.plan]; rw [phiF, phiA]
       · simp only [signature]; exact signature_sequence_same sigF (signature_sequence_same sigA rfl)
       · exact sequence_rows_heq sigF (signature_sequence_same sigA rfl) alignedF (sequence_rows_heq sigA rfl alignedA HEq.rfl)
+  | cleanup callback body ihC ihB =>
+      rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      obtain ⟨nextC, rowsC, sourceC, authC, phiC, sigC, alignedC⟩ := ihC environment name input value lexical bound sameEnvironment (fun n mem => sameLexical n (List.mem_append_left _ mem)) replacement closed actual
+        (fun occurs => authReplacement (List.mem_append_left _ occurs))
+      obtain ⟨nextB, rowsB, sourceB, authB, phiB, sigB, alignedB⟩ := ihB environment name input value lexical bound sameEnvironment (fun n mem => sameLexical n (List.mem_append_right _ mem)) replacement closed actual
+        (fun occurs => authReplacement (List.mem_append_right _ occurs))
+      refine ⟨_, _, by simpa only [Code.subst, CoreCallablePlanSubstitution.plan] using IndexedSource.cleanup sourceC sourceB (by assumption) (by assumption),
+        by simpa only [Code.subst, CoreCallablePlanSubstitution.plan] using Hereditary.cleanup (admitted := by assumption) (publicCertified := by assumption) authC authB, ?_, ?_, ?_⟩
+      · simp only [CoreCallablePlanSubstitution.plan]; rw [phiC, phiB]
+      · simp only [signature]; exact signature_sequence_same sigC
+          (congrArg (fun body => SourcePlanSignatures.Signature.cleanup _ body) sigB)
+      · exact sequence_rows_heq sigC
+          (congrArg (fun body => SourcePlanSignatures.Signature.cleanup _ body) sigB)
+          alignedC (cleanup_rows_heq sigB alignedB)
   | perform operand ih =>
       rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       obtain ⟨next, nextRows, nextSource, auth, phiSame, sameSig, aligned⟩ := ih environment name input value lexical bound sameEnvironment (fun n mem => sameLexical n (List.mem_append_right _ mem)) replacement closed actual

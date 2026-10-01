@@ -245,6 +245,19 @@ registered current modules pass that fresh build, with 11,814 exact reports and
 standard axioms only. The task records implementation, review, verification and
 commit phases for the current deliverables separately from whole-package acceptance.
 
+The [recursive source producer](CoreCallableStaticProducer.lean) now constructs
+same-code Source/Auth for fourteen constructor forms, including receiver-aware
+lambda and cleanup. Full contracts and actual private plans/rows remain literal
+inputs; structural tags derive the accepted body checks. Whole graph shape, root
+metadata and exact translation are checked, while imported contract origin,
+interior metadata, registry/owner origin and runtime captured-value admission
+remain open. Rich cleanup source/authentication and its required transports are
+retained with the same full callback contract and public suffix. Resource source
+construction still needs paired returned-storage and exact replacement evidence.
+The audited current-source assembly contains 893 registered modules and 11,842
+standard-only reports, including the full changed reverse closure; this does not
+close general admission, cleanup preservation or the integrated theorem.
+
 ## Direct control representation
 
 There is one sequencing operation. A binding pushes a frame, a request selects

@@ -64,6 +64,7 @@ theorem IndexedSource.owners_known_mono
   | pair left right ihL ihR => exact .pair (ihL agree) (ihR agree)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF agree) (ihA agree) admitted publicCertified
   | bind initial body ihI ihB => exact .bind (ihI agree) (ihB agree)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC agree) (ihB agree) admitted publicCertified
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC agree) (ihY agree) (ihN agree) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih agree) formed
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -141,7 +142,7 @@ theorem DeclarationAuthentication.owners_congr
     obtain ⟨nextProt, authProt⟩ := protectedMode.owners_congr destination
     obtain ⟨nextRest, authRest⟩ := ihR destination
     exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
-  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | bind | lambda | receiverLambda | handler | typed | unavailable | available => trivial
+  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | typed | unavailable | available => trivial
 
 theorem Authenticated.owners_known_mono
     {source : IndexedSource registry outward owners world allowed scope environment code contract demand requirements plan rows}
@@ -171,6 +172,10 @@ theorem Authenticated.owners_known_mono
   | pair left right ihL ihR =>
       rename_i destination agree nextSource
       refine .pair (ihL agree ?_) (ihR agree ?_)
+      all_goals apply IndexedSource.owners_known_mono (by assumption); exact agree
+  | cleanup callback body ihC ihB =>
+      rename_i destination agree nextSource
+      refine .cleanup (admitted := by assumption) (publicCertified := by assumption) (ihC agree ?_) (ihB agree ?_)
       all_goals apply IndexedSource.owners_known_mono (by assumption); exact agree
   | app function argument ihF ihA =>
       rename_i destination agree nextSource

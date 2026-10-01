@@ -82,6 +82,10 @@ theorem Authenticated.lexical_congr
       rename_i destination agree
       exact .app (admitted := by assumption) (publicCertified := by assumption)
         (ihF (fun n mem => agree n (List.mem_append_left _ mem))) (ihA (fun n mem => agree n (List.mem_append_right _ mem)))
+  | cleanup callback body ihF ihA =>
+      rename_i destination agree
+      exact .cleanup (admitted := by assumption) (publicCertified := by assumption)
+        (ihF (fun n mem => agree n (List.mem_append_left _ mem))) (ihA (fun n mem => agree n (List.mem_append_right _ mem)))
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree
       exact .branch (ihC (fun n mem => agree n (List.mem_append_left _ (List.mem_append_left _ mem))))

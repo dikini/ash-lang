@@ -43,7 +43,7 @@ set_option maxHeartbeats 800000
         (certified_world publicCertified larger) (ScopedPorts.in_world_mono formed larger) known
         (fun nextLexical call known received => body nextLexical (call.rebase larger) known received)
         (fun nextLexical call known received => refinement nextLexical (call.rebase larger) known received)
-    | «variable» | app | bind | branch | perform | resume | discard | handler => cases isValue
+    | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup => cases isValue
 termination_by sizeOf value
 end
 end Ash.OneShot.CoreCallableContractAdmission

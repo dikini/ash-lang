@@ -116,6 +116,9 @@ inductive RestoredSourceRows (world receiver : List Nat) :
   | choice (left : RestoredSourceRows world receiver beforeLeft afterLeft)
       (right : RestoredSourceRows world receiver beforeRight afterRight) :
       RestoredSourceRows world receiver (.choice beforeLeft beforeRight) (.choice afterLeft afterRight)
+  | cleanup (body : RestoredSourceRows world receiver beforeBody afterBody) :
+      RestoredSourceRows world receiver (.cleanup (needs := needs) latent publicRows beforeBody)
+        (.cleanup (needs := needs) latent publicRows afterBody)
 
 theorem RestoredSourceRows.complete (receipt : RestoredSourceRows world receiver before after) : SupportOnly before after := by
   induction receipt with
@@ -127,6 +130,9 @@ theorem RestoredSourceRows.complete (receipt : RestoredSourceRows world receiver
   | choice left right ihLeft ihRight =>
     simp only [SupportOnly, eraseSupportBounds] at ihLeft ihRight ⊢
     rw [ihLeft, ihRight]
+  | cleanup body ih =>
+    simp only [SupportOnly, eraseSupportBounds] at ih ⊢
+    rw [ih]
 
 end Ash.OneShot.CoreCallableRestoredChecking
 
@@ -556,6 +562,9 @@ theorem Authenticated.restored_row_view
       exact ⟨.canonical condition worldExtended receiverExtended domain received,
         .choice (.canonical yes worldExtended receiverExtended domain received)
           (.canonical no worldExtended receiverExtended domain received)⟩
+    | cleanup callback body =>
+      exact ⟨.canonical callback worldExtended receiverExtended domain received,
+        .cleanup (.canonical body worldExtended receiverExtended domain received)⟩
     | perform operand | resume operand =>
       exact ⟨.canonical operand worldExtended receiverExtended domain received, .same⟩
     | handler clauses capabilities coverage unique admitted modes recipes body declarations =>
@@ -570,6 +579,7 @@ theorem RestoredSourceRows.view (receipt : RestoredSourceRows world receiver bef
       exact Authenticated.restored_row_view authenticated worldExtended receiverExtended domain received
   | sequence left right => exact ⟨left, right⟩
   | choice left right => exact ⟨left, right⟩
+  | cleanup body => exact ⟨rfl, .same, body⟩
 
 theorem RestoredSourceRows.handler_parts
     (receipt : RestoredSourceRows world receiver
@@ -799,6 +809,7 @@ theorem RestoredSourceRows.world_weaken (receipt : RestoredSourceRows world rece
       exact .canonical authenticated (extended.trans larger) receiverExtended domain received
   | sequence left right ihLeft ihRight => exact .sequence ihLeft ihRight
   | choice left right ihLeft ihRight => exact .choice ihLeft ihRight
+  | cleanup body ih => exact .cleanup ih
 
 theorem RestoredDeclarations.world_weaken (receipt : RestoredDeclarations world receiver effect table before after)
     (larger : world ⊆ nextWorld) : RestoredDeclarations nextWorld receiver effect table before after := by

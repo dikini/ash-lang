@@ -30,6 +30,11 @@ def plan (code : Code) (source : Plan dependencies) (name : Nat) (value : Code) 
       | .choice yesPlan noPlan =>
         .sequence (plan condition first name value) (.choice (plan yes yesPlan name value) (plan no noPlan name value))
       | other => .sequence first other
+    | .cleanup action body =>
+      match second with
+      | .cleanup publicPlan bodyPlan =>
+        .sequence (plan action first name value) (.cleanup publicPlan (plan body bodyPlan name value))
+      | other => .sequence first other
     | .perform _ _ operand | .resume _ operand => .sequence (plan operand first name value) second
     | _ => .sequence first second
   | .handler required declarations bodyPlan =>
@@ -80,6 +85,9 @@ theorem plan_signature (code : Code) (source : Plan dependencies) (name : Nat) (
         (congr (congrArg Signature.choice (plan_signature _ _ name isValue)) (plan_signature _ _ name isValue))
     · exact congrArg (fun operand => Signature.sequence operand _) (plan_signature _ first name isValue)
     · exact congrArg (fun operand => Signature.sequence operand _) (plan_signature _ first name isValue)
+    · cases second <;> simp only [plan, signature]
+      exact congr (congrArg Signature.sequence (plan_signature _ first name isValue))
+        (congrArg (fun body => Signature.cleanup _ body) (plan_signature _ _ name isValue))
   | handler required declarations bodyPlan =>
     cases code <;> simp only [plan, signature] <;> try rfl
     exact congr (congrArg (Signature.handler required) (clauses_signature declarations name isValue))

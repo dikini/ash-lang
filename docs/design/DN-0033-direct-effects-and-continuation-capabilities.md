@@ -68,6 +68,15 @@ an actual returned-storage contract: a resource-free output port does not exclud
 a closure retaining the acquired cell. The task records this missing rich
 resource/cleanup source boundary and its required constructive producer.
 
+The [recursive producer](direct-effects/one-shot/CoreCallableStaticProducer.lean)
+now constructs body source/authentication for fourteen constructor forms. The rich
+cleanup grammar and its required transports retain full callback contracts and
+public plans/rows. Resource admission still needs paired actual returned-storage
+and replacement evidence; the bounded storage and owner-checker components are
+reviewed and retained, with remaining control/runtime origin obligations explicit. These additions test constructive admission within the
+stated instruction grammar, not full composition completeness, runtime value
+origins or general simulation.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

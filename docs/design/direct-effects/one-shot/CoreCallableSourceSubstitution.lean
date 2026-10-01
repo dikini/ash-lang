@@ -145,6 +145,18 @@ inductive IndexedSource (registry : Registry) (outward : List Instance) :
       IndexedSource registry outward owners world allowed scope environment (.resume binder value) contract.answer
         (operandDemand ++ owner :: contract.resumeDemand) (.sequence operandReq (.invoke ⟨owner, .resume⟩ contract.resumeDemand []))
         (.sequence operandPlan (.invoke (key := ⟨owner, .resume⟩))) (sequenceRows operandRows Rows.invoke)
+  | cleanup {callbackDependencies : Dependencies} {callbackPlan : Plan callbackDependencies}
+      {callbackRows : Rows (signature callbackPlan)}
+      (callback : IndexedSource registry outward owners world allowed scope environment action
+        (Contract.function .unit .unit requests latent callbackPlan callbackRows)
+        callbackDemand callbackReq actualCallbackPlan actualCallbackRows)
+      (body : IndexedSource registry outward owners world allowed scope environment code output bodyDemand bodyReq bodyPlan bodyRows)
+      (admitted : requests ⊆ allowed) (publicCertified : Certified outward world callbackPlan) :
+      IndexedSource registry outward owners world allowed scope environment (.cleanup action code) output
+        (callbackDemand ++ bodyDemand)
+        (.emitAfter (.sequence callbackReq bodyReq) [] (qualify true latent))
+        (.sequence actualCallbackPlan (.cleanup (needs := requests) callbackPlan bodyPlan))
+        (by simpa only [signature] using (Rows.sequence actualCallbackRows (Rows.cleanup (needs := requests) latent callbackRows bodyRows)))
   | discard (known : owners owner = some contract) (resolved : scope.resolve binder = some owner)
       (permission : (registry.policy binder).dispose = true) (unprotected : contract.held = false)
       (admitted : contract.closeEffects ⊆ allowed) :
@@ -228,6 +240,7 @@ abbrev Source.perform := @IndexedSource.perform
 abbrev Source.handler := @IndexedSource.handler
 abbrev Source.resume := @IndexedSource.resume
 abbrev Source.discard := @IndexedSource.discard
+abbrev Source.cleanup := @IndexedSource.cleanup
 
 /-- Actual-plan declaration certification follows structural derivation;
 application separately checks its exposed plan, and lambda bodies stay recursive. -/
@@ -240,6 +253,7 @@ theorem IndexedSource.certified (source : IndexedSource registry outward owners 
   | unit | boolean | integer | reference | «variable» | lambda | receiverLambda | purePair => exact .pure
   | pair left right ihL ihR | bind left right ihL ihR => exact .sequence ihL ihR
   | app function argument admitted publicCertified ihF ihA => exact .sequence ihF (.sequence ihA publicCertified)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .sequence ihC (.cleanup publicCertified ihB)
   | branch condition yes no same ihC ihY ihN => exact .sequence ihC (.choice ihY ihN)
   | perform known admitted operand formed ih => exact .sequence ih .request
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -287,6 +301,7 @@ theorem IndexedSource.owners_congr
   | pair left right ihL ihR => exact .pair (ihL agree) (ihR agree)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF agree) (ihA agree) admitted publicCertified
   | bind initial body ihI ihB => exact .bind (ihI agree) (ihB agree)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC agree) (ihB agree) admitted publicCertified
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC agree) (ihY agree) (ihN agree) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih agree) formed
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -338,6 +353,7 @@ theorem IndexedSource.erase_at (source : IndexedSource registry outward owners w
   | purePair left right ihL ihR | pair left right ihL ihR => exact .pair (ihL scopeTyped) (ihR scopeTyped)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF scopeTyped) (ihA scopeTyped) admitted
   | bind initial body ihI ihB => exact .bind (ihI scopeTyped) (by simpa using ihB scopeTyped)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC scopeTyped) (ihB scopeTyped) admitted
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC scopeTyped) (ihY scopeTyped) (ihN scopeTyped)
   | perform known admitted operand formed ih => exact .perform (by simp only [Registry.ports, known, Option.map_some]) admitted (ih scopeTyped) formed
 
@@ -410,6 +426,9 @@ theorem IndexedSource.environment_congr (source : IndexedSource registry outward
   | app function argument admitted publicCertified ihF ihA =>
       exact .app (ihF (fun name member => agree name (List.mem_append_left _ member)))
         (ihA (fun name member => agree name (List.mem_append_right _ member))) admitted publicCertified
+  | cleanup callback body admitted publicCertified ihC ihB =>
+      exact .cleanup (ihC (fun name member => agree name (List.mem_append_left _ member)))
+        (ihB (fun name member => agree name (List.mem_append_right _ member))) admitted publicCertified
   | bind initial body ihI ihB =>
       rename_i parameter b output bodyDemand bodyReq bodyDependencies bodySignature bodyRows
       apply Source.bind (ihI (fun name member => agree name (List.mem_append_left _ member))) (ihB ?_)
@@ -490,7 +509,7 @@ theorem IndexedSource.value_allowed (source : IndexedSource registry outward own
   | receiverLambda body bodyOutward latentBound publicCertified formed ih => exact .receiverLambda body bodyOutward latentBound publicCertified formed
   | purePair left right ihL ihR => exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
   | pair left right ihL ihR => exact .pair (ihL valueIsValue.1) (ihR valueIsValue.2)
-  | «variable» | app | bind | branch | perform | handler | resume | discard => cases valueIsValue
+  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup => cases valueIsValue
 
   | typed | unavailable | available | nil | cons => trivial
 
@@ -525,7 +544,7 @@ theorem IndexedSource.value_summary (source : IndexedSource registry outward own
   | receiverLambda body bodyOutward latentBound publicCertified formed ih => exact .receiverLambda body bodyOutward latentBound publicCertified formed
   | purePair left right ihL ihR | pair left right ihL ihR =>
       exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
-  | «variable» | app | bind | branch | perform | handler | resume | discard => cases valueIsValue
+  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup => cases valueIsValue
 
   | typed | unavailable | available | nil | cons => trivial
 
@@ -587,6 +606,7 @@ theorem IndexedSource.world_weaken
   | pair left right ihL ihR => exact .pair (ihL larger) (ihR larger)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF larger) (ihA larger) admitted (certified_world publicCertified larger)
   | bind initial body ihI ihB => exact .bind (ihI larger) (ihB larger)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC larger) (ihB larger) admitted (certified_world publicCertified larger)
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC larger) (ihY larger) (ihN larger) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih larger) (ScopedPorts.in_world_mono formed larger)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -661,6 +681,9 @@ inductive Hereditary (registry : Registry) (outward : List Instance) :
       Hereditary registry outward (IndexedSource.branch conditionSource yesSource noSource sameDemand) lexical receiver
   | perform (operand : Authenticated registry outward operandSource lexical receiver) :
       Hereditary registry outward (IndexedSource.perform known admitted operandSource formed) lexical receiver
+  | cleanup (callback : Authenticated registry outward callbackSource lexical receiver)
+      (body : Authenticated registry outward bodySource lexical receiver) :
+      Hereditary registry outward (IndexedSource.cleanup callbackSource bodySource admitted publicCertified) lexical receiver
   | resume (operand : Authenticated registry outward operandSource lexical receiver) :
       Hereditary registry outward (IndexedSource.resume known resolved permission operandSource admitted formed) lexical receiver
   | discard {owners : Owners} {scope : Execution.Scope} {contract : OwnerContract}
@@ -839,6 +862,18 @@ private theorem sequence_rows_heq
   rfl
 
 omit evidence in
+private theorem cleanup_rows_heq
+    {callback : SourcePlanSignatures.Signature callbackDependencies}
+    {body nextBody : SourcePlanSignatures.Signature bodyDependencies}
+    {callbackRows : Rows callback} {bodyRows : Rows body} {nextBodyRows : Rows nextBody}
+    (same : nextBody = body) (aligned : HEq nextBodyRows bodyRows) :
+    HEq (Rows.cleanup (needs := needs) latent callbackRows nextBodyRows)
+      (Rows.cleanup (needs := needs) latent callbackRows bodyRows) := by
+  cases same
+  cases eq_of_heq aligned
+  rfl
+
+omit evidence in
 private theorem choice_rows_heq
     {first nextFirst : SourcePlanSignatures.Signature firstDependencies}
     {second nextSecond : SourcePlanSignatures.Signature secondDependencies}
@@ -955,6 +990,7 @@ private theorem IndexedSource.owner_free_usage
   | purePair left right ihL ihR | pair left right ihL ihR => exact .pair (ihL empty) (ihR empty)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF empty) (ihA empty)
   | bind initial body ihI ihB => exact .bind (ihI empty) (ihB empty)
+  | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC empty) (ihB empty)
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC empty) (ihY empty) (ihN empty)
   | perform known admitted operand formed ih => exact .perform (ih empty)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl => exact .handle (ihBody empty) capabilities
@@ -1090,6 +1126,18 @@ theorem IndexedSource.substitution_reannotated_at
       · simp only [CoreCallablePlanSubstitution.plan]; rw [phiSame]
       · simp only [signature]; exact congr (congrArg SourcePlanSignatures.Signature.sequence sameSig) rfl
       · exact sequence_rows_heq sameSig rfl aligned HEq.rfl
+  | cleanup callback body admitted publicCertified ihC ihB =>
+      intro environment name input value same replacement closed
+      obtain ⟨nextC, rowsC, sourceC, phiC, sigC, alignedC⟩ := ihC environment name input value same replacement closed
+      obtain ⟨nextB, rowsB, sourceB, phiB, sigB, alignedB⟩ := ihB environment name input value same replacement closed
+      refine ⟨_, _, .cleanup sourceC sourceB admitted publicCertified, ?_, ?_, ?_⟩
+      · simp only [CoreCallablePlanSubstitution.plan]; rw [phiC, phiB]
+      · simp only [signature]
+        exact congr (congrArg SourcePlanSignatures.Signature.sequence sigC)
+          (congrArg (fun body => SourcePlanSignatures.Signature.cleanup _ body) sigB)
+      · exact sequence_rows_heq sigC
+          (congrArg (fun body => SourcePlanSignatures.Signature.cleanup _ body) sigB)
+          alignedC (cleanup_rows_heq sigB alignedB)
   | branch condition yes no sameDemand ihC ihY ihN =>
       intro environment name input value same replacement closed
       obtain ⟨nextC, rowsC, sourceC, phiC, sigC, alignedC⟩ := ihC environment name input value same replacement closed

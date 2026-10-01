@@ -79,6 +79,10 @@ theorem Authenticated.lexical_environment_congr
       rename_i destination agree
       exact .app (admitted := by assumption) (publicCertified := by assumption)
         (ihF agree) (ihA agree)
+  | cleanup callback body ihF ihA =>
+      rename_i destination agree
+      exact .cleanup (admitted := by assumption) (publicCertified := by assumption)
+        (ihF agree) (ihA agree)
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree
       exact .branch (ihC agree)
