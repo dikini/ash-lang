@@ -129,6 +129,15 @@ history retains original origin; changed-tail caller activation needs actual
 return history at completion, not a universal immediate scan-success assumption.
 Rich admission, projection/disposal and whole simulation remain open.
 
+The [caller bind/reset/return factories](direct-effects/one-shot/CoreCallableCallerBarriers.lean)
+now retain actual same-literal bind installation, immutable original suffix
+history and beta reset. Actual return at the saved bind head over that same
+suffix constructs caller continuation site/scope and positive target steps.
+A same-active-caller clause miss is local; repeated dynamic reset activations
+remain allowed. These five reports pass independent review and current-source
+integration. Combined chronological occurrence history for changed-tail cleanup
+activation, projection, disposal and whole simulation remain open.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

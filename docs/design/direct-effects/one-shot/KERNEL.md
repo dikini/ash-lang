@@ -366,9 +366,24 @@ and disposal remain open.
 
 Independent replay passes twelve reports and fourteen public probes across both
 leaves. Fresh integration reproduces exact reviewed source/artifact bytes. The
-current assembly contains 902 modules and 11,945 ordered standard-only reports;
+preceding checkpoint `9ccc2fb` contains 902 modules and 11,945 ordered standard-only reports;
 all 900 unchanged modules retain exact preceding source/log/artifact/direct-import
 associations. Whole-fragment admission and simulation remain open.
+
+The [caller bind/reset/return factories](CoreCallableCallerBarriers.lean) retain
+the same literal bind initializer/body, original full suffix history and saved
+caller map/scope/site. Actual bind entry, heap transport and beta reset produce
+historical receipts. Return at that actual bind head over the original suffix
+constructs positive plug/bind steps and restores the same caller site/scope.
+The local clause miss uses the same active caller lineage; it does not prohibit
+repeated dynamic reset activations or assert universal intermediate scan success.
+
+Independent replay passes five reports and seven probes. Fresh integration
+reproduces exact reviewed source/artifact bytes. The current assembly contains
+903 modules and 11,950 ordered standard-only reports; all 902 unchanged modules
+retain exact preceding source/log/artifact/direct-import associations.
+Changed-tail cleanup activation guards require combined chronological occurrence
+history. Projection, disposal, rich admission and whole simulation remain open.
 
 ## Direct control representation
 

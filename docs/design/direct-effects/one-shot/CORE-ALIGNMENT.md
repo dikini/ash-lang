@@ -1824,16 +1824,46 @@ This checked immediate path does not prove every intermediate resume passes the
 scan. GeneralHistory.running keeps an ORIGINAL receipt suffix while its caller
 scope is dormant. Normal cleanup finish needs actual completion tail/original
 suffix agreement; changed-tail activation requires combined actual bind/marker
-return history. Caller-barrier factories are in progress. Rich Source/Auth,
+return history. Caller-barrier factories are now retained below. Rich Source/Auth,
 retained projection, disposal and whole reachability remain open.
 
 Both leaves pass independent fresh replay, with three/nine reports and six/eight
 public probes respectively. Fresh integration reproduces their exact reviewed
-source/artifact bytes and twelve reports. The current assembly contains 902
+source/artifact bytes and twelve reports. Checkpoint `9ccc2fb` assembled 902
 registered modules and 11,945 ordered standard-only reports; all 900 unchanged
 modules retain exact preceding source/log/artifact/direct-import associations.
 No Rust sources change. Whole-fragment admission, simulation and C4/C5 acceptance
 remain open.
+
+### Actual caller bind, reset and return receipts
+
+[CoreCallableCallerBarriers.lean](CoreCallableCallerBarriers.lean) constructs a
+CallerBindPast from the same actual literal bind, exact initializer/body
+translations, current EnvCloses, saved map/scope/site and original general
+physical suffix. Actual Core entry and a positive target focus step are retained.
+`current_history` heap-weakens current carriers without rewriting that original
+installation. `beta_enter` pairs the same receipt with the current front history
+and actual closure/argument application, retaining the empty-map/scope reset.
+
+`bind_return` requires that saved bind at the actual physical head over its
+original suffix. It derives actual Core return, positive target plug/bind steps,
+the original caller continuation site/scope and current suffix history.
+`installed_clause_miss` proves a local miss under the same active caller lineage;
+literal handler uniqueness does not prohibit repeated dynamic reset activations.
+No future origin, source/authentication or owner-pass proof is annotation data.
+
+This produces caller activation at the unchanged-suffix bind return. It does not
+make dormant cleanup callers active at every intermediate resume. Changed-tail
+cleanup activation needs the combined chronological occurrence history of actual
+bind/reset/install/capture/resume/return. Armed projection, disposal, rich
+Source/Auth and whole reachability remain open.
+
+Independent replay passes five standard reports and seven public probes. Fresh
+integration reproduces exact reviewed source/artifact bytes and all five reports.
+The current assembly contains 903 registered modules and 11,950 ordered
+standard-only reports; all 902 unchanged modules retain exact preceding
+source/log/artifact/direct-import associations. No Rust sources change.
+Whole-fragment admission, simulation and C4/C5 acceptance remain open.
 
 ### Runtime capacity boundary
 
