@@ -63,6 +63,52 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
+### Current deliverable board — 2026-10-01 14:14 UTC
+
+The package counts measure whole-fragment acceptance. This board shows movement
+inside those packages. Each row names a fixed deliverable or subcase inventory;
+its phase changes only when the corresponding evidence exists. Constructor
+counts measure implemented cases, not equal effort or a percentage of C2.
+
+| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit |
+| --- | --- | --- | --- | --- |
+| Same-graph callable annotation gate | Yes | Passed | Passed | This checkpoint |
+| Rich initial Site and first-step connection | Yes | Passed | Passed | This checkpoint |
+| Actual capture/beta/bind/resume ownership receipts | Yes | Passed | Passed | This checkpoint |
+| Cleanup registration/entry/return origin receipts | Yes | Passed | Passed | This checkpoint |
+| Registry-derived operation metadata export | Yes | Passed | Passed | This checkpoint |
+| Generated operation declaration checker | Yes | Passed | Passed | This checkpoint |
+| **Current six-deliverable integration batch** | **6 / 6** | **6 / 6** | **6 / 6** | **6 / 6 in this checkpoint** |
+| Recursive C2 source/authentication checker: 16 Code constructors | **11 / 16** | Pending | **11 / 16 locally verified** | **0 / 16** |
+| Missing rich source constructors: cleanup and resource | **Cleanup implemented; resource open (1 / 2)** | Pending | **Cleanup verified (1 / 2)** | **0 / 2** |
+
+Movement since the preceding report:
+
+- The C2 checker moved from 10 to 11 implemented cases: branch now recursively
+  produces the same full contract, source, authentication and complete rows.
+  Receiver-aware lambda is also implemented. Handler, resume, discard, resource
+  and cleanup are the five explicit unsupported cases in this checker.
+- All six integration deliverables passed review and a fresh build of all 891
+  registered current-source modules. The independent packaging audit confirms
+  11,814 exact axiom reports, current source/artifact association and a single
+  fresh dependency cache. Full Rust verification passes: 2,902 tests, no failures
+  and two intentionally ignored tests across 104 groups.
+- Rich cleanup source construction and its transports are implemented in a
+  worker checkpoint, with 38 affected modules and 299 reports passing fresh
+  replay; independent review and integration are still pending.
+  Resource construction needs returned-storage evidence tied to the actual
+  bound value and the same replacement contract. A result port alone cannot
+  reject a pure closure retaining the fresh resource.
+- A stale proof-cache association failed current compilation. The entire current
+  registered source tree was rebuilt without historical artifacts; that build
+  passes. Earlier cache-only checks are not used as current-source evidence.
+
+This checkpoint retains the reviewed six-deliverable batch in an unsigned
+commit. Next phase changes: review and adopt the 11-case C2 producer, and review
+and adopt the cleanup constructor closure. The resource storage interface is a
+named C2.3/C4.1 dependency. These
+steps retain the original fragment and package acceptance inventory.
+
 ### Increment 1 local results
 
 - C1.1–C1.5 are recorded in the
@@ -1486,14 +1532,83 @@ remain separate targets. A small first example does not reduce the final scope.
   standard axioms, import order, trust, whitespace and artifact exclusion pass.
   Unregistered prototypes and unrelated user files remain outside the subset.
   This completes the bounded restoration integration; full C2–C5 remain open.
+- The next parallel increment has three proof lanes and one existing-export
+  connection. C2 checks finite callable metadata and lexical support against the
+  same graph, then feeds the receiver-aware lambda interface; recursive body
+  admission and literal private-plan provenance remain separate. C3 constructs
+  current capture-history and saved-scope receipts consumed by actual resume.
+  C4 constructs the rich initial site and its available lower progress
+  connection, avoiding the refuted legacy authentication adapter.
+- The independent C2.2 export batch owns
+  `src/core/alignment_export_tests.rs` and a generated
+  `CoreExportedOperationMetadata.lean`. The existing registry traversal already
+  instantiates every operation signature but retains it only as manifest text.
+  Emit structured `CoreOperationSignatures.RawEntry` data from that same
+  traversal and identity mapping in a separate module, leaving graph export
+  unchanged. Check the generated declarations with the existing port builder,
+  exact origin-manifest equality, stable export, and positive/negative signature
+  checks. This supplies executable declaration input, not enriched private
+  callable evidence or general Core admission. Reuse the existing fixture;
+  no additional finite example is planned.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Callback source and exact-body recipe factory independently verified | Validated graph admission, captured-environment static evidence and annotation production | Existing shape checks must construct the stronger static derivation and recipes | Next bounded gap assessment: 30–60 minutes; whole-package estimate open |
-| C3 | 0 / 5 | Actual Core resume connected to its rich checked successor and independently reviewed | General state/ownership relation, current coherence, remaining transitions and capacity treatment | Reachable-state producers and general Rust-model bridge | Next bounded coherence assessment: 30–60 minutes; full simulation estimate open |
+| C2 | 0 / 4 | Six-deliverable batch retained; recursive checker locally verifies 11/16 cases | Recursive static body and captured-environment admission producer; whole initial admission | Five checker cases remain; full admission also requires interior metadata, registry origin, actual captured-value and resource storage evidence | 11-case producer review/adoption: 1–2 active hours; five remaining cases depend on the rich control/resource interfaces; whole-package estimate remains open |
+| C3 | 0 / 5 | Integrated actual resume/restoration; capture, beta, bind, saved-resume and cleanup-origin factories retained | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | Cleanup-origin factories supply registration/entry/return scope; current receipts need transport through remaining actual steps | Origin receipts reviewed and verified; remaining reachable transport assessment: 1–2 active hours; whole-package estimate awaits the combined relation |
 | C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
+
+### Acceptance detail at the current checkpoint
+
+The counts above measure closed whole-fragment acceptance items. They do not
+measure implementation activity or completed proof components. The detail below
+records those components and the remaining obligation for each original item;
+the inventory and acceptance boundary are unchanged. Report proof status as
+integrated, independently reviewed, locally verified, or in development.
+Compilation and axiom-report counts are verification evidence, not measures of
+semantic coverage or equal amounts of work.
+
+| Item | Verified component and status | Exact remaining acceptance obligation |
+| --- | --- | --- |
+| C2.1 typed translation | Finite Core syntax translation and supported type realization are integrated. [GraphAnnotationChecks](../design/direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean) independently verifies same-site function/binder/body metadata and computed support guards. | Construct the recursive structural source and authentication derivation from validated graph/annotation data; the lambda gate currently receives the body derivation. The recursive producer locally constructs 11 of 16 Code cases, including receiver-aware lambda and branch. Rich cleanup source construction is implemented in a separate checkpoint; resource construction requires actual returned-storage evidence. Both require review/integration for full-fragment admission. |
+| C2.2 exact identities/signatures | Exact effect argument trees, type realization and conflict-checked declaration-port construction are integrated. Structured declarations now come from the same Rust registry traversal and identity maps; independent review passes with nine Rust tests and fresh Lean metadata compilation against 52 dependencies. One regeneration test is intentionally ignored. | The generated declaration checker is independently reviewed and current-source verified; this checkpoint retains its integration. Manifest equality pairs the artifacts; it does not prove general Rust-to-Lean translation soundness or private callable certification. |
+| C2.3 lexical resources/capabilities | Receiver-conditioned source support, actual operand authentication and restored support/checking are integrated. The new graph annotation gate has passed independent review. | Derive actual bound-value/captured-environment authentication and literal private-plan origin. Recursive body authentication and private-row refinement remain inputs to the gate. |
+| C2.4 initial admission | [InitialAdmission](../design/direct-effects/one-shot/CoreCallableInitialAdmission.lean) constructs the rich initial Site from the same supplied static Source/Auth, contracts, plan, rows and accounting; independent review passes. It projects typing/joint validity and an actual first progress step. | Produce that static Program from validated Core. General rich successor preservation and M4 availability are not established by the first-step projection. |
+| C3.1 configuration relation | Existing value/environment/frame relations are integrated. [ReachableResume](../design/direct-effects/one-shot/CoreCallableReachableResume.lean) has passed independent review for current and saved frame ownership/scope receipts. | Construct and preserve the combined relation for all reachable states, including cleanup, disposal, handler exit and restored saved-prefix scopes. Arbitrary GeneralChain data do not authenticate these receipts. |
+| C3.2 transition simulation | Actual transition components include strict computation, cells, handlers, capture, resume, discard and cleanup. The checked resume successor inhabits the actual Core endpoint. Newly reviewed capture/beta/bind/resume factories produce their current coherence premises. | Assemble whole-fragment step coverage under the same reachable relation. The cleanup-origin batch is independently reviewed and current-source verified for actual registration, callback entry and return; later disposal/projection transport remains open. |
+| C3.3 observations/ownership | Exact restored prefix, consumed root, spent phase, resume observation and accounting are integrated. Current history now derives dynamic ticket uniqueness in the reviewed resume factory. | Preserve these observations and ownership guarantees throughout every covered execution, including cleanup and disposal, using one reachable invariant. |
+| C3.4 capacity and preparation | Runtime failure classes are recorded. The formal resume-readiness component derives post-consumption handler availability from the actual physical segment. | Connect allocation, storage, control-work, registration and disposal preparation to Rust execution; do not equate successful formal freshness with runtime reservation success. |
+| C3.5 nonvacuity | Existing transition consumers use actual Core endpoints and positive calculus steps; ranked administrative components are integrated. | Establish the justified administrative matching/progress measure for the complete simulation, not only its individual transition components. |
+
+The six-deliverable batch in the current board is independently reviewed and
+current-source verified. All 891 registered Lean modules were freshly compiled
+from the same frozen current sources using pinned Lean 4.33.1, warnings as
+errors, and only the newly produced dependency cache and standard libraries.
+All 11,814 ordered axiom reports use only the standard axioms. The independent
+packaging audit checks source, compiler/library, command, log, artifact and direct
+import hashes. This replaces the earlier cache association whose recorded source
+hashes did not establish which source produced the selected artifact. No failing
+current proof was bypassed. Full `cargo xtask verify` passes, including 2,902 tests
+with no failures and two intentionally ignored tests. This checkpoint retains the six-deliverable
+integration.
+
+The next C2 producer checkpoint implements and locally verifies 11 of 16 Code
+constructors without taking Source/Auth judgments as annotation data. It checks
+whole graph shape, root type/effect metadata and the same translated literal Code;
+interior metadata, registry origin and runtime captured-value admission remain
+separate obligations. The five missing checker cases are handler, resume,
+discard, resource and cleanup. Rich cleanup source and transport construction is
+implemented independently; the current-source closure replay passes for 38 affected modules with 299
+reports.
+Resource admission needs actual returned-storage evidence tied to the same
+lexical origin and substitution contract. A freely chosen storage environment or
+port-only guard would not satisfy C2.3/C4.1.
+
+The remaining whole-goal estimate depends on constructing that resource interface
+and the combined reachable-state relation without assuming the invariants they
+must establish. The next review/adoption batches are bounded; they do not change
+the acceptance inventory or declare C2–C5 complete.
 
 ## Verification
 

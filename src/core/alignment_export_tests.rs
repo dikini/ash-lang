@@ -119,6 +119,7 @@ struct Exporter {
     sources: HashMap<SourceId, (usize, usize)>,
     owners: HashMap<crate::resolved::ResumeId, usize>,
     manifest: Vec<String>,
+    signatures: Vec<String>,
 }
 
 impl Exporter {
@@ -305,10 +306,19 @@ impl Exporter {
                 |_| Ok::<_, String>(()),
                 || "signature allocation".into(),
             )?;
-            let ty = self.ty(&ty)?;
+            let rendered_type = self.ty(&ty)?;
+            let Type::Function(input, output) = &ty else {
+                return Err("operation signature is not a function".into());
+            };
+            let input = self.ty(input)?;
+            let output = self.ty(output)?;
+            self.signatures.push(format!(
+                "  {{ effect := {effect}, operation := {}, input := {input}, output := {output} }}",
+                operation.id.operation()
+            ));
             let origin = self.origin(&operation.origin);
             self.manifest.push(format!(
-                "signature {effect} {} {ty} {origin}",
+                "signature {effect} {} {rendered_type} {origin}",
                 operation.id.operation()
             ));
         }
@@ -535,10 +545,10 @@ impl Exporter {
     }
 }
 
-fn export_with_identities(
+fn export_with_operation_metadata(
     program: &ValidatedEffectProgram,
     sources: &[(SourceId, ModuleId, String)],
-) -> Result<(String, IdentityMaps), String> {
+) -> Result<(String, String, IdentityMaps), String> {
     let mut exporter = Exporter::default();
     for (source, module, path) in sources {
         let slot = exporter.sources.len();
@@ -591,6 +601,8 @@ fn export_with_identities(
     }
     exporter.manifest.sort();
     exporter.manifest.dedup();
+    exporter.signatures.sort();
+    exporter.signatures.dedup();
     let manifest = list(exporter.manifest.iter().map(|line| format!("{:?}", line)));
     let node_count = nodes.len();
     let rendered = format!(
@@ -598,8 +610,13 @@ fn export_with_identities(
         nodes.join(",\n"),
         exporter.reference(program.root())
     );
+    let operation_metadata = format!(
+        "import CoreExportedFixture\nimport CoreOperationSignatures\n\n/-! Generated declaration metadata from the same validated registry and\nidentity traversal as CoreExportedFixture. These entries retain exact instance\narguments and instantiated declared types; they are not source admission. -/\nnamespace Ash.OneShot.CoreExportedOperationMetadata\nopen CoreOperationSignatures\n\ndef entries : List RawEntry := [\n{}\n  ]\n\ndef sourceManifest : List String := {manifest}\n\nexample : sourceManifest = CoreExportedFixture.identityManifest := rfl\n\nend Ash.OneShot.CoreExportedOperationMetadata\n",
+        exporter.signatures.join(",\n")
+    );
     Ok((
         rendered,
+        operation_metadata,
         IdentityMaps {
             nodes: exporter.slots,
             binders: exporter.binders,
@@ -608,6 +625,14 @@ fn export_with_identities(
             owners: exporter.owners,
         },
     ))
+}
+
+fn export_with_identities(
+    program: &ValidatedEffectProgram,
+    sources: &[(SourceId, ModuleId, String)],
+) -> Result<(String, IdentityMaps), String> {
+    export_with_operation_metadata(program, sources)
+        .map(|(graph, _, identities)| (graph, identities))
 }
 
 /// Frozen numbering produced by the same traversal that renders the graph.
@@ -643,22 +668,62 @@ fn export_is_stable_across_independent_compilation() {
     let first = effect_program("restored-clause-suffix");
     let second = effect_program("restored-clause-suffix");
     assert_eq!(
-        export(&first.program, &first.sources),
-        export(&second.program, &second.sources)
+        export_with_operation_metadata(&first.program, &first.sources)
+            .map(|(graph, metadata, _)| (graph, metadata)),
+        export_with_operation_metadata(&second.program, &second.sources)
+            .map(|(graph, metadata, _)| (graph, metadata))
     );
 }
 
 #[test]
-#[ignore = "explicit fixture regeneration writes the checked-in Lean golden"]
+fn exports_structured_operation_metadata_from_the_same_registry_traversal() {
+    let fixture = effect_program("restored-clause-suffix");
+    let (graph, metadata, _) = export_with_operation_metadata(&fixture.program, &fixture.sources)
+        .expect("validated registry exports");
+    assert_eq!(
+        graph,
+        export(&fixture.program, &fixture.sources).expect("graph exports")
+    );
+    assert!(metadata.contains("def entries : List RawEntry"));
+    assert!(metadata.contains("input := .boolean, output := .unit"));
+    assert!(metadata.contains("CoreExportedFixture.identityManifest"));
+}
+
+#[test]
+#[ignore = "explicit fixture regeneration writes the checked-in Lean data"]
 fn regenerate_exported_fixture() {
     let fixture = effect_program("restored-clause-suffix");
-    let generated = export(&fixture.program, &fixture.sources).expect("fixture exports");
+    let (generated, operations, _) =
+        export_with_operation_metadata(&fixture.program, &fixture.sources)
+            .expect("fixture exports");
     std::fs::write(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("docs/design/direct-effects/one-shot/CoreExportedFixture.lean"),
         generated,
     )
     .expect("write golden");
+    std::fs::write(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/direct-effects/one-shot/CoreExportedOperationMetadata.lean"),
+        operations,
+    )
+    .expect("write operation metadata");
+}
+
+#[test]
+fn operation_export_matches_checked_in_lean_metadata() {
+    let fixture = effect_program("restored-clause-suffix");
+    let (_, metadata, _) = export_with_operation_metadata(&fixture.program, &fixture.sources)
+        .expect("fixture exports");
+    let golden = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/design/direct-effects/one-shot/CoreExportedOperationMetadata.lean"),
+    )
+    .expect("read operation metadata");
+    assert_eq!(
+        metadata, golden,
+        "regenerate with cargo test --lib core::alignment_export::regenerate_exported_fixture -- --ignored"
+    );
 }
 
 #[test]

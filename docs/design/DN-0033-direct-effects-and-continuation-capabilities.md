@@ -53,6 +53,21 @@ scope coherence remain explicit premises. These results test the higher-order
 restoration obligation without weakening private contracts or changing M4;
 general admission, simulation and Rust capacity treatment remain task work.
 
+The [finite annotation gate](direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean)
+now checks same-site metadata and actual receiver bounds; private body evidence
+remains an input. The [rich initial constructor](direct-effects/one-shot/CoreCallableInitialAdmission.lean)
+uses that stronger static boundary for an initial Site and lower first progress
+step. [Reachable resume](direct-effects/one-shot/CoreCallableReachableResume.lean)
+derives current owner-name and scope coherence for its actual transition
+factories, and [cleanup origins](direct-effects/one-shot/CoreCallableCleanupOrigins.lean)
+recover the same registered caller scope at normal completion. The
+[structured declaration consumer](direct-effects/one-shot/CoreExportedOperationChecks.lean)
+checks exact operation ports from the existing Rust export. These are bounded
+admission/correspondence inputs. General resource admission additionally needs
+an actual returned-storage contract: a resource-free output port does not exclude
+a closure retaining the acquired cell. The task records this missing rich
+resource/cleanup source boundary and its required constructive producer.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

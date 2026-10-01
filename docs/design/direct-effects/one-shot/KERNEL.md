@@ -224,6 +224,27 @@ general configuration correspondence. These components preserve the stated
 experiment boundary; they do not establish full Core simulation or runtime
 capacity success.
 
+The [finite graph annotation gate](CoreCallableGraphAnnotationChecks.lean)
+now produces same-site metadata and receiver-support guards, while its recursive
+private body Source/Auth/refinement remain supplied inputs. The
+[structured registry declarations](CoreExportedOperationChecks.lean) construct
+and check exact operation ports from the existing generated Rust export.
+[Rich initial admission](CoreCallableInitialAdmission.lean) constructs the same
+initial Site and lower first-step progress from supplied static evidence; it
+does not establish full M4 admission or rich successor preservation.
+
+The [reachable resume factories](CoreCallableReachableResume.lean) derive current
+name and scope coherence from actual capture/history and saved-frame origin.
+The [cleanup origin factories](CoreCallableCleanupOrigins.lean) retain the
+actual registration's full callback data and restore its own caller scope on
+Unit completion. General reachable-state construction and transport through
+capture/projection/disposal remain open. The active comparison records both
+the bounded reviews and a fresh current-source integration build required after
+historical dependency caches failed source/artifact association checks. All 891
+registered current modules pass that fresh build, with 11,814 exact reports and
+standard axioms only. The task records implementation, review, verification and
+commit phases for the current deliverables separately from whole-package acceptance.
+
 ## Direct control representation
 
 There is one sequencing operation. A binding pushes a frame, a request selects

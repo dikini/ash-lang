@@ -1505,6 +1505,72 @@ pairs. The audit checks 2,083 local links and anchors, import order, standard
 axioms, trust boundaries, whitespace and artifact exclusion. No Rust source
 changed in this increment.
 
+### Static annotation gates and reachable ownership receipts
+
+[CoreCallableGraphAnnotationChecks.lean](CoreCallableGraphAnnotationChecks.lean)
+checks finite function and binding annotation data against the same graph site,
+parameter and translated body. Successful checks construct exact type/effect,
+lexical knownness, receiver-support and world-formation guards. Its annotation
+data contain no desired Source or Auth proof. `receiver_lambda` consumes those
+guards at the same literal full contract, but still receives recursive private
+body source, authentication and refinement. Actual bound-value authentication,
+private-plan origin and the general recursive static producer remain open.
+
+The test-only Rust exporter now emits structured operation declarations from the
+same validated registry traversal, identity maps and full type substitution as
+the graph export. The existing graph golden is unchanged.
+[CoreExportedOperationMetadata.lean](CoreExportedOperationMetadata.lean) retains
+the exact declarations and the same origin manifest.
+[CoreExportedOperationChecks.lean](CoreExportedOperationChecks.lean) builds those
+entries for any activation of the exported resource binder, realizes every raw
+entry and connects its accepted ports to the current builtin signature overlay.
+Read retains the reference input; write retains the reference/integer pair.
+Unresolved resource binders, conflicting ports, absent operations and unrelated
+cell entries are rejected. Agreement covers the generated cell and all user
+instances, not a fabricated finite entry for every unrelated cell. Manifest
+equality pairs the exports; it does not prove general Rust compiler soundness or
+rich private callable admission.
+
+[CoreCallableInitialAdmission.lean](CoreCallableInitialAdmission.lean) constructs
+the rich initial Site from the same supplied static source/authentication,
+literal plan, complete rows, full contract, support and accounting. Its lower
+projection supplies initial typing, joint validity and an actual first progress
+step under the existing usage and builtin-signature assumptions. It does not
+construct that static Program from validated Core, establish rich successor
+preservation, or supply the legacy M4 authentication refuted by D4.
+
+[CoreCallableReachableResume.lean](CoreCallableReachableResume.lean) constructs
+current and saved owner-map/scope receipts through actual capture, beta, bind
+and resume operand transitions. The canonical static binder map and first
+matching physical owner path derive the current resolution agreement. Ticket
+counting and actual initial Core history derive current dynamic-name uniqueness.
+The consumer uses these produced facts to obtain the same current Site's actual
+Core resume endpoint and rich successor; caller-supplied desired resolution or
+Nodup is unnecessary. Older map entries and each saved frame's own scope remain
+available; the fragment is not restricted to an otherwise empty map.
+
+[CoreCallableCleanupOrigins.lean](CoreCallableCleanupOrigins.lean) derives the
+saved cleanup receipt from actual registration's current scope and callback
+lookup. Normal callback entry retains the entire ActionData and saved caller
+receipt while clearing current scope. Unit return restores the same saved
+value, installation map and scope over an arbitrary outside general segment.
+CleanupRel alone does not supply scope provenance. Movement of running receipts
+through later capture/projection, disposal and the combined reachable invariant
+remains open; these factories do not prove callback termination.
+
+Independent reviews pass for these bounded components. Integration additionally
+detected historical source/artifact association errors in the saved frame and
+unwind dependency caches. Frozen worker reviews retain their recorded graph
+scope. The current registered integration freshly compiles all 891 modules
+from every registered current source, recording each command, direct imported
+artifact, log and output hash. The 11,814 exact reports use standard axioms only;
+the independent packaging audit also verifies the compilation source association.
+Full `cargo xtask verify` passes: 2,902 tests, no failures and two intentionally
+ignored tests. General admission, the rich resource/cleanup constructor extension,
+whole-fragment simulation and Rust preparation remain separate acceptance
+obligations. The task's current phase board records locally verified producer
+and cleanup-extension work separately from this retained integration.
+
 ### Runtime capacity boundary
 
 The [runtime failure representation](../../../../src/eval/failure.rs)
