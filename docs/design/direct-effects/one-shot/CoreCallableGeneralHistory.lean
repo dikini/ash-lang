@@ -477,6 +477,206 @@ theorem capture_history {base : CoreMachine.State}
   exact ⟨fuel,argument,rawBody,body,pattern,clauseAt,translated,closed,step,
     installation,header,.live installation header captured location.after,rfl,rfl,HEq.rfl,rfl,rfl,rfl,rfl⟩
 
+/-- Complete selected owner data come from the same physical live occurrence. -/
+structure OwnerLocation (graph : Graph) (heap : CoreMachine.Heap) (handler owner : Nat)
+    (physical : List CoreMachine.Frame) (target : Stack) where
+  front : List CoreMachine.Frame
+  frontTarget : Stack
+  frontHistory : GeneralHistory graph heap front frontTarget
+  owners : OwnerMap
+  occurrence : Nat
+  dynamicTicket : Nat
+  data : HandlerData
+  result : Ty
+  captured : List CoreMachine.Frame
+  capturedTarget : Stack
+  capturedHistory : GeneralHistory graph heap captured capturedTarget
+  installation : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data
+  header : OwnerHeader graph owners heap handler owner occurrence data
+  outside : List CoreMachine.Frame
+  tail : Stack
+  outsideHistory : GeneralHistory graph heap outside tail
+  whole : GeneralHistory graph heap physical target
+  physicalSame : physical = front ++ .clauseBoundary handler owner occurrence dynamicTicket (some captured) :: outside
+  targetSame : target = frontTarget.append (.live dynamicTicket result data.answer capturedTarget data.scope tail)
+  cut : GeneralOwnerCut graph heap handler owner physical target front frontTarget owners occurrence dynamicTicket
+    data result captured capturedTarget outside tail
+
+private abbrev OwnerPass (handler owner : Nat) (physical : List CoreMachine.Frame) : Prop :=
+  ∀ rest cut, CoreMachine.findOwner handler owner rest = .ok cut →
+    CoreMachine.findOwner handler owner (physical ++ rest) = .ok {cut with inside := physical ++ cut.inside}
+
+noncomputable def OwnerLocation.prepend (location : OwnerLocation graph heap handler owner physical target)
+    (leading : GeneralHistory graph heap leadingPhysical leadingTarget)
+    (pass : OwnerPass handler owner leadingPhysical) :
+    OwnerLocation graph heap handler owner (leadingPhysical ++ physical) (leadingTarget.append target) := by
+  have targetSame : leadingTarget.append target =
+      (leadingTarget.append location.frontTarget).append (.live location.dynamicTicket location.result location.data.answer location.capturedTarget location.data.scope location.tail) :=
+    by simpa [stack_append_assoc] using congrArg (fun xs => leadingTarget.append xs) location.targetSame
+  exact {
+    location with front := leadingPhysical ++ location.front,
+                  frontTarget := leadingTarget.append location.frontTarget,
+                  frontHistory := .append leading location.frontHistory,
+                  whole := .append leading location.whole,
+                  physicalSame := by simpa [List.append_assoc] using congrArg (fun xs => leadingPhysical ++ xs) location.physicalSame,
+                  targetSame := targetSame,
+                  cut := .split (GeneralHistory.append leading location.whole).related (GeneralHistory.append leading location.frontHistory).related
+                    location.header location.capturedHistory.related location.outsideHistory.related targetSame
+                    (pass _ _ location.cut.realizes.1) }
+
+noncomputable def OwnerLocation.suffix (location : OwnerLocation graph heap handler owner physical target)
+    (suffix : GeneralHistory graph heap suffixPhysical suffixTarget) :
+    OwnerLocation graph heap handler owner (physical ++ suffixPhysical) (target.append suffixTarget) := by
+  have targetSame : target.append suffixTarget =
+      location.frontTarget.append (.live location.dynamicTicket location.result location.data.answer location.capturedTarget location.data.scope (location.tail.append suffixTarget)) :=
+    by simpa [stack_append_assoc,Stack.append] using congrArg (fun xs => xs.append suffixTarget) location.targetSame
+  exact {
+    location with outside := location.outside ++ suffixPhysical,
+                  tail := location.tail.append suffixTarget,
+                  outsideHistory := .append location.outsideHistory suffix,
+                  whole := .append location.whole suffix,
+                  physicalSame := by simpa [List.append_assoc] using congrArg (fun xs => xs ++ suffixPhysical) location.physicalSame,
+                  targetSame := targetSame,
+                  cut := .split (GeneralHistory.append location.whole suffix).related location.frontHistory.related
+                    location.header location.capturedHistory.related (GeneralHistory.append location.outsideHistory suffix).related targetSame
+                    (CoreSuffixSplice.owner_append location.cut.realizes.1 suffixPhysical) }
+
+/-- Missing prefixes carry a derived physical traversal law. Blocked means the
+nearest matching physical occurrence was spent; append must not search past it. -/
+inductive OwnerSearch (graph : Graph) (heap : CoreMachine.Heap) (handler owner : Nat)
+    (physical : List CoreMachine.Frame) (target : Stack) : Type where
+  | found (location : OwnerLocation graph heap handler owner physical target)
+  | missing (pass : OwnerPass handler owner physical)
+  | blocked
+
+noncomputable def OwnerSearch.prepend (search : OwnerSearch graph heap handler owner physical target)
+    (leading : GeneralHistory graph heap leadingPhysical leadingTarget)
+    (pass : OwnerPass handler owner leadingPhysical) :
+    OwnerSearch graph heap handler owner (leadingPhysical ++ physical) (leadingTarget.append target) := by
+  cases search with
+  | found location => exact .found (location.prepend leading pass)
+  | blocked => exact .blocked
+  | missing restPass =>
+    exact .missing (by intro rest cut found; simpa [List.append_assoc] using pass _ _ (restPass _ _ found))
+
+private theorem push_owner_pass (frame : PushCarrier graph owners heap core target)
+    (found : CoreMachine.findOwner handler owner rest = .ok cut) :
+    CoreMachine.findOwner handler owner (core :: rest) = .ok {cut with inside := core :: cut.inside} := by
+  cases frame with
+  | ordinary related =>
+      rename_i plain
+      change CoreStrictFrames.FrameRel graph owners heap core plain.context at related
+      generalize contextEq : plain.context = context at related
+      cases related <;> simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+  | initializer related => cases related; simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+  | request related => cases related; simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+  | resume related => cases related; simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+  | cleanup related => cases related; simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+  | boundary related => cases related <;> simp [CoreMachine.findOwner,found,Bind.bind,Except.bind,Pure.pure,Except.pure]
+
+noncomputable def owner_search (history : GeneralHistory graph heap physical target) (handler owner : Nat) :
+    OwnerSearch graph heap handler owner physical target := by
+  cases history with
+  | nil => exact .missing (by intro rest cut found; exact found)
+  | retained history => exact .missing (fun rest cut found => CoreGeneralStack.RetainedCursor.owner_lookup_pass history.related found)
+  | @push owners core frameTarget physical lexical frame ordinary tail =>
+    have pass : OwnerPass handler owner [core] := by
+      intro rest cut found
+      simpa using push_owner_pass frame found
+    simpa [Stack.append] using (owner_search tail handler owner).prepend (.push frame ordinary .nil) pass
+  | @handler owners site environment data physical lexical installation header tail =>
+    have pass : OwnerPass handler owner [.handlerBoundary site environment data.activation] := by
+      intro rest cut found
+      simpa using push_owner_pass (PushCarrier.boundary header) found
+    simpa [Stack.append] using (owner_search tail handler owner).prepend (.handler installation header .nil) pass
+  | running receipt => exact .missing (by intro rest cut found; simpa using (CompletionRel.normal receipt.installed.delayed receipt.value).owner_pass found)
+  | unwinding installed => exact .missing (by intro rest cut found; simpa using (CompletionRel.unwinding installed.delayed).owner_pass found)
+  | closing core target scope => exact .missing (by intro rest cut found; simpa using (CompletionRel.closing (graph := graph) (heap := heap) core target scope).owner_pass found)
+  | @live owners otherHandler otherOwner occurrence dynamicTicket captured data capturedTarget physical target result installation header saved tail =>
+    by_cases same : handler = otherHandler ∧ owner = otherOwner
+    · obtain ⟨rfl,rfl⟩ := same
+      exact .found {
+        front := [],frontTarget := .nil,frontHistory := .nil,owners := owners,
+        occurrence := occurrence,dynamicTicket := dynamicTicket,data := data,result := result,
+        captured := captured,capturedTarget := capturedTarget,capturedHistory := saved,
+        installation := installation,header := header,outside := physical,tail := target,
+        outsideHistory := tail,whole := .live installation header saved tail,
+        physicalSame := rfl,targetSame := rfl,cut := .hit header saved.related tail.related }
+    · have pass : OwnerPass handler owner [.clauseBoundary otherHandler otherOwner occurrence dynamicTicket (some captured)] := by
+        intro rest cut found
+        simp [CoreMachine.findOwner,Bool.and_eq_true,beq_iff_eq,same,found,Functor.map,Except.map]
+      simpa [Stack.append] using (owner_search tail handler owner).prepend (.live installation header saved .nil) pass
+  | @spent owners otherHandler otherOwner occurrence dynamicTicket captured data physical target installation header tail =>
+    by_cases same : handler = otherHandler ∧ owner = otherOwner
+    · exact .blocked
+    · have pass : OwnerPass handler owner [.clauseBoundary otherHandler otherOwner occurrence dynamicTicket none] := by
+        intro rest cut found
+        simp [CoreMachine.findOwner,Bool.and_eq_true,beq_iff_eq,same,found,Functor.map,Except.map]
+      simpa [Stack.append] using (owner_search tail handler owner).prepend (.spent installation header .nil) pass
+  | append first second =>
+    cases owner_search first handler owner with
+    | found location => exact .found (location.suffix second)
+    | blocked => exact .blocked
+    | missing pass => exact (owner_search second handler owner).prepend first pass
+termination_by structural history
+
+theorem owner_search_lookup
+    (history : GeneralHistory graph heap physical target)
+    (picked : owner_search history handler owner = .found location) :
+    CoreMachine.findOwner handler owner physical =
+      .ok ⟨location.front,handler,owner,location.occurrence,location.dynamicTicket,location.captured,location.outside⟩ ∧
+    owner_search history handler owner = .found location := ⟨location.cut.realizes.1,picked⟩
+
+noncomputable def OwnerLocation.restored_history (location : OwnerLocation graph heap handler owner physical target) :
+    GeneralHistory graph heap
+      (location.captured ++ (location.front ++
+        .clauseBoundary handler owner location.occurrence location.dynamicTicket none :: location.outside))
+      (location.capturedTarget.append (location.frontTarget.append
+        (.spent location.dynamicTicket location.data.answer location.data.scope location.tail))) :=
+  location.capturedHistory.append (location.frontHistory.append
+    (.spent location.installation location.header location.outsideHistory))
+
+/-- Actual resume consumes the owner selected by this same current history.
+The original capture, arbitrary current front and selected receipt survive in
+that exact order; only the selected physical live marker becomes spent. -/
+theorem resume_history {base : CoreMachine.State}
+    (history : GeneralHistory graph base.heap physical target)
+    {location : OwnerLocation graph base.heap handler owner physical target}
+    (picked : owner_search history handler owner = .found location)
+    (frame : CoreResumeFrames.ResumeRel graph frameOwners base.heap (.resume handler owner) plain)
+    (context : plain.context = .resume binder)
+    (value : ValueRel graph owners base.heap coreValue code)
+    (resolve : plain.scope.resolve binder = some location.dynamicTicket) (runtimeScope : Execution.Scope) :
+    GeneralStepWitness graph
+      ⟨resumeBefore base handler owner coreValue physical,
+        .eval ⟨.resume binder code,plain.scope,target⟩,owners,[(frameOwners,.resume handler owner)]⟩
+      ⟨resumeAfter base handler owner location.occurrence location.dynamicTicket coreValue
+          location.captured location.front location.outside,
+        .eval ⟨code,plain.scope,location.capturedTarget.append (location.frontTarget.append
+          (.spent location.dynamicTicket location.data.answer location.data.scope location.tail))⟩,owners,[]⟩
+        [] [.ticket location.dynamicTicket] ∧
+    (∃ successor : GeneralHistory graph base.heap
+      (location.captured ++ (location.front ++
+        .clauseBoundary handler owner location.occurrence location.dynamicTicket none :: location.outside))
+      (location.capturedTarget.append (location.frontTarget.append
+        (.spent location.dynamicTicket location.data.answer location.data.scope location.tail))),
+      successor = location.restored_history) ∧
+    (resumeAfter base handler owner location.occurrence location.dynamicTicket coreValue
+      location.captured location.front location.outside).frames =
+      location.captured ++ (location.front ++
+        .clauseBoundary handler owner location.occurrence location.dynamicTicket none :: location.outside) ∧
+    owner_search history handler owner = .found location := by
+  exact ⟨resume_general location.cut frame context value resolve runtimeScope,
+    ⟨location.restored_history,rfl⟩,by simp [resumeAfter,List.append_assoc],picked⟩
+
+/-- A matching spent occurrence is never skipped to an older activation. -/
+theorem owner_search_spent
+    (installation : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data)
+    (header : OwnerHeader graph owners heap handler owner occurrence data)
+    (tail : GeneralHistory graph heap physical target) :
+    owner_search (.spent installation header tail) handler owner = .blocked := by
+  simp [owner_search]
+
 #print axioms GeneralHandlerPast.from_mapped
 #print axioms GeneralClausePast.from_mapped
 #print axioms RetainedHistory.related
@@ -494,4 +694,12 @@ theorem capture_history {base : CoreMachine.State}
 #print axioms handler_locations
 #print axioms handler_location_cut
 #print axioms capture_history
+#print axioms OwnerLocation.prepend
+#print axioms OwnerLocation.suffix
+#print axioms OwnerSearch.prepend
+#print axioms owner_search
+#print axioms owner_search_lookup
+#print axioms OwnerLocation.restored_history
+#print axioms resume_history
+#print axioms owner_search_spent
 end Ash.OneShot.CoreCallableGeneralHistory

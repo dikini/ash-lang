@@ -104,6 +104,12 @@ fresh-opening case. This is not arbitrary universal body acceptance or rich
 resource Source/Auth. Captured-callee origins and actual-return observer transport
 remain separate obligations. Both bounded leaves passed independent review and current-source integration.
 Whole-fragment admission and simulation remain open.
+The reviewed general-history extension derives nearest owner selection, stops at
+a matching spent marker, and constructs actual full-prefix resume history with
+the same installed Clause/header. Current operand and scope-resolution guards
+remain; outside-caller barrier history, projection, disposal and whole
+reachability stay open. The extension passes independent review and fresh
+current-source integration.
 
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;

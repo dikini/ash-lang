@@ -63,14 +63,14 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-01 17:05 UTC
+### Current deliverable board — 2026-10-01 17:19 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
 its phase changes only when the corresponding evidence exists. Constructor
 counts measure implemented cases, not equal effort or a percentage of C2.
 
-| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 16:22 UTC |
+| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 17:05 UTC |
 | --- | --- | --- | --- | --- | --- |
 | Same-graph callable annotation gate | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | Rich initial Site and first-step connection | Yes | Passed | Passed | `d2f26e1` | Unchanged |
@@ -88,9 +88,10 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Same-literal paired initializer/substitution/application consumer | Implemented | Passed | Passed | `b04701b` | Unchanged |
 | Past mapped handler/clause installation and actual capture/resume receipts | Implemented | Passed | Passed | `b04701b` | Unchanged |
 | **Paired C2/C3 two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`b04701b`** | Unchanged |
-| Parameterized storage recipes and generic higher-order formal return from a fresh scope | Implemented | Passed | Passed | This checkpoint | **In development → reviewed → verified → committed** |
-| General installation/completion history, heap transport and guarded actual capture | Implemented | Passed | Passed | This checkpoint | **In development → reviewed → verified → committed** |
-| **General-history/recipe two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **This checkpoint** | **New retained batch** |
+| Parameterized storage recipes and generic higher-order formal return from a fresh scope | Implemented | Passed | Passed | `bfc72e1` | Unchanged |
+| General installation/completion history, heap transport and guarded actual capture | Implemented | Passed | Passed | `bfc72e1` | Unchanged |
+| **General-history/recipe two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`bfc72e1`** | Unchanged |
+| Same-history nearest owner selection and actual full-prefix resume | Implemented | Passed | Passed | This checkpoint | **Worker-verified → reviewed → verified → committed** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -148,42 +149,62 @@ negatives pass unchanged. All 895 unchanged modules retain exact parent source,
 log, artifact and direct-import associations. That preceding assembly has 897
 modules and 11,891 ordered standard-only reports. No Rust sources changed.
 
-This checkpoint retains the reviewed general-history and recipe leaves. Fresh
+The preceding checkpoint `bfc72e1` retains the reviewed general-history and recipe leaves. Fresh
 integration reproduces their exact source/artifact bytes and 27 standard-only
-reports. The current assembly has 899 registered modules and 11,918 ordered
+reports. That preceding assembly has 899 registered modules and 11,918 ordered
 reports; all 897 unchanged modules retain their preceding exact source/log/artifact
 and direct-import associations. This is an audited assembly, not a new uncached
 build of every module. No Rust sources changed.
+
+This checkpoint adds eight owner/resume reports to GeneralHistory's preceding
+seventeen. Fresh compilation of the full changed leaf reproduces all 25 reviewed
+reports and the exact source/artifact bytes. The current assembly still has 899
+modules, now with 11,926 ordered standard-only reports. All 898 unchanged modules
+retain exact preceding source/log/artifact/direct-import associations. This is
+one fresh changed leaf in an audited current-source assembly, not an uncached
+build of every module. No Rust sources change.
 
 Current parallel checkpoints:
 
 | Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
 | --- | --- | --- | --- | --- |
-| C2.3 / C4.1 | Storage-recipe interface in development | **Integrated:** finite templates preserve entire actual higher-order storage contracts; universal formal-return opening excludes the fresh identity | Pair actual captured callee bindings and arguments | Paired-call interface: 30–60 minutes; rich resource admission estimate open |
-| C3.1 / C3.2 | General history interface in development | **Integrated:** immutable general past receipts, heap transport, actual cleanup entry/finish and completion-capable guarded capture | Derive owner selection and consume it in actual full-prefix resume | Owner/resume review: 30–60 minutes; outside misses/projection/disposal estimate open |
-| C2.3 / C4.1 | No separate captured-callee consumer | **In development:** ordinary actual-call ABI pairs the literal callee's captured storage bindings with the actual argument | Reviewed consumer preserving the same private body and full contracts | 30–60 minutes for the bounded current-call consumer |
-| C3.1 / C3.2 | General owner selection absent | **Worker-verified, independent review pending:** frozen checkpoint has a found/missing/blocked selector and deterministic resume history, with matching spent owners stopping lookup | Independent review of the frozen checkpoint | 30–60 minutes for review; outside misses/projection/disposal still open |
+| C2.3 / C4.1 | Generic formal-return recipe integrated | **Unchanged:** full actual higher-order storage tree and fresh-identity exclusion retained | Independent review of frozen captured-callee consumer | 30–60 minutes; rich resource admission estimate open |
+| C3.1 / C3.2 | Owner/resume checkpoint worker-verified | **Integrated:** nearest owner lookup derived from the same history; matching spent owner stops search; actual full-prefix resume constructs successor history | Checked outside-caller restoration consumer | 45–60 minutes for checked outside-origin consumer |
+| C2.3 / C4.1 | Captured-callee consumer in development | **Frozen, independent review running:** caller argument and callee body retain separate binding and instantiation environments; no fresh replacement annotation is chosen | Review verdict on the frozen actual-call consumer | 20–30 minutes for review of the bounded consumer |
+| C3.1 / C3.2 | Outside-anchor restoration open | **ABI identified; implementation started:** scan current front/spent history for the original caller pair and derive restored origin on a checked pass | Checked outside-origin consumer; saved caller/reset/bind barrier history remains separate | 45–60 minutes for checked consumer/review; universal pass estimate open |
+| C3.2 | Handler inventory index/effect guards supplied | **ABI identified; implementation started:** recover exact installed candidate from actual physical interpreter lookup | Inventory-completeness theorem and actual capture wrapper | 45–60 minutes for bounded implementation; current route guards remain |
 
-The new recipe theorem handles any actual formal storage contract, including
-higher-order captures, input and output trees. It proves a generic fresh resource
-scope may return that existing argument while excluding the fresh identity.
-Finite recipe checking does not yet prove every body recipe succeeds universally;
-rich resource Source/Auth, captured-callee provenance after substitution, control
-storage and actual-return observer transport remain open.
+The owner/resume extension retains the same full installation, selected Clause,
+header, captured history, arbitrary current front and outside history. It derives
+the current first physical lookup; dormant captures and physically removed
+logical owners are not searched. Resume consumes that same selected receipt and
+constructs exactly captured ++ front ++ spent(selected receipt) :: outside,
+with an actual Core step and positive target execution. Current ResumeRel,
+operand relation and scope resolution remain explicit. No desired future scope,
+Source/Auth or ownership witness is an input. Whole C3 remains open.
 
-The new general history retains original handler/clause installations while
-allowing running completions and logical retained cursors. Handler candidates
-come from the same current physical history, not dormant captures. Actual capture
-still requires current route/effect, inventory-index and first physical lookup
-guards. Owner selection/resume is the next bounded consumer; outside-anchored
-caller misses, retained projection, disposal and whole reachability remain open.
+The outside-anchor assessment found a causal history gap: current past-handler
+receipts do not relate later front installations to a dormant caller's saved
+reset/bind barrier. Beta resets the active map/scope and can legitimately repeat
+a literal handler. Literal-site ancestry alone therefore does not prove every
+new marker misses the old caller pair. The checked consumer derives restoration
+when the finite current scan passes; producing universal scan success needs
+combined caller/barrier history. This is the existing outside-restoration
+obligation, not a new acceptance item or a reachable counterexample.
 
-The reviewed recipe/history results and their integration arrived within the
-preceding bounded estimates. Estimates now concern the next consumers. With parallel workers, those next checkpoints are
-expected within roughly one elapsed hour. A full C2/C3 estimate remains open:
-the substituted captured-callee origin and combined outside-caller history still
-lack proved interfaces. The fragment and package acceptance inventory remain
-unchanged.
+The captured-callee consumer preserves separate caller argument specialization
+and callee body specialization. Substitution currently retains rich Source/Auth,
+computed Plan/Rows and exact storage, but loses finite body recipe provenance.
+The next structural receipt must retain the original specialization and body
+recipe lineage. Rechecking an arbitrary new annotation would not establish that
+origin. Rich resource Source/Auth and actual-return observer transport remain
+open.
+
+The owner/resume review finished within the preceding 30–60-minute estimate.
+With parallel workers, the next consumer checkpoints are expected in roughly
+one elapsed hour. Full C2/C3 estimates remain open until substituted-callee
+provenance and combined outside-caller barrier history have proved interfaces.
+The fragment and package acceptance inventory remain unchanged.
 
 ### Increment 1 local results
 
@@ -1631,7 +1652,7 @@ unchanged.
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | 14/16 checker forms retained; exact current operands retained; universal formal-return recipe retained | Recursive static body and captured-environment admission producer; whole initial admission | Handler/resource cases and storage control transport remain; full admission also requires interior metadata, registry origin, actual captured-value and resource storage evidence | Captured-callee consumer: 30–60 minutes; substituted-callee/resource body scheme unresolved, so whole-package estimate open |
-| C3 | 0 / 5 | Running-inside restoration, sites and mapped history retained; general completion history/capture retained | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | General completion history now exists; owner/resume review, combined caller outside misses, projection and disposal remain | Owner/resume review: 30–60 minutes; whole-package estimate awaits outside miss/combined relation |
+| C3 | 0 / 5 | Running-inside restoration, sites and mapped history retained; general history and actual owner/resume retained | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | Owner/resume integrated; combined caller outside misses, projection and disposal remain | Outside consumer: 45–60 minutes; whole-package estimate awaits caller/barrier history |
 | C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 

@@ -303,7 +303,7 @@ Heap transport preserves the original predecessor, suffix/maps, full header and
 selected Clause. Handler entry and normal cleanup start/finish build actual
 history. A same-history handler inventory feeds guarded actual capture, retaining
 running completions. Current route/effect, index and first physical lookup guards
-remain inputs; owner selection/resume, outside misses, projection, disposal and
+remain inputs at the initial general-history checkpoint; outside misses, projection, disposal and
 whole reachability remain open.
 
 The [storage-recipe producer](CoreCallableStorageRecipes.lean) specializes finite
@@ -313,10 +313,23 @@ fresh identity from the returned existing argument. The retaining-opened-value
 rejection is generic. This proves the formal-slot case, not arbitrary universal
 recipe success or rich resource Source/Auth. Captured-callee provenance and
 actual-return observer transport remain open. Both leaves pass fresh integration with 27 standard-only reports and identical
-reviewed artifact bytes. The current assembly contains 899 registered modules and
+reviewed artifact bytes. The preceding checkpoint `bfc72e1` assembled 899 registered modules and
 11,918 ordered reports; all 897 unchanged modules retain exact preceding source,
 log, artifact and direct-import associations. Whole-fragment acceptance remains
 open.
+
+The reviewed general-history extension now derives nearest physical owner
+selection from the same complete history. Found retains the original full
+installation/header and captured/front/outside histories; matching spent owners
+block append fallthrough. Missing prefixes carry derived traversal laws. Actual
+resume constructs a positive execution witness and exact full-prefix successor
+history using the same selected live receipt, now spent. Current ResumeRel,
+operand and scope-resolution premises remain. Independent replay passes all 25
+reports and 32 public probes. Fresh integration reproduces the same reviewed
+source/artifact bytes and all 25 reports. The current assembly has 899 modules
+and 11,926 ordered standard-only reports, with 898 unchanged exact preceding
+source/log/artifact/direct-import associations. Outside
+caller origins, retained projection, disposal and whole reachability remain open.
 
 ## Direct control representation
 

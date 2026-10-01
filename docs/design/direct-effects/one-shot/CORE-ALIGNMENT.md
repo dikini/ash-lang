@@ -1716,7 +1716,8 @@ captures and physically removed retained handlers. `capture_history` consumes a
 candidate from that same inventory and constructs the actual selected-clause
 receipt and deterministic live history, including captured running completions.
 Current route/effect, inventory-index and first physical lookup guards remain
-inputs. General owner selection/resume, outside-caller misses, retained
+inputs. At the preceding history17 checkpoint, owner selection/resume remained open.
+Outside-caller misses, retained
 projection, disposal and whole-chain reachability remain open.
 
 [CoreCallableStorageRecipes.lean](CoreCallableStorageRecipes.lean) specializes
@@ -1734,10 +1735,34 @@ is not universal body acceptance. Rich resource Source/Auth, captured-callee
 origins after substitution, owner/control storage and actual-return observer
 transport remain open. Both leaves pass fresh current-source integration with the same reviewed source
 and artifact bytes and 27 standard-only reports. The current audited assembly
-contains 899 registered modules and 11,918 ordered reports. All 897 unchanged
+at checkpoint `bfc72e1` contained 899 registered modules and 11,918 ordered reports. All 897 unchanged
 modules retain exact preceding source/log/artifact and direct-import associations;
 this is not a fresh uncached build of every module. No Rust sources change.
 Whole admission, general reachability, simulation and C4/C5 acceptance remain open.
+
+### Same-history owner selection and actual general resume
+
+The reviewed extension to [CoreCallableGeneralHistory.lean](CoreCallableGeneralHistory.lean)
+adds `owner_search` with found, missing and blocked results. Found retains the
+same installed full GeneralClausePast/header and captured/front/outside histories.
+Missing constructs a physical prefix traversal law from ordinary, completion and
+retained-cursor relations. A matching spent marker blocks search and append
+fallthrough. Dormant captures and retained logical owners are not physical lookup
+candidates. The current first lookup and GeneralOwnerCut are derived from this
+same history, rather than supplied as independent cuts or signature matches.
+
+`resume_history` consumes the computed found result, current ResumeRel, operand
+relation and scope resolution. It constructs an actual Core step, positive target
+execution and deterministic successor history at captured ++ front ++
+spent(the same selected receipt) :: outside. Original installation, full selected
+Clause, suffix/maps and running saved completions remain fixed. No future origin,
+Source/Auth or ownership certificate is an input. The extension passed fresh
+independent replay with 25 reports and 32 public probes against the exact current
+899-module dependency cache. Fresh integration reproduces its exact reviewed
+source/artifact bytes and all 25 reports. The current assembly has 899 modules
+and 11,926 ordered standard-only reports; all 898 unchanged modules retain exact
+preceding source/log/artifact/direct-import associations. Outside
+caller misses, retained projection, disposal and whole reachability remain open.
 
 ### Runtime capacity boundary
 
