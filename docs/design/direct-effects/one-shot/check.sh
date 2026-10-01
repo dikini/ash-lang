@@ -901,3 +901,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCleanupReachableTran
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSiteLineage.olean" CoreCallableSiteLineage.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableFrameInstallations.olean" CoreCallableFrameInstallations.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallablePairedOrigin.olean" CoreCallablePairedOrigin.lean
+
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneralHistory.olean" CoreCallableGeneralHistory.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableStorageRecipes.olean" CoreCallableStorageRecipes.lean

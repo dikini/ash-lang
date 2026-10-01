@@ -63,14 +63,14 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-01 16:22 UTC
+### Current deliverable board — 2026-10-01 17:05 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
 its phase changes only when the corresponding evidence exists. Constructor
 counts measure implemented cases, not equal effort or a percentage of C2.
 
-| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 15:55 UTC |
+| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 16:22 UTC |
 | --- | --- | --- | --- | --- | --- |
 | Same-graph callable annotation gate | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | Rich initial Site and first-step connection | Yes | Passed | Passed | `d2f26e1` | Unchanged |
@@ -85,13 +85,16 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Running cleanup capture/restore/finish: inside-anchored path family | Implemented | Passed | Passed | `3fad8e8` | Unchanged |
 | Literal-site ancestry through actual capture/beta/bind | Implemented | **Passed** | **Passed** | `3fad8e8` | Unchanged |
 | **Bounded C3 two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`3fad8e8`** | **Unchanged** |
-| Same-literal paired initializer/substitution/application consumer | Implemented | Passed | Passed | This checkpoint | **New → reviewed → committed** |
-| Past mapped handler/clause installation and actual capture/resume receipts | Implemented | Passed | Passed | This checkpoint | **New → reviewed → committed** |
-| **Paired C2/C3 two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **This checkpoint** | **New retained batch** |
+| Same-literal paired initializer/substitution/application consumer | Implemented | Passed | Passed | `b04701b` | Unchanged |
+| Past mapped handler/clause installation and actual capture/resume receipts | Implemented | Passed | Passed | `b04701b` | Unchanged |
+| **Paired C2/C3 two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`b04701b`** | Unchanged |
+| Parameterized storage recipes and generic higher-order formal return from a fresh scope | Implemented | Passed | Passed | This checkpoint | **In development → reviewed → verified → committed** |
+| General installation/completion history, heap transport and guarded actual capture | Implemented | Passed | Passed | This checkpoint | **In development → reviewed → verified → committed** |
+| **General-history/recipe two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **This checkpoint** | **New retained batch** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
-The two-leaf batch records branch retention, not whole-fragment acceptance.
+Each two-leaf batch records bounded component progress, not whole-fragment acceptance.
 Its checks cover the named paths; outside-anchored restoration, armed
 projection and disposal history remain open. A phase change means the stated
 check passed. An unchanged row records no new result.
@@ -137,37 +140,50 @@ The storage producer separately establishes storage/domain/result receipts;
 it is not a full typechecker or runtime closure relation.
 
 The preceding cleanup/site checkpoint `3fad8e8` retains two reviewed leaves and
-25 reports in its 895-module assembly. This increment adds the paired-operand
+25 reports in its 895-module assembly. The paired checkpoint `b04701b` adds the paired-operand
 consumer and past mapped-frame installations: both reviewed, fresh compiled and
 retained. Their 24 reports reproduce the reviewed source and artifact bytes;
 15 paired-origin public probes and both existing retaining-value/template
 negatives pass unchanged. All 895 unchanged modules retain exact parent source,
-log, artifact and direct-import associations. The current assembly has 897
+log, artifact and direct-import associations. That preceding assembly has 897
 modules and 11,891 ordered standard-only reports. No Rust sources changed.
+
+This checkpoint retains the reviewed general-history and recipe leaves. Fresh
+integration reproduces their exact source/artifact bytes and 27 standard-only
+reports. The current assembly has 899 registered modules and 11,918 ordered
+reports; all 897 unchanged modules retain their preceding exact source/log/artifact
+and direct-import associations. This is an audited assembly, not a new uncached
+build of every module. No Rust sources changed.
 
 Current parallel checkpoints:
 
-| Existing obligation | Work now | Next observable output | Estimated active work |
-| --- | --- | --- | --- |
-| C2.3 / C4.1 | Specialize structural storage recipes at actual paired calls and fresh openings | Minimal universal-call interface and generic higher-order formal-return theorem | Interface: 30–60 minutes; complete resource admission estimate open |
-| C2.3 / C3.1 / C3.2 | Retain paired current operands and mapped installation history | Two leaves reviewed, verified and committed | Bounded integration complete |
-| C3.1 / C3.2 | Extend past receipts to general running/completion/retained history | General past-receipt adapters/carrier, heap transport and actual cleanup entry/finish | Interface: 30–45 minutes; bounded implementation: 1–2 hours |
+| Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
+| --- | --- | --- | --- | --- |
+| C2.3 / C4.1 | Storage-recipe interface in development | **Integrated:** finite templates preserve entire actual higher-order storage contracts; universal formal-return opening excludes the fresh identity | Pair actual captured callee bindings and arguments | Paired-call interface: 30–60 minutes; rich resource admission estimate open |
+| C3.1 / C3.2 | General history interface in development | **Integrated:** immutable general past receipts, heap transport, actual cleanup entry/finish and completion-capable guarded capture | Derive owner selection and consume it in actual full-prefix resume | Owner/resume review: 30–60 minutes; outside misses/projection/disposal estimate open |
+| C2.3 / C4.1 | No separate captured-callee consumer | **In development:** ordinary actual-call ABI pairs the literal callee's captured storage bindings with the actual argument | Reviewed consumer preserving the same private body and full contracts | 30–60 minutes for the bounded current-call consumer |
+| C3.1 / C3.2 | General owner selection absent | **Worker-verified, independent review pending:** frozen checkpoint has a found/missing/blocked selector and deterministic resume history, with matching spent owners stopping lookup | Independent review of the frozen checkpoint | 30–60 minutes for review; outside misses/projection/disposal still open |
 
-The storage assessment is complete. It found that universal rich callable
-premises carry resource lists but no actual argument/origin storage pairing.
-The retained consumer handles actual paired calls; universal resource-under-lambda
-construction still needs a structurally produced parameterized storage recipe.
-The retained site-lineage producer checks handler-site uniqueness for the same exported
-graph and derives actual capture/beta/bind ancestry. The retained mapped history now records
-past installation sites and full selected clauses. General completions and
-saved-caller outside misses still need a combined history relation.
+The new recipe theorem handles any actual formal storage contract, including
+higher-order captures, input and output trees. It proves a generic fresh resource
+scope may return that existing argument while excluding the fresh identity.
+Finite recipe checking does not yet prove every body recipe succeeds universally;
+rich resource Source/Auth, captured-callee provenance after substitution, control
+storage and actual-return observer transport remain open.
 
-These estimates replace the earlier 1–2-hour gap-assessment estimates with
-concrete implementation and review checkpoints. The paired consumer and mapped history arrived within their bounded estimates.
-With three workers, the next recipe/history results are expected within roughly
-1–2 elapsed hours; they are not an
-estimate for full C2/C3 completion. The fragment and package acceptance inventory
-remain unchanged.
+The new general history retains original handler/clause installations while
+allowing running completions and logical retained cursors. Handler candidates
+come from the same current physical history, not dormant captures. Actual capture
+still requires current route/effect, inventory-index and first physical lookup
+guards. Owner selection/resume is the next bounded consumer; outside-anchored
+caller misses, retained projection, disposal and whole reachability remain open.
+
+The reviewed recipe/history results and their integration arrived within the
+preceding bounded estimates. Estimates now concern the next consumers. With parallel workers, those next checkpoints are
+expected within roughly one elapsed hour. A full C2/C3 estimate remains open:
+the substituted captured-callee origin and combined outside-caller history still
+lack proved interfaces. The fragment and package acceptance inventory remain
+unchanged.
 
 ### Increment 1 local results
 
@@ -1614,8 +1630,8 @@ remain unchanged.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | 14/16 checker forms retained; exact same-initializer/current-operand pairing retained | Recursive static body and captured-environment admission producer; whole initial admission | Handler/resource cases and storage control transport remain; full admission also requires interior metadata, registry origin, actual captured-value and resource storage evidence | Paired actual-call consumer complete; universal storage recipe interface: 30–60 minutes; whole resource/package estimate open |
-| C3 | 0 / 5 | Running-inside restoration, literal sites and mapped past installation/capture/resume history retained | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | Mapped past receipts now exist; general completions and combined caller history must derive outside misses; projection/disposal remain open | General history interface: 30–45 minutes, then heap/cleanup factories: 1–2 hours; whole-package estimate awaits outside miss/combined relation |
+| C2 | 0 / 4 | 14/16 checker forms retained; exact current operands retained; universal formal-return recipe retained | Recursive static body and captured-environment admission producer; whole initial admission | Handler/resource cases and storage control transport remain; full admission also requires interior metadata, registry origin, actual captured-value and resource storage evidence | Captured-callee consumer: 30–60 minutes; substituted-callee/resource body scheme unresolved, so whole-package estimate open |
+| C3 | 0 / 5 | Running-inside restoration, sites and mapped history retained; general completion history/capture retained | Reachable relation across cleanup, disposal and remaining boundaries; complete simulation and preparation bridge | General completion history now exists; owner/resume review, combined caller outside misses, projection and disposal remain | Owner/resume review: 30–60 minutes; whole-package estimate awaits outside miss/combined relation |
 | C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 

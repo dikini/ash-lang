@@ -293,9 +293,30 @@ Actual capture/resume constructs the deterministic live/spent receipts and exact
 full-prefix physical endpoint. General completion/projection histories and old
 caller lookup misses still require transport; no whole-chain invariant follows.
 Both leaves pass independent review and fresh integration with 24 reports and
-identical reviewed artifact bytes. The current assembly has 897 modules and
+identical reviewed artifact bytes. The preceding paired checkpoint `b04701b` assembled 897 modules and
 11,891 ordered standard-only reports; 895 unchanged modules retain their exact
 preceding source and direct-import associations.
+
+The [general-history producer](CoreCallableGeneralHistory.lean) keeps those same
+past installations in completion-capable physical and retained logical histories.
+Heap transport preserves the original predecessor, suffix/maps, full header and
+selected Clause. Handler entry and normal cleanup start/finish build actual
+history. A same-history handler inventory feeds guarded actual capture, retaining
+running completions. Current route/effect, index and first physical lookup guards
+remain inputs; owner selection/resume, outside misses, projection, disposal and
+whole reachability remain open.
+
+The [storage-recipe producer](CoreCallableStorageRecipes.lean) specializes finite
+templates at actual binding/opening environments. Its generic formal-return
+theorem preserves any full actual higher-order storage contract and excludes the
+fresh identity from the returned existing argument. The retaining-opened-value
+rejection is generic. This proves the formal-slot case, not arbitrary universal
+recipe success or rich resource Source/Auth. Captured-callee provenance and
+actual-return observer transport remain open. Both leaves pass fresh integration with 27 standard-only reports and identical
+reviewed artifact bytes. The current assembly contains 899 registered modules and
+11,918 ordered reports; all 897 unchanged modules retain exact preceding source,
+log, artifact and direct-import associations. Whole-fragment acceptance remains
+open.
 
 ## Direct control representation
 

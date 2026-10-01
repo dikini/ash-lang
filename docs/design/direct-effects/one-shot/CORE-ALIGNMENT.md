@@ -1693,10 +1693,50 @@ remain open. No arbitrary GeneralChain is authenticated by this component.
 
 Both leaves pass independent source/interface review and fresh integration.
 Their 24 reports reproduce the same reviewed sources and artifact bytes. The
-current assembled result contains 897 registered modules and 11,891 ordered
+preceding paired checkpoint `b04701b` assembled 897 registered modules and 11,891 ordered
 standard-only reports; all 895 unchanged modules retain exact preceding
 source/log/artifact associations and direct-import hashes. Retaining-value and
 retaining-template negatives pass unchanged in the paired consumer's review.
+Whole admission, general reachability, simulation and C4/C5 acceptance remain open.
+
+### General completion history and parameterized storage recipes
+
+[CoreCallableGeneralHistory.lean](CoreCallableGeneralHistory.lean) extends the
+same original handler/clause installations to general physical history. Mapped
+adapters retain the original maps and predecessors. Heap weakening changes only
+current relations; past installations remain fixed. Running cleanup receipts,
+dormant captures and retained logical cursors have separate constructors.
+Actual handler entry and normal cleanup start/Unit finish construct history and
+positive transition witnesses. Finish requires the original saved suffix to be
+current; it does not prove callback termination or moved outside origins.
+
+A finite physical-handler inventory carries each original installation, current
+full header, prefix/outside histories and exact decomposition. It omits dormant
+captures and physically removed retained handlers. `capture_history` consumes a
+candidate from that same inventory and constructs the actual selected-clause
+receipt and deterministic live history, including captured running completions.
+Current route/effect, inventory-index and first physical lookup guards remain
+inputs. General owner selection/resume, outside-caller misses, retained
+projection, disposal and whole-chain reachability remain open.
+
+[CoreCallableStorageRecipes.lean](CoreCallableStorageRecipes.lean) specializes
+finite storage templates at the same actual binding and resource-opening
+environments as Code. A formal slot retains the entire actual storage contract,
+including higher-order captures, input and output. `pair_argument` constructs the
+argument receipt from both actual checks. `formal_opening_receipt` and
+`formal_resource_storage` prove a generic fresh scope returning that existing
+formal argument preserves its contract and excludes the fresh resource identity.
+A generic retaining-opened-value rejection remains explicit. No empty environment
+or resource-free public port substitutes for actual storage support.
+
+These are reviewed bounded producers. An arbitrary recipe's computed acceptance
+is not universal body acceptance. Rich resource Source/Auth, captured-callee
+origins after substitution, owner/control storage and actual-return observer
+transport remain open. Both leaves pass fresh current-source integration with the same reviewed source
+and artifact bytes and 27 standard-only reports. The current audited assembly
+contains 899 registered modules and 11,918 ordered reports. All 897 unchanged
+modules retain exact preceding source/log/artifact and direct-import associations;
+this is not a fresh uncached build of every module. No Rust sources change.
 Whole admission, general reachability, simulation and C4/C5 acceptance remain open.
 
 ### Runtime capacity boundary

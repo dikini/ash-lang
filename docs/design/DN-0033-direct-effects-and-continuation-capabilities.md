@@ -94,8 +94,16 @@ storage contracts. It constructs substitution/application Source/Auth and
 same-code storage receipts with the original return bound. The [past frame producer](direct-effects/one-shot/CoreCallableFrameInstallations.lean)
 keeps the full selected Clause, handler data and original suffix/maps while
 constructing actual capture/resume receipt movement. These reviewed components
-supply missing pairing data; universal resource-call recipes, general completion
-history, outside-owner misses and runtime origins remain separate obligations.
+supply missing pairing data. The [general-history extension](direct-effects/one-shot/CoreCallableGeneralHistory.lean)
+now retains the same installations through heap extension, running completions,
+normal cleanup start/finish and guarded actual capture. Current capture
+route/effect/index/lookup production, outside-owner misses, projection and disposal
+remain open. The [parameterized storage recipes](direct-effects/one-shot/CoreCallableStorageRecipes.lean)
+retain full actual higher-order contracts and prove a universal formal-return
+fresh-opening case. This is not arbitrary universal body acceptance or rich
+resource Source/Auth. Captured-callee origins and actual-return observer transport
+remain separate obligations. Both bounded leaves passed independent review and current-source integration.
+Whole-fragment admission and simulation remain open.
 
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
