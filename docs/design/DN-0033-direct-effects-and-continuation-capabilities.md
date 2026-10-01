@@ -88,6 +88,15 @@ handler frames; current ancestry and fresh dynamic tickets alone do not supply
 that history. These bounded components do not close general reachability or
 whole-fragment simulation.
 
+The [paired initializer/operand consumer](direct-effects/one-shot/CoreCallablePairedOrigin.lean)
+checks the same actual initializer and operand at their full rich and exact
+storage contracts. It constructs substitution/application Source/Auth and
+same-code storage receipts with the original return bound. The [past frame producer](direct-effects/one-shot/CoreCallableFrameInstallations.lean)
+keeps the full selected Clause, handler data and original suffix/maps while
+constructing actual capture/resume receipt movement. These reviewed components
+supply missing pairing data; universal resource-call recipes, general completion
+history, outside-owner misses and runtime origins remain separate obligations.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

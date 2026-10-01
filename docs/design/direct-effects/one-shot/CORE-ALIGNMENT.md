@@ -1653,10 +1653,51 @@ reachability and whole-fragment simulation remain open.
 Independent leaf/interface reviews pass for both components. Fresh integration
 compilation reproduces their same reviewed sources, artifacts and 25 reports.
 All 893 unchanged modules retain exact parent source/log/artifact associations
-and identical direct-import hashes in one current-source cache. The assembled
-registered result has 895 modules and 11,867 ordered standard-only reports;
+and identical direct-import hashes in one current-source cache. The preceding cleanup/site checkpoint `3fad8e8` assembled 895 modules and
+11,867 ordered standard-only reports;
 this is not another uncached build of every unchanged module. No Rust sources
 change in this increment.
+
+### Paired initializer origins and past frame installations
+
+[CoreCallablePairedOrigin.lean](CoreCallablePairedOrigin.lean) selects actual bind
+initializers and bodies from the same original rich annotation. Both nearest
+binding environments advance and shadow together. Each initializer is checked
+at its original full rich contract and exact storage contract; lexical storage
+support must fit the actual receiver. The root/path/body successful-check
+equations retain the original literal private data and complete rows.
+`substitute_current` checks the actual replacement at both exact inputs, then
+constructs actual substituted Source/Auth, the computed plan and full-row
+transport, and CallableContracts.Derives on that same substituted Code.
+`apply_current` constructs the full public-suffix application and exact storage
+result. Returned bounds stay fixed and are checked within the receiver/world.
+ClosedValue and substitution policy stability remain ordinary current premises.
+This is static same-code pairing; runtime bound/captured values, universal call
+storage recipes, owner/declaration control contracts and resource/cleanup
+storage cases remain open. It does not add rich resource authentication.
+
+[CoreCallableFrameInstallations.lean](CoreCallableFrameInstallations.lean) pairs
+actual mapped frames with past literal handler/clause installations. HandlerPast
+keeps the original predecessor, mapped suffix, full HandlerData, site/environment,
+caller map/scope and actual handler-entry equation. ClausePast keeps that same
+installation, full selected Clause and original inside/outside/captured maps.
+Ordinary frames require actual PushCarrier. Joint handler/owner selection walks
+these same records; it does not infer full private-data equality from a separately
+chosen cut with matching answer/scope. A matching spent owner stops selection.
+Actual capture and resume expose deterministic successor receipts, selected
+Clause/installation equations and the physical full-prefix endpoint. Dynamic
+activations are not constrained to globally unique static handler/owner pairs.
+These receipts cover mapped frames. General completion/retained cursors, heap
+extension, ordinary/callback history evolution and saved-caller outside misses
+remain open. No arbitrary GeneralChain is authenticated by this component.
+
+Both leaves pass independent source/interface review and fresh integration.
+Their 24 reports reproduce the same reviewed sources and artifact bytes. The
+current assembled result contains 897 registered modules and 11,891 ordered
+standard-only reports; all 895 unchanged modules retain exact preceding
+source/log/artifact associations and direct-import hashes. Retaining-value and
+retaining-template negatives pass unchanged in the paired consumer's review.
+Whole admission, general reachability, simulation and C4/C5 acceptance remain open.
 
 ### Runtime capacity boundary
 

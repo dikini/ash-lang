@@ -274,9 +274,28 @@ of every moved handler frame or a general Rust/export soundness theorem.
 
 Both bounded leaves pass independent source/interface review and fresh integration
 compilation, reproducing the same artifact bytes and 25 standard-only reports.
-The current audited assembly has 895 registered modules and 11,867 ordered
-reports; unchanged dependency results retain their exact source associations.
+The preceding cleanup/site checkpoint `3fad8e8` assembled 895 modules and
+11,867 ordered reports; unchanged dependency results retain their exact source associations.
 Whole-fragment admission, reachability, simulation and integration remain open.
+
+The [paired-origin consumer](CoreCallablePairedOrigin.lean) constructs same-literal
+initializer origins in both rich and storage environments. Actual substitution
+preserves full private data/rows and the exact storage result; application checks
+the actual argument at both inputs and constructs the full public suffix.
+Returned bounds are checked within the original receiver/world. Universal
+resource-call pairing, control storage and runtime captured-value origins remain
+open; this component does not add rich resource authentication.
+
+The [past frame-installation producer](CoreCallableFrameInstallations.lean)
+retains original handler/capture suffixes, full selected Clause and private data
+in paired mapped receipts. Joint selection chooses cuts from those same records.
+Actual capture/resume constructs the deterministic live/spent receipts and exact
+full-prefix physical endpoint. General completion/projection histories and old
+caller lookup misses still require transport; no whole-chain invariant follows.
+Both leaves pass independent review and fresh integration with 24 reports and
+identical reviewed artifact bytes. The current assembly has 897 modules and
+11,891 ordered standard-only reports; 895 unchanged modules retain their exact
+preceding source and direct-import associations.
 
 ## Direct control representation
 
