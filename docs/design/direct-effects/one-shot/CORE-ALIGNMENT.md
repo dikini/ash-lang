@@ -910,6 +910,37 @@ reports, including 851 unchanged verified pairs. User-handler capture into the
 retained tail, nested running completions, general admission and creation
 freshness remain open.
 
+[CoreCallbackRequestRoutes](CoreCallbackRequestRoutes.lean) connects a stored
+callback's static request allowance to actual callback execution and projected
+cell dispatch. `StoredCallback` authenticates the same closed action at its full
+private plan and rows, then constructs its initial application source and
+authentication. `CallbackCurrent` retains that exact origin through an actual
+past trace and the same outgoing allowance. Beta, bind, focus, handler entry,
+closed-value steps and selected handler capture construct their actual steps
+and preserve this evidence at their stated local prefixes.
+
+A current request that misses those prefixes belongs to the same action's
+request list. Closing evidence derives the original and surviving route pair;
+current scope realization and a nonexported cell route determine the same
+builtin selector used by `CoreProjectedCellDispatch.read_dispatch`. The public
+consumer constructs actual Core execution and its exact read observation.
+It does not assume a chosen future dispatch or successor. The callback root
+scope producer uses the existing recursive scope realization and outside scope.
+
+Independent parent compilation passes with 20 standard-only reports and checks
+all 465 selected dependency source/artifact pairs under Lean 4.33.1. This is a
+bounded component, not general callback admission or preservation. Core cleanup
+translation still needs to construct `StoredCallback` from validated static
+metadata; runtime cleanup correspondence alone does not constrain its request
+list. Arbitrary callback resource entry, resume, discard and termination remain
+outside these local preservation factories.
+
+The callback increment's grouped audit covers 876 registered modules and 11,643
+exact dependency reports, reusing the unchanged 875-module baseline. All 2,064
+local links and anchors, import order, trust, whitespace and artifact scans pass.
+Concurrent restoration components have separate compilation evidence and are
+not included in this increment's registered-module count.
+
 [CoreNestedCleanupSteps](CoreNestedCleanupSteps.lean) reuses normal cleanup start
 and finish under an enclosing running tail. `RunningTail.append` retains both
 authenticated physical tails and their lexical stacks. Start saves an arbitrary
@@ -956,8 +987,10 @@ The two leaves pass independent pinned compilation and review with 45
 standard-only reports. The grouped audit covers 855 registered modules and
 11,548 exact reports, retaining 853 unchanged verified pairs; 2,054 local links
 and anchors pass. Current
-callback request authentication must still produce the exact request membership
-and closing-route certificates used by projected handler extraction. Admitted
+callback request authentication was still required at this checkpoint.
+`CoreCallbackRequestRoutes`, recorded above, now derives exact membership and
+closing routes from the same authenticated stored callback; its producer from
+validated Core static metadata remains open. Admitted
 ticket validity, ledger uniqueness, generalized completion/unwind after restored
 segments and callback-local discard correspondence remain open. These are
 experimental runtime results; they do not establish general admission, M4

@@ -194,6 +194,13 @@ alignment change was part of that baseline. The active comparison records the
 subsequent repair under CP-0021. An absent proof alone is not a demonstrated
 semantic disagreement.
 
+The active experiment now has a bounded
+[callback request and route connection](CoreCallbackRequestRoutes.lean).
+It derives current request membership and projected cell dispatch from the same
+authenticated stored action and its actual execution prefix. Production of that
+static callback evidence from validated Core metadata and general callback
+preservation remain open; this component does not change the baseline table.
+
 ## Direct control representation
 
 There is one sequencing operation. A binding pushes a frame, a request selects

@@ -24,6 +24,13 @@ with the completed annotated M0–M4 endpoints. The
 coverage and discrepancies; historical experiment boundaries below do not
 supersede that task or reopen completed calculus milestones.
 
+The bounded [callback route experiment](direct-effects/one-shot/CoreCallbackRequestRoutes.lean)
+retains one authenticated stored action through actual local execution and uses
+its exact request allowance to construct projected cell dispatch. Its static
+producer from validated Core metadata remains a task obligation. This result
+supplies admission and correspondence evidence at the stated boundary; it does
+not define a language rule.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

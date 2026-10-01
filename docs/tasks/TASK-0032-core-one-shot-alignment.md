@@ -1339,13 +1339,81 @@ remain separate targets. A small first example does not reduce the final scope.
   for higher-order saved-support transport after restoration; current request
   metadata/origin production remains C2 work. No new finite example or unrelated
   work package was added.
+- The next C4.1 batch runs saved-support reconstruction and the actual resume
+  consumer in parallel. A pinned local counterexample shows that a declaration
+  reading its formal cannot retain an empty stored support bound when its
+  receiver gains a resource. Same-receiver world authentication transport and
+  the exact declaration obstruction compile locally with four standard-only
+  reports. These prerequisites are not an integrated restoration result.
+- Independent interface review accepts deterministic support reconstruction:
+  compute each stored declaration bound from the same body's dependencies and
+  the actual lexical receiver. Preserve complete row structure, contracts,
+  signatures, clause rights, offered modes, owner demands, footprints and private
+  plans; identify only the changed support leaves explicitly. Public callable
+  contract rows remain fixed. The actual consumer must derive its successor
+  source, resource checks and accounting from the predecessor.
+- The companion pending relation lacks the consumed-owner case emitted by actual
+  resume. Its minimal spent constructor and matching existing transport cases
+  are assigned to the resume consumer. That worker owns the shared Execution
+  module; the support worker owns its separate reconstruction leaf. The third
+  worker constructs the independent callback-source/request connection. Runtime
+  cleanup correspondence alone does not authenticate the same action's request
+  list, so the initial callback source must retain that static identity before
+  current request membership and closing routes are derived. All three workers'
+  actual GPT-6.1 Sol medium assignments are verified from session metadata.
+- No package count changes at this interface checkpoint. The restoration batch
+  is estimated at 3–6 active hours for support reconstruction and 2–4 for its
+  consumer, plus 1–2 for integration and review: about 4–8 elapsed hours with the
+  two implementations in parallel. The callback connection is estimated at 2–4
+  active hours in the third slot. Estimates depend on constructive transport of
+  the existing certificate and accounting across the changed support leaves;
+  the next bounded checkpoint checks that interface. These estimates replace
+  the prior unknown restoration interface, not the remaining whole-goal work.
+- The callback request/route connection is implemented and independently
+  reviewed. Fresh parent compilation passes with 20 standard-only reports and
+  all 465 selected dependency source/artifact pairs checked under Lean 4.33.1.
+  The same stored action constructs its initial source and authentication;
+  actual local execution retains its exact request allowance. Current membership
+  and closing routes connect to actual projected cell read dispatch. The leaf is
+  registered and its coverage limits are recorded. Validated Core metadata must
+  still construct the stored static evidence; C2 remains open. Direct reuse of
+  existing typing and dispatch proofs finished this bounded implementation ahead
+  of its 2–4 hour estimate.
+  Its grouped audit covers 876 registered modules and 11,643 exact reports,
+  retaining the unchanged 875-module baseline. All 2,064 local links and anchors,
+  import order, trust, whitespace, artifact scans and five changed-document
+  Markdown checks pass. Concurrent restoration work has separate evidence.
+- C4.1 now has three independent lanes. The source/authentication worker has
+  frozen deterministic support, frame and handler reconstruction, plus exact
+  context decomposition, with 23 local standard-only reports. The third worker
+  then completed raw `Code`/`Pending` and `Run`/`Wait` transport across that
+  structural delta, with six local reports and six public interface checks.
+  Requests reconstruct the same selected private body family; resume and discard
+  split saved and active tails. Scalar demand and the root are unchanged.
+  Independent parent reconstruction remains required for this new component.
+- The resume worker's consumed-owner constructors and existing transports pass
+  fresh pinned compilation with 38 reports. Exact selected-handler and typed
+  prefix suffix rebasing passes with 13 local reports, including nested dormant
+  captures. These results remain prerequisites. Canonical resource checking and
+  the actual restored successor site are the remaining implementation gates.
+  A checking leaf imports the frozen accounting and support leaves to avoid an
+  import cycle. It must derive checks from the same installation and computed
+  bounds; an assumed desired successor is inadmissible. The completed accounting
+  worker now independently reviews the resume lane. Counts remain unchanged.
+- Fresh parent compilation reconstructs the shared consumed-owner changes,
+  frozen support/context leaf, raw admission/accounting and existing execution
+  examples: five modules, 72 standard-only reports under the same pinned compiler
+  and library. Independent review accepts context selection, cuts, splitting and
+  request budgets. Signature equality alone does not establish literal source
+  and plan identity; the canonical checking receipt must retain the original
+  installation provenance. No source contract or M4 index was weakened.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication, callback request/route producer and general admission compiler | Validated request/origin producers, restored-world support and general static derivation | Full estimate awaits connected Core admission bridge |
-| C3 | 0 / 5 | Capture/resume and restored-tail completion/unwind/local-discard batches integrated | Admitted state/ownership correspondence and remaining general transition coverage | Current request routes, resume scope resolution, readiness and ledger evidence | Requested restored-tail batch complete; full simulation estimate remains open |
-| C4 | 2 / 3 | Connected fixed-world consumer gate integrated | Restored-world transport and complete discrepancy closure | Saved support must admit receiving resources acquired in the clause | Requested consumer batch complete; restoration estimate awaits its transport interface |
+| C2 | 0 / 4 | Actual-root Program, admitted discard prefix and bounded callback route connection independently verified | Static callback metadata producer, request/origin authentication and general admission compiler | Validated metadata must construct the same-action static evidence and general admission | Bounded callback batch complete; full estimate awaits connected Core admission bridge |
+| C3 | 0 / 5 | Capture/resume and restored-tail completion/unwind/local-discard batches integrated | Admitted state/ownership correspondence and remaining general transition coverage | Current request routes, resume scope resolution, readiness and ledger evidence | Full simulation estimate remains open |
+| C4 | 2 / 3 | Fixed-world gate integrated; support/context and raw accounting transport locally verified | Canonical checked admission, actual restored successor and complete discrepancy closure | Same-installation checking receipt and exact full-prefix splice | Current batch 6–12 combined active hours, about 4–8 elapsed with parallelism; next connected check will revise it |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

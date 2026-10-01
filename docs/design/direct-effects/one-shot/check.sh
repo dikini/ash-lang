@@ -873,6 +873,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreAdmittedCompletionPrefix.ole
 lean -DwarningAsError=true -o "$proof_build_dir/CoreSuffixSplice.olean" CoreSuffixSplice.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreRunningSplice.olean" CoreRunningSplice.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreProjectedCellDispatch.olean" CoreProjectedCellDispatch.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallbackRequestRoutes.olean" CoreCallbackRequestRoutes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreNestedCleanupSteps.olean" CoreNestedCleanupSteps.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralStack.olean" CoreGeneralStack.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralCaptureResume.olean" CoreGeneralCaptureResume.lean

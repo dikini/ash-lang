@@ -123,7 +123,7 @@ points with all assumptions and exclusions. Remove this plan when the task close
 ## Execution discipline
 
 Implementation workers use verified GPT-6.1 Sol medium and disjoint owned files;
-GPT-6 Astra reviews decisions and integration. Report after each increment and at
+GPT-6.1 Sol reviews decisions and integration. Report after each increment and at
 least every 30 minutes, using the task's stable inventory. Preserve blocked and
 failed approaches where they change the plan. Re-estimate after C1 rather than
 assigning hours to unknown proof obligations.
