@@ -1407,13 +1407,49 @@ remain separate targets. A small first example does not reduce the final scope.
   request budgets. Signature equality alone does not establish literal source
   and plan identity; the canonical checking receipt must retain the original
   installation provenance. No source contract or M4 index was weakened.
+- C2 and C3 proceed independently of the remaining restoration consumer.
+  `CoreCallbackAdmissionProducer` constructs the same closed callback's source,
+  authentication, translation link and initial application typing from a stronger
+  graph derivation. Its private-plan endpoint inverts the actual lambda before
+  recovering the plan and complete rows. Independent compilation reproduces
+  11 reports and the exact artifact/log, checking 495 dependency pairs. Validated
+  shape metadata does not yet construct that derivation, captured environments
+  lack static substitution evidence, and declaration certification remains open.
+  The bounded producer is complete; the general C2 count remains 0/4.
+  Registration found three older dependency sources in its frozen graph. A
+  coherent rebuild of those modules and affected consumers passes for ten
+  modules and 93 reports against the current baseline, with all 495 dependency
+  pairs checked before and after. The producer source is unchanged; the earlier
+  artifact reproduction is scoped to its predecessor graph.
+- `CoreResumeReadiness` derives active handler definitions from the same related
+  physical segment and actual owner cut, then reuses the existing actual Core
+  and positive target resume witness with the full saved prefix. Independent
+  review and compilation reproduce six reports and the exact artifact/log,
+  checking 283 dependency pairs. This covers the experimental graph counterpart
+  of the Rust post-consumption handler lookup. Allocation, storage, control-work,
+  registration and disposal preparation, and the general Rust bridge remain
+  open. The component is complete; the general C3 count remains 0/5.
+- Their registered subset contains 878 modules and 11,660 exact reports, reusing
+  the unchanged 876-module callback baseline. Concurrent restoration work has
+  separate evidence and is excluded from this subset. Both bounded components
+  finished within their revised preparation estimates; a whole-package estimate
+  still depends on the validated Core admission bridge and simulation coverage.
+- C4's checked restoration recursor now compiles all 24 code constructors and
+  pending checks against the concrete raw certificate reconstructed from the
+  predecessor. Its frozen leaf has 18 local standard-only reports; independent
+  review remains required. The actual resume consumer still must splice the
+  saved source onto the current front. A handler's entry allowance can exceed
+  its private residual, so the front producer must retain and append the exact
+  selected installation's entry allowance. Private handler residuals and
+  full owner-contract interfaces remain fixed. The prior elapsed estimate is
+  at risk; this bounded splice and its review determine the revised estimate.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program, admitted discard prefix and bounded callback route connection independently verified | Static callback metadata producer, request/origin authentication and general admission compiler | Validated metadata must construct the same-action static evidence and general admission | Bounded callback batch complete; full estimate awaits connected Core admission bridge |
-| C3 | 0 / 5 | Capture/resume and restored-tail completion/unwind/local-discard batches integrated | Admitted state/ownership correspondence and remaining general transition coverage | Current request routes, resume scope resolution, readiness and ledger evidence | Full simulation estimate remains open |
-| C4 | 2 / 3 | Fixed-world gate integrated; support/context and raw accounting transport locally verified | Canonical checked admission, actual restored successor and complete discrepancy closure | Same-installation checking receipt and exact full-prefix splice | Current batch 6–12 combined active hours, about 4–8 elapsed with parallelism; next connected check will revise it |
+| C2 | 0 / 4 | Actual-root Program and callback source producer independently verified | Validated graph admission, captured-environment static evidence and declaration certification | Existing shape checks must construct the stronger static derivation | Bounded producer complete; full estimate awaits the validated Core admission bridge |
+| C3 | 0 / 5 | Capture/resume, restored-tail transitions and handler readiness independently verified | Admitted state/ownership correspondence, remaining transitions and capacity treatment | Restoration consumer and general Rust-model bridge | Bounded readiness complete; full simulation estimate remains open |
+| C4 | 2 / 3 | Support/context and raw accounting reviewed; canonical checked transport locally verified | Checked transport review, actual restored successor and complete discrepancy closure | Exact selected entry allowance and full-prefix splice | Prior 6–12 active / 4–8 elapsed hour estimate at risk; bounded splice and review will revise it |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

@@ -201,6 +201,15 @@ authenticated stored action and its actual execution prefix. Production of that
 static callback evidence from validated Core metadata and general callback
 preservation remain open; this component does not change the baseline table.
 
+The [closed-callback producer](CoreCallbackAdmissionProducer.lean) now constructs
+source and authentication from the same stronger graph derivation, recovering
+the actual lambda's private plan before constructing its initial application.
+Producing that derivation and declaration certification from validated Core
+metadata remains open. The [resume readiness proof](CoreResumeReadiness.lean)
+derives restored handler definitions from the actual selected saved segment and
+connects them to the existing resume witness. It addresses a structural graph
+lookup obligation; runtime capacity and the general Rust bridge remain open.
+
 ## Direct control representation
 
 There is one sequencing operation. A binding pushes a frame, a request selects

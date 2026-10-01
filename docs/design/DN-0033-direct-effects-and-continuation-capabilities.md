@@ -31,6 +31,16 @@ producer from validated Core metadata remains a task obligation. This result
 supplies admission and correspondence evidence at the stated boundary; it does
 not define a language rule.
 
+The [closed-callback producer](direct-effects/one-shot/CoreCallbackAdmissionProducer.lean)
+now constructs source and authentication from an existing graph derivation for
+the same closed action, retaining the actual lambda's private plan and rows.
+Validated metadata must still construct that derivation and declaration
+certification. The [resume readiness component](direct-effects/one-shot/CoreResumeReadiness.lean)
+derives handler definitions from the selected saved segment and connects them
+to actual modeled resume. It leaves runtime capacity and the general Rust
+relation open. Both results refine the comparison evidence without changing
+current language semantics.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

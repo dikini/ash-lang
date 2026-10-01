@@ -941,6 +941,30 @@ local links and anchors, import order, trust, whitespace and artifact scans pass
 Concurrent restoration components have separate compilation evidence and are
 not included in this increment's registered-module count.
 
+[CoreCallbackAdmissionProducer](CoreCallbackAdmissionProducer.lean) constructs
+the source-owned part of that stored callback from an existing `Checked` graph
+derivation for the same closed action. The stronger private-plan endpoint first
+inverts the actual lambda constructor, then retains its private plan and complete
+rows. Equality of erased signatures alone does not identify a literal plan.
+The producer also derives agreement with the same node's declared request row,
+exact translation and resource instantiation, and initial application source,
+authentication and typing. Declaration certification is not assumed in its
+annotation and is not yet constructed.
+
+Independent compilation reproduces all 11 reports and the exact frozen artifact
+and log, checking 495 selected dependency pairs under Lean 4.33.1. This is a
+C2 component. Shape validation does not yet construct the stronger `Checked`
+derivation; captured runtime environments do not yet supply static substitution
+evidence; declaration-required-action metadata still needs to construct the
+certificate required by `StoredCallback`. General static admission remains open.
+
+Registration detected three older dependency sources in that frozen graph.
+The coherent integration build recompiles those modules and their affected
+consumers against the current registered baseline: ten modules and 93 reports,
+including the unchanged producer source. All 495 dependency pairs are checked
+before and after compilation. The earlier artifact reproduction remains evidence
+for its frozen predecessor graph, rather than the integrated dependency graph.
+
 [CoreNestedCleanupSteps](CoreNestedCleanupSteps.lean) reuses normal cleanup start
 and finish under an enclosing running tail. `RunningTail.append` retains both
 authenticated physical tails and their lexical stacks. Start saves an arbitrary
@@ -995,6 +1019,26 @@ ticket validity, ledger uniqueness, generalized completion/unwind after restored
 segments and callback-local discard correspondence remain open. These are
 experimental runtime results; they do not establish general admission, M4
 validity or Rust execution correspondence.
+
+[CoreResumeReadiness](CoreResumeReadiness.lean) derives handler definition
+readiness from the same active physical segment. Actual owner lookup identifies
+the saved segment inspected during ordinary resume; `resume_ready_from_lookup`
+combines its readiness with the existing actual Core and positive target
+transition witness. The entire saved prefix is restored before caller work,
+the consumed owner and the outside tail. Dormant saved frames are checked when
+they become that selected segment, rather than treated as currently active.
+
+Independent review and fresh compilation reproduce the artifact and six reports,
+checking 283 selected dependency pairs under Lean 4.33.1. The result discharges
+the experimental graph counterpart of Rust's post-consumption handler lookup.
+It does not establish allocation, storage or control-work success, disposal or
+registration preparation, or the general Rust-to-model relation. These remain
+within C3.4 and the full simulation obligations.
+
+The combined static-producer and readiness increment's grouped audit covers
+878 registered modules and 11,660 exact dependency reports, reusing the unchanged
+876-module callback baseline. Concurrent restoration components retain separate
+evidence and are excluded from this registered subset.
 
 [CoreGeneralRestoration.lean](CoreGeneralRestoration.lean) connects normal
 cleanup start and current Unit completion, consumed-clause return and evaluation
