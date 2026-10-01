@@ -1759,10 +1759,43 @@ Clause, suffix/maps and running saved completions remain fixed. No future origin
 Source/Auth or ownership certificate is an input. The extension passed fresh
 independent replay with 25 reports and 32 public probes against the exact current
 899-module dependency cache. Fresh integration reproduces its exact reviewed
-source/artifact bytes and all 25 reports. The current assembly has 899 modules
+source/artifact bytes and all 25 reports. Checkpoint `a336e3b` assembled 899 modules
 and 11,926 ordered standard-only reports; all 898 unchanged modules retain exact
 preceding source/log/artifact/direct-import associations. Outside
 caller misses, retained projection, disposal and whole reachability remain open.
+
+### Literal captured-callee ordinary-call storage
+
+[CoreCallablePairedCall.lean](CoreCallablePairedCall.lean) is indexed by the same
+original literal rich lambda/body annotation and paired initializer Admission.
+`lambda_origin` extracts the original storage lambda body annotation and full
+function contract, then checks exact agreement with the finite body Recipe
+specialized at the callee's captured bindings and original instantiation map.
+The actual argument separately retains its caller bindings/map and produced
+rich/storage receipt. No desired Source or storage derivation is annotation data.
+
+`call_body_check` checks nearest dependency-relevant captured slots against the
+actual receiver, extends the callee storage environment with the exact actual
+argument contract, and specializes the same original body recipe. Existing
+closed-value environment transport and substitution derive storage for the same
+body.subst formal actualValue. `paired_call` enforces full agreement with the
+original stored function domain/result and derives receiver-to-world bounds.
+Generic formal-return and captured-variable specialization equations are proved.
+
+This is static literal ordinary-call storage, not runtime closure origins,
+closed-callee finite recipe provenance or universal body success. A concrete
+original storage function contract cannot stand for every varying higher-order
+argument storage tree. The universal scheme must structurally generate that
+family from actual slots while retaining the original rich private families.
+Callee map graph origin, captured substitution lineage, rich resource Source/Auth,
+control storage and actual-return observer transport remain open.
+
+Independent same-cwd replay passes seven reports, sixteen public probes and both
+existing retaining negatives. Fresh integration reproduces exact reviewed
+source/artifact bytes and reports. The current assembly contains 900 registered
+modules and 11,933 ordered standard-only reports; all 899 unchanged modules retain
+exact preceding source/log/artifact/direct-import associations. No Rust sources
+change. Whole-fragment admission and simulation remain open.
 
 ### Runtime capacity boundary
 

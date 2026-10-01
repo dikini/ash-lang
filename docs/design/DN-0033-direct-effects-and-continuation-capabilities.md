@@ -111,6 +111,14 @@ remain; outside-caller barrier history, projection, disposal and whole
 reachability stay open. The extension passes independent review and fresh
 current-source integration.
 
+The [literal ordinary-call consumer](direct-effects/one-shot/CoreCallablePairedCall.lean)
+now computes original callee body/recipe agreement with separate callee and
+caller bindings/maps, actual nearest captured-slot bounds, exact original storage
+domain/result and same substituted-body storage. It passes independent review
+and fresh integration. Runtime closure origin, deterministic captured recipe
+substitution and universal varying-storage families remain open; a current
+concrete call does not close rich resource admission.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

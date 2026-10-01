@@ -326,10 +326,27 @@ resume constructs a positive execution witness and exact full-prefix successor
 history using the same selected live receipt, now spent. Current ResumeRel,
 operand and scope-resolution premises remain. Independent replay passes all 25
 reports and 32 public probes. Fresh integration reproduces the same reviewed
-source/artifact bytes and all 25 reports. The current assembly has 899 modules
+source/artifact bytes and all 25 reports. Checkpoint `a336e3b` assembled 899 modules
 and 11,926 ordered standard-only reports, with 898 unchanged exact preceding
 source/log/artifact/direct-import associations. Outside
 caller origins, retained projection, disposal and whole reachability remain open.
+
+The [literal paired-call consumer](CoreCallablePairedCall.lean) computes exact
+original storage-lambda body/recipe agreement at the callee bindings/map. Actual
+arguments retain their caller bindings/map. Nearest dependency-relevant captures
+fit the receiver; existing closed-value transport/substitution derive the same
+substituted-body storage. Full original function domain/result agreement and
+receiver-to-world bounds are checked. Formal/captured-variable specializations
+are generic. This static current call does not establish runtime closed/captured
+origins, finite substituted-callee provenance or a universal varied-storage
+contract family. Rich resource Source/Auth and returned-value transport remain
+open.
+
+Independent replay passes seven reports, sixteen interfaces and both existing
+retaining negatives. Fresh integration matches exact reviewed source/artifact
+bytes. The current assembly contains 900 modules and 11,933 ordered standard-only
+reports; all 899 unchanged modules retain exact preceding source/log/artifact and
+direct-import associations. Whole-fragment admission/simulation remains open.
 
 ## Direct control representation
 
