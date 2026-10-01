@@ -41,6 +41,18 @@ to actual modeled resume. It leaves runtime capacity and the general Rust
 relation open. Both results refine the comparison evidence without changing
 current language semantics.
 
+The [callback recipe factory](direct-effects/one-shot/CoreCallbackRecipeProducer.lean)
+now constructs certification and the same stored callback from an actual checked
+body, literal plan, complete rows and structural recipe. Producing those
+annotations from validated Core remains open. The
+[restored resume consumer](direct-effects/one-shot/CoreCallableRestoredResume.lean)
+reconstructs support, checking and accounting at the actual receiving context,
+and the [Core connection](direct-effects/one-shot/CoreCallableResumeCorrespondence.lean)
+derives the rich successor at the modeled resume endpoint. Current name and
+scope coherence remain explicit premises. These results test the higher-order
+restoration obligation without weakening private contracts or changing M4;
+general admission, simulation and Rust capacity treatment remain task work.
+
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;
 the current lambda guard instead bounds retention by port resources. Also,

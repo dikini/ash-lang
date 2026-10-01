@@ -210,6 +210,20 @@ derives restored handler definitions from the actual selected saved segment and
 connects them to the existing resume witness. It addresses a structural graph
 lookup obligation; runtime capacity and the general Rust bridge remain open.
 
+The [recipe factory](CoreCallbackRecipeProducer.lean) constructs certification
+and a stored callback at the same checked body's literal plan and complete rows.
+Validated Core still must produce its retained body and recipe annotations.
+The [checked restoration consumer](CoreCallableRestoredResume.lean) now
+reconstructs support, checking and accounting for actual higher-order resume,
+retaining the full owner contract and private source family. The
+[Core resume connection](CoreCallableResumeCorrespondence.lean) places that
+rich successor at the actual modeled endpoint, deriving root consumption,
+spent phase, observation and ownership accounting. Current dynamic-name
+uniqueness and scope-resolution consistency remain premises to be produced by
+general configuration correspondence. These components preserve the stated
+experiment boundary; they do not establish full Core simulation or runtime
+capacity success.
+
 ## Direct control representation
 
 There is one sequencing operation. A binding pushes a frame, a request selects

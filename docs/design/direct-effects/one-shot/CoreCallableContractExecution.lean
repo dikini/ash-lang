@@ -173,6 +173,14 @@ inductive Pending (globals : Globals) (outward : List Instance) (world : List Na
       (tail : Pending globals outward world outsideAllowed ambient stack answer output (context : Context (hints : ReturnHints scope))) :
       Pending globals outward world (data.effectInst :: residual) ambient (.push (.handler data) stack) answer output
         (.handler (effect := data.effectInst) (table := table) data.activation rows context)
+  | handlerView
+      (frame : HandlerSource globals outward world residual data answer table plans rows (actualReceiver world scope ambient))
+      (admitted : residual ⊆ outsideAllowed)
+      (entered : (data.effectInst :: residual) ⊆ beforeAllowed)
+      (bounded : beforeAllowed ⊆ (data.effectInst :: outsideAllowed))
+      (tail : Pending globals outward world outsideAllowed ambient stack answer output (context : Context (hints : ReturnHints scope))) :
+      Pending globals outward world beforeAllowed ambient (.push (.handler data) stack) answer output
+        (.handler (effect := data.effectInst) (table := table) data.activation rows context)
   | live
       (known : globals.owners owner = some contract)
       (inputSame : contract.input = input) (answerSame : contract.answer = answer)
@@ -203,6 +211,12 @@ inductive Pending (globals : Globals) (outward : List Instance) (world : List Na
       (terminal : TerminalHandler handler.effectInst handler.activation rows captured) :
       Pending globals outward world residual ambient (.live owner operationResult handler.answer cap handler.scope tail)
         answer output (.live (owner := owner) (resumeDemand := savedDemand) captured outside)
+  | spent
+      (known : globals.owners owner = some contract)
+      (answerSame : contract.answer = input)
+      (annotation : ScopedPorts.eraseType answer = input.port)
+      (tail : Pending globals outward world tailAllowed ambient stack input output context) :
+      Pending globals outward world allowed ambient (.spent owner answer caller stack) input output (.spent (owner := owner) context)
   | cell (issued : identity ∈ world)
       (annotation : ScopedPorts.eraseType answer = input.port)
       (tail : Pending globals outward world allowed ambient stack input output context) :
@@ -226,6 +240,16 @@ inductive SelectedPending (globals : Globals) (outward : List Instance) (world :
         (whole := .push (.handler handler) stack) (input := answer) (output := output)
         (wholeContext := .handler (effect := handler.effectInst) (table := table) handler.activation rows outside)
         (tailAllowed := tailAllowed) (tail := stack) (outside := outside) frame
+  | hereView
+      (frame : HandlerSource globals outward world residual handler answer table plans rows (actualReceiver world tailScope ambient))
+      (admitted : residual ⊆ tailAllowed)
+      (entered : (handler.effectInst :: residual) ⊆ beforeAllowed)
+      (bounded : beforeAllowed ⊆ (handler.effectInst :: tailAllowed))
+      (tail : Pending globals outward world tailAllowed ambient stack answer output (outside : Context (tailHints : ReturnHints tailScope))) :
+      SelectedPending globals outward world (beforeAllowed := beforeAllowed)
+        (whole := .push (.handler handler) stack) (input := answer) (output := output)
+        (wholeContext := .handler (effect := handler.effectInst) (table := table) handler.activation rows outside)
+        (tailAllowed := tailAllowed) (tail := stack) (outside := outside) frame
   | plainPath
       (saved : FrameSource globals outward world allowed data input middle parameter body demand requirements plan waiting inputBound bodyBound (actualReceiver world scope ambient))
       (received : bodyBound ⊆ scope.visibleResources ++ ambient)
@@ -243,6 +267,17 @@ inductive SelectedPending (globals : Globals) (outward : List Instance) (world :
       SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed) (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope))) (beforeAllowed := data.effectInst :: outerResidual) (whole := .push (.handler data) stack)
         (input := middle) (output := output)
         (wholeContext := .handler (effect := data.effectInst) (table := outerTable) data.activation outerRows context) frame
+  | handlerMissView
+      (saved : HandlerSource globals outward world outerResidual data middle outerTable outerPlans outerRows (actualReceiver world scope ambient))
+      (admitted : outerResidual ⊆ allowed)
+      (entered : (data.effectInst :: outerResidual) ⊆ beforeAllowed)
+      (bounded : beforeAllowed ⊆ (data.effectInst :: allowed))
+      (miss : data.effectInst ≠ handler.effectInst)
+      (selected : SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed) (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope))) (beforeAllowed := allowed) (whole := stack) (input := middle)
+        (output := output) (wholeContext := (context : Context (hints : ReturnHints scope))) (handler := handler) frame) :
+      SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed) (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope))) (beforeAllowed := beforeAllowed) (whole := .push (.handler data) stack)
+        (input := middle) (output := output)
+        (wholeContext := .handler (effect := data.effectInst) (table := outerTable) data.activation outerRows context) frame
   | cellPath
       (issued : identity ∈ world) (annotation : ScopedPorts.eraseType answerType = input.port)
       (selected : SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed) (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope))) (beforeAllowed := allowed) (whole := stack) (input := input)
@@ -250,6 +285,18 @@ inductive SelectedPending (globals : Globals) (outward : List Instance) (world :
       SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed) (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope))) (beforeAllowed := allowed)
         (whole := .push (.cell identity payload caller answerType) stack) (input := input) (output := output)
         (wholeContext := .cell (identity := identity) context) frame
+  | spentPath
+      (known : globals.owners owner = some contract)
+      (answerSame : contract.answer = input)
+      (annotation : ScopedPorts.eraseType answer = input.port)
+      (selected : SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed)
+        (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope)))
+        (beforeAllowed := tailAllowed) (whole := stack) (input := input) (output := output)
+        (wholeContext := context) frame) :
+      SelectedPending globals outward world (ambient := ambient) (tailAllowed := selectedAllowed)
+        (tail := selectedTail) (outside := (selectedOutside : Context (selectedHints : ReturnHints selectedScope)))
+        (beforeAllowed := allowed) (whole := .spent owner answer caller stack) (input := input) (output := output)
+        (wholeContext := .spent (owner := owner) context) frame
   | liveTail
       (known : globals.owners owner = some contract)
       (inputSame : contract.input = input) (answerSame : contract.answer = answer)
@@ -296,11 +343,14 @@ theorem SelectedPending.connection
       Pending globals outward world tailAllowed ambient tail answer output outside := by
   induction selected using SelectedPending.rec
     (motive_1 := fun _ _ _ _ _ _ _ _ _ => True) with
-  | nil | plain | handler | live | capture | cell => trivial
+  | nil | plain | handler | handlerView | live | capture | spent | cell => trivial
   | here frame admitted tail ih => exact ⟨.handler frame admitted tail, tail⟩
+  | hereView frame admitted entered bounded tail ih => exact ⟨.handlerView frame admitted entered bounded tail, tail⟩
   | plainPath saved received accepts selected ih => exact ⟨.plain saved received accepts ih.1, ih.2⟩
   | handlerMiss saved admitted miss selected ih => exact ⟨.handler saved admitted ih.1, ih.2⟩
+  | handlerMissView saved admitted entered bounded miss selected ih => exact ⟨.handlerView saved admitted entered bounded ih.1, ih.2⟩
   | cellPath issued annotation selected ih => exact ⟨.cell issued annotation ih.1, ih.2⟩
+  | spentPath known answerSame annotation selected ih => exact ⟨.spent known answerSame annotation ih.1, ih.2⟩
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih =>
       exact ⟨.live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved ih.1, ih.2⟩
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation installedFrame installation physical contextual terminal selected ihInstallation ih =>
@@ -344,16 +394,21 @@ theorem Pending.owners_known_mono
   | nil => exact .nil
   | plain frame received accepts tail ih => exact .plain (frame.owners_known_mono agree) received accepts ih
   | handler frame admitted tail ih => exact .handler (frame.owners_congr destination) admitted ih
+  | handlerView frame admitted entered bounded tail ih => exact .handlerView (frame.owners_congr destination) admitted entered bounded ih
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved tail ihSaved ihTail =>
     exact .live (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation ihSaved ihTail
   | capture known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal ihInstalled =>
       exact .capture (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation
         (frame.owners_congr destination) ihInstalled physical contextual terminal
   | cell issued annotation tail ih => exact .cell issued annotation ih
+  | spent known answerSame annotation tail ih => exact .spent (agree _ _ known) answerSame annotation ih
   | here frame admitted tail ih => exact .here (frame.owners_congr destination) admitted ih
+  | hereView frame admitted entered bounded tail ih => exact .hereView (frame.owners_congr destination) admitted entered bounded ih
   | plainPath saved received accepts selected ih => exact .plainPath (saved.owners_known_mono agree) received accepts ih
   | handlerMiss saved admitted miss selected ih => exact .handlerMiss (saved.owners_congr destination) admitted miss ih
+  | handlerMissView saved admitted entered bounded miss selected ih => exact .handlerMissView (saved.owners_congr destination) admitted entered bounded miss ih
   | cellPath issued annotation selected ih => exact .cellPath issued annotation ih
+  | spentPath known answerSame annotation selected ih => exact .spentPath (agree _ _ known) answerSame annotation ih
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih =>
       exact .liveTail (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation ihSaved ih
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal selected ihInstalled ih =>
@@ -374,16 +429,21 @@ theorem SelectedPending.owners_known_mono
   | nil => exact .nil
   | plain frame received accepts tail ih => exact .plain (frame.owners_known_mono agree) received accepts ih
   | handler frame admitted tail ih => exact .handler (frame.owners_congr destination) admitted ih
+  | handlerView frame admitted entered bounded tail ih => exact .handlerView (frame.owners_congr destination) admitted entered bounded ih
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved tail ihSaved ihTail =>
     exact .live (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation ihSaved ihTail
   | capture known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal ihInstalled =>
       exact .capture (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation
         (frame.owners_congr destination) ihInstalled physical contextual terminal
   | cell issued annotation tail ih => exact .cell issued annotation ih
+  | spent known answerSame annotation tail ih => exact .spent (agree _ _ known) answerSame annotation ih
   | here frame admitted tail ih => exact .here (frame.owners_congr destination) admitted ih
+  | hereView frame admitted entered bounded tail ih => exact .hereView (frame.owners_congr destination) admitted entered bounded ih
   | plainPath saved received accepts selected ih => exact .plainPath (saved.owners_known_mono agree) received accepts ih
   | handlerMiss saved admitted miss selected ih => exact .handlerMiss (saved.owners_congr destination) admitted miss ih
+  | handlerMissView saved admitted entered bounded miss selected ih => exact .handlerMissView (saved.owners_congr destination) admitted entered bounded miss ih
   | cellPath issued annotation selected ih => exact .cellPath issued annotation ih
+  | spentPath known answerSame annotation selected ih => exact .spentPath (agree _ _ known) answerSame annotation ih
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih =>
       exact .liveTail (agree _ _ known) inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation ihSaved ih
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal selected ihInstalled ih =>
@@ -416,6 +476,8 @@ theorem Pending.cell_update (pending : Pending globals outward world allowed amb
     | push miss next => exact .plain frame received accepts (ih next)
   | handler frame admitted tail ih => cases updated with
     | push miss next => exact .handler frame admitted (ih next)
+  | handlerView frame admitted entered bounded tail ih => cases updated with
+    | push miss next => exact .handlerView frame admitted entered bounded (ih next)
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved tail _ihSaved ihTail =>
     cases updated with
     | live next => exact .live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved (ihTail next)
@@ -425,6 +487,8 @@ theorem Pending.cell_update (pending : Pending globals outward world allowed amb
       have nextOutside := ih.1 _ next
       exact .capture known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame
         (ih.2 _ nextOutside _ physical) (physical_rebase physical _) contextual terminal
+  | spent known answerSame annotation tail ih => cases updated with
+    | spent next => exact .spent known answerSame annotation (ih next)
   | cell issued annotation tail ih => cases updated with
     | hit => exact .cell issued annotation tail
     | push miss next => exact .cell issued annotation (ih next)
@@ -433,6 +497,13 @@ theorem Pending.cell_update (pending : Pending globals outward world allowed amb
       intro after nextTail cap cut
       cases cut with
       | hit => exact .here frame admitted nextTail
+      | push frame rest cap tail handler miss next =>
+          exact False.elim (miss rfl)
+  | hereView frame admitted entered bounded tail ih =>
+      refine ⟨fun _ update => ih update, ?_⟩
+      intro after nextTail cap cut
+      cases cut with
+      | hit => exact .hereView frame admitted entered bounded nextTail
       | push frame rest cap tail handler miss next =>
           exact False.elim (miss rfl)
   | plainPath saved received accepts selected ih =>
@@ -448,12 +519,25 @@ theorem Pending.cell_update (pending : Pending globals outward world allowed amb
       | hit handler tail same => exact False.elim (miss same)
       | push frame rest cap tail handler physicalMiss next =>
           exact .handlerMiss saved admitted miss (ih.2 after nextTail cap next)
+  | handlerMissView saved admitted entered bounded miss selected ih =>
+      refine ⟨ih.1, ?_⟩
+      intro after nextTail cap cut
+      cases cut with
+      | hit handler tail same => exact False.elim (miss same)
+      | push frame rest cap tail handler physicalMiss next =>
+          exact .handlerMissView saved admitted entered bounded miss (ih.2 after nextTail cap next)
   | cellPath issued annotation selected ih =>
       refine ⟨ih.1, ?_⟩
       intro after nextTail cap cut
       cases cut with
       | push frame rest cap tail handler miss next =>
           exact .cellPath issued annotation (ih.2 after nextTail cap next)
+  | spentPath known answerSame annotation selected ih =>
+      refine ⟨ih.1, ?_⟩
+      intro after nextTail cap cut
+      cases cut with
+      | spent ticket a scope rest cap tail handler next =>
+          exact .spentPath known answerSame annotation (ih.2 after nextTail cap next)
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih =>
       refine ⟨ih.1, ?_⟩
       intro after nextTail cap cut
@@ -491,12 +575,23 @@ theorem Pending.cell_update_builtin
         · rename_i same
           exact False.elim (miss (by simpa only [ExecFrame.erase, HandlerData.erase, Frame.target] using congrArg some same.symm))
         · simp only [ih next, Option.map_some, Selection.prepend]
+  | handlerView frame admitted entered bounded tail ih =>
+      cases updated with
+      | push miss next =>
+        simp only [select]
+        split
+        · rename_i same
+          exact False.elim (miss (by simpa only [ExecFrame.erase, HandlerData.erase, Frame.target] using congrArg some same.symm))
+        · simp only [ih next, Option.map_some, Selection.prepend]
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved tail _ihSaved ihTail =>
     cases updated with
     | live next => simp only [select, ihTail next, Option.map_some, Selection.prepend]
   | capture known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal ih =>
     cases updated with
     | live next => simp only [select, ih next, Option.map_some, Selection.prepend]
+  | spent known answerSame annotation tail ih =>
+      cases updated with
+      | spent next => simp only [select, ih next, Option.map_some, Selection.prepend]
   | cell issued annotation tail ih =>
       cases updated with
       | hit => simp [select]
@@ -508,9 +603,12 @@ theorem Pending.cell_update_builtin
           · simp only [ih next, Option.map_some, Selection.prepend]
 
   | here frame admitted tail ih => apply ih; assumption
+  | hereView frame admitted entered bounded tail ih => apply ih; assumption
   | plainPath saved received accepts selected ih => apply ih; assumption
   | handlerMiss saved admitted miss selected ih => apply ih; assumption
+  | handlerMissView saved admitted entered bounded miss selected ih => apply ih; assumption
   | cellPath issued annotation selected ih => apply ih; assumption
+  | spentPath known answerSame annotation selected ih => apply ih; assumption
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih => apply ih; assumption
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal selected ihInstalled ih => apply ih; assumption
 

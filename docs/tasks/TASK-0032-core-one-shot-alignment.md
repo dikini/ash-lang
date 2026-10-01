@@ -1434,8 +1434,8 @@ remain separate targets. A small first example does not reduce the final scope.
   separate evidence and is excluded from this subset. Both bounded components
   finished within their revised preparation estimates; a whole-package estimate
   still depends on the validated Core admission bridge and simulation coverage.
-- C4's checked restoration recursor now compiles all 24 code constructors and
-  pending checks against the concrete raw certificate reconstructed from the
+- C4's checked restoration recursor now compiles all 23 code and pending
+  constructor cases against the concrete raw certificate reconstructed from the
   predecessor. Its frozen leaf has 18 local standard-only reports; independent
   review remains required. The actual resume consumer still must splice the
   saved source onto the current front. A handler's entry allowance can exceed
@@ -1443,13 +1443,56 @@ remain separate targets. A small first example does not reduce the final scope.
   selected installation's entry allowance. Private handler residuals and
   full owner-contract interfaces remain fixed. The prior elapsed estimate is
   at risk; this bounded splice and its review determine the revised estimate.
+- The checked restoration and actual resume consumer now pass independent
+  review. `Site.resume` in `CoreCallableRestoredResume.lean` derives canonical saved
+  support/checking, the complete saved/front/spent/outside splice, actual operand
+  reauthentication, root consumption and the spent phase from the current site.
+  The exact selected entry allowance widens only the outer front allowance;
+  private handler residuals, literal plans, all non-support row data and full
+  contracts remain unchanged; support bounds are deterministically reannotated.
+  `Site.resume_plug` connects the physical restored plain head
+  to the existing bind consumer. Fresh independent compilation checks 33 reports
+  and 463 exact dependency pairs. The checkpoint's inherited Checking-stage
+  metadata is recorded separately from its actual resume report count and scope.
+- `CoreCallbackRecipeProducer` passes independent review and 12 fresh reports.
+  Its suffix recipe certifies the existing consuming clause's full family for
+  every owner, including occupied components. `callback_lambda` constructs the
+  same checked lambda and stored callback from an actual body derivation at its
+  literal plan and rows plus structural recipes; translation, instantiation,
+  initial typing and start follow. Validated Core must still produce or validate
+  these annotations and captured-environment evidence. The factory exposed an
+  accidental auto-implicit policy parameter in `StoredCallback.certified`;
+  qualifying the intended cleanup policy removes it while retaining all private
+  and all-owner obligations. Independent routes compilation checks 20 reports.
+- `CoreCallableResumeCorrespondence.Site.resume_correspondence` passes independent
+  review and four fresh reports with 503 exact dependency pairs. The current
+  actual lookup, related segment/value and explicit dynamic-name and scope
+  coherence select the same complete cut as the checked resume consumer. Its
+  rich successor therefore inhabits the actual Core endpoint with the same full
+  contract, root consumption, phase, resumed observation and ownership
+  accounting. No desired future invariant or endpoint is assumed. General
+  reachable configurations must still construct the current coherence premises.
+- The bounded C2 and C3 lanes proceed in parallel. Their next assessments target
+  the validated metadata annotation producer and current configuration coherence,
+  respectively. The earlier whole-goal estimate is no longer reliable; these
+  concrete gaps determine the next implementation batches. Counts retain the
+  original full-package inventory rather than counting components as packages.
+- The registered grouped audit passes for 885 modules, 11,760 exact reports
+  and 2,083 local links/anchors. The complete changed-source reverse dependency
+  closure contains 12 freshly compiled modules with 174 reports; 873 unchanged
+  modules retain exact baseline source and report provenance. The three final
+  consumers pass 49 fresh parent reports against a coherent 534-pair dependency
+  set. Source and selected artifact hashes, compiler/libraries, report names,
+  standard axioms, import order, trust, whitespace and artifact exclusion pass.
+  Unregistered prototypes and unrelated user files remain outside the subset.
+  This completes the bounded restoration integration; full C2–C5 remain open.
 
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and callback source producer independently verified | Validated graph admission, captured-environment static evidence and declaration certification | Existing shape checks must construct the stronger static derivation | Bounded producer complete; full estimate awaits the validated Core admission bridge |
-| C3 | 0 / 5 | Capture/resume, restored-tail transitions and handler readiness independently verified | Admitted state/ownership correspondence, remaining transitions and capacity treatment | Restoration consumer and general Rust-model bridge | Bounded readiness complete; full simulation estimate remains open |
-| C4 | 2 / 3 | Support/context and raw accounting reviewed; canonical checked transport locally verified | Checked transport review, actual restored successor and complete discrepancy closure | Exact selected entry allowance and full-prefix splice | Prior 6–12 active / 4–8 elapsed hour estimate at risk; bounded splice and review will revise it |
+| C2 | 0 / 4 | Callback source and exact-body recipe factory independently verified | Validated graph admission, captured-environment static evidence and annotation production | Existing shape checks must construct the stronger static derivation and recipes | Next bounded gap assessment: 30–60 minutes; whole-package estimate open |
+| C3 | 0 / 5 | Actual Core resume connected to its rich checked successor and independently reviewed | General state/ownership relation, current coherence, remaining transitions and capacity treatment | Reachable-state producers and general Rust-model bridge | Next bounded coherence assessment: 30–60 minutes; full simulation estimate open |
+| C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

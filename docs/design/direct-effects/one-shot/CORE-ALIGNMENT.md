@@ -1424,7 +1424,7 @@ signature and row equalities. A desired successor or chosen private source is
 not a premise. Readiness, current owner/action freshness, finite request-flow
 evidence and policy stability remain explicit current assumptions.
 
-This is a fixed-world formal companion gate. C2 still must authenticate the
+That checkpoint is a fixed-world formal companion gate. C2 still must authenticate the
 request index and produce operand/prefix realization from validated Core.
 Higher-order resume after the clause acquires resources still requires saved
 support transport under the restored world. General M4 admission, Rust execution
@@ -1444,6 +1444,66 @@ is rejected with `type.resource-escape`, and an
 [ordinary helper](fixtures/core-cleanup-helper-closure-branch.ash) executes both
 branch choices. All ten cleanup/alignment integration tests pass, as do targeted
 clippy and formatting checks. These tests do not repair calculus admission.
+
+### Checked higher-order restoration and actual Core resume
+
+The restoration consumer now derives the successor from the same current
+installation and full owner contract. [CoreCallableRestoredSupport.lean](CoreCallableRestoredSupport.lean)
+reconstructs support bounds under the actual receiving world and context while
+retaining literal private plans, complete row structure and non-support data,
+and owner-indexed families. Support leaves are deterministically reannotated.
+[CoreCallableRestoredAccounting.lean](CoreCallableRestoredAccounting.lean)
+reconstructs the raw certificate with the same demand and root.
+[CoreCallableRestoredChecking.lean](CoreCallableRestoredChecking.lean) checks
+that certificate in all 23 code and pending constructor cases. Its complete
+exports derive their receipts from original source/authentication evidence;
+the standalone recursive handler helper has an explicit inner checking premise.
+
+[CoreCallableRestoredResume.lean](CoreCallableRestoredResume.lean) connects these
+constructions to `Site.resume`. It derives the exact entry allowance from the
+selected installation, transports the current front using
+[CoreCallableAllowedTransport.lean](CoreCallableAllowedTransport.lean), and
+retains the private handler residual. The resulting stack contains the complete
+saved prefix, current front, spent owner and outside tail in that order. The
+operand is reauthenticated against the actual receiving support, the root
+consumes that owner, and its phase becomes spent. No desired successor source,
+checking certificate, accounting root or `Site` is supplied. `Site.resume_plug`
+then uses the actual restored plain head and the existing bind consumer.
+
+[CoreCallableResumeCorrespondence.lean](CoreCallableResumeCorrespondence.lean)
+connects this successor to the actual Core owner lookup and positive resume
+witness. Current dynamic-name uniqueness and scope-resolution agreement align
+the entire cut, including dormant saved frames and caller metadata. The theorem
+returns the rich successor at the exact Core endpoint, the full owner contract,
+root consumption, spent phase, resumed observation and ownership permutation.
+Deriving those current name and scope premises from general reachable Core
+configurations remains a C3 obligation. This is one connected transition family,
+not a complete configuration simulation or a Rust capacity theorem.
+
+The independent callback lane also closes a bounded C2 certification gap.
+[CoreCallbackRecipeProducer.lean](CoreCallbackRecipeProducer.lean) certifies
+retained structural recipes and the existing consuming clause's effectful
+suffix for every owner, including occupied owner components. `callback_lambda`
+constructs the same graph lambda and stored callback from a checked body at its
+literal plan and complete rows, ordinary metadata and a structural recipe.
+Exact translation, resource instantiation, initial typing and callback start
+follow from that construction. Exported validated Core must still produce or
+validate the body and recipe annotations; captured-environment static admission
+also remains open. `CleanupRel` alone does not constrain `ActionData.requests`.
+
+This factory exposed an unintended auto-implicit declaration-policy parameter
+in `StoredCallback.certified`. Qualifying the existing cleanup policy removes
+that accidental universal parameter and retains the intended private and
+all-owner checks. This changes an experimental proof interface, not Ash or M4
+semantics. Independent reviews pass for restoration, the callback factory and
+the Core connection. The registered grouped audit covers 885 modules and 11,760
+exact dependency reports. All 12 modules in the changed sources' reverse
+dependency closure were freshly compiled with 174 reports; 873 unchanged
+modules retain exact baseline source and report provenance. The final three
+consumers pass 49 fresh parent reports against 534 exact selected dependency
+pairs. The audit checks 2,083 local links and anchors, import order, standard
+axioms, trust boundaries, whitespace and artifact exclusion. No Rust source
+changed in this increment.
 
 ### Runtime capacity boundary
 

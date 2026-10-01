@@ -30,7 +30,9 @@ structure StoredCallback (operations : Operations) (policy : Syntax.TicketPolicy
   callback : SourcePlannedSources.ValueSummary operations policy contracts world (fun _ => none) [] action.action
     (.function .unit .unit action.requests latent (signature plan))
   authenticated : Auth operations policy ports owners emptyRows callback (.function .unit .unit rows) .pure
-  certified : Certified (evidence := declarationPolicy) outward world plan
+  certified : Certified
+    (evidence := SourceScheduledCleanupInterfaces.Lexical.Recursive.declarationPolicy)
+    outward world plan
 
 theorem StoredCallback.initial_source
     (stored : StoredCallback operations policy contracts ports owners emptyRows world outward action) :

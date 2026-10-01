@@ -176,15 +176,20 @@ theorem pending_visible
   | nil => rfl
   | plain frame received accepts tail ih => exact ih
   | handler frame admitted tail ih => exact ih
+  | handlerView frame admitted entered bounded tail ih => exact ih
+  | spent known answerSame annotation tail ih => exact ih
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved tail ihSaved ihTail => exact ihTail
   | cell issued annotation tail ih =>
     simpa only [SourceDependencyCapture.Scope.visibleResources, Stack.erase, Control.visible, ExecFrame.erase, Frame.visible, List.singleton_append] using congrArg (List.cons _) ih
 
   | capture known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed physical contextual terminal ih => exact ih
   | here frame admitted tail ih => exact ih
+  | hereView frame admitted entered bounded tail ih => exact ih
   | plainPath saved received accepts selected ih => exact ih
   | handlerMiss saved admitted miss selected ih => exact ih
+  | handlerMissView saved admitted entered bounded miss selected ih => exact ih
   | cellPath issued annotation selected ih => exact ih
+  | spentPath known answerSame annotation selected ih => exact ih
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih => exact ih
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation installedFrame installation physical contextual terminal selected ihInstallation ih => exact ih
 omit [DeclarationPolicy] in
@@ -270,6 +275,27 @@ theorem pending_selected_handler
       obtain ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, terminal, outsideVisible, insideVisible, outsidePending, path⟩ := ih next found
       exact ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, .handler terminal, outsideVisible,
         insideVisible, outsidePending, .handlerMiss frame admitted (by simpa only [ScopedTyping.handler_cut_instance next] using Ne.symm different) path⟩
+  | handlerView frame admitted entered bounded rest ih =>
+    rename_i residual data answer table families plans rows scope ambient beforeAllowed outsideAllowed stack output hints context
+    cases physical with
+    | hit data stack same =>
+      rw [← same] at selected
+      simp only [select, ↓reduceIte] at selected
+      split at selected <;> try { cases selected }
+      obtain ⟨rfl, rfl, rfl, rfl⟩ := Selection.handler.inj (Option.some.inj selected)
+      rw [← same]
+      exact ⟨_, _, _, _, _, _, frame, _, by assumption, by assumption, .here, pending_visible rest, rfl, rest, .hereView frame admitted entered bounded rest⟩
+    | push runtimeFrame rest cap tail handler miss next =>
+      have different : requested ≠ data.effectInst := by
+        intro same
+        apply miss
+        simp only [ExecFrame.erase, HandlerData.erase, Frame.target, same]
+      simp only [select, if_neg different] at selected
+      obtain ⟨inside, found, same⟩ := prepend_selection selected
+      subst captured
+      obtain ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, terminal, outsideVisible, insideVisible, outsidePending, path⟩ := ih next found
+      exact ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, .handler terminal, outsideVisible,
+        insideVisible, outsidePending, .handlerMissView frame admitted entered bounded (by simpa only [ScopedTyping.handler_cut_instance next] using Ne.symm different) path⟩
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved rest ihSaved ihTail =>
     cases physical with
     | live ticket q a saved scope rest cap tail handler next =>
@@ -278,6 +304,14 @@ theorem pending_selected_handler
       obtain ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, terminal, outsideVisible, insideVisible, outsidePending, path⟩ := ihTail next found
       exact ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, .live terminal, outsideVisible,
         insideVisible, outsidePending, .liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved path⟩
+  | spent known answerSame annotation rest ih =>
+    cases physical with
+    | spent ticket a scope rest cap tail handler next =>
+      obtain ⟨inside, found, same⟩ := prepend_selection selected
+      subst captured
+      obtain ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, terminal, outsideVisible, insideVisible, outsidePending, path⟩ := ih next found
+      exact ⟨answer, residual, table, families, plans, rows, installed, outsideAllowed, foundAt, modesAt, .spent terminal, outsideVisible,
+        insideVisible, outsidePending, .spentPath known answerSame annotation path⟩
   | cell issued annotation rest ih =>
     rename_i identity answerType allowed ambient stack input output scope hints context payload caller
     cases physical with
@@ -303,9 +337,12 @@ theorem pending_selected_handler
       exact ⟨answer, residual, table, families, plans, rows, selectedFrame, outsideAllowed, foundAt, modesAt, .live selectedTerminal, outsideVisible,
         insideVisible, outsidePending, .captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation frame installed originalPhysical contextual terminal path⟩
   | here frame admitted tail ih => exact ih (by assumption) (by assumption)
+  | hereView frame admitted entered bounded tail ih => exact ih (by assumption) (by assumption)
   | plainPath saved received accepts selected ih => exact ih (by assumption) (by assumption)
   | handlerMiss saved admitted miss selected ih => exact ih (by assumption) (by assumption)
+  | handlerMissView saved admitted entered bounded miss selected ih => exact ih (by assumption) (by assumption)
   | cellPath issued annotation selected ih => exact ih (by assumption) (by assumption)
+  | spentPath known answerSame annotation selected ih => exact ih (by assumption) (by assumption)
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih => exact ih (by assumption) (by assumption)
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation installedFrame installation physical contextual terminal selected ihInstallation ih => exact ih (by assumption) (by assumption)
 
@@ -348,11 +385,28 @@ theorem handler_not_builtin
         intro same; apply miss; simp only [ExecFrame.erase, HandlerData.erase, Frame.target, same]
       simp only [select, if_neg different] at found
       exact ih next (prepend_builtin found)
+  | handlerView frame admitted entered bounded rest ih =>
+    rename_i residual data answer table families plans rows scope ambient beforeAllowed outsideAllowed stack output hints context
+    cases physical with
+    | hit data stack same =>
+      rw [← same] at found
+      simp only [select, ↓reduceIte] at found
+      split at found <;> cases found
+    | push runtimeFrame rest cap tail handler miss next =>
+      have different : requested ≠ data.effectInst := by
+        intro same; apply miss; simp only [ExecFrame.erase, HandlerData.erase, Frame.target, same]
+      simp only [select, if_neg different] at found
+      exact ih next (prepend_builtin found)
   | live known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved rest ihSaved ihTail =>
     cases physical with
     | live ticket q a saved scope rest cap tail handler next =>
       simp only [select] at found
       exact ihTail next (prepend_builtin found)
+  | spent known answerSame annotation rest ih =>
+    cases physical with
+    | spent ticket a scope rest cap tail handler next =>
+      simp only [select] at found
+      exact ih next (prepend_builtin found)
   | cell issued annotation rest ih =>
     rename_i identity answerType allowed ambient stack input output scope hints context payload caller
     cases physical with
@@ -368,9 +422,12 @@ theorem handler_not_builtin
       simp only [select] at found
       exact ih next (prepend_builtin found)
   | here frame admitted tail ih => exact ih (by assumption)
+  | hereView frame admitted entered bounded tail ih => exact ih (by assumption)
   | plainPath saved received accepts selected ih => exact ih (by assumption)
   | handlerMiss saved admitted miss selected ih => exact ih (by assumption)
+  | handlerMissView saved admitted entered bounded miss selected ih => exact ih (by assumption)
   | cellPath issued annotation selected ih => exact ih (by assumption)
+  | spentPath known answerSame annotation selected ih => exact ih (by assumption)
   | liveTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation saved selected ihSaved ih => exact ih (by assumption)
   | captureTail known inputSame answerSame heldSame resumeSame balanced inputAnnotation answerAnnotation installedFrame installation physical contextual terminal selected ihInstallation ih => exact ih (by assumption)
 
