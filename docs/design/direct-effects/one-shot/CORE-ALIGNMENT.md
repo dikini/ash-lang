@@ -925,6 +925,44 @@ unchanged verified pairs. Two existing empty-tail eliminations now use the prove
 nonempty property. User-handler capture, dispatch selecting into nested tails,
 and projected inner completion into unwind remain open.
 
+[CoreGeneralStack.lean](CoreGeneralStack.lean) retains arbitrary authenticated
+physical and lexical segments, including running cleanup with an arbitrary
+saved value, unfinished close, nested live and consumed owners, and retained
+cleanup projections. Physical live owners save the same segment. A projected
+lexical owner does not become a physical resumable owner. Recursive protection
+evidence proves that an obligation to finish cleanup or close prevents successful
+disposal even behind ordinary prefixes or nested saved owners.
+
+[CoreGeneralCaptureResume.lean](CoreGeneralCaptureResume.lean) embeds the old
+configuration relation and step witnesses unchanged. `handler_split` and
+`owner_split` derive authenticated segment decompositions from actual Core
+lookup. Handler cut extraction also uses current source scope and outward-route
+evidence for that exact prefix, preserving selector agreement across erased
+lexical handlers. Resume extraction follows the actual selected physical owner,
+retains the same saved segment, and requires current binder resolution to that
+dynamic ticket.
+
+`capture_general` and `resume_from_lookup` construct actual Core transitions,
+positive target transitions and both full related endpoints. The connected
+`capture_immediate_resume` chain covers an immediate Unit-resume clause on an
+arbitrary captured segment: capture, two decreasing operand-administration
+steps, and resume. It restores the entire saved segment before the consumed
+owner and outside stack. The same chain proves exact capture/entry/resume
+observations and ownership accounting. This clause connection does not simulate
+arbitrary clause programs. Protected captured obligations admit no successful
+discard step.
+
+The two leaves pass independent pinned compilation and review with 45
+standard-only reports. The grouped audit covers 855 registered modules and
+11,548 exact reports, retaining 853 unchanged verified pairs; 2,054 local links
+and anchors pass. Current
+callback request authentication must still produce the exact request membership
+and closing-route certificates used by projected handler extraction. Admitted
+ticket validity, ledger uniqueness, generalized completion/unwind after restored
+segments and callback-local discard correspondence remain open. These are
+experimental runtime results; they do not establish general admission, M4
+validity or Rust execution correspondence.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

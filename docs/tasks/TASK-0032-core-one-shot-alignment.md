@@ -19,7 +19,7 @@ DN-0033 governs formal experiments. A demonstrated language change requires a
 proposal before product implementation; a repair to current specified behavior
 does not change the language contract.
 
-Use GPT-6 Astra for orchestration, analysis and integration, and GPT-6.1 Sol
+Use GPT-6.1 Sol for orchestration, analysis and integration, and GPT-6.1 Sol
 with medium reasoning for implementation workers. Verify each assignment.
 
 ## Work
@@ -44,7 +44,12 @@ remain separate targets. A small first example does not reduce the final scope.
 
 - Baseline: `124e164`, clean `main`; work uses `codex/core-alignment` in
   `.worktree/core-alignment`.
-- Verified orchestrator assignment: `gpt-6-astra`, high reasoning.
+- Initial verified orchestrator assignment: `gpt-6-astra`, high reasoning.
+- The user paused development, then resumed on 2026-10-01 with an updated
+  objective assigning `gpt-6.1-sol` to orchestration. The resumed assignment is
+  verified as `gpt-6.1-sol`, xhigh reasoning; implementation workers retain
+  `gpt-6.1-sol` with medium reasoning. The accepted scope and C1–C5 inventory
+  remain unchanged.
 - Current specification removes captured source handlers during discard and
   rejects cleanup whose nearest interpreter would be removed. The calculus
   retains captured handlers until lexical unwind reaches them. Comparison must
@@ -1168,12 +1173,94 @@ remain separate targets. A small first example does not reduce the final scope.
   direct proof reuse. General user capture, nested dispatch and projected inner
   unwind remain open; C3 remains 0/5.
 
+- General deterministic source substitution now passes independent pinned
+  compilation. The mutual theorem covers source expressions, clause bodies,
+  offered modes and declarations, including receiver-dependent lambdas and
+  nested handler literals. Available owner plans are selected independently of
+  the subsequently quantified owner contract. Public contracts, scalar
+  requirements, checking signatures and complete rows are retained. All 442
+  imported source/artifact pairs stayed unchanged; the theorem uses only
+  `propext` and `Quot.sound`. This resolves the identified uniformity obstruction.
+  Hereditary support preservation and the saved-frame/capture consumers remain
+  unfinished, so the checkpoint stays unregistered pending the connected gate.
+
+- After another pause, the user explicitly resumed higher-order support
+  preservation and general capture/resume correspondence in parallel. Both
+  existing workers are verified as `gpt-6.1-sol` with medium reasoning. Their
+  source ownership is separate; no further finite example extension is planned.
+- Closed-value world extension and receiver transport pass independent pinned
+  compilation. Environment and resolved-owner transport now also pass independent
+  compilation and separate interface and proof-quality review. The latter two
+  modules have five exact standard-only axiom reports, with 443 and 444 frozen
+  imported modules respectively. Review found a missing direct-import hash in
+  worker metadata; parent metadata now records the source, selected artifact and
+  linked checkpoint hashes. These helpers remain unregistered pending connected
+  hereditary authentication and supported-source preservation.
+- Exact dependency membership after closed substitution, reverse actual-support
+  inclusion, finite lexical-known transport and authentication under agreeing
+  lexical environments now pass independent pinned compilation and review. Five
+  exact reports contain only standard axioms. The parent builds record 445 and
+  446 consumed imported modules; the worker's unified manifest also includes its
+  two outputs. Review found worker artifact shadowing in its search path, so the
+  parent compilation uses only frozen parent inputs and records their selected
+  hashes. Recursive replacement authentication is conditioned
+  on the substituted name actually occurring, so a lambda that does not capture
+  that name need not receive the replacement's resources. Completing hereditary
+  and supported-source preservation is estimated at 90–150 active minutes on
+  resumption; the frame/site/capture connection and saved restoration remain
+  subsequent gates.
+- General capture requires a physical segment that can retain running cleanup,
+  unfinished close operations and nested owners. Adding that segment directly to
+  the old relation would invalidate its existing running-only classification.
+  Parent scope review instead approved an upper-layer relation with an embedding
+  of the old relation and step witnesses. New capture and resume proofs must
+  construct both endpoints from the same structural segment and actual Core
+  execution. The first normal/protected capture and resume gate is estimated at
+  2–3 active hours in parallel with support preservation. Projected interior
+  handler selection still needs authenticated request-route evidence; the first
+  gate does not close general simulation.
+
+- Higher-order hereditary authentication and supported-source substitution now
+  pass independent pinned compilation and interface review. The mutual proof
+  covers nested lambda bodies, available owner families, protected declarations
+  and handler literals. It retains the same public contracts, requirements,
+  demand and receiving bound, selecting the same private source family. The
+  concrete declaration policy discharges its signature transport automatically;
+  an unused substituted name needs no requirement that the replacement's
+  resources lie in the body's receiver. Five final
+  modules produce seven standard-only reports and eleven reviewed public
+  interfaces, with 449 unchanged imported source/artifact pairs. This finishes
+  the requested support-preservation checkpoint. It remains unregistered until
+  the existing connected C4 gate constructs saved frames, the execution site
+  and actual capture; restored-world support is also still open.
+- The general capture/resume runtime gate is implemented and frozen. An upper
+  relation embeds the existing relation and accepts arbitrary authenticated
+  segments containing running cleanup, unfinished close, nested owners and
+  retained projections. Actual handler and owner lookup derive the split and
+  cut; capture and resume construct both endpoints and restore the same saved
+  segment. A connected immediate-resume clause chain gives four actual Core
+  steps, two decreasing administrative matches, exact observations and the
+  same ownership accounting. Protected saved obligations cannot be discarded.
+  Both leaves pass independent pinned compilation and review with 45
+  standard-only reports. Registration and the grouped audit cover 855 modules
+  and 11,548 exact reports, retaining 853 unchanged verified pairs; 2,054 local
+  links and anchors pass. The connected runtime gate is integrated without
+  changing the existing relation or its consumers.
+- Current projected-handler route certificates remain explicit inputs. Their
+  C2 producer must connect a request from the same isolated callback to its
+  exact `ActionData.requests` and the same closing-scope routes. Resume also
+  retains current scope resolution to the selected ticket; raw correspondence
+  does not establish admitted ledger validity or uniqueness. General completion
+  and unwind after restoration, and ordinary callback-local discard with a
+  protected outside segment, remain separate C3 transition obligations. No M4
+  interface, Rust behavior or finite example changes accompany these proofs.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication and general admission compiler | Higher-order interface and general static derivation | Full estimate awaits connected M4 migration |
-| C3 | 0 / 5 | Nested normal cleanup, projected builtin read/write and callback suffix/beta components integrated | User capture, nested dispatch/projected unwind, general state/ownership correspondence | Static readiness and annotation authentication | Nested normal batch complete; next bounded review must estimate remaining capture and unwind carriers |
-| C4 | 2 / 3 | Common owner-source checkpoint integrated; formation, current-tail and payload interfaces independently checked | Connect substitution, supported source, saved frames and actual handler capture; restored-world transport | Preserve same selected private source and authenticated request-flow evidence | Transform independently checked; source/support 60–90 min; frame/site/capture 60–90 min; saved-support restoration unestimated |
+| C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication, callback request/route producer and general admission compiler | Connected higher-order consumers and general static derivation | Full estimate awaits connected Core admission bridge |
+| C3 | 0 / 5 | General capture/resume runtime gate and earlier cleanup/dispatch components integrated | General completion/unwind, callback-local discard, admitted state/ownership correspondence | Current request routes, resume scope resolution, readiness and ledger evidence | Capture/resume runtime batch complete; remaining coverage awaits a bounded restored-completion review |
+| C4 | 2 / 3 | Hereditary/support preservation independently verified; common owner-source checkpoint integrated | Connect supported source, saved frames, execution site and actual capture; restored-world transport | Same selected private source and authenticated receiving support | Support checkpoint complete; frame/site/capture previously estimated 60–90 min; saved-support restoration unestimated |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification
