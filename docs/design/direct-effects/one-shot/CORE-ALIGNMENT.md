@@ -963,6 +963,42 @@ segments and callback-local discard correspondence remain open. These are
 experimental runtime results; they do not establish general admission, M4
 validity or Rust execution correspondence.
 
+[CoreGeneralRestoration.lean](CoreGeneralRestoration.lean) connects normal
+cleanup start and current Unit completion, consumed-clause return and evaluation
+mode close completion over an arbitrary restored segment. Saved return values
+retain the same `ValueRel`; completion restores their recorded scope and every
+outside obligation. `resume_then_normal_finish` connects actual resume to
+cleanup completion using the same saved segment, caller prefix, consumed marker
+and outside stack.
+
+[CoreGeneralUnwind.lean](CoreGeneralUnwind.lean) reuses retained-cursor
+normalization and cleanup selection for resource release, cleanup start and
+current completion, and final close completion. Finite lexical advances precede
+the matching physical step. The same positive transition witness determines
+observations and discharge accounting, with separate Core and target close
+labels. `cleanup_finish_then_close` connects completion to the same empty
+retained cursor and actual physical close pop.
+
+[CoreGeneralProjection.lean](CoreGeneralProjection.lean) connects callback-local
+discard of an ordinary mapped saved capture while retaining an arbitrary caller
+prefix and outside segment, including protected running and closing obligations.
+It derives the selected capture's unprotected guard and the retained cursor from
+that capture and its current successful projection preflight. Empty projection
+creates no physical close or counter increment; nonempty projection increments
+the physical close counter once and preserves the exact nested-consumption
+observations. `discard_then_resource` connects discard to the same projection's
+inner-first release. Protection of a selected saved capture still excludes
+successful disposal; protection outside that capture remains intact.
+
+All four affected leaves pass independent pinned compilation and both stages of
+review with 53 standard-only reports. The grouped audit covers 858 registered
+modules and 11,572 exact reports, retaining 854 unchanged verified pairs; all
+2,057 local links and anchors pass. Current Unit return is a completion redex,
+not a claim that arbitrary callbacks terminate. Current `closeFuel` preflight
+remains explicit. This local-discard batch does not project arbitrary selected
+`GeneralSegment` captures. General admitted-state closure, route production,
+ticket validity and restored higher-order support remain open.
+
 [CoreAllocationCorrespondence.lean](CoreAllocationCorrespondence.lean) proves
 that current Core acquisition history and the target's historical resource
 world remain equal when an actual Core step and target raw segment agree on

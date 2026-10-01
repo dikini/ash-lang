@@ -859,3 +859,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreProjectedCellDispatch.olean"
 lean -DwarningAsError=true -o "$proof_build_dir/CoreNestedCleanupSteps.olean" CoreNestedCleanupSteps.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralStack.olean" CoreGeneralStack.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralCaptureResume.olean" CoreGeneralCaptureResume.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralRestoration.olean" CoreGeneralRestoration.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralUnwind.olean" CoreGeneralUnwind.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreGeneralProjection.olean" CoreGeneralProjection.lean

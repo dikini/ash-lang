@@ -1255,12 +1255,55 @@ remain separate targets. A small first example does not reduce the final scope.
   protected outside segment, remain separate C3 transition obligations. No M4
   interface, Rust behavior or finite example changes accompany these proofs.
 
+- The user authorized the next two consumer batches in parallel. C4 promotes
+  the reviewed substitution/authentication layers into the callable admission
+  companion, carries the actual receiver through saved frames and the current
+  execution site, and connects the selected handler capture. Signature and row
+  equality must transport the existing checks and accounting; a desired
+  successor site is not an input. Consumer inspection revises the earlier
+  60–90 minute connection estimate to 60–90 minutes for receiver-aware frame
+  execution and 90–150 minutes for actual capture, or 2.5–4 active hours in total.
+  Restored-world support remains separate. Registration waits for the complete
+  connected gate rather than helper-only checkpoints.
+- C3 extends the upper relation with current discard and unwind configurations.
+  The batch covers normal cleanup completion, consumed-clause return and close
+  completion over general restored tails, then projected cleanup/resource
+  transitions and callback-local discard with protected obligations outside
+  the selected capture. The local-discard case selects an ordinary mapped
+  capture; arbitrary outside segments remain intact. Current projection
+  preflight is explicit, and recursive protected-capture rejection remains
+  unchanged. Estimated active work is 2–3 hours in parallel with C4. This yields
+  approximately 2.5–4 hours elapsed implementation time before independent
+  review and affected verification, subject to the identified interfaces.
+- At the user's request, C4 is now split between receiver-aware frame/site
+  migration and a separate selected-handler capture leaf. The first worker owns
+  the shared execution definitions and publishes their interface; the capture
+  worker owns only the new consumer leaf. Family selection must invert the same
+  installed declaration authentication, and operand receiver checks use actual
+  support rather than a conservative aggregate bound. The two implementation
+  estimates can overlap: 60–90 minutes for frame migration and 90–150 minutes
+  for capture, followed by their join and verification. The previous sequential
+  2.5–4 hour estimate therefore no longer describes the parallel schedule.
+- C3's restored-tail batch is implemented and passes both stages of independent
+  review. Connected chains cover resume followed by normal cleanup completion,
+  unwinding cleanup followed by close completion, and local discard followed by
+  resource release. They retain the same saved values, selected captures and
+  protected outside segments, with exact observation and discharge order. Four
+  affected modules pass independent pinned compilation with 53 standard-only
+  reports. Grouped verification covers 858 modules and 11,572 exact reports,
+  retaining 854 unchanged verified pairs; all 2,057 local links and anchors pass.
+  The restored-tail batch is integrated. Direct reuse of cursor normalization,
+  suffix and projection proofs completed implementation ahead of the 2–3 hour
+  estimate. Current Unit redexes and structural projection preflight remain
+  explicit; callback termination and arbitrary selected-segment projection are
+  not established by this batch.
+
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
 | C2 | 0 / 4 | Actual-root Program and admitted discard prefix independently verified | Metadata authentication, callback request/route producer and general admission compiler | Connected higher-order consumers and general static derivation | Full estimate awaits connected Core admission bridge |
-| C3 | 0 / 5 | General capture/resume runtime gate and earlier cleanup/dispatch components integrated | General completion/unwind, callback-local discard, admitted state/ownership correspondence | Current request routes, resume scope resolution, readiness and ledger evidence | Capture/resume runtime batch complete; remaining coverage awaits a bounded restored-completion review |
-| C4 | 2 / 3 | Hereditary/support preservation independently verified; common owner-source checkpoint integrated | Connect supported source, saved frames, execution site and actual capture; restored-world transport | Same selected private source and authenticated receiving support | Support checkpoint complete; frame/site/capture previously estimated 60–90 min; saved-support restoration unestimated |
+| C3 | 0 / 5 | Capture/resume and restored-tail completion/unwind/local-discard batches integrated | Admitted state/ownership correspondence and remaining general transition coverage | Current request routes, resume scope resolution, readiness and ledger evidence | Requested restored-tail batch complete; full simulation estimate remains open |
+| C4 | 2 / 3 | Support preservation verified; frame/site and selected-capture consumers active in parallel | Restored-world transport and complete discrepancy closure | Shared execution interface, same selected private source and receiving support | Frame migration 60–90 min and capture 90–150 min overlap, then join/verification; restoration unestimated |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
 ## Verification

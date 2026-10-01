@@ -22,6 +22,16 @@ inductive GeneralRelated (graph : CoreSyntax.Graph) : CoreUnwindRelation.Point �
       (component : ComponentMapped graph owners maps (isolate state maps) focus)
       (frames : state.frames = framesOf maps ++ physical) :
       GeneralRelated graph ⟨state,.eval (attach focus lexical),owners,maps⟩
+  | discardSegment (carrier : DiscardCarrier graph owners state.heap environment handler owner binder)
+      (control : state.control = .discard handler owner)
+      (frames : state.frames = physical)
+      (segment : GeneralSegment graph state.heap physical lexical) :
+      GeneralRelated graph ⟨state,.eval ⟨.discard binder,scope,lexical⟩,owners,[]⟩
+  | unwindSegment (cursor : RetainedCursor graph state.heap physical lexical)
+      (outside : GeneralSegment graph state.heap outsidePhysical outsideTarget)
+      (control : state.control = .returned .unit)
+      (frames : state.frames = physical ++ .closeCompletion coreClose :: outsidePhysical) :
+      GeneralRelated graph ⟨state,.unwind scope (lexical.append (.push (.closing targetClose callerScope) outsideTarget)),owners,[]⟩
 
 structure GeneralStepWitness (graph : CoreSyntax.Graph) (before after : CoreUnwindRelation.Point)
     (created discharged : List Owner) : Prop where
