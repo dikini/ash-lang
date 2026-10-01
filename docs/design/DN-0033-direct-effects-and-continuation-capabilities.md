@@ -138,7 +138,7 @@ remain allowed. These five reports pass independent review and current-source
 integration. Combined chronological occurrence history for changed-tail cleanup
 activation, projection, disposal and whole simulation remain open.
 
-The current checkpoint also integrates five independently reviewed proof leaves.
+The preceding capture/origin checkpoint integrates five independently reviewed proof leaves.
 [Captured substitution](direct-effects/one-shot/CoreCallableCapturedSubstitution.lean)
 retains the full storage contract and exact restored-lexical private family;
 the [direct lambda constructor](direct-effects/one-shot/CoreCallableCapturedLambdaConstructor.lean)
@@ -154,13 +154,46 @@ constructs local actual start/bind/beta history;
 derives actual marker return/finish with explicit current guards.
 
 Their 26 fresh standard-only reports join an audited 908-module, 11,976-report
-assembly, preserving the 903 unchanged dependency associations. Finite captured
-recipe substitution and generated-marker capture/immediate resume have passed
-independent review but await registration. Continuous clause/callback history,
-heap-changing transport, derived activation guards, varied storage/resource
-admission, projection/disposal and whole correspondence remain open. These are
-bounded prototype results within the existing C2/C3 obligations; the supported
-fragment, whole-package inventory and normative semantics are unchanged.
+assembly, preserving the 903 unchanged dependency associations.
+
+The current checkpoint integrates
+[finite captured recipes](direct-effects/one-shot/CoreCallableCapturedRecipes.lean)
+and [generated-marker capture/resume](direct-effects/one-shot/CoreCallableRunningCapture.lean).
+The first transports the exact successful finite checker with separate original
+callee and frozen caller-specialized annotations, preserving full Contracts.
+The second derives actual selected capture and immediate owner consumption from
+the same running occurrence, preserving its full original clause/header and
+generating the spent marker. Both pass independent review; exact fresh source,
+artifact, log and report matches join an audited 910-module, 11,997-report
+assembly with all 908 preceding associations unchanged.
+
+Continuous clause/callback history, actual heap-changing transport, derived
+activation guards, varied storage/resource/control admission, projection/disposal
+and whole correspondence remain open. [The generated initializer connection](direct-effects/one-shot/CoreCallableInitializerHead.lean) now passes independent
+review and exact fresh source/artifact/log/report verification. Its five reports
+extract the same original initializer/path and rich/storage checks, derive
+actual three-step evaluation and the completed binding MEnv/raw-body closing,
+and construct the same whole lambda family plus finite/storage judgments.
+It covers one closed initializer; outer callee evaluation, multi-binding/open
+initializer lineage and general resource/control admission remain open.
+
+The final audited assembly contains 911 modules and 12,002 ordered standard-only
+reports, with all 910 preceding associations unchanged. This checkpoint's three
+new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
+The other two leaves were freshly compiled in the preceding 910-module assembly;
+this is an audited assembly, not an uncached rebuild of every module.
+The separate four-report outer-lambda evaluation producer has passed independent
+review and remains unregistered at this checkpoint.
+
+Packaging review caught three registrations without compiled output paths.
+The corrected commands use warnings as errors and explicit temporary olean
+outputs. Replaying those three literal registrations over the audited 908-module
+dependency set passes 26 reports with exactly the reviewed artifacts. The prior
+missing-import failure was reproduced. This is a registered-tail replay, not a
+new uncached run of every module.
+ These are bounded prototype results
+within the existing C2/C3 obligations; the supported fragment, whole-package
+inventory and normative semantics are unchanged.
 
 The D4 higher-order case exposes two distinct annotation constraints. A pure
 callable can retain a live cell while keeping an empty declared request row;

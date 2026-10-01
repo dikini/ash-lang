@@ -1865,7 +1865,7 @@ standard-only reports; all 902 unchanged modules retain exact preceding
 source/log/artifact/direct-import associations. No Rust sources change.
 Whole-fragment admission, simulation and C4/C5 acceptance remain open.
 
-### Captured values and running cleanup: current checkpoint
+### Captured values and running cleanup: preceding capture/origin checkpoint
 
 Five independently reviewed components now have exact current-source integration:
 
@@ -1899,12 +1899,57 @@ retain exact preceding source/log/artifact/direct-import associations. This is
 five fresh leaves, not an uncached rebuild of every module. Rust sources are
 unchanged. These are DN-0033 prototype results, not new normative Ash semantics.
 
-Two next checkpoints have passed independent replay against that same sole
-908-module cache but are not registered here: thirteen finite captured-recipe
-substitution reports and eight same-occurrence capture/immediate-resume reports.
-The latter generates its spent marker through actual capture and resume; it
-still does not supply intervening clause chronology or changed-tail activation.
-General admission, armed projection, disposal and whole simulation remain open.
+### Exact captured recipes and generated-marker capture/resume
+
+[CoreCallableCapturedRecipes.lean](CoreCallableCapturedRecipes.lean) transforms
+the actual finite annotation following the same Code constructors and shadowing.
+A captured variable receives the already caller-specialized tree. The original
+callee map and caller map remain separate; the exact full captured Contract,
+lambda capture bound and checked result are preserved. Successful original and
+replacement checks derive the substituted check and storage judgment. Existing
+finite-checker resource/control/cleanup gaps remain: impossible original checks
+for those forms do not establish their missing admission.
+
+[CoreCallableRunningCapture.lean](CoreCallableRunningCapture.lean) selects its
+handler from the same running occurrence's tail history. Actual capture computes
+the full contained grouping and original selected clause/header. The nearest
+owner hit is derived for that generated live head. Actual immediate resume
+consumes it and restores the same running occurrence with its generated spent
+marker. No independent prefix or desired restored origin is an input.
+
+Both pass independent review. Fresh integration reproduces exact reviewed
+source/artifact/log bytes and 21 reports: thirteen recipe reports and eight
+capture/resume reports. Their intermediate audited assembly has 910 registered modules
+and 11,997 ordered standard-only reports; all 908 unchanged modules retain exact
+preceding source/log/artifact/direct-import associations. This is two fresh
+leaves, not an uncached rebuild of every module. No Rust sources change.
+
+Continuous clause/callback chronology, actual heap-changing occurrence transport,
+derived activation guards, armed projection/disposal and whole simulation remain
+open. [The generated initializer connection](CoreCallableInitializerHead.lean) now passes independent
+review and exact fresh source/artifact/log/report verification. Its five reports
+extract the same original initializer/path and rich/storage checks, derive
+actual three-step evaluation and the completed binding MEnv/raw-body closing,
+and construct the same whole lambda family plus finite/storage judgments.
+It covers one closed initializer; outer callee evaluation, multi-binding/open
+initializer lineage and general resource/control admission remain open.
+
+The final audited assembly contains 911 modules and 12,002 ordered standard-only
+reports, with all 910 preceding associations unchanged. This checkpoint's three
+new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
+The other two leaves were freshly compiled in the preceding 910-module assembly;
+this is an audited assembly, not an uncached rebuild of every module.
+The separate four-report outer-lambda evaluation producer has passed independent
+review and remains unregistered at this checkpoint.
+
+Packaging review caught three registrations without compiled output paths.
+The corrected commands use warnings as errors and explicit temporary olean
+outputs. Replaying those three literal registrations over the audited 908-module
+dependency set passes 26 reports with exactly the reviewed artifacts. The prior
+missing-import failure was reproduced. This is a registered-tail replay, not a
+new uncached run of every module.
+ These components remain DN-0033
+prototype evidence within existing C2/C3 obligations, not normative semantics.
 
 ### Runtime capacity boundary
 

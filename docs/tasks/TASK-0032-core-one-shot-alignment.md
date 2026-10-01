@@ -63,14 +63,14 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-01 19:35 UTC
+### Current deliverable board — 2026-10-01 19:58 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
 its phase changes only when the corresponding evidence exists. Constructor
 counts measure implemented cases, not equal effort or a percentage of C2.
 
-| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 18:40 UTC |
+| Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since 19:35 UTC |
 | --- | --- | --- | --- | --- | --- |
 | Same-graph callable annotation gate | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | Rich initial Site and first-step connection | Yes | Passed | Passed | `d2f26e1` | Unchanged |
@@ -97,16 +97,19 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Checked outside-anchor running receipt restoration through actual full-prefix resume | Implemented | Passed | Passed | `9ccc2fb` | Unchanged |
 | **Handler-selection/outside two-deliverable batch** | **2 / 2** | **2 / 2** | **2 / 2** | **`9ccc2fb`** | Unchanged |
 | Actual caller bind/reset/return factories: five named reports | **5 / 5** | **5 / 5** | **5 / 5** | **`0d6965c`** | Unchanged |
-| Guarded cleanup activation: two named marker-return/finish factories | **2 / 2** | **2 / 2, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
+| Guarded cleanup activation: two named marker-return/finish factories | **2 / 2** | **2 / 2, passed** | **Exact current-source replay passed** | **`c5fb370`** | Unchanged |
 | Original closed initializer runtime binding v1: two named reports | Static inversion valid; combined consumer vacuous | **Rejected: contradictory inputs** | Kernel contradiction confirmed independently | Excluded | Unchanged; v2 repair is a separate applicable path |
-| Runtime binding repair v2: three named value-ready/check-lambda reports | **3 / 3** | **3 / 3, passed** | **Exact current-source replay passed** | **This checkpoint** | **Frozen → reviewed → registered and verified** |
-| Captured substitution: eight named replacement/body receipts | **8 / 8** | **8 / 8, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
-| Running occurrence: four actual start/bind/beta/history reports | **4 / 4** | **4 / 4, passed** | **Exact current-source replay passed** | **This checkpoint** | **New local occurrence factories verified** |
-| Captured lambda constructor: nine same-family reconstruction reports | **9 / 9** | **9 / 9, passed** | **Exact current-source replay passed** | **This checkpoint** | **Whole returned lambda now uses the exact transformed body family** |
-| **Five-component capture/origin batch** | **5 / 5** | **5 / 5** | **5 / 5; 26 reports** | **This checkpoint** | **Five components advanced to registered current-source verification** |
-| Captured recipe transport: thirteen named checker reports | **13 / 13, frozen** | **13 / 13, passed** | Independent replay against current 908-module cache passed | Pending | **New recursive finite annotation substitution verified** |
-| Running capture/resume: eight named generated-marker reports | **8 / 8, frozen** | **8 / 8, passed** | Independent replay against current 908-module cache passed | Pending | **Actual capture and immediate resume generate the same spent marker** |
-| Runtime closure connection: initializer-head producer | Locally compiled | Pending | Worker local check only | Pending | **In development: original left initializer checks and full bind path recovered** |
+| Runtime binding repair v2: three named value-ready/check-lambda reports | **3 / 3** | **3 / 3, passed** | **Exact current-source replay passed** | **`c5fb370`** | Unchanged |
+| Captured substitution: eight named replacement/body receipts | **8 / 8** | **8 / 8, passed** | **Exact current-source replay passed** | **`c5fb370`** | Unchanged |
+| Running occurrence: four actual start/bind/beta/history reports | **4 / 4** | **4 / 4, passed** | **Exact current-source replay passed** | **`c5fb370`** | Unchanged |
+| Captured lambda constructor: nine same-family reconstruction reports | **9 / 9** | **9 / 9, passed** | **Exact current-source replay passed** | **`c5fb370`** | Unchanged |
+| **Five-component capture/origin batch** | **5 / 5** | **5 / 5** | **5 / 5; 26 reports** | **`c5fb370`** | Unchanged |
+| Captured recipe transport: thirteen named checker reports | **13 / 13** | **13 / 13, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
+| Running capture/resume: eight named generated-marker reports | **8 / 8** | **8 / 8, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
+| **Recipe/capture/initializer three-component batch** | **3 / 3** | **3 / 3** | **3 / 3; 26 reports** | **This checkpoint** | **Three reviewed components advanced to registration and verification** |
+| Runtime closure connection: five named initializer-head/generated-binding reports | **5 / 5** | **5 / 5, passed** | **Exact current-source replay passed** | **This checkpoint** | **Local prototype → reviewed actual evaluation/family/checker connection** |
+| Outer lambda evaluation: four named origin/evaluation reports | **4 / 4, frozen** | **4 / 4, passed** | Independent current911 replay passed | Pending | **New actual outer closure evaluation connection reviewed** |
+| Generated clause occurrence: front/history heap transport | First phase locally compiled | Pending | Worker pinned local check passed | Pending | **New constructive history composition; actual clause/heap transitions next** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -202,7 +205,7 @@ all 902 unchanged modules retain exact preceding source/log/artifact/direct-impo
 associations. This is one fresh added leaf, not an uncached build of every module.
 No Rust sources change. Whole-fragment acceptance counts remain unchanged.
 
-The current five-component checkpoint registers guarded cleanup activation,
+The preceding checkpoint `c5fb370` registers guarded cleanup activation,
 captured substitution, corrected runtime binding, running occurrence and the
 direct captured-lambda constructor. All five pass independent semantic review.
 Fresh integration reproduces their exact reviewed source/artifact bytes and
@@ -212,15 +215,40 @@ source/log/artifact/direct-import associations. This is five fresh leaves in an
 audited assembly, not an uncached build of every module. No Rust sources change;
 the earlier full Rust verification remains the Rust evidence.
 
+The preceding intermediate two-leaf assembly registers
+[CoreCallableCapturedRecipes.lean](../design/direct-effects/one-shot/CoreCallableCapturedRecipes.lean)
+and [CoreCallableRunningCapture.lean](../design/direct-effects/one-shot/CoreCallableRunningCapture.lean).
+Both pass independent review. Fresh integration reproduces their exact reviewed
+source/artifact/log bytes and 21 ordered standard-only reports. The audited
+assembly contains 910 registered modules and 11,997 reports. All 908 unchanged
+modules retain exact preceding source/log/artifact/direct-import associations.
+This is two fresh leaves in an audited assembly, not an uncached rebuild of
+every module. No Rust sources change.
+
+The current checkpoint also registers
+[CoreCallableInitializerHead.lean](../design/direct-effects/one-shot/CoreCallableInitializerHead.lean).
+It extracts the same original nearest-binding initializer and full bind path,
+replays its original rich/storage checks, and uses actual three-step initializer
+evaluation to derive the ValueRel and completed binding environment. The same
+lambda family and finite/storage checks are then constructed from that value.
+Independent review passes five reports, six probes and the two unchanged
+retaining negatives. Fresh integration reproduces exact reviewed source,
+artifact, log and ordered reports. This scope is one closed initializer; outer
+callee evaluation and general runtime closure admission remain open.
+
+The final audited assembly has 911 registered modules and 12,002 standard-only
+reports. Its 910 preceding source/log/artifact/direct-import associations are
+unchanged. Across this commit's three new leaves, 26 reports have fresh exact
+reviewed matches; all 908 modules from parent `c5fb370` remain unchanged.
+
 Current parallel checkpoints:
 
 | Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
 | --- | --- | --- | --- | --- |
-| C2.3 / C4.1 | Captured substitution reviewed, constructor coupling open | **Registered and verified:** eight substitution reports and nine direct-constructor reports use the same transformed private family in the whole returned lambda | Connect finite annotation substitution and actual runtime captured environments | Next bounded connection: 1–2 hours provisional; full admission estimate open |
-| C2.3 / C3.5 | Runtime binding v1 rejected; v2 frozen | **V2 registered and verified:** three reports derive actual checked-lambda evaluation, value-ready bind entry and returned binding; v1 remains excluded | Join original initializer-head checks to the constructor and runtime closure relation | First producer locally compiles; connection estimate 1–2 hours provisional |
-| C3.1 / C3.2 | Activation reviewed; occurrence factories outstanding | **Registered and verified:** two guarded marker-return/finish reports and four actual start/bind/beta occurrence reports | Preserve the occurrence through intervening clause/callback steps and heap changes, then derive current activation guards | Next bounded transport: 2–4 hours provisional; whole simulation estimate open |
-| C2.3 | Finite recipe substitution outstanding | **Reviewed, not registered:** thirteen reports preserve the exact full captured input/result using the frozen caller-specialized annotation tree | Register and freshly integrate the unchanged reviewed source | Packaging alongside next C3 leaf: 30–60 minutes |
-| C3.1 / C3.2 | Marker-producing capture/resume outstanding | **Reviewed, not registered:** eight reports derive capture from the same occurrence and immediate live-head resume with its generated spent marker | Register and freshly integrate; extend through intervening clause work | Packaging alongside next C2 leaf: 30–60 minutes |
+| C2.3 / C4.1 | Same-family lambda constructor integrated; finite recipe transport reviewed | **Recipe transport registered and verified:** thirteen reports preserve exact full input/result with the frozen caller-specialized tree | Consume the checker in actual captured-environment admission | Initializer connection frozen; full admission estimate open |
+| C2.3 / C3.5 | Original initializer-head producer locally compiled | **Five reports reviewed, registered and verified:** actual generated initializer evaluation supplies ValueRel, completed MEnv/raw-body closure, whole same-family Auth and exact finite/storage checks | Connect actual outer lambda evaluation from the completed binding environment | Outer evaluation prerequisites identified; next producer estimate provisional; full admission open |
+| C3.1 / C3.2 | Generated-marker capture/resume reviewed | **Registered and verified:** eight reports derive capture above the same completion and immediate live-head resume with its generated marker | Extend through intervening clause/front execution and actual heap allocation | Next bounded clause/heap transport: 3–4 hours provisional |
+| C3.1 / C3.2 | Clause/heap transport not started | **First phase locally compiled:** constructive history heap-composition and immutable capture carrier; no arbitrary prefix seed | Derive actual clause bind/beta/return, allocation and resume through its generated front | Included in the 3–4 hour transport checkpoint; independent review follows |
 | C3.2 | Physical selection and outside restoration integrated | **Unchanged:** selected handler and outside-anchor receipts remain available | Supply current route/readiness from general admission; supply activation guards from chronological history | Depends on C2 and occurrence transport; whole-package estimate open |
 
 The new constructor closes the particular coupling gap between substituted body
@@ -240,7 +268,7 @@ open/evaluating or capture-substituted initializer lineage.
 RunningOccurrence constructs local actual start/bind/beta factories from the
 same original running receipt and current histories. CleanupActivation derives
 actual spent-marker Unit return and normal finish with current inside or checked
-outside guards. Those guards remain inputs. The newly reviewed RunningCapture
+outside guards. Those guards remain inputs. The integrated RunningCapture
 checkpoint derives actual capture above the selected tail handler and immediate
 live-head resume with a generated marker. These local factories do not yet
 establish continuous callback/clause chronology or heap-changing transport.
@@ -248,8 +276,8 @@ No universal intermediate scan-success claim is made. Changed-tail activation,
 armed projection, disposal, rich successor preservation and whole simulation
 remain open.
 
-The next work runs in parallel: C2 connects initializer-head checks, captured
-recipes and the same-family constructor to actual closure origins; C3 derives
+The next work runs in parallel: C2 integrates the reviewed outer lambda evaluation from the integrated
+initializer connection; C3 derives
 occurrence transport through intervening clause work and heap changes. The
 previous 90–150 minute occurrence-factory stage is discharged; the private-family
 constructor stage is also discharged. The next transport estimate remains
@@ -1702,25 +1730,34 @@ The supported fragment and package acceptance inventory remain unchanged.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete; records follow new evidence |
-| C2 | 0 / 4 | 14/16 checker forms retained; captured substitution, same-family whole-lambda constructor and repaired runtime binding registered and verified; finite recipe transport reviewed | General initializer/captured-environment admission; handler/resource constructors; whole initial admission | Connect actual closure origins and the exact finite annotation tree; varied full storage/resource and metadata/registry gaps remain | Next bounded runtime closure connection: 1–2 active hours provisional; full-package estimate open |
-| C3 | 0 / 5 | Caller barriers, guarded activation and local running occurrence registered and verified; generated-marker capture/resume reviewed | Continuous reachable relation across callback/clause work, cleanup and disposal; full simulation and preparation bridge | Heap-changing occurrence transport and derived activation guards; armed projection/disposal; C2 rich successor evidence | Next bounded occurrence transport: 2–4 active hours provisional; full-package estimate open |
+| C2 | 0 / 4 | 14/16 checker forms retained; captured family, repaired runtime binding and finite recipe transport integrated; actual generated-binding connection reviewed and integrated | General runtime closure admission; handler/resource constructors; whole initial admission | Derive outer callee evaluation from completed actual capture environment, then multi-binding/open initializer origins; varied full storage/resource and metadata/registry gaps remain | Generated-binding review complete; outer evaluation producer reviewed; integration pending; full-package estimate open |
+| C3 | 0 / 5 | Caller barriers, guarded activation, local occurrence and actual generated-marker capture/resume integrated; clause/heap transport first phase locally compiled | Continuous reachable relation across callback/clause work, cleanup and disposal; full simulation and preparation bridge | Actual clause/heap occurrence transport and derived activation guards; armed projection/disposal; C2 rich successor evidence | Next bounded clause/heap transport: 3–4 active hours provisional; full-package estimate open |
 | C4 | 2 / 3 | Reviewed restoration and actual resume consumer integrated with grouped evidence | Complete discrepancy closure across the declared fragment | General admission and remaining transition coverage can expose further alignment obligations | Bounded restoration integration complete; full closure estimate awaits C2/C3 gap assessment |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | Integrated theorem, final coverage, grouped verification and independent review | C2–C4; source-selected runtime annotations | Bounded example complete; general integrated theorem awaits C2–C4 |
 
-Five components have advanced from frozen or reviewed checkpoints to exact
-current-source registration and verification; the two next leaves have also
-passed independent review. Package counts stay unchanged because these are
-components of the existing whole-fragment acceptance obligations, not complete
-admission or simulation. The rejected runtime v1 consumer receives no acceptance
-credit. Its corrected v2 covers a distinct actual checked-lambda path.
+Three further components have advanced from reviewed checkpoints to exact
+current-source registration and verification. The generated-binding connection
+has advanced from local compilation through independent review to exact
+current-source registration and verification. Clause-occurrence work has a locally compiled heap-history
+composition; its actual execution factories are still in development. These
+phase changes do not close whole-fragment acceptance items.
 
-Recipe/capture packaging is estimated at 30–60 active minutes. The next C2 closure
-connection and C3 occurrence transport can proceed in parallel: 3–6 combined
-active hours, approximately 2–4 elapsed hours if their current interfaces suffice.
-These are bounded checkpoint estimates, not a goal finish date. Compared with
-the preceding report, constructor coupling and the first occurrence factories
-are discharged; continuous chronology, varied storage/resource admission and
-projection/disposal remain unresolved.
+Recipe/capture integration discharges the previous 30–60 minute packaging stage.
+The C2 generated-binding review is complete. Its outer lambda evaluation
+producer runs in parallel with the 3–4 hour C3 clause/heap transport checkpoint.
+That elapsed estimate covers only the bounded C3 output, not completion of the
+goal. The previous 1–2 hour C2 connection stage yielded the reviewed producer;
+outer evaluation prerequisites have now been identified from its completed
+environment, resource closure and original successful graph checks. General
+runtime origins, varied storage/resource admission, derived activation guards
+and projection/disposal keep the whole-package finish estimates open.
+
+Packaging review caught three registrations without compiled output paths.
+The corrected commands use warnings as errors and explicit temporary olean
+outputs. Replaying those three literal registrations over the audited 908-module
+dependency set passes 26 reports with exactly the reviewed artifacts. The prior
+missing-import failure was reproduced. This is a registered-tail replay, not a
+new uncached run of every module.
 
 ### Acceptance detail at the current checkpoint
 

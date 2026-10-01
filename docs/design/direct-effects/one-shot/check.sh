@@ -913,3 +913,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCapturedSubstitution
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRuntimeBindingOrigins.olean" CoreCallableRuntimeBindingOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningOccurrence.olean" CoreCallableRunningOccurrence.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCapturedLambdaConstructor.olean" CoreCallableCapturedLambdaConstructor.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCapturedRecipes.olean" CoreCallableCapturedRecipes.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningCapture.olean" CoreCallableRunningCapture.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableInitializerHead.olean" CoreCallableInitializerHead.lean

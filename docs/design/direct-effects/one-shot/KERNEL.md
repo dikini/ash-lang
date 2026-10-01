@@ -385,7 +385,7 @@ retain exact preceding source/log/artifact/direct-import associations.
 Changed-tail cleanup activation guards require combined chronological occurrence
 history. Projection, disposal, rich admission and whole simulation remain open.
 
-The current captured-value/running-cleanup checkpoint adds five reviewed leaves.
+The preceding captured-value/running-cleanup checkpoint adds five reviewed leaves.
 [CapturedSubstitution](CoreCallableCapturedSubstitution.lean) preserves the full
 captured storage contract and restored-lexical private body family.
 [CapturedLambdaConstructor](CoreCallableCapturedLambdaConstructor.lean) constructs
@@ -401,12 +401,50 @@ Fresh integration reproduces exact reviewed source/artifact bytes and 26 reports
 The audited assembly has 908 registered modules and 11,976 ordered standard-only
 reports; all 903 unchanged modules retain exact preceding source/log/artifact/
 direct-import associations. Five leaves are fresh; this is not an uncached build
-of all 908 modules. No Rust sources change. The next finite recipe substitution
-and generated-marker capture/resume leaves have passed independent review but
-are not registered here. Continuous callback/clause history, heap-changing
-transport, derived activation guards, general runtime closure admission,
-projection/disposal and whole simulation remain open. These components do not
-extend M0–M4's original theorem boundary or define Ash semantics.
+of all 908 modules. No Rust sources change.
+
+The current checkpoint integrates
+[CapturedRecipes](CoreCallableCapturedRecipes.lean): exact Code-directed finite
+annotation substitution inserts the frozen caller-specialized tree, preserving
+the original full captured Contract/result and callee map. It derives the
+substituted checker/storage judgment from actual original checks.
+[RunningCapture](CoreCallableRunningCapture.lean) derives the selected handler
+from the same occurrence's tail, constructs actual capture with its full original
+clause/header, computes the generated live-head owner hit, and consumes it by
+actual immediate resume. The restored same occurrence contains its generated
+spent marker. No independently selected prefix or future origin is an input.
+
+Both independent reviews pass. Fresh integration reproduces exact reviewed
+source/artifact/log bytes and 21 reports. Their intermediate audited assembly contains 910
+registered modules and 11,997 ordered standard-only reports; all 908 unchanged
+source/log/artifact/direct-import associations are preserved. Two leaves are
+fresh; this is not an uncached build of all modules. Rust sources are unchanged.
+Continuous clause/callback history, actual heap-changing transport, derived
+activation guards, general runtime closure/resource/control admission,
+projection/disposal and whole simulation remain open. [The generated initializer connection](CoreCallableInitializerHead.lean) now passes independent
+review and exact fresh source/artifact/log/report verification. Its five reports
+extract the same original initializer/path and rich/storage checks, derive
+actual three-step evaluation and the completed binding MEnv/raw-body closing,
+and construct the same whole lambda family plus finite/storage judgments.
+It covers one closed initializer; outer callee evaluation, multi-binding/open
+initializer lineage and general resource/control admission remain open.
+
+The final audited assembly contains 911 modules and 12,002 ordered standard-only
+reports, with all 910 preceding associations unchanged. This checkpoint's three
+new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
+The other two leaves were freshly compiled in the preceding 910-module assembly;
+this is an audited assembly, not an uncached rebuild of every module.
+The separate four-report outer-lambda evaluation producer has passed independent
+review and remains unregistered at this checkpoint.
+
+Packaging review caught three registrations without compiled output paths.
+The corrected commands use warnings as errors and explicit temporary olean
+outputs. Replaying those three literal registrations over the audited 908-module
+dependency set passes 26 reports with exactly the reviewed artifacts. The prior
+missing-import failure was reproduced. This is a registered-tail replay, not a
+new uncached run of every module.
+ These components do not extend M0–M4's original
+theorem boundary or define Ash semantics.
 
 ## Direct control representation
 
