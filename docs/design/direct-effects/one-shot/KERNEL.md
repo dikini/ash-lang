@@ -591,7 +591,7 @@ That checkpoint contained 931 modules and 12,210 ordered standard-only reports,
 forty more than `acb7724`, with exact selected direct-import hashes.
 No Rust source changed and no Rust test group was rerun.
 
-The current increment retains the [finite original cell schema](CoreCallableFiniteCellRegistry.lean)
+Checkpoint `c81a6cb` retained the [finite original cell schema](CoreCallableFiniteCellRegistry.lean)
 and [resource template checker](CoreCallableFiniteResourceTemplate.lean).
 The schema checks the same exported raw read/write declarations and source
 manifest, with their original API formal binder. Resource-opening binders remain
@@ -613,9 +613,9 @@ check varying private resource-family members, shadowing, binder namespaces,
 fresh-reference escape and retained higher-order contract fields. The 47
 ordered reports include one repeated existing non-retention report. This is
 a separate finite checker: the original StaticProducer remains 14/16. Its
-initial registry/admission connection, general initializer and new higher-order
-resource-body constructors, handler, branch, cleanup and nested resources remain
-open. The graph wrapper result assumes its original shape check; the lower
+initial registry/admission connection was still open at that checkpoint.
+General initializer and new higher-order resource-body constructors, handler,
+branch, cleanup and nested resources remained open. The graph wrapper result assumes its original shape check; the lower
 storage result is a constructed derivation, not an extended recipe checker.
 
 [Cleanup registration sites](CoreCallableGeneratedCleanupRegistration.lean)
@@ -627,18 +627,74 @@ re-entry to the original active caller's handler; it receives no independently
 supplied body-site proof. [Registration probes](GeneratedCleanupRegistrationProbes.lean)
 compose three actual Core steps at an active captured caller scope, retaining
 that original scope while callback invocation uses empty scope. Nine producer
-and six probe reports pass. Registration currently consumes MappedHistory;
-arbitrary general-suffix registration, initial admitted reachability, general
+and six probe reports pass. That registration producer consumes MappedHistory; arbitrary general-suffix
+registration was still open at `c81a6cb`. Initial admitted reachability, general
 body progress and changed-tail capture/resume anchor transport remain open.
 This does not remove outsideCheck or derive unconditional activation guards.
 
-Both components pass author-disjoint semantic and quality review and fresh
-isolated replay. Their six leaves compile together in 9.4 seconds, with 5.4
-seconds of preparation/hash checking, reusing all 931 prior artifacts and logs.
-The current audited assembly contains 937 modules and 12,272 ordered standard-only
-reports: 62 additional reports and 61 new report names. Selected direct-import
-hashes agree in one cache. No Rust source changed and no Rust tests were rerun.
-M0–M4, the declared fragment and whole-package acceptance counts are unchanged.
+Both components passed author-disjoint semantic and quality review and fresh
+isolated replay at `c81a6cb`. Their six leaves compiled together in 9.4 seconds,
+with 5.4 seconds of preparation/hash checking, reusing all 931 prior artifacts
+and logs. That assembly contained 937 modules and 12,272 ordered standard-only
+reports: 62 additional reports and 61 new report names. No Rust sources changed.
+
+The current increment connects the finite cell checker to original admission.
+[Exact registry compatibility](CoreCallableFiniteRegistryCompatibility.lean)
+checks the actual CellApi and every original full scalar cell record. It
+preserves successful selected lookups, including full non-cell contracts and
+original lookup order. Fresh cell operations can be added, so this is not
+registry equality. [Checked transport](CoreCallableFiniteRegistryBridge.lean)
+runs the original Annotation checker and transports only its produced
+fourteen-constructor StaticTree. Code, full contracts, environments,
+requirements, dependencies, private Plans and full Rows remain the same indices.
+No handler/resource registry congruence or unchecked fallback is assumed.
+
+The [closed initial root](CoreCallableFiniteCellInitialRoot.lean) checks
+one connected original eight-node graph: bind7(integer17), resource3(integer0),
+the ordinary handle9 bind, fresh read, and return7. Shape and translation match
+the same rootCode. Original initializer checks and the finite resource check
+construct Source/Auth; code/installation certificates, usage, accounting,
+row annotation and recursive checks construct every initial Program facet.
+No admission, invariant or future-progress proof is an input. The
+[bridge probes](FiniteCellAdmissionBridgeProbes.lean) reject incompatible
+full cell records, nearest-record/API mismatches and shadowed original handles.
+The [checked cell port ABI](CoreCallableFiniteCellPortABI.lean) derives
+the existing builtin equality for arbitrary full non-cell entries.
+[Initial progress](FiniteCellInitialProgressProbes.lean) consumes this
+same constructed Program and produces an actual calculus NamedAccessStep and
+its joint projection. This is not a Core-machine simulation or rich successor
+preservation. The formal graph checks are not a replay of Rust graph validation.
+General resource/initializer composition, handler and broader body forms,
+static storage origins, rich whole-state preservation and full M4 remain open.
+The original checker remains 14/16; the old Annotation.resource constructor
+is still absent. This bounded connected root does not close whole C2 admission.
+
+[General cleanup registration](CoreCallableGeneralCleanupRegistration.lean)
+now consumes the SAME GeneralHistory rather than only a mapped suffix. Its
+original receipt is explicitly coupled to that history, original node/action,
+identity, environment and actual registration edge. The changed
+[Generated chronology](CoreCallableGeneratedChronology.lean) adds cleanup
+as its thirteenth operation, computing the successor/history and retaining the
+same original running stamp. The [ticket-bound producer](CoreCallableGeneratedTicketBound.lean)
+preserves its bound through cleanupArmed, which creates no captured ticket.
+[General-entry probes](GeneralGeneratedCleanupEntryProbes.lean) register
+key1 above the existing key0 completion after the SAME actual start and five
+callback edges: six Generated edges and seven Core steps from start_before.
+The existing current-site, ownership and environment-closing guards remain
+conditional. Saved-anchor/changed-tail scope transport, arbitrary body progress,
+projection/disposal and general initial admitted reachability remain open.
+
+All three components pass author-disjoint semantic and quality review and fresh
+isolated replay. The grouped batch compiles seventeen affected modules once in
+23.2 seconds, with
+7.0 seconds of preparation/hash
+checking. Eight new sources and two existing source changes account for 49
+additional reports. The current coherent assembly contains 945 modules and
+12,321 ordered standard-only reports, with 928 unchanged artifacts/logs reused.
+The new lower registration module precedes its changed chronology consumer;
+the reviewed batching tool preserves the other registration order and every
+provenance check. No Rust sources changed and no Rust tests were rerun. M0–M4,
+the declared fragment and whole-package acceptance counts remain unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

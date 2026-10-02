@@ -33,6 +33,7 @@ theorem Operation.ticket_events {graph : CoreSyntax.Graph} {before after : Endpo
     capturedTickets after.state.observations =
       capturedTickets before.state.observations ++ issuedTickets created := by
   cases operation with
+  | cleanup input => simp [cleanup_result, CoreCallableGeneralCleanupRegistration.registeredState, issuedTickets, capturedTickets]
   | bind input => simp [bind_result, issuedTickets, capturedTickets]
   | beta input => simp [beta_result, issuedTickets]
   | bindReturn input => simp [bind_return_result, issuedTickets]

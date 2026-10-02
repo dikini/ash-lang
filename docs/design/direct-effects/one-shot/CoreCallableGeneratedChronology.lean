@@ -1,5 +1,6 @@
 import CoreCallableRunningLocalHandler
 import CoreCallableCleanupActivation
+import CoreCallableGeneralCleanupRegistration
 namespace Ash.OneShot.CoreCallableGeneratedChronology
 open CoreSyntax CoreTranslation CoreMachine CoreValueRelation CoreStrictFrames CoreStrictStack
 open ScopedExpressions ScopedExecution CoreGeneralStack CoreGeneralCaptureResume CoreGeneralRestoration
@@ -994,9 +995,84 @@ noncomputable def spent_return_result {graph : Graph} {current : Endpoint graph}
   · rw [empty_point input.empty,input.lexical]
     exact actual.target
 
+/-- Cleanup registration consumes only this SAME current endpoint and actual
+literal/closing/site/ownership guards. General history is not supplied anew. -/
+structure CleanupInput (current : Endpoint graph) where
+  site : Nat
+  callback : Binder
+  action : Nat
+  body : Nat
+  environment : Environment
+  data : ActionData
+  node : CoreSyntax.Node
+  known : graph.node site = some node
+  kind : node.kind = .cleanup callback action body
+  shape : checkCleanup graph site callback action = .ok ()
+  postorder : CoreTranslationFuel.Postorder graph
+  lineage : CoreCallableSiteLineage.SiteLineage graph current.owners data.scope site
+  rawBody : Code
+  bodyCode : Code
+  translated : translateFuel graph (graph.nodes.length+1) current.owners body = .ok rawBody
+  closing : EnvCloses graph current.owners current.state.heap environment
+    (.cleanup (.variable callback.id) rawBody) (.cleanup data.action bodyCode)
+  parameter : Nat
+  lambdaBody : Code
+  callable : data.action = .lambda parameter lambdaBody
+  identity : data.identity = current.state.nextCleanup
+  ownership : CoreCallableReachableResume.CurrentOwnership graph current.owners
+    {current.state with frames := current.physical} data.scope current.lexical
+  control : current.state.control = .evaluate site environment
+  empty : EmptyFocus current (.cleanup data.action bodyCode) data.scope
+
+structure CleanupData {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) where
+  past : CoreCallableGeneralCleanupRegistration.GeneralRegisteredCleanupPast graph current.owners current.state
+    input.site input.callback input.action input.body input.environment input.data current.physical current.lexical input.rawBody input.bodyCode
+  historySame : past.history = current.history
+  raw : RawStep ⟨.cleanup input.data.action input.bodyCode,input.data.scope,current.lexical⟩
+    ⟨input.bodyCode,input.data.scope,.push (.armed input.data) current.lexical⟩ [.cleanup input.data.identity] []
+  owned : CoreCallableReachableResume.CurrentOwnership graph current.owners
+    (CoreCallableGeneralCleanupRegistration.registeredState current.state input.site input.body input.action input.environment input.data current.physical)
+    input.data.scope (.push (.armed input.data) current.lexical)
+
+private theorem cleanup_produced {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) : Nonempty (CleanupData input) := by
+  obtain ⟨past,sameHistory,raw,owned⟩ := CoreCallableGeneralCleanupRegistration.general_register input.postorder input.lineage
+    input.known input.kind input.shape input.translated input.closing input.callable input.identity input.ownership current.history
+  exact ⟨⟨past,sameHistory,raw,owned⟩⟩
+
+noncomputable def cleanup_data {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) : CleanupData input :=
+  Classical.choice (cleanup_produced input)
+
+noncomputable def cleanup_result {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) : Result current [.cleanup input.data.identity] [] := by
+  let data := cleanup_data input
+  let after : Endpoint graph := {
+    state := CoreCallableGeneralCleanupRegistration.registeredState current.state input.site input.body input.action input.environment input.data current.physical
+    focus := ⟨input.bodyCode,input.data.scope,.nil⟩
+    owners := current.owners,maps := []
+    physical := .cleanupBoundary input.action input.environment input.data.identity :: current.physical
+    lexical := .push (.armed input.data) current.lexical
+    history := .push (.cleanup data.past.installed.delayed) (by trivial) current.history
+    frames := rfl }
+  have actual := data.past.actual
+  have same : {current.state with control := .evaluate input.site input.environment,frames := current.physical} = current.state := by
+    rw [← input.control,← empty_frames input.empty]
+  rw [same] at actual
+  refine ⟨after,actual,.positive ?_⟩
+  rw [empty_point input.empty]
+  exact raw_positive data.raw (by trivial)
+
+theorem cleanup_current_sites {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) :
+    CoreCallableSiteLineage.SiteLineage graph current.owners input.data.scope input.body ∧
+    CoreCallableSiteLineage.SiteLineage graph current.owners input.data.scope input.action :=
+  ⟨(cleanup_data input).past.body_site,(cleanup_data input).past.action_site⟩
+
+theorem cleanup_current_ownership {graph : Graph} {current : Endpoint graph} (input : CleanupInput current) :
+    CoreCallableReachableResume.CurrentOwnership graph current.owners (cleanup_result input).after.state
+      input.data.scope (cleanup_result input).after.lexical := (cleanup_data input).owned
+
 /-- The only edge constructors are named operation producers. There is no
 constructor accepting Result, GeneralLink, GeneralChain or arbitrary matching. -/
 inductive Operation : (before after : Endpoint graph) → List Owner → List Owner → Type where
+  | cleanup (input : CleanupInput before) : Operation before (cleanup_result input).after [.cleanup input.data.identity] []
   | bind (input : BindInput before) : Operation before (bind_result input).after [] []
   | beta (input : BetaInput before) : Operation before (beta_result input).after [] []
   | bindReturn (input : BindReturnInput before) : Operation before (bind_return_result input).after [] []
@@ -1013,6 +1089,7 @@ inductive Operation : (before after : Endpoint graph) → List Owner → List Ow
 theorem Operation.actual {graph : Graph} {before after : Endpoint graph} (operation : Operation before after created discharged) :
     CoreMachine.next graph before.state = .stepped after.state ∧ Matching graph before after created discharged := by
   cases operation with
+  | cleanup input => exact ⟨(cleanup_result input).core,(cleanup_result input).matching⟩
   | bind input => exact ⟨(bind_result input).core,(bind_result input).matching⟩
   | beta input => exact ⟨(beta_result input).core,(beta_result input).matching⟩
   | bindReturn input => exact ⟨(bind_return_result input).core,(bind_return_result input).matching⟩
@@ -1236,6 +1313,9 @@ theorem Operation.running_receipts {graph : Graph} {before after : Endpoint grap
     (operation : Operation before after created discharged) :
     (running_stamps before.history).Perm (running_stamps after.history) := by
   cases operation with
+  | cleanup input =>
+    simp only [cleanup_result,running_stamps]
+    exact List.Perm.refl _
   | bind input => simp [bind_result,running_stamps]
   | beta input => simp [beta_result]
   | bindReturn input =>
@@ -1351,6 +1431,8 @@ theorem matching_spent_blocks
 #print axioms HandlerHead.stamps
 #print axioms SpentHead.stamps
 #print axioms ResumeSplit.stamps
+#print axioms cleanup_current_sites
+#print axioms cleanup_current_ownership
 #print axioms Operation.actual
 #print axioms Operation.bounded_matching
 #print axioms Operation.running_receipts
