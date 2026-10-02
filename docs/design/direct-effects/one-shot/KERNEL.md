@@ -799,7 +799,7 @@ The three related leaves compile together once in
 4.2 seconds, with
 7.3 seconds of preparation
 and hash checks. All 950 parent artifacts and logs are reused unchanged. The
-current coherent assembly contains 953 modules and 12,389 ordered
+assembly at `2484040` contains 953 modules and 12,389 ordered
 standard-only reports, twenty-three more than `05cff7d`, with exact source,
 artifact, log and selected-import associations. No Rust sources changed or
 Rust tests were rerun. M0–M4, the fragment and whole-package counts remain
@@ -809,11 +809,83 @@ This closes the current evaluate/saved-map scope provider for those thirteen
 forms. It does not produce a dormant cleanup caller's activation over a changed
 suffix, saved-anchor transport or prefix misses. Strong all-endpoint origins,
 deeper restored strict-frame promotion, environment-closing, disposal/projection,
-general C2 admission and the complete C3/C5 correspondence remain open. The next
-C3 assessment targets the original registration-to-start history and actual
-completion activation guards. C2 is implementing the assessed finite
+general C2 admission and the complete C3/C5 correspondence remain open. At `2484040`, the next
+C3 assessment targeted the original registration-to-start history and actual
+completion activation guards. C2 was implementing the assessed finite
 higher-order resource-body composition. This work changes no current language
 semantics and makes no claim that the remaining proofs are already available.
+
+The next paired increment checks [compositional resource bodies](CoreCallableCompositionalResourceBody.lean)
+from finite data. New lambda, application and Bool-branch constructors combine
+with ordinary bindings, variables and products. Original opaque slots preserve
+their exact position and whole private contract; same-name shadowing cannot
+select an older slot. A lambda checks its body under its own declared allowance
+and computes its isolated requirements and private checking family. Application
+checks the whole function domain/result and exposed recipe. The identity family
+is structural finite data, with constness of full dependencies, Plan and Rows
+rather than only erased ports. No desired Source/Auth or future-success proof
+is supplied as metadata.
+
+The [opening checker](CoreCallableCompositionalResourceOpening.lean)
+executes the original finite initializer recheck before the body gate. Its
+result retains that exact initializer receipt and constructs the all-fresh
+Source/Auth openings, requirement hiding and combined resource Source/Auth.
+The [connected original graph](CoreCallableCompositionalResourceRoot.lean)
+retains outer7, handle9 and the nonliteral initializer. Its resource body binds
+a fresh-cell reader, binds a higher-order function taking that whole callable
+contract, applies both through ordinary variables, and returns outer7 through a
+Bool branch. Actual shape, translation and closed Source/Auth pass. Four
+metadata negatives reject a falsely pure cell reader, escape of a fresh-reading
+callable, an older shadowed slot and an unsupported exact recipe. The three
+leaves have thirty-two standard-only reports and nine interface checks.
+
+Stored-capture nonretention remains a separate C2.3 obligation. One retained
+boundary check accepts Source/Auth for a pure callable that aliases handle9 and
+returns Integer, while its literal dependency still names handle9. Requirement
+hiding and full checking-family constness do not certify stored captures. The
+next bounded storage producer must reuse actual dependencies and the nearest
+whole paired storage binding; the fresh-read escape negative does not establish
+rejection of every retaining callable. Rust final validation already reconstructs
+capture information; this formal separation is not a demonstrated Rust bug.
+
+The [initial chronology](CoreCallableInitialChronology.lean) fixes the
+actual Core initial graph/root/environment, empty frames and empty history.
+Shape and exact root translation are current guards. Named existing Operations
+extend that same endpoint-threaded history. An additive initial ready-lambda-bind
+bootstrap reuses the established three-edge producer: two ranked administrative
+edges and one positive bind step. It does not accept an arbitrary CoreSteps
+chain or change the thirteen existing Operation forms. Original site, evaluated
+scope and ticket-bound obligations are derived along this history.
+
+The [causal callback-start consumer](CoreCallableGeneralStartedFrom.lean)
+retains the exact initial prefix, cleanup registration, named body prefix,
+original installed receipt and heap-weakened history at normal callback start.
+Its Generated consumer preserves actual initial-to-current Core steps, the
+calculus target trace and ticket bound without an independent initialBound seed.
+The [focused probes](InitialChronologyProbes.lean) reuse the existing
+authenticatedCleanup graph: three bootstrap edges, registration, the Unit body
+edge and normal start make six actual Core edges. Exact translation rejects a
+false Unit initial focus. Twelve producer, six consumer and eight probe reports
+pass. This is causal coverage for the represented named families; it does not
+construct general C2 admission or remove dormant activation/outsideCheck guards.
+
+Both independently reviewed components passed an initial six-leaf compile batch
+in 46.7 seconds, with
+7.1 seconds of
+preparation and hash checks; all 953 parent artifacts were reused. Packaging
+then caught seven redundant final newline bytes in one new Lean file. An
+independently reviewed whitespace-only correction recompiles that file and its
+two consumers in 42.6
+seconds, with 9.4
+seconds of preparation. It reuses 956 artifacts, including every C3 leaf. All
+affected reports and artifact bytes match the initial assembly. The final
+coherent assembly contains 959 modules and 12,447 ordered standard-only reports,
+fifty-eight more than committed `2484040`. Both assembly gates are retained;
+neither is presented as a separate Git commit.
+No Rust source changed or Rust test was rerun. M0–M4, the declared fragment and
+whole-package acceptance counts remain unchanged. General handler/resource
+admission, stored captures, dormant first-anchor transport, deeper strict-frame
+promotion, disposal, complete simulation and the integrated theorem remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
