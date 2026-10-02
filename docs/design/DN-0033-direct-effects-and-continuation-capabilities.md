@@ -842,7 +842,7 @@ review reused those three successful compiles, without replaying them.
 One related three-leaf integration gate compiles in
 81.9 seconds, with
 5.3 seconds of preparation and association checks.
-It reuses all 972 parent artifacts and logs. The current coherent assembly
+It reuses all 972 parent artifacts and logs. The `4d2397c` coherent assembly
 contains 975 modules and 12,615 ordered standard-only reports, 38 more than
 `633f0a4`. No Rust source changed or Rust test was rerun. This advances existing
 C2.1/C2.3 obligations without changing the original checker14/16 inventory,
@@ -854,9 +854,71 @@ runtime connection computes the original initial-to-reader path with twelve
 Core edges and activation0 from actual history. Focused acquisition matches
 three Raw steps: plug the saved resource initializer, enterCell and synthetic
 handle bind. It does not consume a supplied Chain or desired closure origin.
-Finite handler Source/Auth assembly and changed-tail strict restoration remain
-parallel bounded work; arbitrary initializer execution, saved anchors,
-disposal, runtime preparation and whole C3/C5 coverage remain open.
+At that checkpoint, finite handler Source/Auth and changed-tail restoration
+were parallel bounded work. The following checkpoint integrates both.
+
+The [finite clause-template checker](direct-effects/one-shot/CoreCallableFiniteClauseTemplate.lean)
+and [handler Source/Auth producer](direct-effects/one-shot/CoreCallableFiniteHandlerSource.lean)
+now derive the SAME handler judgment from literal original metadata. Pure
+operands, resume, pure bind prefixes and Bool branches retain complete opaque
+contracts and private plans/rows. Clause producers quantify every compatible
+full owner contract, including its resume demand. Actual current-use checks
+reject available, double-used and escaped continuation code before the supported
+form check. Registry coverage and uniqueness, nearest references, rights,
+receiver support and ordinary/protected offers are executed. Canonical owner0
+is used only to erase an already universal producer to port typing.
+
+The [handler probes](direct-effects/one-shot/FiniteHandlerSourceProbes.lean) construct Source/Auth
+for the same closed request/handler graph and check exact full higher-order
+slots, owner distinctions and unavailable modes. Protected selection here is
+static mode/family lookup; it does not establish contextual request routing.
+Independent review passes 46 exact standard-only reports, fifteen interfaces,
+two intended missing-interface failures and 522 actual selected dependencies,
+with all 975 parent/eight-library associations before and after. This finite
+resume-template increment does not extend the original checker14/16 inventory.
+Original handler annotation, contextual CodeChecked/terminal/pending admission,
+local-owner retirement, storage and general initial Program remain open.
+
+The [strict capture-origin producer](direct-effects/one-shot/CoreCallableStrictCaptureOrigins.lean)
+preserves the same computed physical installation through actual capture and
+resume. It derives head membership, selected handler/activation/ticket, complete
+captured and outside segments and the current clause front. Original saved
+maps/scope and finite kept-prefix checks derive inactive or retained-inside
+scope lineage. Its [changed-tail consumer](direct-effects/one-shot/CoreCallableStrictCaptureConsumers.lean)
+uses that restored installation to match one actual Core right-return step with
+two Raw plug/focus steps. It retains full literal, closing, nonvalue, maps and
+PlainData guards while removing the unchanged-original-tail/history guard.
+
+The [connected restoration probes](direct-effects/one-shot/StrictCaptureOriginInterfaces.lean)
+add a bound product to the original running graph and preserve its original
+Unit result, callback, outer handler and cleanup. Sixteen actual Core edges
+from that running start capture pair-left plus an older saved bind. Restoration
+retains pair-right, saved bind, outer/intervening handlers, the same selected
+spent marker and original completion. Wrong handler, activation, dynamic ticket
+and original captured suffix remain distinct negatives. Independent review
+passes 35 exact standard-only reports, twelve interfaces, intended RED failure,
+541 actual selected dependencies and all 975 parent/eight-library associations.
+Standard Classical.choice selects a proved HeadCut receipt; this is proof-level
+construction, not an executable capture validator. Outside-active compatibility,
+deeper ordinary positions, arbitrary nesting/repeated episodes, disposal,
+initial admission and complete callback/C3 execution remain open.
+
+One combined six-leaf integration gate compiles in
+9.9 seconds and reuses all 975 unchanged artifacts and logs;
+preparation and association checks take
+10.4 seconds. The current coherent assembly has 981 modules and
+12,696 ordered standard-only reports, 81 more than `4d2397c`. All six source,
+artifact and log associations match their independent reviews. No Rust source
+changed or Rust tests were rerun. The unchanged acceptance counts and estimates
+measure whole-fragment obligations rather than these proof components.
+
+Actual resource execution is a separate active increment: its first leaf is
+locally verified through nine original initial-to-acquisition Core edges,
+activation0, the opened environment and exactly three focused acquisition Raw
+steps. Reader closure/installation to the twelve-edge endpoint is in development;
+this runtime increment is not independently reviewed or integrated here.
+General admission, saved-anchor/disposal transport, runtime preparation and the
+integrated C5 result remain open. No normative semantics change in this batch.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
