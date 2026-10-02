@@ -2749,7 +2749,7 @@ Program and complete callback execution remain open.
 One combined eight-leaf gate compiles in
 28.6 seconds and reuses all 981 unchanged artifacts and logs;
 preparation and association checks take
-9.9 seconds. The current coherent assembly has 989 modules and
+9.9 seconds. The `9b4f7f6` coherent assembly has 989 modules and
 12,784 ordered standard-only reports, 88 more than `18d3ecb`. All eight source,
 artifact and log associations match their independent reviews. No Rust source
 changed or Rust tests were rerun. These components advance existing C2/C3
@@ -2758,6 +2758,88 @@ No normative semantics change. The next bounded assessments address original
 handler BODY routing and connecting the computed reader to actual calls through
 the existing history carrier. General admission/simulation, deeper saved-anchor
 and disposal transport, runtime preparation and integrated C5 remain open.
+
+The next integrated increment connects original handler BODY routes, actual
+ordinary calls and a cell-read reply, and independent saved caller metadata.
+These are DN-0033 proof experiments. No normative semantics or Rust behavior
+changes. Whole-fragment C2/C3 acceptance counts and estimates remain unchanged.
+
+The [handler BODY route checker](CoreCallableFiniteHandlerBodyRoutes.lean)
+executes the original annotation/Source/Auth checker and checks quiet prefixes,
+suffixes and both Bool arms. It constructs the exact captured suffix Pending,
+CodeChecked, accounting choices and every fresh full owner specialization.
+Operation input and handler answer are distinct full Contracts; body-local
+shadowing remains separate from outer clause bindings. The initial checker
+executes usage, policy, resource support, accounting evaluation and budget checks
+to construct Program. Source demand remains separate from accounting.
+The [associated graph probes](FiniteHandlerBodyRoutingProbes.lean)
+retain the earlier four-node graph records and handler metadata in one ten-node
+extension, with explicit translation and ticket mapping 10 to 45. They produce
+an accepted Program and structural initial joint judgment. Opaque input/answer,
+nearest shadowing, unavailable ordinary mode, nonquiet suffix and unchosen-arm
+refusals, and a nonempty latent full-function slot pass. This is a singleton,
+resume-only handler with at most one request per body path and quiet suffixes;
+general handlers, repeated requests, original checker 14/16 completion, builtin
+ABI, initial_progress, stored capture and actual Core execution remain open.
+Independent replay passes 41 reports, twelve interfaces, two missing-interface
+failures without an artifact, 547 selected dependencies and all 989 parent pins.
+
+The [runtime current carrier](CoreCallableComposedRuntimeCurrent.lean)
+retains the same Core state and calculus machine while moving the original cell
+boundary from mapped annotations into physical GeneralHistory. Both original
+and new interpretation certificates remain; this representation change is not
+an execution step. Whole Point equality was disproved by a retained countercheck.
+An inherited Chain endpoint helper was fixed to another graph; the new leaf
+derives its original related endpoint directly without changing that helper.
+The [call/read consumer](CoreCallableComposedRuntimeCalls.lean)
+extends the SAME original 23-node graph from reader12 through higher13 installation,
+two ordinary beta calls and a computed cell reply: 29 actual Core edges. Named
+operations and inherited ranked administrative matches construct the target
+trace. The reader runs in its original saved E9 with Unit, rather than caller
+E13; the current closure derives the request, handle lookup and original cell cut.
+The result is read0/0, integer0, activation ledger1 and the retained original
+bind5/cell boundary. The unexecuted Bool suffix later returns outer7, integer17.
+
+Executed reader/current/captured-handle receipts and the checked higher code
+join to existing runtime ValueRel and populate the exact BetaInput records.
+Full Family/Origin/Auth, private Plan/Rows and lower function domain [0,0] remain
+indexed. The higher runtime relation comes from the existing finite closure
+proof rewritten by checked code equality; extraction retains its static Family.
+This proves a connected finite receipt-to-beta consumer, without a generic typed
+beta or full-contract argument-admission theorem. The [connected probe](ComposedResourceRuntimeCallProbes.lean)
+retains all executed original checks and the same 29-edge path; saved-environment
+and nearest erased-domain shadow negatives pass. Independent replay passes 65
+reports, 25 interfaces, 597 selected dependencies, three baseline missing-interface
+failures and the representation countercheck, all without artifacts. All989
+parent/eight-library associations agree before and after. Generic ready-lambda
+installation is proved; arbitrary call simulation, the old chronology carrier,
+branch/return/resource release, general admission and Rust preparation remain open.
+
+The [saved caller-head producer](CoreCallableStrictCallerHeadCompatibility.lean)
+replaces full saved-map/scope equality with computed active enclosing-handler
+compatibility. Original and selected map tails, saved owners and dynamic tickets
+remain independent. The selected installation keeps its own lineage; unique
+handler sites derive its spent-marker miss. The original caller retains exact
+occurrence, ticket and saved capture through the actual original cut.
+The [right consumer](CoreCallableStrictCallerHeadConsumers.lean)
+retains current control/value/closing/PlainData guards and matches one Core step
+with two Raw steps. The [same graph probe](StrictCallerHeadCompatibilityInterfaces.lean)
+reuses the unchanged private prefix and 19-edge run. Independent replay passes 30
+reports, twelve interfaces, two missing-interface failures without an artifact,
+544 selected dependencies and all 989 parent pins. Independent metadata checks
+are conditional interface evidence. Reset/different-handler cases, clause-bearing
+fronts, causal outside ancestry, deeper promotion and disposal remain open.
+
+One related eight-leaf gate compiles in
+18.1 seconds; preparation and associations take
+7.3 seconds. All989 unchanged artifacts and logs are reused.
+The current coherent assembly has 997 modules and 12,920 ordered standard-only
+reports, 136 more than `9b4f7f6`. All eight source/artifact/log associations match
+independent reviews. Failed authoring and review-harness attempts remain recorded;
+successful productive compiles were not repeated for metadata corrections.
+The next bounded assessments cover the original graph's saved return, Bool and
+resource completion; causal outside/deeper scope transport; and connecting
+contextual handler production to general admission. Full C2–C5 remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
