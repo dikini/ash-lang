@@ -1007,3 +1007,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/ComposedResourceRuntimeCompletio
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRestoredTupleHeads.olean" CoreCallableRestoredTupleHeads.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRestoredTupleDischarge.olean" CoreCallableRestoredTupleDischarge.lean
 lean -DwarningAsError=true -o "$proof_build_dir/RestoredTupleDischargeInterfaces.olean" RestoredTupleDischargeInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableFiniteHandlerEffectfulSuffix.olean" CoreCallableFiniteHandlerEffectfulSuffix.lean
+lean -DwarningAsError=true -o "$proof_build_dir/FiniteHandlerEffectfulSuffixProbes.olean" FiniteHandlerEffectfulSuffixProbes.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBetaPreservation.olean" CoreCallableRichBetaPreservation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBetaCore.olean" CoreCallableRichBetaCore.lean

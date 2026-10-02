@@ -2877,15 +2877,59 @@ The graph assigns a product type to the pair and its binding; inherited plain
 frame input/output annotations still say Unit. The operational correspondence
 does not authenticate these type fields or establish their typed compatibility.
 
-The current coherent assembly has 1,002 modules and 12,991 ordered standard-only
+The `3b8fa0d` coherent assembly has 1,002 modules and 12,991 ordered standard-only
 reports, 71 more than `0aa09d7`. One related five-leaf gate takes
 8.0 seconds; preparation and association checks take
 10.3 seconds. All 997 unchanged artifacts and logs are reused,
 and all five new source/artifact/log associations match independent reviews.
 No Rust behavior changes or repeated Rust checks occur in this proof batch.
-The next existing dependencies are finite effectful handler suffix production,
-the original recursive handler metadata seam, older changed-tail bind transport
-and general rich typed beta/current-state preservation. Full C2–C5 remain open.
+The next integrated increment connects finite effectful handler sequencing and
+CURRENT rich beta preservation. These remain informative DN-0033 proof
+experiments within C2/C3; whole-fragment counts and estimates are unchanged.
+
+The [effectful suffix producer](CoreCallableFiniteHandlerEffectfulSuffix.lean)
+checks a direct first request followed by a finite route with at most one later
+request per path. It derives the changed spent-owner context, both resumptions'
+checking and accounting, and the original initial Program facets from finite
+data. Both Boolean arms are checked. The [associated probes](FiniteHandlerEffectfulSuffixProbes.lean)
+retain the original full operation input and handler answer, higher-order slots,
+private plans and rows, and nearest ordinary binding. The associated seven-node
+graph extends the original request-handler body; it is not a new graph matrix.
+Independent replay passes 54 reports, twelve interface checks, two missing
+interfaces and the old quiet-route rejection without artifacts, and 549 selected
+dependencies. This covers a direct first request and the existing bounded later
+route; arbitrary sequences, original recursive handler admission, rich reachable
+runtime preservation and M4 remain open. Constructor coverage stays 14/16.
+
+The [rich beta producer](CoreCallableRichBetaPreservation.lean)
+inverts a CURRENT authenticated application and derives the original constructor
+Family/Origin/Auth, actual argument support, selected private Plan/full Rows,
+successor Source/checking/accounting and transported root. It retains both
+original operand sources and the pending caller. The [Core consumer](CoreCallableRichBetaCore.lean)
+uses the SAME indexed beta input for actual Core execution and positive matching;
+the captured callee environment remains distinct from the pending caller.
+Independent replay passes ten reports, 29 interfaces, three parent-only missing
+interfaces, two missing original-provider interfaces without artifacts, and 599
+selected dependencies. The original executed higher-order call receipt retains
+its full opaque nested input domain and rejects scalar collapse. It does not yet
+produce the original23 graph's e20/e25 CURRENT rich Site with that exact source,
+domain and private family. A CURRENT Site is a preservation premise here, not a
+field accepted as static metadata or a supplied future invariant. General typed
+ValueRel, initial-to-final preservation and C5/M4 are not established.
+
+The current coherent assembly has 1,006 modules and 13,055 ordered standard-only
+reports, 64 more than `3b8fa0d`. One related four-leaf compile gate takes
+8.2 seconds; preparation and association checks take
+9.8 seconds. All 1,002 unchanged artifacts and logs are reused as hard links.
+All four new source/artifact/log associations match author-disjoint reviews.
+No Rust source changes or repeated Rust checks occur in this proof batch.
+The next dependencies are the original recursive handler metadata/declaration
+seam, exact-current clause support and future receiver provenance, older
+changed-tail bind transport, and the original rich CURRENT source/domain/family
+producer. Existing fixed-receiver world transport preserves original rows;
+receiver restoration computes new rows and cannot establish unchanged literal
+clause support at arbitrary receivers. This is a formal proof limitation, not a
+demonstrated Ash semantic defect. Full C2–C5 remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
