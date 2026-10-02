@@ -715,11 +715,93 @@ reports, twelve public interfaces, the missing-interface negative check and
 related leaves in 2.1 seconds, with
 8.8 seconds of preparation and association checks.
 All 964 parent source/artifact/log associations remain unchanged and are reused.
-The current coherent assembly contains 967 modules and 12,531 ordered
+The assembly committed as `70b41c0` contains 967 modules and 12,531 ordered
 standard-only reports, eighteen more than `45d6f09`. No Rust source changed or
 Rust test was rerun. This advances C3.1/C3.2 without closing a whole-fragment
 acceptance item; package counts, estimates, exclusions and normative semantics
 remain unchanged.
+
+The [compositional admission facets](direct-effects/one-shot/CoreCallableCompositionalAdmissionFacets.lean)
+now interpret the original finite initializer recipe and compositional Checking
+into contextual SourceAdmission.Code, dependent CodeChecked and Accounting.Run.
+The structural cell check constructs exact rows at every identity; Source/Auth
+freshness is supplied by the separately executed original rich gate. Closed
+opaque Plan/Rows remain whole and use their original finite RecipeTag. Literal
+requests unavailable in this context and invocation without a continuation
+reject. Actual syntax is checked to construct Uses, including lambda bodies.
+
+The closed-root checker executes the original outer and resource rich checks,
+then checks contextual availability, usage, support, evaluated accounting and
+budget. Its metadata carries no desired Source/Auth, contextual certificate,
+accounting, usage or future-success family. The
+[SAME23-node initial Program probes](direct-effects/one-shot/CompositionalInitialAdmissionProbes.lean)
+retain the nonliteral initializer and higher-order lambda/app/Bool body. The
+full-index witness preserves the original private Plan, full Rows and rich
+Source requirements. Its independently computed accounting root remains a
+choice of two done branches and evaluates to the empty row. It is not replaced
+by the rich Source requirements. The same Program yields an actual calculus
+NamedAccessStep and joint successor validity through the existing initial
+progress interface; this is a first step, not whole Core execution.
+
+Independent review passes seventeen exact standard-only reports, eight public
+interfaces, three missing-interface negative checks and 549 actual dependency
+selections. The intermediate two-leaf gate compiles in
+22.3 seconds, with 9.9 seconds of
+preparation and association checks. All 967 parent source/artifact/log
+associations remain unchanged and are reused. This immutable intermediate
+assembly contains 969 modules and 12,548 ordered standard-only reports, seventeen more
+than `70b41c0`. Earlier failed/light 959/964 diagnostics remain separate from
+this committed-parent verification.
+
+This Program checker does not consume the separate lower storage receipt or
+prove stored-capture nonretention. It handles one outer integer binding and the
+finite composed resource slice; general original resource/handler checking,
+cleanup/invocation contextual interpretation, retained runtime/callable origins,
+rich successor preservation, whole M4 availability and Rust validation remain
+open. Original checker coverage stays 14/16 and whole C2 stays 0/4. No Rust
+source changed or Rust test was rerun. C1–C5 counts, estimates, fragment scope
+and normative semantics remain unchanged.
+
+The [general strict-focus producer](direct-effects/one-shot/CoreCallableGeneralStrictFocus.lean)
+computes positive pair-left/application-function endpoints over the entire
+general physical suffix. SAME current chronology derives both child-site
+lineages and a saved ordinary-frame origin. The installation receipt retains
+the original node, right literal/code/environment, saved map, complete
+PlainData.scope and below-history. Each entry takes one Core and one Raw step.
+
+The [saved-right consumers](direct-effects/one-shot/CoreCallableStrictFocusConsumers.lean)
+retain that receipt through a middle of existing named Operation outputs.
+Actual returned head, unchanged original physical/lexical tail and history,
+operand ValueRel, heap extension, full return PlainData, matching saved scope,
+non-value right code and EmptyFocus remain explicit. Pair-right and application-
+argument compute one Core edge and two Raw steps: plug, then focus. They restore
+the SAME saved map/scope and derive right-site/current origins without an
+independently supplied saved lineage or desired origin.
+
+The [generic strict episode interfaces](direct-effects/one-shot/GeneralStrictFocusInterfaces.lean)
+retain SAME InitialChronology or Generated prefix, computed entry, named middle
+and computed right return. Actual Core steps, target trace and accounting
+compose through that original prefix. The literal-operation consumer retains
+the installation and performs its actual right transition. Wrong returned entry
+control and value-selected entry/right children fail the current strict gates.
+No graph fixture is added. Arbitrary nesting, repeated new-focus episodes,
+capture/resume changed tails, general saved-anchor transport and admission
+remain open. These are C3.1/C3.2 components, not new acceptance items.
+
+Both components join one five-leaf checkpoint with 46 additional reports:
+seventeen contextual-admission reports and twenty-nine strict-episode reports.
+Independent reviews pass all five leaves, twenty public interfaces, exact
+ordered standard-only reports, expected missing-interface failures and their
+actual dependency selections. The final gate compiles only the three strict
+leaves in 3.1 seconds, with
+7.2 seconds of preparation and association checks.
+It reuses all 969 intermediate artifacts and logs, including both facets;
+the expensive facets are not recompiled. All 967 committed-parent associations
+remain unchanged. The 969 assembly is an immutable integration intermediate,
+not a separate Git commit. The current coherent assembly contains 972 modules
+and 12,577 ordered standard-only reports, 46 more than `70b41c0`. No Rust source
+changed or Rust test was rerun. C1–C5 counts, estimates, exclusions and normative
+semantics remain unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
