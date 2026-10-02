@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 17:43 UTC
+### Current deliverable board — 2026-10-02 18:36 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,9 +72,12 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Finite effectful handler suffix | **2 / 2 leaves** | **Passed** | **54 reports; twelve interfaces; original finite initial Program** | **This checkpoint** | **Direct first request and bounded later request connected; changed spent-owner checking derived; original checker remains 14/16** |
-| General CURRENT rich beta preservation | **2 / 2 leaves** | **Passed** | **10 reports; 29 interfaces; actual Core beta and positive matching** | **This checkpoint** | **Full original constructor/private rows retained; original23 e20/e25 CURRENT source/domain/family provider still open** |
-| **Suffix/beta integration batch** | **4 / 4 leaves** | **Passed** | **64 additional reports; 1,002 unchanged artifacts/logs reused** | **This checkpoint** | **One related gate; four exact independently reviewed source/artifact/log associations** |
+| Original handler metadata/declaration seam | **3 / 3 new; 3 / 3 existing files** | **Passed** | **53 reports; net +25; twelve interfaces; original graph** | **This checkpoint** | **Exact-current support and fixed-receiver world transport derived; original checker stays 14/16; handler branch/future receivers open** |
+| Changed-tail restored bind completion | **3 / 3 leaves** | **Passed** | **44 reports; twelve interfaces; original prefix 26→27 Core edges** | **This checkpoint** | **Both actual cuts, own saved scope and caller closure connected; Unit/Product annotation gap and H completion remain open** |
+| **Handler seam/restored bind integration** | **9 / 9 source deltas** | **Passed** | **69 additional reports; 62 affected compiled; 950 artifact/log pairs reused** | **This checkpoint** | **One related gate; all nine exact reviewed associations; single-space repair reused 59 successful author compiles** |
+| Finite effectful handler suffix | **2 / 2 leaves** | **Passed** | **54 reports; twelve interfaces; original finite initial Program** | **`4047755`** | **Direct first request and bounded later request connected; changed spent-owner checking derived; original checker remains 14/16** |
+| General CURRENT rich beta preservation | **2 / 2 leaves** | **Passed** | **10 reports; 29 interfaces; actual Core beta and positive matching** | **`4047755`** | **Full original constructor/private rows retained; original23 e20/e25 CURRENT source/domain/family provider still open** |
+| **Suffix/beta integration batch** | **4 / 4 leaves** | **Passed** | **64 additional reports; 1,002 unchanged artifacts/logs reused** | **`4047755`** | **One related gate; four exact independently reviewed source/artifact/log associations** |
 | Original resource execution to done | **2 / 2 leaves** | **Passed** | **34 reports; twenty interfaces; 35 initial Core edges/result 17/release 0** | **`3b8fa0d`** | **Saved E13, branch, literal 25 observations and exact ledger connected; general rich preservation open** |
 | Restored tuple second capture/resume/discharge | **3 / 3 leaves** | **Passed** | **37 reports; twelve interfaces; same 26-edge original run** | **`3b8fa0d`** | **Full original K installation and pair allocation derived; older bind/live H/both spent K retained; bind completion open** |
 | **Resource/tuple integration batch** | **5 / 5 leaves** | **Passed** | **71 additional reports; 997 unchanged artifacts/logs reused** | **`3b8fa0d`** | **One related gate; five exact independently reviewed source/artifact/log associations** |
@@ -2723,19 +2726,75 @@ domain and private family. A CURRENT Site is a preservation premise here, not a
 field accepted as static metadata or a supplied future invariant. General typed
 ValueRel, initial-to-final preservation and C5/M4 are not established.
 
-The current coherent assembly has 1,006 modules and 13,055 ordered standard-only
+The `4047755` coherent assembly has 1,006 modules and 13,055 ordered standard-only
 reports, 64 more than `3b8fa0d`. One related four-leaf compile gate takes
 8.2 seconds; preparation and association checks take
 9.8 seconds. All 1,002 unchanged artifacts and logs are reused as hard links.
 All four new source/artifact/log associations match author-disjoint reviews.
 No Rust source changes or repeated Rust checks occur in this proof batch.
-The next dependencies are the original recursive handler metadata/declaration
-seam, exact-current clause support and future receiver provenance, older
-changed-tail bind transport, and the original rich CURRENT source/domain/family
-producer. Existing fixed-receiver world transport preserves original rows;
-receiver restoration computes new rows and cannot establish unchanged literal
-clause support at arbitrary receivers. This is a formal proof limitation, not a
-demonstrated Ash semantic defect. Full C2–C5 remain open.
+The next integrated increment connects the original finite handler metadata
+seam and the older restored bind. These remain informative DN-0033 experiments
+within C2/C3. The whole-fragment acceptance inventory and estimates are unchanged.
+
+The [lower finite data](../design/direct-effects/one-shot/CoreCallableStaticFiniteData.lean)
+and [handler declarations](../design/direct-effects/one-shot/CoreCallableFiniteHandlerDeclarations.lean)
+retain the original nominal definitions, full contracts, private plans, rows,
+lookup order and errors. Three existing modules now import those definitions
+without the former upper-layer dependency. The current declaration checker
+derives the exact operation record, formal-extended body support and stored
+support at the same receiver from finite data. The [original handler consumer](../design/direct-effects/one-shot/CoreCallableFiniteHandlerSource.lean)
+also transports Source/Auth to a larger world with the same lexical receiver and
+rows. The [probes](../design/direct-effects/one-shot/OriginalHandlerSeamProbes.lean)
+reuse the original four-node graph and check full-contract shadowing, operation
+coverage, formal support and rejection of unused unsupported bounds. Six source
+records have 53 reports, including 28 retained reports: the net addition is 25.
+Independent replay passes twelve interface checks, two missing interfaces without
+artifacts and 526 selected nonowned dependencies. Original constructor coverage
+stays 14/16. This does not add the original handler Annotation/StaticTree branch,
+authenticate literal clause rows at arbitrary future receivers, or compute
+recursive full target-cell coverage. Fixed-receiver world transport preserves
+original rows; receiver restoration computes new rows. No Ash semantic defect is
+established by this proof limitation.
+
+The [restored bind origins](../design/direct-effects/one-shot/CoreCallableRestoredBindOrigins.lean)
+derive the adjacent older ordinary bind through both actual capture cuts and
+changed restored tails. They retain its full owner, binder, body, caller
+environment, context, type annotation, pending state and dynamic owner path.
+Lookup uses lexical position; a retained projection with zero physical frames is
+not treated as an empty lexical prefix. The original bind's own saved classifiers
+produce scope provenance. The [Core consumer](../design/direct-effects/one-shot/CoreCallableRestoredBindConsumers.lean)
+connects one actual Core bind completion to two positive Raw steps and derives the
+body environment closure through the actual tuple heap extension. The
+[interfaces and same-graph probes](../design/direct-effects/one-shot/RestoredBindInterfaces.lean)
+extend the original operational prefix from 26 to 27 Core edges. Created tickets
+remain `[0, 1, 2]`, discharged tickets remain `[2, 1]`, and the older bind caller,
+both spent continuation markers and live outer H remain distinct. Independent
+replay passes 44 reports, twelve interfaces, two missing interfaces without
+artifacts and 548 selected nonowned dependencies. The inherited annotation gap
+remains: the graph pair and binder use Product Unit Unit, while the saved bind's
+PlainData input and tuple output use Unit. These operational relations do not
+establish typed initial admission or general typed preservation. Arbitrary
+nesting, reset ancestry, clause-bearing fronts and subsequent H completion remain
+open.
+
+The current coherent assembly has 1,012 modules and 13,124 ordered standard-only
+reports, 69 more than `4047755`. The related batch has six new files and three
+modified proof files. One final gate compiles the union of 62 old/new reverse
+consumers in 377.4 seconds; preparation and association checks take
+5.7 seconds. The 950 unaffected artifact/log pairs are reused as real hard links.
+Independent review freshly compiles all nine changed/new sources; it separately
+reuses 950 original pairs and 53 author-recompiled consumers with unchanged
+source. All nine source/artifact/log associations match the independent replay.
+The initial author gate's 62 successful compiles and trailing-space formatting
+failure remain recorded. Removing one ASCII space requires three corrective
+compiles, taking 9.1 seconds; the other 59 successful author compiles are reused.
+No Rust source change or repeated Rust verification occurs in this proof batch.
+
+The next dependencies are computed future receiver provenance and the original
+recursive handler branch, the original resource/reader CURRENT source with full
+domain and private family, and execution after the restored bind through outer
+owner completion. General reachable typed preservation, admission and final
+observation/accounting composition remain open. Full C2–C5 remain open.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected

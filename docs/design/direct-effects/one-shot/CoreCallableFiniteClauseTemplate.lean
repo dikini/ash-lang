@@ -1,4 +1,4 @@
-import CoreCallableStaticProducer
+import CoreCallableStaticFiniteData
 import ClauseRowContracts
 namespace Ash.OneShot.CoreCallableFiniteClauseTemplate
 open ScopedExpressions ScopedExecution ProtectionContracts
