@@ -638,7 +638,7 @@ with 5.4 seconds of preparation/hash checking, reusing all 931 prior artifacts
 and logs. That assembly contained 937 modules and 12,272 ordered standard-only
 reports: 62 additional reports and 61 new report names. No Rust sources changed.
 
-The current increment connects the finite cell checker to original admission.
+Checkpoint `985caff` connected the finite cell checker to original admission.
 [Exact registry compatibility](CoreCallableFiniteRegistryCompatibility.lean)
 checks the actual CellApi and every original full scalar cell record. It
 preserves successful selected lookups, including full non-cell contracts and
@@ -684,17 +684,86 @@ The existing current-site, ownership and environment-closing guards remain
 conditional. Saved-anchor/changed-tail scope transport, arbitrary body progress,
 projection/disposal and general initial admitted reachability remain open.
 
-All three components pass author-disjoint semantic and quality review and fresh
-isolated replay. The grouped batch compiles seventeen affected modules once in
-23.2 seconds, with
-7.0 seconds of preparation/hash
-checking. Eight new sources and two existing source changes account for 49
-additional reports. The current coherent assembly contains 945 modules and
-12,321 ordered standard-only reports, with 928 unchanged artifacts/logs reused.
-The new lower registration module precedes its changed chronology consumer;
-the reviewed batching tool preserves the other registration order and every
-provenance check. No Rust sources changed and no Rust tests were rerun. M0–M4,
-the declared fragment and whole-package acceptance counts remain unchanged.
+All three components passed author-disjoint semantic and quality review and
+fresh isolated replay at `985caff`. That grouped batch compiled seventeen
+affected modules once in 23.2 seconds, with 7.0 seconds of preparation/hash
+checking. Eight new sources and two existing changes added 49 reports to its
+945-module/12,321-report coherent assembly; 928 unchanged artifacts/logs were
+reused. The lower registration module preceded its changed chronology consumer,
+with other registration order and provenance checks retained. No Rust sources
+changed and no Rust tests were rerun.
+
+The current [site-origin producer](CoreCallableGeneratedSiteOrigins.lean)
+derives canonical current and mapped owners, current evaluating-site lineage,
+and saved strict-right lineage from the SAME original RunningStartPast. A
+simultaneous induction covers all thirteen existing Generated operations. Start
+uses the original installed receipt. Cleanup/bind/handler descent uses the
+preceding current site's control and scope, rather than copying duplicate
+operation lineage fields. Entry computes both actual child sites from the
+same parent and finite Postorder evidence. Swap consumes its same singleton
+mapped owner/right-site receipt. Capture uses the selected handler's original
+installation map; it never substitutes the operand's current map.
+
+[Real consumers](CoreCallableGeneratedSiteConsumers.lean) remove current
+lineage from CleanupCurrent and HandlerCurrent inputs. Cleanup derives it from
+Generated before invoking the original registration factory. Handler derives
+it before constructing the actual installation with the SAME current.history;
+no desired installation or endpoint is supplied. The selected-handler helper
+also derives canonicality from that same installation. [Probes](GeneratedSiteOriginProbes.lean)
+replace only those supplied lineage fields in the original nested cleanup and
+active handler paths. Exact private fixture-prefix bytes are retained and
+audited. Cleanup still registers key1 after five prior Generated edges, with
+seven Core steps from start_before. The active handler uses its same nine-edge
+captured prefix; exported resumed_trace is consumed directly. Five producer,
+seven consumer and thirteen probe reports pass author-disjoint review and
+fresh isolated replay, including the missing-interface baseline check.
+
+This removes independent current-lineage inputs for these consumers. Full
+CurrentOwnership, physical CurrentScopeOrigin and environment-closing remain
+conditional. The current thirteen operations never promote restored physical
+strict frames into current.maps. Deeper restored strict provenance, saved
+anchors/changed-tail scope transport, general initial admitted reachability,
+projection/disposal and whole-fragment simulation remain open.
+
+The same increment includes the [general resource initializer](CoreCallableGeneralResourceInitializer.lean).
+Its entry point executes the original finite Annotation checker through exact
+registry recheck, then the retained body check. It receives no Source/Auth,
+Rechecked, ArgumentReceipt, desired check-success or future-progress provider.
+The initializer remains checked as the full Integer contract, with its original
+preceding environment/world/allowed scope. Its actual Code, demand,
+Requirements, dependencies, private Plan and full Rows are retained. The
+result sequences those original indices with the SAME computed resource-body
+families, total at every identity and authenticated only fresh. The existing
+literal-only API remains a specialization; a whole-resource StaticTree is not
+invented, since that old grammar has no resource constructor.
+
+The [connected consumer](CoreCallableGeneralResourceInitialRoot.lean)
+reuses the prior Cell root's entries/globals/policy/body, outer7, resource3,
+handle9, read and return7. Only the initializer changes to the nonvalue
+bind20(integer0)(variable20). The same extended ten-node graph checks and
+translates to its original code. Produced Source/Auth, full finite initial
+Program facets and the existing calculus NamedAccessStep are connected to that
+same root. Four producer and sixteen consumer/probe reports pass independent
+review and fresh replay, with six exact interface checks. The actual unsupported
+initializer RecipeTag propagates its rejection; invalid API and fresh-reference
+escape also reject. Generic Program certificate/accounting production, original
+Annotation.resource/PairedOrigin resource admission, broader body/handler forms,
+storage request checking, Rust validator replay and rich whole-state/M4 coverage
+remain open. Original checker coverage stays 14/16; no new fragment exclusion is
+introduced.
+
+The five new sources are coalesced into one integration increment. The first
+three related C3 leaves compiled once in 4.2 seconds; the two C2 leaves compiled
+once in 53.4 seconds against that
+immutable intermediate assembly. Final preparation/hash checking took
+5.7 seconds. The intermediate
+948-module/12,346-report assembly is evidence, not a git commit; HEAD stayed
+`985caff` throughout both subbatches. All three already-compiled C3 artifacts and
+all 945 original artifacts were reused for the C2 subbatch. The current coherent
+assembly contains 950 modules and 12,366 ordered standard-only reports, forty-five
+more than `985caff`. Exact source/artifact/log/import associations and compiler
+library pins agree. No Rust sources changed and no Rust tests were rerun.
+M0–M4, the declared fragment and whole-package acceptance counts are unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
