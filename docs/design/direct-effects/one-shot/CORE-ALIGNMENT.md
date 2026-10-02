@@ -2968,7 +2968,7 @@ establish typed initial admission or general typed preservation. Arbitrary
 nesting, reset ancestry, clause-bearing fronts and subsequent H completion remain
 open.
 
-The current coherent assembly has 1,012 modules and 13,124 ordered standard-only
+The `9977fca` coherent assembly has 1,012 modules and 13,124 ordered standard-only
 reports, 69 more than `4047755`. The related batch has six new files and three
 modified proof files. One final gate compiles the union of 62 old/new reverse
 consumers in 377.4 seconds; preparation and association checks take
@@ -2981,11 +2981,68 @@ failure remain recorded. Removing one ASCII space requires three corrective
 compiles, taking 9.1 seconds; the other 59 successful author compiles are reused.
 No Rust source change or repeated Rust verification occurs in this proof batch.
 
-The next dependencies are computed future receiver provenance and the original
-recursive handler branch, the original resource/reader CURRENT source with full
-domain and private family, and execution after the restored bind through outer
-owner completion. General reachable typed preservation, admission and final
-observation/accounting composition remain open. Full C2–C5 remain open.
+The next integrated increment connects two finished prerequisite components in
+one related batch. They remain informative DN-0033 experiments within C2/C3.
+The whole-fragment acceptance inventory and remaining-work estimates are unchanged.
+
+The [original resource current producer](CoreCallableOriginalResourceCurrent.lean)
+executes the original accepted program and resource acquisition, deriving the
+current site at p9 and three actual acquisition Raw steps. Its initializer
+accounting comes from the original nonliteral bind recipe. The
+[reader current producer](CoreCallableOriginalCallableCurrent.lean)
+continues through the same reader installation to p12 and retains the full closed
+reader contract, constructor family, origin, authentication and lower receipt.
+Private plans and full rows are transported at every lexical/call point through
+the actual handle and outer-value substitutions. These are outputs of the
+original transcript. No desired current site, successful family or later
+execution witness is added to annotation metadata. The
+[same-graph probes](OriginalCurrentProviderProbes.lean)
+connect the original 12-Core prefix to the rich current endpoint, preserve the
+captured E9 reader environment separately from the caller environment, and reject
+erasure of the reader's request row. Independent replay passes 22 reports,
+25 interfaces and five expected missing-interface failures without artifacts.
+It checks 604 selected nonowned dependencies. Intermediate initializer sites,
+original e20/e25 application current providers and general reachable typed
+preservation remain open. The existing complete operational trace is separate
+from this rich current coverage.
+
+The [full registry coverage checker](CoreCallableFiniteHandlerRegistryCoverage.lean)
+validates the original cell schema and compatibility of every full operation
+entry, then checks symmetric clause-key coverage and uniqueness. Its output
+covers every interpreted rich operation record and derives lower port coverage.
+Cell handlers must cover both read and write; a negative case retains the older
+read-only check's insufficiency. The
+[declaration transport](CoreCallableFiniteHandlerRegistryTransport.lean)
+reconstructs the original finite pure/resume/bind/Bool grammar at the interpreted
+registry. The public checker executes original declaration checking internally
+and produces Source/Auth for both modes and every compatible owner contract at
+the same current lexical receiver. Original tables, full contracts, unused
+literal support leaves, private plans and full rows stay exact. The
+[branch-prerequisite probes](OriginalHandlerBranchPrerequisiteProbes.lean)
+reuse the original four-node graph and retain complete cell coverage, opaque full
+function records, owner-dependent plans, schema/key/shadowing negatives and two
+finite receiver-boundary cases. Independent replay passes 26 reports, ten
+interfaces and two expected missing interfaces without artifacts, with 537
+selected nonowned dependencies. Original constructor coverage remains 14/16.
+These outputs are declaration prerequisites, not a complete target handler
+program or future-receiver authentication. The receiver probes do not establish
+a validated Core or Rust defect.
+
+The current coherent assembly has 1,018 modules and 13,172 ordered standard-only
+reports, 48 more than `9977fca`. All six additive sources pass independent replay
+with exact author source/artifact/log associations. The combined review resolves
+614 dependencies and verifies all 1,012 parent associations and eight compiler
+libraries before and after. One final gate compiles the six additions in
+128.9 seconds; preparation and association checks take
+6.0 seconds. The 1,012 unaffected artifact/log pairs are reused as real hard links.
+No old proof source or Rust source changes, and no Rust verification is repeated.
+
+The next dependencies are the original higher-order application current providers
+through e20/e21 and e25/e26, actual delivered clause-operand support and contextual
+receiver provenance for the original recursive handler branch, and execution
+after the restored bind through outer-owner completion. General reachable typed
+preservation, initial admission and final observation/accounting composition
+remain open. Full C2–C5 remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
