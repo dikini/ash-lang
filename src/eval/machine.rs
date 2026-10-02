@@ -10,6 +10,10 @@ use instantiation::Instantiation;
 #[path = "machine/alignment_trace_tests.rs"]
 mod alignment_trace;
 
+#[cfg(test)]
+#[path = "machine/core_runtime_preparation_tests.rs"]
+mod core_runtime_preparation_tests;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -2236,7 +2240,8 @@ impl Machine {
         if let Some(trace) = &mut self.effect_trace {
             reserve_control(trace, 1, RuntimeResource::EffectTrace, false)?;
         }
-        // All fallible checks precede consumption and accounting release.
+        // Preflight checks precede consumption. Projection still checks host
+        // disposal before publishing closing frames and accounting release.
         let Frame::ClauseBoundary { continuation, .. } = &mut self.frames[boundary_index] else {
             return Err(RuntimeFailure::InvalidControlState);
         };

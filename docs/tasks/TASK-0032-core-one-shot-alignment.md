@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 02:49 UTC
+### Current deliverable board — 2026-10-02 03:46 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -108,11 +108,17 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Running capture/resume: eight named generated-marker reports | **8 / 8** | **8 / 8, passed** | **Exact current-source replay passed** | **`f1fc1e4`** | Unchanged |
 | **Recipe/capture/initializer three-component batch** | **3 / 3** | **3 / 3** | **3 / 3; 26 reports** | **`f1fc1e4`** | Unchanged |
 | Runtime closure connection: five named initializer-head/generated-binding reports | **5 / 5** | **5 / 5, passed** | **Exact current-source replay passed** | **`f1fc1e4`** | Unchanged |
-| Outer lambda evaluation: four named origin/evaluation reports | **4 / 4** | **4 / 4, passed** | **Exact current-source replay passed** | **This checkpoint** | **Reviewed → registered and verified** |
-| Clause execution, tuple heap transport and full-prefix resume: thirteen named reports | **13 / 13** | **13 / 13, passed** | **Exact current-source replay passed** | **This checkpoint** | **Frozen → reviewed, registered and verified** |
-| Local handler installation/capture/return: seven named reports | **7 / 7** | **7 / 7, passed** | **Exact current-source replay passed** | **This checkpoint** | **Frozen → reviewed, registered and verified** |
-| **Outer/clause/local-handler three-component batch** | **3 / 3** | **3 / 3** | **3 / 3; 24 reports** | **This checkpoint** | **All three finished components integrated together** |
-| Recursive closure origins: four diagnostic reports | Dependency assessed; producer not implemented | Diagnosis checked locally | Four diagnostic reports passed | Not registered | Unchanged; diagnostics are not admission evidence |
+| Outer lambda evaluation: four named origin/evaluation reports | **4 / 4** | **4 / 4, passed** | **Exact current-source replay passed** | **`2de8f55`** | **Reviewed → registered and verified** |
+| Clause execution, tuple heap transport and full-prefix resume: thirteen named reports | **13 / 13** | **13 / 13, passed** | **Exact current-source replay passed** | **`2de8f55`** | **Frozen → reviewed, registered and verified** |
+| Local handler installation/capture/return: seven named reports | **7 / 7** | **7 / 7, passed** | **Exact current-source replay passed** | **`2de8f55`** | **Frozen → reviewed, registered and verified** |
+| **Outer/clause/local-handler three-component batch** | **3 / 3** | **3 / 3** | **3 / 3; 24 reports** | **`2de8f55`** | **All three finished components integrated together** |
+| Recursive closure origins: four diagnostic reports | Dependency assessed | Diagnosis checked locally | Four diagnostic reports passed | Not registered | Diagnostics remain assessment evidence; producer is below |
+| Recursive literal-lambda ordinary prefix and consumers: nineteen named reports | **19 / 19** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **Diagnostic → conditional arbitrary-length producer, evaluated lambda and nearest lookup** |
+| Generated running callback chronology: twelve named producer classes | **12 / 12 classes** | **Passed** | **Eleven leaf reports; concrete six-edge callback and five probe reports passed** | **This checkpoint** | **Local factories → generated exact-endpoint path; nested generated handler cycle remains open** |
+| Current-operation preparation and phase-local cursor: thirteen named reports | **13 / 13** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **Assessment → bounded conditional interface; full footprint/ledger origin remains open** |
+| Preparation exact-budget/finite-key/reservation probes: twenty-one named reports | **21 / 21** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **New represented-operation counterevidence** |
+| Discard failure-boundary Rust QA: success, pre-consumption and post-consumption cases | **3 / 3 cases** | **Passed** | **Seven-test related group passed independently** | **This checkpoint** | **New actual disposal-refusal evidence; internal shape, no general reachability claim** |
+| **Recursive/chronology/preparation four-leaf batch** | **4 / 4 leaves** | **4 / 4** | **4 / 4; 64 reports** | **This checkpoint** | **Frozen → reviewed, registered and verified together** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -248,18 +254,20 @@ Current parallel checkpoints:
 
 | Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
 | --- | --- | --- | --- | --- |
-| C2.3 / C4.1 | Outer lambda evaluation independently reviewed | **Registered and verified:** four reports connect actual evaluation at the completed binding MEnv with the same full family and storage checks | Recursive original binding/runtime prefix producer | Next bounded batch 2–4 active hours; C2 whole-package range 15–26 agent-hours |
-| C3.1 / C3.2 | Clause/heap transport frozen; review subsequently passed | **Registered and verified:** thirteen reports cover actual clause bind/beta/return, tuple heap extension, owner selection and full-prefix resume | Generated endpoint-threaded chronology, including mixed fronts | Next bounded batch 2–4 active hours; C3 whole-package range 16–29 agent-hours |
-| C3.1 / C3.2 | Local handler component frozen and locally checked | **Independently reviewed, registered and verified:** seven reports preserve the dormant original running receipt through actual local handler entry/capture/return | Compose local handler transitions in the same generated chronology | Included in the C3 batch; retirement/projection/disposal remain separate |
-| C3.2 | Physical selection and outside restoration integrated | **Unchanged:** selected handler and outside-anchor receipts remain available | Derive current route/readiness from general admission and activation guards from chronology | Depends on C2 and chronological transport |
+| C2.1 / C2.3 | One-binding outer evaluation integrated | **Recursive conditional producer integrated:** nineteen reports retain the same original prefix/full families/storage attachment and derive actual lambda installations/evaluation/lookup | Coherent resource rich constructor and pointwise Plan/Rows transport, then finite resource checker | Next bounded batch 2–4 active hours; C2 whole-package range 15–26 agent-hours |
+| C3.1 / C3.2 | Local clause/handler factories integrated | **Generated endpoint-threaded path integrated:** twelve operation classes and one concrete six-edge callback; exact original receipt and spent barrier retained | Connect cleanup retirement/activation and instantiate nested generated capture/resume | Next bounded batch 2–4 active hours; C3 whole-package range 16–29 agent-hours |
+| C3.4 | Capacity/preparation assessed | **Bounded interface and QA integrated:** thirteen producer reports, twenty-one probes, independently replayed seven-test Rust group | Derive actual runtime metadata/cost/ledger origin and connect surrounding disposal/projection checks | Existing C3.4 allowance 3–6 agent-hours; reassess concrete provider gaps |
+| C3.2 | Physical selection and outside restoration integrated | **Unchanged:** selected-handler and outside-anchor receipts remain available | Derive current route/readiness from admission and activation guards from generated chronology | Depends on C2 and chronological transport |
 
 The new constructor closes the particular coupling gap between substituted body
 receipts and the private family of the whole returned lambda. It evaluates the
 original family at the exact restored lexical environment and actual call,
 computes the new private Plan/full Rows, and constructs that whole lambda from
 the same transformed family. This is existing C2.3 work, not a new acceptance
-item. General higher-order admission still needs recursive closure origins,
-varied full storage contracts, resource construction and the remaining handlers.
+item. General higher-order admission still needs general initializer/resource origins,
+validated metadata production, varied full storage contracts, resource construction
+and the remaining handlers. The new prefix producer covers literal lambda
+initializers under supplied original check successes.
 
 Runtime binding v1 remains excluded: its nonvalue initializer focus contradicted
 ValueRel for the same original Code. The repaired v2 proves an applicable path
@@ -274,18 +282,20 @@ outside guards. Those guards remain inputs. The integrated RunningCapture
 checkpoint derives actual capture above the selected tail handler and immediate
 live-head resume with a generated marker. These preceding local factories did not establish continuous callback/clause
 chronology or heap-changing transport; the resumed clause leaf adds bounded
-actual tuple heap transport. Generated whole chronology remains open.
+actual tuple heap transport. The new generated chronology connects twelve named operation classes; whole
+reachable coverage remains open.
 No universal intermediate scan-success claim is made. Changed-tail activation,
 armed projection, disposal, rich successor preservation and whole simulation
 remain open.
 
-After the finished-component integration gate, C2 constructs recursive original
-binding/runtime origins while C3 constructs generated endpoint-threaded callback
-and clause chronology. The one-binding outer evaluation and local clause/heap
-transport stages are discharged. The two next bounded outputs have 2–4 active-hour
-estimates. The whole-goal planning range and its uncertainty are stated in the
-current-state table below.
-The supported fragment and package acceptance inventory remain unchanged.
+After integrating the finished outer/clause/local-handler components, the next
+batch retains recursive literal-lambda origins, generated callback chronology and
+bounded preparation/QA. The next C2 prerequisite is a coherent rich resource
+constructor with pointwise Plan/full Rows transport; editing only the checker
+branch cannot supply it. C3 next connects cleanup retirement/activation and
+nested generated capture/resume. Actual runtime instantiation/map/cost origin
+remains an identified C3.4 dependency. These are existing acceptance obligations,
+not additional packages. The fragment and whole acceptance inventory stay fixed.
 
 ### Increment 1 local results
 
@@ -1732,25 +1742,32 @@ The supported fragment and package acceptance inventory remain unchanged.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
-| C2 | 0 / 4 | 14/16 checker forms and captured family/recipes retained; initializer and outer lambda evaluation integrated | Recursive runtime closure origins; handler/resource construction; metadata soundness; general initial admission | Join original binding prefix/private families/full storage checks to actual recursively installed MEnv; varied resource/storage and registry gaps remain | 15–26 combined agent-hours before contingency; next recursive-prefix batch 2–4 active hours |
-| C3 | 0 / 5 | Actual clause bind/beta/return, tuple allocation and resume plus local handler installation/capture/return integrated | Generated reachable mixed callback/clause relation; retirement/disposal and ownership invariant; full simulation; capacity/preparation bridge | Compose exact Core/target endpoints and original receipt history; C2 supplies rich successor evidence | 16–29 combined agent-hours before contingency; next generated-chronology batch 2–4 active hours |
+| C2 | 0 / 4 | 14/16 checker forms and conditional arbitrary-length literal-lambda origins/consumers integrated | Validated metadata/check manufacture; general initializer/resource origins; handler/resource construction; general initial admission | Coherent resource pointwise Plan/Rows transport; original graph/private-family/storage and registry origins | 15–26 combined agent-hours before contingency; next resource-foundation batch 2–4 active hours |
+| C3 | 0 / 5 | Generated exact-endpoint callback path, bounded current-operation preparation and failure QA integrated | All reachable current guards; nested generated cycle; retirement/activation/projection/disposal; ownership and full simulation; complete preparation footprint | C2 rich successor evidence; generated cleanup completion/scope; actual runtime ledger/instantiation/cost origin | 16–29 combined agent-hours before contingency; next cleanup/generated-cycle batch 2–4 active hours |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
-The resumed batch integrates the three finished components first: outer-lambda
-origin/evaluation (four reports), clause execution/heap transport/resume
-(thirteen), and local handler installation/capture/return (seven). All have
-independent semantic and kernel/provenance review. Their exact productive
-registrations compile together in 9.7 seconds; 911 unchanged dependency
-associations are checked and reused in one coherent cache. The current assembly
-contains 914 modules and 12,026 standard-only reports. No full uncached rebuild
-or Rust rerun is claimed. The two user-owned unregistered handler prototypes
-remain excluded from registration and integration.
+The finished-component gate at `2de8f55` retained outer-lambda evaluation,
+clause/heap/resume and local-handler transitions: three leaves, 24 reports, 914
+modules and 12,026 reports. The next coherent batch retains four reviewed leaves:
+recursive ordinary origins (19), generated chronology (11), runtime preparation
+(13), and preparation probes (21). Exact productive registrations compile
+together in 10.0 seconds. The current assembly contains 918 modules and 12,090
+ordered standard-only reports, with all 914 preceding source/artifact/log/direct
+import associations checked and reused through immutable dependency hardlinks.
+No uncached whole-module rebuild is claimed. Seven related Rust tests pass
+independently; one new test distinguishes actual post-consumption disposal refusal
+from preflight refusal. Runtime behavior is unchanged. The two user-owned
+unregistered handler prototypes remain excluded and unchanged.
 
-These local factories retain the same original receipts and actual endpoints;
-they do not construct a general chronological execution judgment. Likewise,
-outer evaluation closes its one-binding connection, while the four recursive
-origin diagnostics identify the next producer and do not implement it.
+C2's arbitrary-length literal-lambda prefix is conditional on original successful
+graph/static/storage guards, whose automatic manufacture remains open; its
+open-initializer theorem has no concrete all-guard inhabitant yet. C3 has twelve
+producer classes and one concrete callback path, with current mixed-front and
+spent-barrier probes. A nested generated handler/capture/resume cycle is not yet
+instantiated. Preparation represents selected operations with supplied runtime
+ledgers and phase-local cursor records; general footprint/origin/projection
+history remains open. These bounds are preserved by independent review.
 Whole-fragment acceptance counts remain unchanged.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
@@ -1764,15 +1781,15 @@ commits. General admission and generated simulation are harder integration
 obligations, so component delivery rates are not extrapolated directly.
 These whole-goal estimates replace prior estimates covering only bounded gates.
 
-After this integration gate, C2 constructs recursive original binding/runtime
-origins while C3 constructs generated endpoint-threaded mixed chronology in
-parallel. Each has a bounded 2–4 active-hour checkpoint and disjoint owned files.
-Reassess the whole-goal range after their first 4–6 resumed elapsed hours against
-those outputs. Batch related local edits, compile changed leaves and their
-necessary consumers against checked dependencies, and run broader grouped
-verification at integration gates. Preserve immutable source/artifact/direct
-import associations when reusing caches; no side work or acceptance narrowing
-is authorized by this optimization.
+After this gate, C2 extends resource rich source/authentication and pointwise
+Plan/full Rows transport, while C3 extends generated cleanup completion/activation
+and nested capture/resume coverage. Runtime map/cost origin is an explicit C3.4
+provider dependency. Each next proof lane has a bounded 2–4 active-hour checkpoint
+and disjoint owned outputs. Reassess the whole-goal estimate at the original
+4–6 resumed-hour gate; the present component progress does not by itself narrow
+the range. Batch related edits and necessary reverse consumers; retain audited
+source/artifact/direct-import associations, and use grouped checks at integration
+points. Compile optimization does not narrow acceptance or authorize side work.
 
 ### Acceptance detail at the current checkpoint
 

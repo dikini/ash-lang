@@ -183,7 +183,7 @@ reports, with all 910 preceding associations unchanged. Checkpoint `f1fc1e4`'s
 three new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
 The other two leaves were freshly compiled in the preceding 910-module assembly;
 this is an audited assembly, not an uncached rebuild of every module.
-The resumed integration adds three independently reviewed components.
+Checkpoint `2de8f55` added three independently reviewed components.
 [Outer lambda evaluation](direct-effects/one-shot/CoreCallableOuterLambdaOrigins.lean) derives actual evaluation and ValueRel
 at the same completed binding environment, retaining the original full private
 family and exact finite/storage checks. It covers one binding; recursive open
@@ -198,7 +198,7 @@ head-local capture and normal return from that same clause occurrence. Capture
 retains the old running completion outside the local cut, dormant in the
 original owner receipt; normal return restores the same suffix.
 
-These three leaves add 24 fresh standard-only reports. The current assembly
+At checkpoint `2de8f55`, these three leaves added 24 standard-only reports. That assembly
 contains 914 modules and 12,026 reports, retaining all 911 preceding
 source/artifact/log/direct-import associations. Their three productive
 registration commands compile together against one coherent audited cache;
@@ -207,6 +207,51 @@ are immutable hardlinks; this is an audited incremental assembly. Rust sources
 are unchanged. Generated mixed callback/clause chronology, spent-marker
 retirement, derived activation guards, projection/disposal, resource admission
 and whole simulation remain open. M0–M4 and the declared fragment are unchanged.
+
+The next independently reviewed batch constructs
+[recursive ordinary runtime origins](direct-effects/one-shot/CoreCallableOrdinaryRuntimeOrigins.lean)
+for arbitrary-length original prefixes of literal lambda bindings. The producer
+starts with an actual empty environment, retains the same original binding path,
+full private families and original recipe/map/storage checks, and constructs
+three actual Core steps per installation. Its consumers evaluate the same next
+lambda and recover nearest runtime lookup. Original graph/static/storage check
+successes remain supplied guards. The open-initializer theorem is conditional;
+no concrete inhabitant of all its full guards is claimed. Arbitrary evaluating
+initializers, resource/template origins and validated metadata manufacture remain
+open C2 obligations.
+
+[Generated chronology](direct-effects/one-shot/CoreCallableGeneratedChronology.lean) extends only
+through twelve named current-operation producers at the preceding exact endpoint.
+It derives actual Core steps, positive or ranked administrative matching,
+accounting and the complete original running receipt, including dormant captures.
+One concrete callback path has six generated operations and seven Core steps
+including cleanup start. Mixed current fronts and the spent-owner barrier have
+checked probes; a concrete nested generated handler/capture/resume cycle is still
+uninstantiated. General current-guard production, deeper strict maps, cleanup
+retirement/activation and projection/disposal remain open C3 obligations.
+
+[Runtime preparation](direct-effects/one-shot/CoreRuntimePreparation.lean) computes represented
+cleanup/resume/discard-preflight checks from current control and the actual owner
+cut, with concrete ordered reservation replies and explicit runtime-ledger guards.
+Successful cleanup/resume erase to actual Core next; discard preflight yields
+projection readiness, never completion. The cursor/stop records are phase-local,
+not a generated projection history. [Preparation probes](direct-effects/one-shot/CoreRuntimePreparationExamples.lean)
+check exact budgets, one-short refusal, finite keys, invariant exclusion and
+reservation order. Complete metadata/cost/ledger origin, surrounding disposal
+checks and whole C3.4 remain open.
+
+Four productive registrations add 64 freshly compiled standard-only reports.
+The current audited assembly contains 918 modules and 12,090 ordered reports;
+all 914 preceding source/artifact/log/direct-import associations remain unchanged.
+The related leaf batch compiles in 10.0 seconds against one coherent cache
+with immutable dependency hardlinks. This is incremental verification, not an
+uncached whole-suite rebuild. Independent review also replays seven focused Rust
+tests. The new internal-machine fixture distinguishes pre-consumption work
+refusal from actual environment-disposal refusal after owner consumption, with no
+published Discard or cleanup replay. It is bounded executable evidence, not a
+validated-program reachability or general Rust correspondence theorem. Runtime
+behavior is unchanged; only QA registration and a misleading preflight comment
+change. M0–M4, the fragment and whole-package acceptance counts are unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

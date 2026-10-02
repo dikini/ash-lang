@@ -919,3 +919,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableInitializerHead.olea
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableOuterLambdaOrigins.olean" CoreCallableOuterLambdaOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningClauseOccurrence.olean" CoreCallableRunningClauseOccurrence.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningLocalHandler.olean" CoreCallableRunningLocalHandler.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableOrdinaryRuntimeOrigins.olean" CoreCallableOrdinaryRuntimeOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedChronology.olean" CoreCallableGeneratedChronology.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreRuntimePreparation.olean" CoreRuntimePreparation.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreRuntimePreparationExamples.olean" CoreRuntimePreparationExamples.lean
