@@ -1323,13 +1323,59 @@ fronts, causal outside ancestry, deeper promotion and disposal remain open.
 One related eight-leaf gate compiles in
 18.1 seconds; preparation and associations take
 7.3 seconds. All989 unchanged artifacts and logs are reused.
-The current coherent assembly has 997 modules and 12,920 ordered standard-only
+The `0aa09d7` coherent assembly has 997 modules and 12,920 ordered standard-only
 reports, 136 more than `9b4f7f6`. All eight source/artifact/log associations match
 independent reviews. Failed authoring and review-harness attempts remain recorded;
 successful productive compiles were not repeated for metadata corrections.
-The next bounded assessments cover the original graph's saved return, Bool and
-resource completion; causal outside/deeper scope transport; and connecting
-contextual handler production to general admission. Full C2–C5 remain open.
+The next integrated increment completes the original resource execution and
+extends the restored tuple episode. These are informative DN-0033 experiments;
+whole-fragment acceptance and estimates remain unchanged.
+
+The [resource completion](CoreCallableComposedRuntimeCompletion.lean)
+continues the same original 23-node graph from read 0 through its saved bind,
+Boolean branch, outer lookup and normal resource release. It proves 35 actual
+Core edges from initial state, done(integer 17), the literal 25-event observation
+list, allocation ledger `[0]` and counter `1` and empty final stacks. The saved caller is
+E13, distinct from the reader's E9. The executed call join retains full private
+Family/Origin/Auth/Plan/Rows in its output; it does not derive generic rich beta
+preservation from them. The six-edge suffix target trace has exact empty
+creation and resource 0 discharge; whole initial trace owner lists retain their
+inherited existential indices. This graph has no cleanup callback.
+The [connected probe](ComposedResourceRuntimeCompletionProbes.lean)
+consumes the original executed static/runtime receipts. Independent replay
+passes 34 reports, twenty interfaces, three missing-interface failures without
+an artifact and 600 selected dependencies.
+
+The [restored tuple producer](CoreCallableRestoredTupleHeads.lean)
+starts at the actual original right transition. A structural handler inventory
+retains the full original installation through an opaque captured-head witness;
+it derives the actual second K selection without identifying Type histories
+from their physical stacks. The [discharge consumer](CoreCallableRestoredTupleDischarge.lean)
+computes the resumed returned endpoint, pops tupleRight, allocates a fresh pair
+and weakens its full below-history. One Core step matches one Raw plug.
+The [same graph probe](RestoredTupleDischargeInterfaces.lean)
+retains the entire original private graph and 19-edge prefix, then executes the
+second request/capture/resume and tuple discharge: 26 actual initial Core edges.
+It exposes the older bind, both spent K markers and live H ticket 0 with the original
+scope; exact target tickets created `[0, 1, 2]` and discharged `[2, 1]` remain. Wrong handler,
+activation, stale ticket and returned-control checks pass. Independent replay
+passes 37 reports, twelve interfaces, two missing-interface failures without an
+artifact and 546 selected dependencies. Original scope classifiers remain
+explicit. Older changed-tail bind completion, reset/different-head ancestry,
+deeper/disposal coverage and general admitted execution remain open.
+The graph assigns a product type to the pair and its binding; inherited plain
+frame input/output annotations still say Unit. The operational correspondence
+does not authenticate these type fields or establish their typed compatibility.
+
+The current coherent assembly has 1,002 modules and 12,991 ordered standard-only
+reports, 71 more than `0aa09d7`. One related five-leaf gate takes
+8.0 seconds; preparation and association checks take
+10.3 seconds. All 997 unchanged artifacts and logs are reused,
+and all five new source/artifact/log associations match independent reviews.
+No Rust behavior changes or repeated Rust checks occur in this proof batch.
+The next existing dependencies are finite effectful handler suffix production,
+the original recursive handler metadata seam, older changed-tail bind transport
+and general rich typed beta/current-state preservation. Full C2–C5 remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

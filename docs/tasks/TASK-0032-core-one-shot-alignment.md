@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 16:17 UTC
+### Current deliverable board — 2026-10-02 17:01 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,10 +72,13 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Handler BODY prefixes/suffixes/Bool | **2 / 2 leaves** | **Passed** | **41 reports; twelve interfaces; associated 10-node Program and initial joint** | **This checkpoint** | **Full input/answer and current accounting retained; effectful suffix/general handler admission open** |
-| Original reader calls and cell reply | **3 / 3 leaves** | **Passed** | **65 reports;25 interfaces; 29 actual initial Core edges** | **This checkpoint** | **Exact beta inputs, saved E9 and read0/0 connected; branch/return/release and generic simulation open** |
-| Independent saved caller metadata | **3 / 3 leaves** | **Passed** | **30 reports; twelve interfaces; same 19-edge restored-right run** | **This checkpoint** | **Full map/scope equality removed; original ticket retained; causal reset/different-head/deeper transport open** |
-| **Routes/calls/head integration batch** | **8 / 8 leaves** | **Passed** | **136 additional reports; 989 unchanged artifacts/logs reused** | **This checkpoint** | **One related gate; eight exact reviewed source/artifact/log associations** |
+| Original resource execution to done | **2 / 2 leaves** | **Passed** | **34 reports; twenty interfaces; 35 initial Core edges/result 17/release 0** | **This checkpoint** | **Saved E13, branch, literal 25 observations and exact ledger connected; general rich preservation open** |
+| Restored tuple second capture/resume/discharge | **3 / 3 leaves** | **Passed** | **37 reports; twelve interfaces; same 26-edge original run** | **This checkpoint** | **Full original K installation and pair allocation derived; older bind/live H/both spent K retained; bind completion open** |
+| **Resource/tuple integration batch** | **5 / 5 leaves** | **Passed** | **71 additional reports; 997 unchanged artifacts/logs reused** | **This checkpoint** | **One related gate; five exact independently reviewed source/artifact/log associations** |
+| Handler BODY prefixes/suffixes/Bool | **2 / 2 leaves** | **Passed** | **41 reports; twelve interfaces; associated 10-node Program and initial joint** | **`0aa09d7`** | **Full input/answer and current accounting retained; effectful suffix/general handler admission open** |
+| Original reader calls and cell reply | **3 / 3 leaves** | **Passed** | **65 reports;25 interfaces; 29 actual initial Core edges** | **`0aa09d7`** | **Exact beta inputs, saved E9 and read0/0 connected; branch/return/release and generic simulation open** |
+| Independent saved caller metadata | **3 / 3 leaves** | **Passed** | **30 reports; twelve interfaces; same 19-edge restored-right run** | **`0aa09d7`** | **Full map/scope equality removed; original ticket retained; causal reset/different-head/deeper transport open** |
+| **Routes/calls/head integration batch** | **8 / 8 leaves** | **Passed** | **136 additional reports; 989 unchanged artifacts/logs reused** | **`0aa09d7`** | **One related gate; eight exact reviewed source/artifact/log associations** |
 | Higher-order resource-body composition | **3 / 3 leaves** | **Passed** | **32 reports; nine interface checks; same graph Source/Auth** | **`5688835`** | **Finite lambda/app/Bool body producer; initializer executed; storage boundary retained** |
 | Initial execution to callback start | **3 / 3 leaves** | **Passed** | **26 reports; same original graph; six actual Core edges** | **`5688835`** | **Exact initial state → registration → body → start → Generated; original bound derived** |
 | **Composition/initial-history integration batch** | **6 / 6 leaves** | **Passed** | **58 additional reports; 953 unchanged artifacts reused** | **`5688835`** | **Initial six-leaf batch; EOF-only three-leaf correction reused every C3 artifact** |
@@ -1794,7 +1797,7 @@ preparation remain existing obligations. The fragment and inventory stay fixed.
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
 | C2 | 0 / 4 | 14/16 original forms; routed-handler Programs and original callable receipts integrated | Effectful BODY suffixes/general handler and cleanup admission; stored capture and metadata connections | Full contextual routing/private indices and original validated graph coverage | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
-| C3 | 0 / 5 | Original29-edge call/read path and independent saved-head restoration integrated | Branch/return/release; generic call history; causal outside/deeper scope; projection/disposal; full simulation/preparation | C2 admission; combined reachable-state invariant and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next original completion/causal-scope assessments bounded at 2–4 active hours; general first-anchor open |
+| C3 | 0 / 5 | Original 35-edge resource completion and 26-edge restored tuple discharge integrated | Generic rich call history; older changed-tail bind; reset/outside/deeper scope; projection/disposal; full simulation/preparation | C2 admission; combined reachable-state invariant and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next original-bind/rich-beta increments bounded at 2–4 active hours; general first-anchor open |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
@@ -2633,13 +2636,59 @@ fronts, causal outside ancestry, deeper promotion and disposal remain open.
 One related eight-leaf gate compiles in
 18.1 seconds; preparation and associations take
 7.3 seconds. All989 unchanged artifacts and logs are reused.
-The current coherent assembly has 997 modules and 12,920 ordered standard-only
+The `0aa09d7` coherent assembly has 997 modules and 12,920 ordered standard-only
 reports, 136 more than `9b4f7f6`. All eight source/artifact/log associations match
 independent reviews. Failed authoring and review-harness attempts remain recorded;
 successful productive compiles were not repeated for metadata corrections.
-The next bounded assessments cover the original graph's saved return, Bool and
-resource completion; causal outside/deeper scope transport; and connecting
-contextual handler production to general admission. Full C2–C5 remain open.
+The next integrated increment completes the original resource execution and
+extends the restored tuple episode. These are informative DN-0033 experiments;
+whole-fragment acceptance and estimates remain unchanged.
+
+The [resource completion](../design/direct-effects/one-shot/CoreCallableComposedRuntimeCompletion.lean)
+continues the same original 23-node graph from read 0 through its saved bind,
+Boolean branch, outer lookup and normal resource release. It proves 35 actual
+Core edges from initial state, done(integer 17), the literal 25-event observation
+list, allocation ledger `[0]` and counter `1` and empty final stacks. The saved caller is
+E13, distinct from the reader's E9. The executed call join retains full private
+Family/Origin/Auth/Plan/Rows in its output; it does not derive generic rich beta
+preservation from them. The six-edge suffix target trace has exact empty
+creation and resource 0 discharge; whole initial trace owner lists retain their
+inherited existential indices. This graph has no cleanup callback.
+The [connected probe](../design/direct-effects/one-shot/ComposedResourceRuntimeCompletionProbes.lean)
+consumes the original executed static/runtime receipts. Independent replay
+passes 34 reports, twenty interfaces, three missing-interface failures without
+an artifact and 600 selected dependencies.
+
+The [restored tuple producer](../design/direct-effects/one-shot/CoreCallableRestoredTupleHeads.lean)
+starts at the actual original right transition. A structural handler inventory
+retains the full original installation through an opaque captured-head witness;
+it derives the actual second K selection without identifying Type histories
+from their physical stacks. The [discharge consumer](../design/direct-effects/one-shot/CoreCallableRestoredTupleDischarge.lean)
+computes the resumed returned endpoint, pops tupleRight, allocates a fresh pair
+and weakens its full below-history. One Core step matches one Raw plug.
+The [same graph probe](../design/direct-effects/one-shot/RestoredTupleDischargeInterfaces.lean)
+retains the entire original private graph and 19-edge prefix, then executes the
+second request/capture/resume and tuple discharge: 26 actual initial Core edges.
+It exposes the older bind, both spent K markers and live H ticket 0 with the original
+scope; exact target tickets created `[0, 1, 2]` and discharged `[2, 1]` remain. Wrong handler,
+activation, stale ticket and returned-control checks pass. Independent replay
+passes 37 reports, twelve interfaces, two missing-interface failures without an
+artifact and 546 selected dependencies. Original scope classifiers remain
+explicit. Older changed-tail bind completion, reset/different-head ancestry,
+deeper/disposal coverage and general admitted execution remain open.
+The graph assigns a product type to the pair and its binding; inherited plain
+frame input/output annotations still say Unit. The operational correspondence
+does not authenticate these type fields or establish their typed compatibility.
+
+The current coherent assembly has 1,002 modules and 12,991 ordered standard-only
+reports, 71 more than `0aa09d7`. One related five-leaf gate takes
+8.0 seconds; preparation and association checks take
+10.3 seconds. All 997 unchanged artifacts and logs are reused,
+and all five new source/artifact/log associations match independent reviews.
+No Rust behavior changes or repeated Rust checks occur in this proof batch.
+The next existing dependencies are finite effectful handler suffix production,
+the original recursive handler metadata seam, older changed-tail bind transport
+and general rich typed beta/current-state preservation. Full C2–C5 remain open.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected
