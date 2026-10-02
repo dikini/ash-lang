@@ -557,7 +557,7 @@ and logs. Every selected direct-import hash agreed in one cache. That checkpoint
 contained 927 modules and 12,170 ordered standard-only reports, 80 more than
 `aa71286`. M0–M4, the fragment and whole-package counts were unchanged.
 
-The current increment retains the
+Checkpoint `bbe7317` retained the
 [current ticket-bound producer](CoreCallableGeneratedTicketBound.lean).
 It derives actual capture-event coupling for all twelve named operations,
 transports ticket-name counts through their finite target traces, and derives
@@ -584,13 +584,61 @@ map coverage or general graph admission is proved. The translated resource's
 original handle-binding wrapper and full Source/Auth/storage association remain
 C2 dependencies; this leaf contains no arbitrary Origin passthrough.
 
-Both additive components pass author-disjoint semantic and quality reviews.
-Their four leaves compile together in 3.5 seconds, with 8.1 seconds of
-preparation/hash checks; all 927 prior artifacts and logs are reused unchanged.
-The current audited assembly contains 931 modules and 12,210 ordered standard-only
-reports, forty more than `acb7724`, with exact selected direct-import hashes.
-No Rust source changed, so no Rust test group was rerun. M0–M4, the declared
-fragment and whole-package acceptance counts remain unchanged.
+Both additive components passed author-disjoint semantic and quality reviews.
+Their four leaves compiled together in 3.5 seconds, with 8.1 seconds of
+preparation/hash checks; all 927 prior artifacts and logs were reused unchanged.
+That checkpoint contained 931 modules and 12,210 ordered standard-only reports,
+forty more than `acb7724`, with exact selected direct-import hashes.
+No Rust source changed and no Rust test group was rerun.
+
+The current increment retains the [finite original cell schema](CoreCallableFiniteCellRegistry.lean)
+and [resource template checker](CoreCallableFiniteResourceTemplate.lean).
+The schema checks the same exported raw read/write declarations and source
+manifest, with their original API formal binder. Resource-opening binders remain
+independent. Non-cell operation lookup preserves the original full contracts.
+Finite body tags cover scalar values, references, ordinary variables, pairs,
+binds and cell read/write. They compute actual opened Code, requirements,
+dependencies, private Plans and full Rows at every identity. Source/Auth apply
+only at fresh identities. Original names, positional slots, shadow order and
+receiver issuance are checked; each initial environment equals the entire
+original Bindings list. The resource checker constructs Source/Auth for an
+integer initializer and non-retaining output under its explicit cell registry.
+
+[Paired consumers](CoreCallableFiniteResourceConsumers.lean) take the same
+produced ArgumentReceipt, bind the translated resource handle, read the fresh
+cell and return the original full contract. Source uses the entire original
+rich environment and lexical map; lower storage uses the entire original
+storage map and original stored contract. [Probes](FiniteResourceTemplateProbes.lean)
+check varying private resource-family members, shadowing, binder namespaces,
+fresh-reference escape and retained higher-order contract fields. The 47
+ordered reports include one repeated existing non-retention report. This is
+a separate finite checker: the original StaticProducer remains 14/16. Its
+initial registry/admission connection, general initializer and new higher-order
+resource-body constructors, handler, branch, cleanup and nested resources remain
+open. The graph wrapper result assumes its original shape check; the lower
+storage result is a constructed derivation, not an extended recipe checker.
+
+[Cleanup registration sites](CoreCallableGeneratedCleanupRegistration.lean)
+derive action/body child lineage from the same actual registration node and
+produce the original full cleanup receipt. Actual body steps derive heap
+extension and connect that receipt and original suffix to the same normal start
+and Generated.initial endpoint. The child-site consumer rejects immediate
+re-entry to the original active caller's handler; it receives no independently
+supplied body-site proof. [Registration probes](GeneratedCleanupRegistrationProbes.lean)
+compose three actual Core steps at an active captured caller scope, retaining
+that original scope while callback invocation uses empty scope. Nine producer
+and six probe reports pass. Registration currently consumes MappedHistory;
+arbitrary general-suffix registration, initial admitted reachability, general
+body progress and changed-tail capture/resume anchor transport remain open.
+This does not remove outsideCheck or derive unconditional activation guards.
+
+Both components pass author-disjoint semantic and quality review and fresh
+isolated replay. Their six leaves compile together in 9.4 seconds, with 5.4
+seconds of preparation/hash checking, reusing all 931 prior artifacts and logs.
+The current audited assembly contains 937 modules and 12,272 ordered standard-only
+reports: 62 additional reports and 61 new report names. Selected direct-import
+hashes agree in one cache. No Rust source changed and no Rust tests were rerun.
+M0–M4, the declared fragment and whole-package acceptance counts are unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
