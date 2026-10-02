@@ -977,3 +977,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CompositionalInitialAdmissionPro
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneralStrictFocus.olean" CoreCallableGeneralStrictFocus.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableStrictFocusConsumers.olean" CoreCallableStrictFocusConsumers.lean
 lean -DwarningAsError=true -o "$proof_build_dir/GeneralStrictFocusInterfaces.olean" GeneralStrictFocusInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableComposedResourceOrigins.olean" CoreCallableComposedResourceOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableComposedCapturedHandle.olean" CoreCallableComposedCapturedHandle.lean
+lean -DwarningAsError=true -o "$proof_build_dir/ComposedResourceOriginProbes.olean" ComposedResourceOriginProbes.lean

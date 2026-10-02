@@ -2560,10 +2560,65 @@ leaves in 3.1 seconds, with
 It reuses all 969 intermediate artifacts and logs, including both facets;
 the expensive facets are not recompiled. All 967 committed-parent associations
 remain unchanged. The 969 assembly is an immutable integration intermediate,
-not a separate Git commit. The current coherent assembly contains 972 modules
+not a separate Git commit. The `633f0a4` coherent assembly contains 972 modules
 and 12,577 ordered standard-only reports, 46 more than `70b41c0`. No Rust source
 changed or Rust test was rerun. C1–C5 counts, estimates, exclusions and normative
 semantics remain unchanged.
+
+The [composed resource-origin producer](CoreCallableComposedResourceOrigins.lean)
+executes original finite initializer annotations and storage recipes on the
+SAME root bind path, deriving paired origins from its transcript. Graph shape,
+translation and root-code equality are checked. The resource opening retains
+that original graph/prefix and full rich/storage maps. Selected internal bind
+and initializer producers retain computational Body and Recipe constructors,
+execute both child recipes and compute exact intermediate slots/domains. These
+metadata cannot be recovered from proof-erased Produced or a noninjective
+Source/Auth demand split. Current child checks produce Source/Auth and the
+lower storage judgment with actual ordered shadowing and arbitrary fresh-cell
+identity; no desired derivation or successful future family is an input.
+
+The [captured-handle consumer](CoreCallableComposedCapturedHandle.lean)
+checks the exact selected resource reference under its complete outside maps.
+Existing constructor-origin reconstruction, structural declaration-policy
+transport and lower substitution retain the full public contract and private
+Family at every lexical/call point. The [connected probes](ComposedResourceOriginProbes.lean)
+reuse the original23 graph: outer7, resource3 and its nonliteral initializer,
+handle9, reader12 and higher13. Both callable current checks quantify arbitrary
+fresh identity. One static identity1 reconstruction produces the exact closed
+reader and full lower storage contract. It is not an actual acquired Core
+owner. Wrong-root, alias/storage, nearest-shadow and opaque-domain negatives
+retain their separate meanings; source acceptance alone does not establish
+stored-capture nonretention.
+
+Independent review passes 38 ordered standard-only reports, sixteen public
+interfaces, three missing-interface failures without an artifact, 555 actual
+dependency selections and all 972 parent/eight-library associations. Its first
+fresh replay found a probe artifact identity difference: the author follow-up
+used a relative path whose Lean main-module name included the development
+folder. Sources, theorem names and report logs match exactly. Compiler source
+and binary metadata establish the path-derived name; canonical basename
+artifacts are pinned separately. The immutable author checkpoint, failed
+association assertion and successful fresh replay are retained. Finishing the
+review reused those three successful compiles, without replaying them.
+
+One related three-leaf integration gate compiles in
+81.9 seconds, with
+5.3 seconds of preparation and association checks.
+It reuses all 972 parent artifacts and logs. The current coherent assembly
+contains 975 modules and 12,615 ordered standard-only reports, 38 more than
+`633f0a4`. No Rust source changed or Rust test was rerun. This advances existing
+C2.1/C2.3 obligations without changing the original checker14/16 inventory,
+C1–C5 acceptance counts, estimates or normative semantics.
+
+Actual Core initializer execution, acquisition, MEnv/ValueRel/EnvCloses,
+whole Program and full general admission remain open. The next assessed
+runtime connection computes the original initial-to-reader path with twelve
+Core edges and activation0 from actual history. Focused acquisition matches
+three Raw steps: plug the saved resource initializer, enterCell and synthetic
+handle bind. It does not consume a supplied Chain or desired closure origin.
+Finite handler Source/Auth assembly and changed-tail strict restoration remain
+parallel bounded work; arbitrary initializer execution, saved anchors,
+disposal, runtime preparation and whole C3/C5 coverage remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
