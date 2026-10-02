@@ -955,3 +955,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedSiteConsume
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedSiteOriginProbes.olean" GeneratedSiteOriginProbes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneralResourceInitializer.olean" CoreCallableGeneralResourceInitializer.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneralResourceInitialRoot.olean" CoreCallableGeneralResourceInitialRoot.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedCurrentScopeOrigins.olean" CoreCallableGeneratedCurrentScopeOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedCurrentScopeConsumers.olean" CoreCallableGeneratedCurrentScopeConsumers.lean
+lean -DwarningAsError=true -o "$proof_build_dir/GeneratedCurrentScopeOriginProbes.olean" GeneratedCurrentScopeOriginProbes.lean

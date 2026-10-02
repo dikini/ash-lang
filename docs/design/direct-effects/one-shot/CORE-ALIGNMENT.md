@@ -2269,11 +2269,61 @@ immutable intermediate assembly. Final preparation/hash checking took
 5.7 seconds. The intermediate
 948-module/12,346-report assembly is evidence, not a git commit; HEAD stayed
 `985caff` throughout both subbatches. All three already-compiled C3 artifacts and
-all 945 original artifacts were reused for the C2 subbatch. The current coherent
-assembly contains 950 modules and 12,366 ordered standard-only reports, forty-five
+all 945 original artifacts were reused for the C2 subbatch. Checkpoint `05cff7d` contains 950 modules and 12,366 ordered standard-only
+reports, forty-five
 more than `985caff`. Exact source/artifact/log/import associations and compiler
 library pins agree. No Rust sources changed and no Rust tests were rerun.
 M0–M4, the declared fragment and whole-package acceptance counts are unchanged.
+
+The next increment derives [evaluated physical scope origins](CoreCallableGeneratedCurrentScopeOrigins.lean)
+through all thirteen existing Generated operation forms. One simultaneous
+induction produces the current origin at actual evaluate controls and the
+origin of every saved strict map at its exact physical suffix. The original
+start installation supplies canonical owners; no caller-supplied current or
+successor origin is accepted. Cleanup, bind and handler descent use the
+preceding evaluate origin. Entry creates a saved dynamic path and Swap consumes
+that SAME path. BindReturn retains its original receipt at the exact computed
+suffix; no unrelated or changed tail is substituted. Capture creates the actual
+fresh clause head from the selected installation. Returned resume, handler and
+spent-marker endpoints retain their actual controls and frames without asserting
+an unevaluated physical occurrence.
+
+The [real cleanup and handler consumers](CoreCallableGeneratedCurrentScopeConsumers.lean)
+remove current ownership and origin fields as well as the previously removed
+lineage fields. Cleanup ownership combines the produced evaluate origin with
+the existing SAME-start ticket-bound theorem. Its only bound input remains the
+original pre-start suffix obligation. Handler origin comes directly from actual
+control inversion. Exact action/handler data, closure/readiness, counters,
+computed successors and current history remain indexed by those same inputs.
+
+The [focused probes](GeneratedCurrentScopeOriginProbes.lean) reuse the
+pinned original private prefixes. Nested cleanup key 1 follows five prior
+Generated edges and seven actual Core steps; the inner-handler construction
+follows the same captured execution. The exported resumed trace is consumed
+directly, retaining returned Unit, no strict maps and its exact four restored
+frames. A wrong dynamic ticket is rejected at the SAME first physical owner
+even when its canonical static map is unchanged. Four producer, six consumer
+and thirteen probe reports pass independent review and fresh replay.
+
+The three related leaves compile together once in
+4.2 seconds, with
+7.3 seconds of preparation
+and hash checks. All 950 parent artifacts and logs are reused unchanged. The
+current coherent assembly contains 953 modules and 12,389 ordered
+standard-only reports, twenty-three more than `05cff7d`, with exact source,
+artifact, log and selected-import associations. No Rust sources changed or
+Rust tests were rerun. M0–M4, the fragment and whole-package counts remain
+unchanged.
+
+This closes the current evaluate/saved-map scope provider for those thirteen
+forms. It does not produce a dormant cleanup caller's activation over a changed
+suffix, saved-anchor transport or prefix misses. Strong all-endpoint origins,
+deeper restored strict-frame promotion, environment-closing, disposal/projection,
+general C2 admission and the complete C3/C5 correspondence remain open. The next
+C3 assessment targets the original registration-to-start history and actual
+completion activation guards. C2 is implementing the assessed finite
+higher-order resource-body composition. This work changes no current language
+semantics and makes no claim that the remaining proofs are already available.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
