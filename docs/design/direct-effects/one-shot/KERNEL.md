@@ -931,13 +931,47 @@ These two independently reviewed components compile together as five new
 leaves in 42.9 seconds,
 with 7.2 seconds of preparation and
 association checks. All 959 parent artifacts and logs are reused unchanged.
-The current coherent assembly contains 964 modules and
+The assembly committed as `45d6f09` contains 964 modules and
 12,513 ordered standard-only reports,
 66 more than `5688835`.
 No Rust source changed or Rust test was rerun. General initial admission,
 handler/resource integration, runtime storage origins, saved-anchor transport,
 disposal, whole simulation/preparation and the integrated theorem remain open.
 M0–M4, normative semantics, exclusions and C1–C5 acceptance counts are unchanged.
+
+The [generated bind producer](CoreCallableGeneratedBindProducers.lean)
+now derives the existing non-value bind input from SAME current site and
+evaluated-scope origins. Literal node metadata, child translations, current
+environment closing, PlainData, ClosedExcept, non-value initializer and
+EmptyFocus remain explicit. The existing bind_enter constructs the saved caller
+from the entire current GeneralHistory; the producer retains exact predecessor
+and original-history equations. It takes no desired saved caller or successor.
+The physical successor prepends the actual bind frame to the full suffix.
+
+The [chronology consumers](CoreCallableGeneratedBindConsumers.lean)
+derive these origins from SAME InitialChronology or Generated, append the named
+bind operation, and preserve the original actual Core prefix and target trace.
+The [generic interfaces](GeneratedBindProducerInterfaces.lean)
+prove actual-prefix extension, explicit positive target steps, returned-control
+exclusion and rejection of a literal Unit initializer at this strict-bind gate.
+These are generic interfaces under current readiness guards, not extra graph
+fixtures or unconditional transition availability. Arbitrary physical suffixes
+are retained; deeper mapped strict focus/plug, restored right-site origins,
+bind-return extraction, general saved-anchor transport and full admission remain
+open. Existing strict proofs already compute positive entry and plug steps;
+their endpoints still need connection to the generated chronology.
+
+Independent review replays all three leaves once with 18 exact standard-only
+reports, twelve public interfaces, the missing-interface negative check and
+534 actual dependency selections. The integration batch compiles the three
+related leaves in 2.1 seconds, with
+8.8 seconds of preparation and association checks.
+All 964 parent source/artifact/log associations remain unchanged and are reused.
+The current coherent assembly contains 967 modules and 12,531 ordered
+standard-only reports, eighteen more than `45d6f09`. No Rust source changed or
+Rust test was rerun. This advances C3.1/C3.2 without closing a whole-fragment
+acceptance item; package counts, estimates, exclusions and normative semantics
+remain unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

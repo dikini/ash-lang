@@ -969,3 +969,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CompositionalResourceStorageProb
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedOutsideActivationOrigins.olean" GeneratedOutsideActivationOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedOutsideActivationConsumers.olean" GeneratedOutsideActivationConsumers.lean
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedOutsideActivationProbes.olean" GeneratedOutsideActivationProbes.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedBindProducers.olean" CoreCallableGeneratedBindProducers.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedBindConsumers.olean" CoreCallableGeneratedBindConsumers.lean
+lean -DwarningAsError=true -o "$proof_build_dir/GeneratedBindProducerInterfaces.olean" GeneratedBindProducerInterfaces.lean

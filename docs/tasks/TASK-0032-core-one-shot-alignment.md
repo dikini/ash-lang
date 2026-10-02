@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 11:58 UTC
+### Current deliverable board — 2026-10-02 12:25 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -75,11 +75,13 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Higher-order resource-body composition | **3 / 3 leaves** | **Passed** | **32 reports; nine interface checks; same graph Source/Auth** | **`5688835`** | **Finite lambda/app/Bool body producer; initializer executed; storage boundary retained** |
 | Initial execution to callback start | **3 / 3 leaves** | **Passed** | **26 reports; same original graph; six actual Core edges** | **`5688835`** | **Exact initial state → registration → body → start → Generated; original bound derived** |
 | **Composition/initial-history integration batch** | **6 / 6 leaves** | **Passed** | **58 additional reports; 953 unchanged artifacts reused** | **`5688835`** | **Initial six-leaf batch; EOF-only three-leaf correction reused every C3 artifact** |
-| Compositional stored-capture admission | **2 / 2 leaves** | **Passed** | **40 reports; SAME23-node Code; all-fresh lower judgment; alias escape rejected** | **This checkpoint** | **Actual dependency captures and executed original prefix; full paired maps retained** |
-| Dormant cleanup activation: intervening handler case | **3 / 3 leaves** | **Passed** | **26 reports; actual initial→finish23 edges; SAME resume tail** | **This checkpoint** | **Saved-scope/split/position/outsideCheck produced; current-tail guard and general transport remain** |
-| **Storage/outside-activation integration batch** | **5 / 5 leaves** | **Passed** | **66 additional reports; 959 unchanged artifacts reused** | **This checkpoint** | **One related compile batch; original source hashes unchanged** |
+| Compositional stored-capture admission | **2 / 2 leaves** | **Passed** | **40 reports; SAME23-node Code; all-fresh lower judgment; alias escape rejected** | **`45d6f09`** | **Actual dependency captures and executed original prefix; full paired maps retained** |
+| Dormant cleanup activation: intervening handler case | **3 / 3 leaves** | **Passed** | **26 reports; actual initial→finish23 edges; SAME resume tail** | **`45d6f09`** | **Saved-scope/split/position/outsideCheck produced; current-tail guard and general transport remain** |
+| **Storage/outside-activation integration batch** | **5 / 5 leaves** | **Passed** | **66 additional reports; 959 unchanged artifacts reused** | **`45d6f09`** | **One related compile batch; original source hashes unchanged** |
 | Contextual composed initial-admission facets | ABI assessed; implementation started | Pending | Existing certificate/CodeChecked/accounting/Uses APIs identified | Not integrated | SAME23-node root; source requirements and accounting root remain separate |
-| General saved-anchor and strict-frame transport | ABI assessed; implementation started | Pending | Existing actual bind_enter reused; restored right-origin gap identified | Not integrated | No general multi-cycle or deeper strict availability claim |
+| Generic non-value bind from SAME chronology | **3 / 3 leaves** | **Passed** | **18 reports; twelve interfaces; actual prefix and positive target step** | **This checkpoint** | **Saved caller/predecessor/history produced from current origins; full physical suffix retained** |
+| General saved-anchor and strict-frame transport | Assessment in progress | Pending | Positive strict endpoint and restored physical right-origin gaps identified | Not integrated | Existing strict proofs reused; no deeper or multi-cycle availability claim |
+| Composed original resource and captured-handle origins | Implementation started | Pending | Finite prefix locally compiled; internal binding receipts in progress | Not integrated | SAME executed original transcript and full contracts; concrete runtime lineage remains open |
 | Physical current-scope ownership across restored prefixes | **13 / 13 evaluate/saved-map cases** | **Passed** | **Four producer reports; exact dynamic paths from SAME history** | **`2484040`** | **Independent current origin → simultaneous operation-derived origin; dormant anchors remain open** |
 | Cleanup and handler without supplied current ownership/origin | **2 / 2 factories** | **Passed** | **Six consumer and thirteen probe reports** | **`2484040`** | **Actual control inversion; original-start bound retained; same nested/resumed execution** |
 | **Current-scope three-leaf integration batch** | **3 / 3 leaves** | **Passed** | **23 additional reports; 950 unchanged artifacts reused** | **`2484040`** | **One related compile batch; no parent-source changes** |
@@ -1778,7 +1780,7 @@ preparation remain existing obligations. The fragment and inventory stay fixed.
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
 | C2 | 0 / 4 | 14/16 original forms; compositional Source/Auth/storage and checked general initializer integrated | Contextual composed initial admission and finite handlers; general capture and metadata origins | Original graph/private-family/storage origins; checked cell-registry transport | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
-| C3 | 0 / 5 | Causal initial history and intervening-handler outside activation integrated; SAME-start scope/ownership over 13 forms | Dormant activation/saved anchors; deeper strict frames; projection/disposal; full simulation/preparation | C2 admission; dormant anchor/position transport and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next generic bind/strict provider 2–4 active hours; general first-anchor transport remains open |
+| C3 | 0 / 5 | Causal initial history and intervening-handler outside activation integrated; SAME-start scope/ownership over 13 forms | Dormant activation/saved anchors; deeper strict frames; projection/disposal; full simulation/preparation | C2 admission; dormant anchor/position transport and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; generic bind integrated; next positive strict chronology batch 2–4 active hours; first-anchor transport open |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
@@ -2225,13 +2227,47 @@ These two independently reviewed components compile together as five new
 leaves in 42.9 seconds,
 with 7.2 seconds of preparation and
 association checks. All 959 parent artifacts and logs are reused unchanged.
-The current coherent assembly contains 964 modules and
+The assembly committed as `45d6f09` contains 964 modules and
 12,513 ordered standard-only reports,
 66 more than `5688835`.
 No Rust source changed or Rust test was rerun. General initial admission,
 handler/resource integration, runtime storage origins, saved-anchor transport,
 disposal, whole simulation/preparation and the integrated theorem remain open.
 M0–M4, normative semantics, exclusions and C1–C5 acceptance counts are unchanged.
+
+The [generated bind producer](../design/direct-effects/one-shot/CoreCallableGeneratedBindProducers.lean)
+now derives the existing non-value bind input from SAME current site and
+evaluated-scope origins. Literal node metadata, child translations, current
+environment closing, PlainData, ClosedExcept, non-value initializer and
+EmptyFocus remain explicit. The existing bind_enter constructs the saved caller
+from the entire current GeneralHistory; the producer retains exact predecessor
+and original-history equations. It takes no desired saved caller or successor.
+The physical successor prepends the actual bind frame to the full suffix.
+
+The [chronology consumers](../design/direct-effects/one-shot/CoreCallableGeneratedBindConsumers.lean)
+derive these origins from SAME InitialChronology or Generated, append the named
+bind operation, and preserve the original actual Core prefix and target trace.
+The [generic interfaces](../design/direct-effects/one-shot/GeneratedBindProducerInterfaces.lean)
+prove actual-prefix extension, explicit positive target steps, returned-control
+exclusion and rejection of a literal Unit initializer at this strict-bind gate.
+These are generic interfaces under current readiness guards, not extra graph
+fixtures or unconditional transition availability. Arbitrary physical suffixes
+are retained; deeper mapped strict focus/plug, restored right-site origins,
+bind-return extraction, general saved-anchor transport and full admission remain
+open. Existing strict proofs already compute positive entry and plug steps;
+their endpoints still need connection to the generated chronology.
+
+Independent review replays all three leaves once with 18 exact standard-only
+reports, twelve public interfaces, the missing-interface negative check and
+534 actual dependency selections. The integration batch compiles the three
+related leaves in 2.1 seconds, with
+8.8 seconds of preparation and association checks.
+All 964 parent source/artifact/log associations remain unchanged and are reused.
+The current coherent assembly contains 967 modules and 12,531 ordered
+standard-only reports, eighteen more than `45d6f09`. No Rust source changed or
+Rust test was rerun. This advances C3.1/C3.2 without closing a whole-fragment
+acceptance item; package counts, estimates, exclusions and normative semantics
+remain unchanged.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected
@@ -2247,8 +2283,9 @@ These whole-goal estimates replace prior estimates covering only bounded gates.
 C2 next constructs contextual certification, checked accounting and one-shot
 usage for the SAME23-node composed root, reusing the executed rich and storage
 receipts. General graph/private-family and handler/resource production remains
-open. C3 next derives generic saved-bind inputs from SAME current history;
-deeper focus/plug and restored right-site origins remain distinct obligations.
+open. C3 now derives generic saved-bind inputs from SAME current history.
+Next it connects positive strict focus/plug endpoints to generated chronology;
+restored right-site and actual-tail scope origins remain distinct obligations.
 General saved-anchor transport, disposal, runtime metadata origins and complete
 simulation/preparation are not closed by the one intervening-handler prefix.
 Next checkpoints remain bounded at 2–4 active hours with disjoint outputs.
