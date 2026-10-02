@@ -100,6 +100,20 @@ private theorem transport_heq {α β : Sort u} (same : α = β) (value : β) : H
   cases same; rfl
 
 omit evidence in
+private theorem resource_rows_heq
+    {family : Nat → Dependencies}
+    {first second : ∀ identity, SourcePlanSignatures.Signature (family identity)}
+    {firstRows : ∀ identity, Rows (first identity)} {secondRows : ∀ identity, Rows (second identity)}
+    (same : ∀ identity, first identity = second identity)
+    (aligned : ∀ identity, HEq (firstRows identity) (secondRows identity)) :
+    HEq (Rows.resource firstRows) (Rows.resource secondRows) := by
+  have sameFunctions : first = second := funext same
+  cases sameFunctions
+  have sameRows : firstRows = secondRows := funext (fun identity => eq_of_heq (aligned identity))
+  cases sameRows
+  rfl
+
+omit evidence in
 private theorem available_rows_heq
     {family : Nat → Dependencies}
     {first second : ∀ owner, SourcePlanSignatures.Signature (family owner)}
@@ -205,6 +219,9 @@ private theorem IndexedSource.usage_for_substitution
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF empty) (ihA empty)
   | bind initial body ihI ihB => exact .bind (ihI empty) (ihB empty)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC empty) (ihB empty)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      obtain ⟨identity, fresh⟩ := ScopedTyping.fresh_world_name _
+      exact .resource (ihI empty) ((instantiation_preserves_usage_iff _ _).mp (ihB identity fresh empty))
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC empty) (ihY empty) (ihN empty)
   | perform known admitted operand formed ih => exact .perform (ih empty)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl => exact .handle (ihBody empty) capabilities
@@ -348,6 +365,69 @@ theorem Authenticated.substitution_reannotated_at
       · simp only [CoreCallablePlanSubstitution.plan]; rw [phiF, phiA]
       · simp only [signature]; exact signature_sequence_same sigF (signature_sequence_same sigA rfl)
       · exact sequence_rows_heq sigF (signature_sequence_same sigA rfl) alignedF (sequence_rows_heq sigA rfl alignedA HEq.rfl)
+  | resource initial body ihI ihB =>
+      rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      rename_i bodyDemand owners world allowed scope originalEnvironment initialCode initialDemand
+        initialRequirements initialDependencies initialPlan initialRows residual binder output originalLexical
+        receiver template bodyRequirements bodyDependencies bodyPlans bodyRows initialSource bodySource
+        outwardRequirements formed effectsBound admitted hidden
+      obtain ⟨nextI, rowsI, sourceI, authI, phiI, sigI, alignedI⟩ :=
+        ihI environment name input value lexical bound sameEnvironment
+          (fun n mem => sameLexical n (List.mem_append_left _ mem)) replacement closed actual
+          (fun occurs => authReplacement (List.mem_append_left _ occurs))
+      let nextPlans := fun identity => CoreCallablePlanSubstitution.plan
+        (template.instantiate (Instantiation.Environment.empty.bind binder identity)) (bodyPlans identity) name value
+      have sigB : ∀ identity, signature (nextPlans identity) = signature (bodyPlans identity) :=
+        fun identity => CoreCallablePlanSubstitution.plan_signature _ _ name closed.1
+      let nextRows := fun identity => (sigB identity).symm ▸ bodyRows identity
+      have alignedB : ∀ identity, HEq (nextRows identity) (bodyRows identity) :=
+        fun identity => rows_cast_heq (sigB identity) (bodyRows identity)
+      have transported : ∀ identity, identity ∉ world →
+          ∃ nextSource : IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+            scope environment
+            ((template.subst name value).instantiate (Instantiation.Environment.empty.bind binder identity))
+            output bodyDemand (bodyRequirements identity) (nextPlans identity) (nextRows identity),
+          Authenticated registry outward nextSource lexical (identity :: receiver) := by
+        intro identity fresh
+        have bodyOccurs : ∀ n, Syntax.Dependency.variable n ∈
+            (template.instantiate (Instantiation.Environment.empty.bind binder identity)).dependencies →
+            Syntax.Dependency.variable n ∈ (Code.resource binder initialCode template).dependencies := by
+          intro n mem
+          rcases List.mem_append.mp (acquisition_dependency_bound _ identity _ mem) with old | introduced
+          · exact List.mem_append_right _ old
+          · simp at introduced
+        let openedReplacement := (replacement.world_weaken (nextWorld := world ++ [identity])
+            (by intro id member; exact List.mem_append_left _ member)).value_allowed closed.1 (.cell identity :: residual) scope
+        have replacementAuth : Syntax.Dependency.variable name ∈
+            (template.instantiate (Instantiation.Environment.empty.bind binder identity)).dependencies →
+            Authenticated registry outward openedReplacement lexical (identity :: receiver) := by
+          intro occurs
+          have auth := authReplacement (bodyOccurs name occurs)
+          have weakened := (auth.value_world_weaken (nextWorld := world ++ [identity]) closed.1
+            (by intro id member; exact List.mem_append_left _ member)).value_allowed closed.1 (.cell identity :: residual) scope
+          apply weakened.value_reauthenticate closed
+          exact (SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mp auth.current_support).trans
+            (by intro id member; exact List.mem_cons_of_mem _ member)
+        obtain ⟨newPlan, newRows, newSource, newAuth, phi, sig, aligned⟩ :=
+          ihB identity fresh environment name input value lexical bound sameEnvironment
+            (fun n mem => sameLexical n (bodyOccurs n mem)) openedReplacement closed actual replacementAuth
+        change newPlan = nextPlans identity at phi
+        cases phi
+        have rowSame : newRows = nextRows identity := eq_of_heq (aligned.trans (alignedB identity).symm)
+        cases rowSame
+        rw [Code.instantiation_subst _ name value _ closed.2.1]
+        exact ⟨newSource, newAuth⟩
+      let opened := fun identity fresh => Classical.choose (transported identity fresh)
+      have openedAuth := fun identity fresh => Classical.choose_spec (transported identity fresh)
+      refine ⟨.sequence nextI (.resource nextPlans), sequenceRows rowsI (Rows.resource nextRows),
+        by simpa only [Code.subst] using IndexedSource.resource sourceI opened formed effectsBound admitted hidden,
+        ?_, ?_, ?_, ?_⟩
+      · simpa only [Code.subst] using Hereditary.resource (bodySource := opened)
+          (formed := formed) (effectsBound := effectsBound) (admitted := admitted) (hidden := hidden) authI openedAuth
+      · simp only [CoreCallablePlanSubstitution.plan]; rw [phiI]
+      · exact signature_sequence_same sigI (congrArg SourcePlanSignatures.Signature.resource (funext sigB))
+      · exact sequence_rows_heq sigI (congrArg SourcePlanSignatures.Signature.resource (funext sigB))
+          alignedI (resource_rows_heq sigB alignedB)
   | cleanup callback body ihC ihB =>
       rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       obtain ⟨nextC, rowsC, sourceC, authC, phiC, sigC, alignedC⟩ := ihC environment name input value lexical bound sameEnvironment (fun n mem => sameLexical n (List.mem_append_left _ mem)) replacement closed actual

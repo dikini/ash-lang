@@ -83,6 +83,11 @@ theorem Authenticated.lexical_environment_congr
       rename_i destination agree
       exact .cleanup (admitted := by assumption) (publicCertified := by assumption)
         (ihF agree) (ihA agree)
+  | resource initial body ihI ihB =>
+      rename_i destination agree
+      exact .resource (bodySource := by assumption) (formed := by assumption) (effectsBound := by assumption)
+        (admitted := by assumption) (hidden := by assumption) (ihI agree)
+        (fun identity fresh => ihB identity fresh agree)
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree
       exact .branch (ihC agree)

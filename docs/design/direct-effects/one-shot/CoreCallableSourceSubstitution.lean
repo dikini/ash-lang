@@ -157,6 +157,26 @@ inductive IndexedSource (registry : Registry) (outward : List Instance) :
         (.emitAfter (.sequence callbackReq bodyReq) [] (qualify true latent))
         (.sequence actualCallbackPlan (.cleanup (needs := requests) callbackPlan bodyPlan))
         (by simpa only [signature] using (Rows.sequence actualCallbackRows (Rows.cleanup (needs := requests) latent callbackRows bodyRows)))
+  /-- Resource families remain total at every identity; recursive evidence is
+  required only at fresh openings of this SAME original body template. -/
+  | resource {bodyRequirements : Nat → Requirements bodyDemand}
+      {bodyDependencies : Nat → Dependencies}
+      {bodyPlans : ∀ identity, Plan (bodyDependencies identity)}
+      {bodyRows : ∀ identity, Rows (signature (bodyPlans identity))}
+      (initializer : IndexedSource registry outward owners world allowed scope environment
+        initial .integer initialDemand initialRequirements initialPlan initialRows)
+      (body : ∀ identity, identity ∉ world →
+        IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+          scope environment (code.instantiate (Instantiation.Environment.empty.bind binder identity))
+          output bodyDemand (bodyRequirements identity) (bodyPlans identity) (bodyRows identity))
+      (formed : ScopedPorts.InWorld world output.port)
+      (effectsBound : residual.flatMap Instance.resources ⊆ world) (admitted : residual ⊆ allowed)
+      (hidden : ∀ identity, identity ∉ world →
+        ResourceRequirements.Hides identity (bodyRequirements identity) outwardRequirements) :
+      IndexedSource registry outward owners world allowed scope environment (.resource binder initial code)
+        output (initialDemand ++ bodyDemand) (.sequence initialRequirements outwardRequirements)
+        (.sequence initialPlan (.resource bodyPlans))
+        (sequenceRows initialRows (Rows.resource bodyRows))
   | discard (known : owners owner = some contract) (resolved : scope.resolve binder = some owner)
       (permission : (registry.policy binder).dispose = true) (unprotected : contract.held = false)
       (admitted : contract.closeEffects ⊆ allowed) :
@@ -241,6 +261,7 @@ abbrev Source.handler := @IndexedSource.handler
 abbrev Source.resume := @IndexedSource.resume
 abbrev Source.discard := @IndexedSource.discard
 abbrev Source.cleanup := @IndexedSource.cleanup
+abbrev Source.resource := @IndexedSource.resource
 
 /-- Actual-plan declaration certification follows structural derivation;
 application separately checks its exposed plan, and lambda bodies stay recursive. -/
@@ -254,6 +275,8 @@ theorem IndexedSource.certified (source : IndexedSource registry outward owners 
   | pair left right ihL ihR | bind left right ihL ihR => exact .sequence ihL ihR
   | app function argument admitted publicCertified ihF ihA => exact .sequence ihF (.sequence ihA publicCertified)
   | cleanup callback body admitted publicCertified ihC ihB => exact .sequence ihC (.cleanup publicCertified ihB)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .sequence ihI (.resource ihB)
   | branch condition yes no same ihC ihY ihN => exact .sequence ihC (.choice ihY ihN)
   | perform known admitted operand formed ih => exact .sequence ih .request
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -302,6 +325,9 @@ theorem IndexedSource.owners_congr
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF agree) (ihA agree) admitted publicCertified
   | bind initial body ihI ihB => exact .bind (ihI agree) (ihB agree)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC agree) (ihB agree) admitted publicCertified
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .resource (ihI agree) (fun identity fresh => ihB identity fresh agree)
+        formed effectsBound admitted hidden
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC agree) (ihY agree) (ihN agree) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih agree) formed
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -354,6 +380,9 @@ theorem IndexedSource.erase_at (source : IndexedSource registry outward owners w
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF scopeTyped) (ihA scopeTyped) admitted
   | bind initial body ihI ihB => exact .bind (ihI scopeTyped) (by simpa using ihB scopeTyped)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC scopeTyped) (ihB scopeTyped) admitted
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .resource (ihI scopeTyped) (fun identity fresh => ihB identity fresh scopeTyped)
+        formed effectsBound admitted
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC scopeTyped) (ihY scopeTyped) (ihN scopeTyped)
   | perform known admitted operand formed ih => exact .perform (by simp only [Registry.ports, known, Option.map_some]) admitted (ih scopeTyped) formed
 
@@ -429,6 +458,14 @@ theorem IndexedSource.environment_congr (source : IndexedSource registry outward
   | cleanup callback body admitted publicCertified ihC ihB =>
       exact .cleanup (ihC (fun name member => agree name (List.mem_append_left _ member)))
         (ihB (fun name member => agree name (List.mem_append_right _ member))) admitted publicCertified
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      apply IndexedSource.resource
+        (ihI (fun name member => agree name (List.mem_append_left _ member)))
+        (fun identity fresh => ihB identity fresh ?_) formed effectsBound admitted hidden
+      intro name member
+      rcases List.mem_append.mp (ScopedExpressions.acquisition_dependency_bound _ _ _ member) with old | introduced
+      · exact agree name (List.mem_append_right _ old)
+      · simp at introduced
   | bind initial body ihI ihB =>
       rename_i parameter b output bodyDemand bodyReq bodyDependencies bodySignature bodyRows
       apply Source.bind (ihI (fun name member => agree name (List.mem_append_left _ member))) (ihB ?_)
@@ -509,7 +546,7 @@ theorem IndexedSource.value_allowed (source : IndexedSource registry outward own
   | receiverLambda body bodyOutward latentBound publicCertified formed ih => exact .receiverLambda body bodyOutward latentBound publicCertified formed
   | purePair left right ihL ihR => exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
   | pair left right ihL ihR => exact .pair (ihL valueIsValue.1) (ihR valueIsValue.2)
-  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup => cases valueIsValue
+  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup | resource => cases valueIsValue
 
   | typed | unavailable | available | nil | cons => trivial
 
@@ -544,7 +581,7 @@ theorem IndexedSource.value_summary (source : IndexedSource registry outward own
   | receiverLambda body bodyOutward latentBound publicCertified formed ih => exact .receiverLambda body bodyOutward latentBound publicCertified formed
   | purePair left right ihL ihR | pair left right ihL ihR =>
       exact .purePair (ihL valueIsValue.1) (ihR valueIsValue.2)
-  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup => cases valueIsValue
+  | «variable» | app | bind | branch | perform | handler | resume | discard | cleanup | resource => cases valueIsValue
 
   | typed | unavailable | available | nil | cons => trivial
 
@@ -607,6 +644,16 @@ theorem IndexedSource.world_weaken
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF larger) (ihA larger) admitted (certified_world publicCertified larger)
   | bind initial body ihI ihB => exact .bind (ihI larger) (ihB larger)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC larger) (ihB larger) admitted (certified_world publicCertified larger)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      rename_i bodyRequirements bodyDependencies bodyPlans bodyRows
+      apply IndexedSource.resource (bodyRequirements := bodyRequirements)
+        (ihI larger) ?_ (ScopedPorts.in_world_mono formed larger)
+        (List.Subset.trans effectsBound larger) admitted ?_
+      · intro identity fresh
+        exact ihB identity (fun old => fresh (larger old))
+          (by intro name member; rcases List.mem_append.mp member with old | current; exact List.mem_append_left _ (larger old); exact List.mem_append_right _ current)
+      · intro identity fresh
+        exact hidden identity (fun old => fresh (larger old))
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC larger) (ihY larger) (ihN larger) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih larger) (ScopedPorts.in_world_mono formed larger)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -684,6 +731,27 @@ inductive Hereditary (registry : Registry) (outward : List Instance) :
   | cleanup (callback : Authenticated registry outward callbackSource lexical receiver)
       (body : Authenticated registry outward bodySource lexical receiver) :
       Hereditary registry outward (IndexedSource.cleanup callbackSource bodySource admitted publicCertified) lexical receiver
+  | resource {code : Code}
+      {bodyRequirements : Nat → Requirements bodyDemand}
+      {bodyDependencies : Nat → Dependencies}
+      {bodyPlans : ∀ identity, Plan (bodyDependencies identity)}
+      {bodyRows : ∀ identity, Rows (signature (bodyPlans identity))}
+      {initialSource : IndexedSource registry outward owners world allowed scope environment
+        initial .integer initialDemand initialRequirements initialPlan initialRows}
+      {bodySource : ∀ identity, identity ∉ world →
+        IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+          scope environment (code.instantiate (Instantiation.Environment.empty.bind binder identity))
+          output bodyDemand (bodyRequirements identity) (bodyPlans identity) (bodyRows identity)}
+      {outwardRequirements : Requirements bodyDemand}
+      {formed : ScopedPorts.InWorld world output.port}
+      {effectsBound : residual.flatMap Instance.resources ⊆ world} {admitted : residual ⊆ allowed}
+      {hidden : ∀ identity, identity ∉ world →
+        ResourceRequirements.Hides identity (bodyRequirements identity) outwardRequirements}
+      (initial : Authenticated registry outward initialSource lexical receiver)
+      (body : ∀ identity (fresh : identity ∉ world),
+        Authenticated registry outward (bodySource identity fresh) lexical (identity :: receiver)) :
+      Hereditary registry outward
+        (IndexedSource.resource initialSource bodySource formed effectsBound admitted hidden) lexical receiver
   | resume (operand : Authenticated registry outward operandSource lexical receiver) :
       Hereditary registry outward (IndexedSource.resume known resolved permission operandSource admitted formed) lexical receiver
   | discard {owners : Owners} {scope : Execution.Scope} {contract : OwnerContract}
@@ -921,6 +989,20 @@ private theorem rows_cast_heq {first second : SourcePlanSignatures.Signature dep
   rfl
 
 omit evidence in
+private theorem resource_rows_heq
+    {family : Nat → Dependencies}
+    {first second : ∀ identity, SourcePlanSignatures.Signature (family identity)}
+    {firstRows : ∀ identity, Rows (first identity)} {secondRows : ∀ identity, Rows (second identity)}
+    (same : ∀ identity, first identity = second identity)
+    (aligned : ∀ identity, HEq (firstRows identity) (secondRows identity)) :
+    HEq (Rows.resource firstRows) (Rows.resource secondRows) := by
+  have sameFunctions : first = second := funext same
+  cases sameFunctions
+  have sameRows : firstRows = secondRows := funext (fun identity => eq_of_heq (aligned identity))
+  cases sameRows
+  rfl
+
+omit evidence in
 private theorem available_rows_heq
     {family : Nat → Dependencies}
     {first second : ∀ owner, SourcePlanSignatures.Signature (family owner)}
@@ -991,6 +1073,10 @@ private theorem IndexedSource.owner_free_usage
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF empty) (ihA empty)
   | bind initial body ihI ihB => exact .bind (ihI empty) (ihB empty)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC empty) (ihB empty)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      obtain ⟨identity, fresh⟩ := ScopedTyping.fresh_world_name _
+      exact .resource (ihI empty)
+        ((ScopedExpressions.instantiation_preserves_usage_iff _ _).mp (ihB identity fresh empty))
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC empty) (ihY empty) (ihN empty)
   | perform known admitted operand formed ih => exact .perform (ih empty)
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl => exact .handle (ihBody empty) capabilities
@@ -1138,6 +1224,43 @@ theorem IndexedSource.substitution_reannotated_at
       · exact sequence_rows_heq sigC
           (congrArg (fun body => SourcePlanSignatures.Signature.cleanup _ body) sigB)
           alignedC (cleanup_rows_heq sigB alignedB)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      rename_i bodyDemand owners world allowed scope sourceEnvironment initial initialDemand
+        initialRequirements initialDependencies initialPlan initialRows residual output outwardRequirements
+        binder template bodyRequirements bodyDependencies bodyPlans bodyRows
+      intro environment name input value same replacement closed
+      obtain ⟨nextI, rowsI, sourceI, phiI, sigI, alignedI⟩ :=
+        ihI environment name input value same replacement closed
+      let nextPlans := fun identity => CoreCallablePlanSubstitution.plan
+        (template.instantiate (Instantiation.Environment.empty.bind binder identity)) (bodyPlans identity) name value
+      have sigB : ∀ identity, signature (nextPlans identity) = signature (bodyPlans identity) :=
+        fun identity => CoreCallablePlanSubstitution.plan_signature _ _ name closed.1
+      let nextRows := fun identity => (sigB identity).symm ▸ bodyRows identity
+      have alignedB : ∀ identity, HEq (nextRows identity) (bodyRows identity) :=
+        fun identity => rows_cast_heq (sigB identity) (bodyRows identity)
+      have opened : ∀ identity, identity ∉ world →
+          IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+            scope environment
+            ((template.subst name value).instantiate (Instantiation.Environment.empty.bind binder identity))
+            output bodyDemand (bodyRequirements identity) (nextPlans identity) (nextRows identity) := by
+        intro identity fresh
+        obtain ⟨newPlan, newRows, newSource, phi, sig, aligned⟩ :=
+          ihB identity fresh environment name input value same
+            ((replacement.world_weaken (by intro identity member; exact List.mem_append_left _ member)).value_allowed
+              closed.1 (.cell identity :: residual) scope) closed
+        change newPlan = nextPlans identity at phi
+        cases phi
+        have rowSame : newRows = nextRows identity := eq_of_heq (aligned.trans (alignedB identity).symm)
+        cases rowSame
+        rw [Code.instantiation_subst _ name value _ closed.2.1]
+        exact newSource
+      refine ⟨.sequence nextI (.resource nextPlans), sequenceRows rowsI (Rows.resource nextRows),
+        ?_, ?_, ?_, ?_⟩
+      · simpa only [Code.subst] using IndexedSource.resource sourceI opened formed effectsBound admitted hidden
+      · simp only [CoreCallablePlanSubstitution.plan]; rw [phiI]
+      · exact signature_sequence_same sigI (congrArg SourcePlanSignatures.Signature.resource (funext sigB))
+      · exact sequence_rows_heq sigI (congrArg SourcePlanSignatures.Signature.resource (funext sigB))
+          alignedI (resource_rows_heq sigB alignedB)
   | branch condition yes no sameDemand ihC ihY ihN =>
       intro environment name input value same replacement closed
       obtain ⟨nextC, rowsC, sourceC, phiC, sigC, alignedC⟩ := ihC environment name input value same replacement closed

@@ -85,6 +85,23 @@ theorem Authenticated.environment_congr
       refine .cleanup (admitted := by assumption) (publicCertified := by assumption) (ihF (fun n mem => agree n (List.mem_append_left _ mem)) ?_) (ihA (fun n mem => agree n (List.mem_append_right _ mem)) ?_)
       · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_left _ mem)
       · apply IndexedSource.environment_congr (by assumption); exact fun n mem => agree n (List.mem_append_right _ mem)
+  | resource initial body ihI ihB =>
+      rename_i initialSource bodySource outwardRequirements formed effectsBound admitted hidden destination agree nextSource
+      let changed := fun identity fresh => (bodySource identity fresh).environment_congr (destination := destination) (by
+        intro n mem
+        rcases List.mem_append.mp (acquisition_dependency_bound _ identity _ mem) with old | introduced
+        · exact agree n (List.mem_append_right _ old)
+        · simp at introduced)
+      refine .resource (bodySource := changed) (formed := formed) (effectsBound := effectsBound)
+        (admitted := admitted) (hidden := hidden)
+        (ihI (fun n mem => agree n (List.mem_append_left _ mem)) ?_) ?_
+      · exact initialSource.environment_congr (fun n mem => agree n (List.mem_append_left _ mem))
+      · intro identity fresh
+        apply ihB identity fresh ?_ (changed identity fresh)
+        intro n mem
+        rcases List.mem_append.mp (acquisition_dependency_bound _ identity _ mem) with old | introduced
+        · exact agree n (List.mem_append_right _ old)
+        · simp at introduced
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree nextSource
       refine .branch (ihC (fun n mem => agree n (List.mem_append_left _ (List.mem_append_left _ mem))) ?_)

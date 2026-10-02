@@ -10,11 +10,12 @@ namespace Ash.OneShot.CoreRuntimePreparation
 open CoreMachine CoreSyntax
 
 inductive Phase where
-  | acquisition | capture | cleanup | teardown
+  | acquisition | capture | cleanup | teardown | evaluation | access
   deriving DecidableEq, Repr
 
 inductive Resource where
   | work | cleanupOwners | activationKeys | environmentBindings
+  | resourceOwners | instantiationEntries | instantiationStorage
   | frames | effectTrace | captureInspection
   | environmentDisposal | capturedDisposal | typeDisposal | kindDisposal
   deriving DecidableEq, Repr

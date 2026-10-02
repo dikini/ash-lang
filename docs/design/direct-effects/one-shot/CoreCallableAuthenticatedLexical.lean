@@ -86,6 +86,17 @@ theorem Authenticated.lexical_congr
       rename_i destination agree
       exact .cleanup (admitted := by assumption) (publicCertified := by assumption)
         (ihF (fun n mem => agree n (List.mem_append_left _ mem))) (ihA (fun n mem => agree n (List.mem_append_right _ mem)))
+  | resource initial body ihI ihB =>
+      rename_i destination agree
+      refine .resource (bodySource := by assumption) (formed := by assumption) (effectsBound := by assumption)
+        (admitted := by assumption) (hidden := by assumption)
+        (ihI (fun n mem => agree n (List.mem_append_left _ mem))) ?_
+      intro identity fresh
+      apply ihB identity fresh
+      intro n mem
+      rcases List.mem_append.mp (acquisition_dependency_bound _ identity _ mem) with old | introduced
+      · exact agree n (List.mem_append_right _ old)
+      · simp at introduced
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree
       exact .branch (ihC (fun n mem => agree n (List.mem_append_left _ (List.mem_append_left _ mem))))

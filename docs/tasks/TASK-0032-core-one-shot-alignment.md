@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 03:46 UTC
+### Current deliverable board — 2026-10-02 05:06 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -80,7 +80,7 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Generated operation declaration checker | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | **Retained six-deliverable batch** | **6 / 6** | **6 / 6** | **6 / 6** | **`d2f26e1`** | **Unchanged** |
 | Recursive C2 source/authentication checker: 16 Code constructors | **14 / 16** | **14 / 16** | **14 / 16** | **`ab71211`** | Unchanged |
-| Missing rich source constructors: cleanup and resource | **1 / 2** | **1 / 2** | **1 / 2** | **`ab71211`** | Unchanged |
+| Missing rich source constructors: cleanup and resource | **2 / 2** | **2 / 2** | **2 / 2** | **This checkpoint** | **1 / 2 → 2 / 2; finite checker remains 14 / 16** |
 | Bounded returned-storage and actual-initializer origin producer | Yes | Passed | Passed | `ab71211` | Unchanged |
 | Running cleanup capture/restore/finish: inside-anchored path family | Implemented | Passed | Passed | `3fad8e8` | Unchanged |
 | Literal-site ancestry through actual capture/beta/bind | Implemented | **Passed** | **Passed** | `3fad8e8` | Unchanged |
@@ -113,12 +113,20 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Local handler installation/capture/return: seven named reports | **7 / 7** | **7 / 7, passed** | **Exact current-source replay passed** | **`2de8f55`** | **Frozen → reviewed, registered and verified** |
 | **Outer/clause/local-handler three-component batch** | **3 / 3** | **3 / 3** | **3 / 3; 24 reports** | **`2de8f55`** | **All three finished components integrated together** |
 | Recursive closure origins: four diagnostic reports | Dependency assessed | Diagnosis checked locally | Four diagnostic reports passed | Not registered | Diagnostics remain assessment evidence; producer is below |
-| Recursive literal-lambda ordinary prefix and consumers: nineteen named reports | **19 / 19** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **Diagnostic → conditional arbitrary-length producer, evaluated lambda and nearest lookup** |
-| Generated running callback chronology: twelve named producer classes | **12 / 12 classes** | **Passed** | **Eleven leaf reports; concrete six-edge callback and five probe reports passed** | **This checkpoint** | **Local factories → generated exact-endpoint path; nested generated handler cycle remains open** |
-| Current-operation preparation and phase-local cursor: thirteen named reports | **13 / 13** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **Assessment → bounded conditional interface; full footprint/ledger origin remains open** |
-| Preparation exact-budget/finite-key/reservation probes: twenty-one named reports | **21 / 21** | **Passed** | **Exact current-source replay passed** | **This checkpoint** | **New represented-operation counterevidence** |
-| Discard failure-boundary Rust QA: success, pre-consumption and post-consumption cases | **3 / 3 cases** | **Passed** | **Seven-test related group passed independently** | **This checkpoint** | **New actual disposal-refusal evidence; internal shape, no general reachability claim** |
-| **Recursive/chronology/preparation four-leaf batch** | **4 / 4 leaves** | **4 / 4** | **4 / 4; 64 reports** | **This checkpoint** | **Frozen → reviewed, registered and verified together** |
+| Recursive literal-lambda ordinary prefix and consumers: nineteen named reports | **19 / 19** | **Passed** | **Exact current-source replay passed** | **`aa71286`** | **Diagnostic → conditional arbitrary-length producer, evaluated lambda and nearest lookup** |
+| Generated running callback chronology: twelve named producer classes | **12 / 12 classes** | **Passed** | **Twenty current chronology reports; initial callback retained; new composition/cycle rows below** | **`aa71286`** | **Local factories → initial exact-endpoint callback; current nested completion is below** |
+| Current-operation preparation and phase-local cursor: thirteen named reports | **13 / 13** | **Passed** | **Exact current-source replay passed** | **`aa71286`** | **Assessment → bounded conditional interface; full footprint/ledger origin remains open** |
+| Preparation exact-budget/finite-key/reservation probes: twenty-one named reports | **21 / 21** | **Passed** | **Exact current-source replay passed** | **`aa71286`** | **New represented-operation counterevidence** |
+| Discard failure-boundary Rust QA: success, pre-consumption and post-consumption cases | **3 / 3 cases** | **Passed** | **Seven-test related group passed independently** | **`aa71286`** | **New actual disposal-refusal evidence; internal shape, no general reachability claim** |
+| **Recursive/chronology/preparation four-leaf batch** | **4 / 4 leaves** | **4 / 4** | **4 / 4; 64 reports** | **`aa71286`** | **Frozen → reviewed, registered and verified together** |
+
+| Resource foundation: fifteen changed modules and three leaves/probes | **18 / 18 sources** | **Passed** | **53 consumers + three modules; 444 reports** | **This checkpoint** | **Resource rule and full pointwise transports supplied** |
+| History composition: capture outputs and resume/handler/spent heads | **4 / 4 interfaces** | **Passed** | **Twenty chronology reports passed** | **This checkpoint** | **Equality failure → same-current structural decomposition** |
+| Computed normal cleanup completion: nine named reports | **9 / 9** | **Passed** | **Passed** | **This checkpoint** | **Running owner → restored saved result/scope, retired owner** |
+| SAME-start nested cycle: eighteen actual Core steps including start | **18 / 18 steps** | **Passed** | **Eight nested reports, seven simple probes and six guards** | **This checkpoint** | **Six-edge callback → seventeen-edge nested path through completion** |
+| Activation-map preparation: fourteen reports and twenty probes | **34 / 34 reports** | **Passed** | **Passed** | **This checkpoint** | **Computed requests and same endpoint agreement** |
+| Runtime metadata Rust QA: two computed-budget tests | **2 / 2 tests** | **Passed** | **Passed** | **This checkpoint** | **Exact/one-short diagnostics and observation prefix; bounded internal shape** |
+| **Resource/cycle/metadata coherent batch** | **3 / 3 components** | **3 / 3** | **64 affected modules; 80 additional reports** | **This checkpoint** | **Compiled once; 863 unaffected artifacts reused** |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -133,9 +141,10 @@ Retained implementation and verification summary:
   callback and body. Resume/discard use exact owner insertion, numeric shadow,
   scope, policy, allowance and held guards without comparing full contracts by
   signature. Handler and resource are the two missing forms.
-- Rich cleanup source and its transports moved to retention: 1/2 missing source
-  constructors. Full callback contracts and public plans/rows remain fixed.
-  Resource stays open. The bounded returned-storage producer is retained after
+- Both missing rich source constructors, cleanup and resource, and their
+  pointwise transports are retained: 2/2. Full contracts and public plans/rows
+  remain fixed. Finite handler/resource checking remains open at 14/16.
+  The bounded returned-storage producer is retained after
   review; it derives actual initializer origins and exact application/substitution
   contracts while preserving the retaining-closure rejection.
 - The preceding checker/storage checkpoint `ab71211` adds 28 standard reports.
@@ -144,16 +153,17 @@ Retained implementation and verification summary:
   with 299 reports. The other 862 modules retain their fresh current-source
   association and identical direct-import hashes. This is an audited assembly,
   not a new uncached build of all 893 modules.
-- C3's bounded running-cleanup checkpoint constructs actual capture, protected
+- The preceding running-cleanup checkpoint `d2f26e1` constructs actual capture, protected
   disposal rejection and full-prefix resume/finish when the original scope path
   is anchored inside the same captured suffix. Independent replay passes all
   twelve reports and the public interface probe. This checkpoint retains the
   transport alongside literal-site ancestry: initial/selected-clause/child
   receipts and actual capture/beta/bind factories. An ancestry receipt records
   enclosing-handler metadata and a strict postorder site bound, not a whole
-  execution ancestry trace. Outside-anchored restoration and armed projection
-  remain open. Canonical maps and dynamic ticket freshness do not prove the
-  missing lexical site/history origin for those paths.
+  execution ancestry trace. At that checkpoint, outside-anchored restoration
+  and armed projection remained open. Checked outside restoration is now retained;
+  general changed-tail activation and armed projection remain open. Canonical
+  maps and dynamic ticket freshness alone do not supply those providers.
 - The six-deliverable batch remains retained in unsigned commit `d2f26e1`. Its
   fresh 891-module build and full Rust verification remain valid for unchanged
   Rust sources: 2,902 tests, no failures and two intentionally ignored tests.
@@ -252,12 +262,12 @@ reviewed matches; all 908 modules from parent `c5fb370` remain unchanged.
 
 Current parallel checkpoints:
 
-| Existing obligation | Previous report | Current phase and concrete result | Next observable output | Estimated active work |
+| Existing obligation | Previous report | Current phase and result | Next observable output | Estimated active work |
 | --- | --- | --- | --- | --- |
-| C2.1 / C2.3 | One-binding outer evaluation integrated | **Recursive conditional producer integrated:** nineteen reports retain the same original prefix/full families/storage attachment and derive actual lambda installations/evaluation/lookup | Coherent resource rich constructor and pointwise Plan/Rows transport, then finite resource checker | Next bounded batch 2–4 active hours; C2 whole-package range 15–26 agent-hours |
-| C3.1 / C3.2 | Local clause/handler factories integrated | **Generated endpoint-threaded path integrated:** twelve operation classes and one concrete six-edge callback; exact original receipt and spent barrier retained | Connect cleanup retirement/activation and instantiate nested generated capture/resume | Next bounded batch 2–4 active hours; C3 whole-package range 16–29 agent-hours |
-| C3.4 | Capacity/preparation assessed | **Bounded interface and QA integrated:** thirteen producer reports, twenty-one probes, independently replayed seven-test Rust group | Derive actual runtime metadata/cost/ledger origin and connect surrounding disposal/projection checks | Existing C3.4 allowance 3–6 agent-hours; reassess concrete provider gaps |
-| C3.2 | Physical selection and outside restoration integrated | **Unchanged:** selected-handler and outside-anchor receipts remain available | Derive current route/readiness from admission and activation guards from generated chronology | Depends on C2 and chronological transport |
+| C2.1 / C2.3 | Resource foundation absent | **Foundation integrated:** both missing source constructors, varying Plan/Rows transport and paired-formal receipts | Finite original-template handler/resource annotations with Source/Auth outputs | Next checkpoint 2–4 active hours; C2 range 15–26 agent-hours |
+| C3.1 / C3.2 | Nested cycle uninstantiated | **Completion integrated:** 17 post-start edges/18 Core steps, exact prefix and original receipt | Current activation/TicketBound/guard providers; projection/disposal | Next checkpoint 2–4 active hours; C3 range 16–29 agent-hours |
+| C3.4 | Preparation with supplied ledgers | **Metadata slice integrated:** acquisition 2n+3/request 3 + scan, endpoint agreement and two Rust tests | Actual indexed C2 map/observer/ledger origins and remaining metadata consumers | Within existing C3.4 range; wider providers open |
+| C3.2 | Outside restoration integrated | **Unchanged:** physical selection and outside-anchor receipts | Current route/readiness and activation guards | C2 and chronological transport |
 
 The new constructor closes the particular coupling gap between substituted body
 receipts and the private family of the whole returned lambda. It evaluates the
@@ -288,14 +298,11 @@ No universal intermediate scan-success claim is made. Changed-tail activation,
 armed projection, disposal, rich successor preservation and whole simulation
 remain open.
 
-After integrating the finished outer/clause/local-handler components, the next
-batch retains recursive literal-lambda origins, generated callback chronology and
-bounded preparation/QA. The next C2 prerequisite is a coherent rich resource
-constructor with pointwise Plan/full Rows transport; editing only the checker
-branch cannot supply it. C3 next connects cleanup retirement/activation and
-nested generated capture/resume. Actual runtime instantiation/map/cost origin
-remains an identified C3.4 dependency. These are existing acceptance obligations,
-not additional packages. The fragment and whole acceptance inventory stay fixed.
+The resource foundation, generated nested normal completion and bounded
+metadata slice are integrated. Finite static annotation construction and actual
+current guard/origin providers remain next. General initial admission, whole
+reachable simulation, changed-tail activation, projection/disposal and full
+preparation remain existing obligations. The fragment and inventory stay fixed.
 
 ### Increment 1 local results
 
@@ -1742,33 +1749,77 @@ not additional packages. The fragment and whole acceptance inventory stay fixed.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
-| C2 | 0 / 4 | 14/16 checker forms and conditional arbitrary-length literal-lambda origins/consumers integrated | Validated metadata/check manufacture; general initializer/resource origins; handler/resource construction; general initial admission | Coherent resource pointwise Plan/Rows transport; original graph/private-family/storage and registry origins | 15–26 combined agent-hours before contingency; next resource-foundation batch 2–4 active hours |
-| C3 | 0 / 5 | Generated exact-endpoint callback path, bounded current-operation preparation and failure QA integrated | All reachable current guards; nested generated cycle; retirement/activation/projection/disposal; ownership and full simulation; complete preparation footprint | C2 rich successor evidence; generated cleanup completion/scope; actual runtime ledger/instantiation/cost origin | 16–29 combined agent-hours before contingency; next cleanup/generated-cycle batch 2–4 active hours |
+| C2 | 0 / 4 | 14/16 checker forms; both missing rich source constructors and full resource transports integrated | Finite handler/resource annotations; metadata and general initializer origins; admission | Original graph/private-family/storage/registry origins; finite symbolic specialization | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
+| C3 | 0 / 5 | SAME-start nested cycle through completion and activation-map preparation integrated | All reachable current guards; changed-tail activation/projection/disposal; full ownership/simulation/preparation | C2 rich successor evidence; current TicketBound/scope and actual indexed map/ledger origins | 16–29 combined agent-hours before contingency; next guard checkpoint 2–4 active hours |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
-The finished-component gate at `2de8f55` retained outer-lambda evaluation,
-clause/heap/resume and local-handler transitions: three leaves, 24 reports, 914
-modules and 12,026 reports. The next coherent batch retains four reviewed leaves:
-recursive ordinary origins (19), generated chronology (11), runtime preparation
-(13), and preparation probes (21). Exact productive registrations compile
-together in 10.0 seconds. The current assembly contains 918 modules and 12,090
-ordered standard-only reports, with all 914 preceding source/artifact/log/direct
-import associations checked and reused through immutable dependency hardlinks.
-No uncached whole-module rebuild is claimed. Seven related Rust tests pass
-independently; one new test distinguishes actual post-consumption disposal refusal
-from preflight refusal. Runtime behavior is unchanged. The two user-owned
-unregistered handler prototypes remain excluded and unchanged.
+Checkpoints `2de8f55` and `aa71286` integrated three leaves/24 reports and
+four leaves/64 reports respectively. The current increment coalesces three
+reviewed components; related dependencies compile once. The original paired
+Admission/static/storage successes remain upstream providers; 14/16 checker forms
+do not establish arbitrary initial admission. Current guards, changed-tail
+activation and projection/disposal remain open. Two user-owned unregistered
+handler prototypes remain excluded and unchanged.
 
-C2's arbitrary-length literal-lambda prefix is conditional on original successful
-graph/static/storage guards, whose automatic manufacture remains open; its
-open-initializer theorem has no concrete all-guard inhabitant yet. C3 has twelve
-producer classes and one concrete callback path, with current mixed-front and
-spent-barrier probes. A nested generated handler/capture/resume cycle is not yet
-instantiated. Preparation represents selected operations with supplied runtime
-ledgers and phase-local cursor records; general footprint/origin/projection
-history remains open. These bounds are preserved by independent review.
-Whole-fragment acceptance counts remain unchanged.
+The current coherent increment retains the
+[rich resource foundation](../design/direct-effects/one-shot/CoreCallableRichResourceFoundation.lean).
+It adds the existing lower resource rule to IndexedSource and hereditary
+authentication, preserving fresh world/receiver opening, original-world output
+formation, residual allowance and Hides. Substitution and restoration retain
+total full Plan/Rows families at every identity; Source/Auth recursion applies
+only to fresh openings. The paired-formal consumer constructs integer-init and
+formal-return resource Source/Auth from the same upstream paired receipt,
+preserving full rich/storage contracts, original map and exact slot result.
+It does not manufacture that upstream Admission.
+[Pointwise probes](../design/direct-effects/one-shot/ResourcePointwiseProbes.lean) reproduce the old
+substitution failure and preserve varying identities;
+[retention/namespace probes](../design/direct-effects/one-shot/ResourceFoundationProbes.lean) reject fresh
+capture into an older receiver and preserve ordinary formals with equal names.
+Both missing rich source constructors are supplied. The finite checker remains
+14/16; handler/resource annotations and general admission remain open.
+
+[Generated completion](../design/direct-effects/one-shot/CoreCallableGeneratedCleanupCompletion.lean)
+computes normal finish from the same generated history and original receipt,
+restores saved value/code/scope and retires that cleanup owner. CaptureData
+retains clause/closing equations already produced by capture. Structural
+resume and handler/spent head decompositions fix direct-versus-append history
+composition, deriving physical selection and complete receipt partitions from
+the same current constructors. No arbitrary equivalence or desired matching is
+accepted. The [nested probe](../design/direct-effects/one-shot/GeneratedNestedHandlerProbes.lean) has
+17 post-start edges and 18 actual Core steps including start, exact four-frame
+full-prefix restoration, both handler returns, spent return and completion.
+Original typed receipts persist through capture, operand evaluation, resume and
+return. [Completion guards](../design/direct-effects/one-shot/GeneratedCompletionGuards.lean) preserve the
+spent barrier. General current guards/TicketBound, changed-tail activation,
+deeper maps, projection/disposal and whole reachable simulation remain open.
+
+[Metadata preparation](../design/direct-effects/one-shot/CoreRuntimeMetadataPreparation.lean) retains
+finite map presence/distinct activation entries and rejects rows/nonactivation
+entries. Current literal resource/request control computes ordered requests:
+acquisition 2n+3 even for a shadowing key; cell effect 3 before top-down frame
+visits. Clone failures report optional request None, parameter charges Some(1).
+Produced map/effect/cut agreement connects to the same actual Core endpoint.
+Same effect-ID handler metadata and wider structural type/row traversal remain
+unsupported. Runtime ledger/word/disposal/map-erasure/physical-length guards
+are supplied current obligations. Generic Origin is an unindexed passthrough;
+it proves no full C2 lineage or observer origin. Faithful Rust Host replies
+must return at the zero-size row reservation while retaining its ordinal;
+arbitrary abstract refusals are not executable failure equivalence.
+[Metadata probes](../design/direct-effects/one-shot/CoreRuntimeMetadataPreparationExamples.lean) and two
+independently replayed internal-Machine Rust tests check computed exact/one-short
+budgets, shadowing, diagnostics and published observation prefixes. They do not
+prove validated-program reachability. The initially selected write operation
+was a fixture error; retained QA uses the original read. Runtime behavior and
+normative semantics are unchanged.
+
+Seventeen existing modules change; nine new modules/probes are registered.
+The 64 affected modules compile once in 205.8 seconds, with 6.3 seconds
+preparation/hash checking. Immutable hardlinks reuse 863 unaffected artifacts
+and logs. Every selected direct-import hash agrees in one cache. The current
+audited assembly contains 927 modules and 12,170 ordered standard-only reports,
+80 more than `aa71286`. This is incremental verification. M0–M4, the fragment
+and whole-package acceptance counts are unchanged.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected
@@ -1781,15 +1832,14 @@ commits. General admission and generated simulation are harder integration
 obligations, so component delivery rates are not extrapolated directly.
 These whole-goal estimates replace prior estimates covering only bounded gates.
 
-After this gate, C2 extends resource rich source/authentication and pointwise
-Plan/full Rows transport, while C3 extends generated cleanup completion/activation
-and nested capture/resume coverage. Runtime map/cost origin is an explicit C3.4
-provider dependency. Each next proof lane has a bounded 2–4 active-hour checkpoint
-and disjoint owned outputs. Reassess the whole-goal estimate at the original
-4–6 resumed-hour gate; the present component progress does not by itself narrow
-the range. Batch related edits and necessary reverse consumers; retain audited
-source/artifact/direct-import associations, and use grouped checks at integration
-points. Compile optimization does not narrow acceptance or authorize side work.
+After this gate, C2 constructs finite original-template handler/resource
+annotations and their source/authentication outputs. C3 constructs current
+activation/TicketBound/guard providers and connects projection/disposal under
+the same generated history. Indexed runtime map/ledger origin and remaining
+metadata consumers are C3.4 dependencies. Next checkpoints remain bounded at
+2–4 active hours with disjoint outputs. Reassess at the original 4–6 resumed-hour
+gate; this prerequisite progress does not itself narrow the whole-goal range.
+Batch related edits/reverse consumers without narrowing acceptance.
 
 ### Acceptance detail at the current checkpoint
 
@@ -1803,7 +1853,7 @@ semantic coverage or equal amounts of work.
 
 | Item | Verified component and status | Exact remaining acceptance obligation |
 | --- | --- | --- |
-| C2.1 typed translation | Finite Core syntax translation and supported type realization are integrated. [GraphAnnotationChecks](../design/direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean) independently verifies same-site function/binder/body metadata and computed support guards. | Construct the recursive structural source and authentication derivation from validated graph/annotation data; the lambda gate currently receives the body derivation. The producer retains 14 of 16 constructor forms, including receiver-aware lambda, cleanup, resume and discard. Rich cleanup source and transports are retained. The bounded storage producer is retained; resource construction still needs its evidence through control/resource/cleanup and the exact replacement contract. |
+| C2.1 typed translation | Finite Core syntax translation and supported type realization are integrated. [GraphAnnotationChecks](../design/direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean) independently verifies same-site function/binder/body metadata and computed support guards. | Construct the recursive structural source and authentication derivation from validated graph/annotation data; the lambda gate currently receives the body derivation. The producer retains 14 of 16 constructor forms, including receiver-aware lambda, cleanup, resume and discard. Rich cleanup/resource source and full pointwise transports are retained. The bounded storage producer is retained; finite resource/handler checking still needs symbolic original template/contract/recipe specialization and the exact replacement contract. |
 | C2.2 exact identities/signatures | Exact effect argument trees, type realization and conflict-checked declaration-port construction are integrated. Structured declarations now come from the same Rust registry traversal and identity maps; independent review passes with nine Rust tests and fresh Lean metadata compilation against 52 dependencies. One regeneration test is intentionally ignored. | The generated declaration checker is independently reviewed and current-source verified; this checkpoint retains its integration. Manifest equality pairs the artifacts; it does not prove general Rust-to-Lean translation soundness or private callable certification. |
 | C2.3 lexical resources/capabilities | Receiver-conditioned source support, actual operand authentication and restored support/checking are integrated. The new graph annotation gate has passed independent review. | Derive actual bound-value/captured-environment authentication and literal private-plan origin. Recursive body authentication and private-row refinement remain inputs to the gate. |
 | C2.4 initial admission | [InitialAdmission](../design/direct-effects/one-shot/CoreCallableInitialAdmission.lean) constructs the rich initial Site from the same supplied static Source/Auth, contracts, plan, rows and accounting; independent review passes. It projects typing/joint validity and an actual first progress step. | Produce that static Program from validated Core. General rich successor preservation and M4 availability are not established by the first-step projection. |

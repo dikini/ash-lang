@@ -35,6 +35,14 @@ def plan (code : Code) (source : Plan dependencies) (name : Nat) (value : Code) 
       | .cleanup publicPlan bodyPlan =>
         .sequence (plan action first name value) (.cleanup publicPlan (plan body bodyPlan name value))
       | other => .sequence first other
+    | .resource binder initializer body =>
+      match second with
+      | .resource bodies =>
+        .sequence (plan initializer first name value)
+          (.resource (fun identity => plan
+            (body.instantiate (Instantiation.Environment.empty.bind binder identity))
+            (bodies identity) name value))
+      | other => .sequence first other
     | .perform _ _ operand | .resume _ operand => .sequence (plan operand first name value) second
     | _ => .sequence first second
   | .handler required declarations bodyPlan =>
@@ -85,6 +93,9 @@ theorem plan_signature (code : Code) (source : Plan dependencies) (name : Nat) (
         (congr (congrArg Signature.choice (plan_signature _ _ name isValue)) (plan_signature _ _ name isValue))
     · exact congrArg (fun operand => Signature.sequence operand _) (plan_signature _ first name isValue)
     · exact congrArg (fun operand => Signature.sequence operand _) (plan_signature _ first name isValue)
+    · cases second <;> simp only [plan, signature]
+      exact congr (congrArg Signature.sequence (plan_signature _ first name isValue))
+        (congrArg Signature.resource (funext (fun identity => plan_signature _ _ name isValue)))
     · cases second <;> simp only [plan, signature]
       exact congr (congrArg Signature.sequence (plan_signature _ first name isValue))
         (congrArg (fun body => Signature.cleanup _ body) (plan_signature _ _ name isValue))

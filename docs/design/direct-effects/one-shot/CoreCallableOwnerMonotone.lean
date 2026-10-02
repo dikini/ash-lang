@@ -65,6 +65,8 @@ theorem IndexedSource.owners_known_mono
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF agree) (ihA agree) admitted publicCertified
   | bind initial body ihI ihB => exact .bind (ihI agree) (ihB agree)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC agree) (ihB agree) admitted publicCertified
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .resource (ihI agree) (fun identity fresh => ihB identity fresh agree) formed effectsBound admitted hidden
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC agree) (ihY agree) (ihN agree) same
   | perform known admitted operand formed ih => exact .perform known admitted (ih agree) formed
   | handler body clauses capabilities coverage unique admitted table modes declarations recipes ihBody ihDecl =>
@@ -142,7 +144,7 @@ theorem DeclarationAuthentication.owners_congr
     obtain ⟨nextProt, authProt⟩ := protectedMode.owners_congr destination
     obtain ⟨nextRest, authRest⟩ := ihR destination
     exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
-  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | typed | unavailable | available => trivial
+  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | resource | typed | unavailable | available => trivial
 
 theorem Authenticated.owners_known_mono
     {source : IndexedSource registry outward owners world allowed scope environment code contract demand requirements plan rows}
@@ -181,6 +183,13 @@ theorem Authenticated.owners_known_mono
       rename_i destination agree nextSource
       refine .app (admitted := by assumption) (publicCertified := by assumption) (ihF agree ?_) (ihA agree ?_)
       all_goals apply IndexedSource.owners_known_mono (by assumption); exact agree
+  | resource initial body ihI ihB =>
+      rename_i initialSource bodySource outwardRequirements formed effectsBound admitted hidden destination agree nextSource
+      let changed := fun identity fresh => (bodySource identity fresh).owners_known_mono agree
+      refine .resource (bodySource := changed) (formed := formed) (effectsBound := effectsBound)
+        (admitted := admitted) (hidden := hidden) (ihI agree (initialSource.owners_known_mono agree)) ?_
+      intro identity fresh
+      exact ihB identity fresh agree (changed identity fresh)
   | branch condition yes no ihC ihY ihN =>
       rename_i destination agree nextSource
       refine .branch (ihC agree ?_) (ihY agree ?_) (ihN agree ?_)

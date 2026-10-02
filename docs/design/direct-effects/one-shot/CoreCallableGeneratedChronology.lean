@@ -258,6 +258,65 @@ noncomputable def bind_return_result {graph : Graph} {current : Endpoint graph} 
       (raw_positive reduce (by trivial))
   exact ⟨after,proof.1,.positive proof.2⟩
 
+/-- Structural selected heads traverse only actual append constructors.
+Their complete installation/header and remainder history are indexed. -/
+inductive HandlerHead
+    (past : GeneralHandlerPast graph owners site environment data)
+    (header : CoreEffectFrames.BoundaryRel graph owners heap
+      (.handlerBoundary site environment data.activation) (.handler data)) :
+    {physical : List CoreMachine.Frame} → {target : Stack} → GeneralHistory graph heap physical target →
+    {tailPhysical : List CoreMachine.Frame} → {tailTarget : Stack} → GeneralHistory graph heap tailPhysical tailTarget → Type where
+  | here (tail : GeneralHistory graph heap physical target) : HandlerHead past header (.handler past header tail) tail
+  | append (current : GeneralHistory graph heap physical target) (tail : GeneralHistory graph heap tailPhysical tailTarget)
+      (second : GeneralHistory graph heap secondPhysical secondTarget) (head : HandlerHead past header current tail) :
+      HandlerHead past header (current.append second) (tail.append second)
+  | emptyPrefix (current : GeneralHistory graph heap physical target) (tail : GeneralHistory graph heap tailPhysical tailTarget)
+      (head : HandlerHead past header current tail) : HandlerHead past header ((GeneralHistory.nil (graph := graph) (heap := heap)).append current) tail
+
+inductive SpentHead
+    (past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data)
+    (header : OwnerHeader graph owners heap handler owner occurrence data) :
+    {physical : List CoreMachine.Frame} → {target : Stack} → GeneralHistory graph heap physical target →
+    {tailPhysical : List CoreMachine.Frame} → {tailTarget : Stack} → GeneralHistory graph heap tailPhysical tailTarget → Type where
+  | here (tail : GeneralHistory graph heap physical target) : SpentHead past header (.spent past header tail) tail
+  | append (current : GeneralHistory graph heap physical target) (tail : GeneralHistory graph heap tailPhysical tailTarget)
+      (second : GeneralHistory graph heap secondPhysical secondTarget) (head : SpentHead past header current tail) :
+      SpentHead past header (current.append second) (tail.append second)
+  | emptyPrefix (current : GeneralHistory graph heap physical target) (tail : GeneralHistory graph heap tailPhysical tailTarget)
+      (head : SpentHead past header current tail) : SpentHead past header ((GeneralHistory.nil (graph := graph) (heap := heap)).append current) tail
+
+theorem HandlerHead.physical
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralHandlerPast graph owners site environment data}
+    {header : CoreEffectFrames.BoundaryRel graph owners heap (.handlerBoundary site environment data.activation) (.handler data)}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : HandlerHead past header current tail) : physical = .handlerBoundary site environment data.activation :: tailPhysical := by
+  induction head <;> simp_all [List.cons_append]
+
+theorem HandlerHead.lexical
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralHandlerPast graph owners site environment data}
+    {header : CoreEffectFrames.BoundaryRel graph owners heap (.handlerBoundary site environment data.activation) (.handler data)}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : HandlerHead past header current tail) : target = .push (.handler data) tailTarget := by
+  induction head <;> simp_all [Stack.append]
+
+theorem SpentHead.physical
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : SpentHead past header current tail) : physical = .clauseBoundary handler owner occurrence dynamicTicket none :: tailPhysical := by
+  induction head <;> simp_all [List.cons_append]
+
+theorem SpentHead.lexical
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : SpentHead past header current tail) : target = .spent dynamicTicket data.answer data.scope tailTarget := by
+  induction head <;> simp_all [Stack.append]
+
 structure HandlerReturnInput (current : Endpoint graph) where
   owners : OwnerMap
   site : Nat
@@ -277,7 +336,7 @@ structure HandlerReturnInput (current : Endpoint graph) where
   empty : EmptyFocus current code scope
   physical : current.physical = .handlerBoundary site environment data.activation :: suffixPhysical
   lexical : current.lexical = .push (.handler data) suffixTarget
-  sameHistory : HEq current.history (GeneralHistory.handler installation header suffix)
+  head : HandlerHead installation header current.history suffix
 
 noncomputable def handler_return_result {graph : Graph} {current : Endpoint graph} (input : HandlerReturnInput current) : Result current [] [] := by
   let after : Endpoint graph := {
@@ -591,6 +650,13 @@ structure CaptureData {graph : Graph} {current : Endpoint graph} (input : Captur
   translated : translateFuel graph fuel
     (⟨(location current input.index).installation.handler,input.selectedClause.owner,ticket graph input.selectedClause.owner⟩ ::
       (location current input.index).owners) input.selectedClause.body = .ok rawBody
+  clauseAt : ClauseAt input.operation (location current input.index).data.clauses
+    argument.id (ticket graph input.selectedClause.owner) body
+  closed : EnvCloses graph
+    (⟨(location current input.index).installation.handler,input.selectedClause.owner,ticket graph input.selectedClause.owner⟩ ::
+      (location current input.index).owners) current.state.heap
+    (.binding argument.id input.value (location current input.index).environment) rawBody
+    (body.subst argument.id input.code)
   installation : GeneralClausePast graph (location current input.index).owners
     (location current input.index).installation.handler input.selectedClause.owner (location current input.index).data.activation current.state.nextOwner
     ((location current input.index).inside ++ [.handlerBoundary (location current input.index).site
@@ -620,7 +686,7 @@ private theorem capture_produced {graph : Graph} {current : Endpoint graph} (inp
     site,environment,installed,selected,inside,outside,same⟩ := capture_history current.history input.index
       input.same input.prefixScope input.route input.lookup input.selected input.operand input.requestCarrier
       input.plain input.plainContext input.ready input.result input.plain.scope
-  exact ⟨⟨fuel,argument,rawBody,body,pattern,translated,installation,header,installed,selected,inside,outside,step⟩⟩
+  exact ⟨⟨fuel,argument,rawBody,body,pattern,translated,clauseAt,closed,installation,header,installed,selected,inside,outside,step⟩⟩
 
 noncomputable def capture_data {graph : Graph} {current : Endpoint graph} (input : CaptureInput current) : CaptureData input :=
   Classical.choice (capture_produced input)
@@ -730,6 +796,65 @@ theorem PassFront.physical_pass {graph : Graph} {heap : CoreMachine.Heap} {handl
     simpa [List.append_assoc] using ihLeft _ _ (ihRight rest cut found)
 
 
+/-- A split is generated from the SAME current history constructors. It
+retains the selected complete live receipt, saved capture, and outside history;
+there is no arbitrary equivalence or stamp-equality constructor. -/
+inductive ResumeSplit
+    (past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data)
+    (header : OwnerHeader graph owners heap handler owner occurrence data)
+    (saved : GeneralHistory graph heap captured capturedTarget)
+    (outsideHistory : GeneralHistory graph heap outside tail) (result : Ty) :
+    {physical : List CoreMachine.Frame} → {target : Stack} → GeneralHistory graph heap physical target →
+    {frontPhysical : List CoreMachine.Frame} → {frontTarget : Stack} → GeneralHistory graph heap frontPhysical frontTarget → Type where
+  | here : ResumeSplit past header saved outsideHistory result (.live (result := result) past header saved outsideHistory) .nil
+  | push (frame : PushCarrier graph frameOwners heap core frameTarget) (ordinary)
+      (current : GeneralHistory graph heap physical target) (front : GeneralHistory graph heap frontPhysical frontTarget)
+      (split : ResumeSplit past header saved outsideHistory result current front) :
+      ResumeSplit past header saved outsideHistory result (.push frame ordinary current) (.push frame ordinary front)
+  | handler (installation : GeneralHandlerPast graph handlerOwners site environment handlerData)
+      (boundary : CoreEffectFrames.BoundaryRel graph handlerOwners heap (.handlerBoundary site environment handlerData.activation) (.handler handlerData))
+      (current : GeneralHistory graph heap physical target) (front : GeneralHistory graph heap frontPhysical frontTarget)
+      (split : ResumeSplit past header saved outsideHistory result current front) :
+      ResumeSplit past header saved outsideHistory result (.handler installation boundary current) (.handler installation boundary front)
+  | live (installation : GeneralClausePast graph otherOwners otherHandler otherOwner otherOccurrence otherTicket otherCaptured otherData)
+      (boundary : OwnerHeader graph otherOwners heap otherHandler otherOwner otherOccurrence otherData)
+      (otherSaved : GeneralHistory graph heap otherCaptured otherTarget)
+      (current : GeneralHistory graph heap physical target) (front : GeneralHistory graph heap frontPhysical frontTarget)
+      (split : ResumeSplit past header saved outsideHistory result current front) :
+      ResumeSplit past header saved outsideHistory result (.live (result := otherResult) installation boundary otherSaved current)
+        (.live (result := otherResult) installation boundary otherSaved front)
+  | spent (installation : GeneralClausePast graph otherOwners otherHandler otherOwner otherOccurrence otherTicket otherCaptured otherData)
+      (boundary : OwnerHeader graph otherOwners heap otherHandler otherOwner otherOccurrence otherData)
+      (current : GeneralHistory graph heap physical target) (front : GeneralHistory graph heap frontPhysical frontTarget)
+      (split : ResumeSplit past header saved outsideHistory result current front) :
+      ResumeSplit past header saved outsideHistory result (.spent installation boundary current) (.spent installation boundary front)
+  | append (first : GeneralHistory graph heap firstPhysical firstTarget)
+      (current : GeneralHistory graph heap physical target) (front : GeneralHistory graph heap frontPhysical frontTarget)
+      (split : ResumeSplit past header saved outsideHistory result current front) :
+      ResumeSplit past header saved outsideHistory result (first.append current) (first.append front)
+
+theorem ResumeSplit.physical
+    {handler owner : Nat} {physical frontPhysical : List CoreMachine.Frame} {target frontTarget : Stack}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {saved : GeneralHistory graph heap captured capturedTarget}
+    {outsideHistory : GeneralHistory graph heap outside tail}
+    {current : GeneralHistory graph heap physical target} {front : GeneralHistory graph heap frontPhysical frontTarget}
+    (split : ResumeSplit past header saved outsideHistory result current front) :
+    physical = frontPhysical ++ .clauseBoundary handler owner occurrence dynamicTicket (some captured) :: outside := by
+  induction split <;> simp_all [List.cons_append,List.append_assoc]
+
+theorem ResumeSplit.lexical
+    {handler owner : Nat} {physical frontPhysical : List CoreMachine.Frame} {target frontTarget : Stack}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {saved : GeneralHistory graph heap captured capturedTarget}
+    {outsideHistory : GeneralHistory graph heap outside tail}
+    {current : GeneralHistory graph heap physical target} {front : GeneralHistory graph heap frontPhysical frontTarget}
+    (split : ResumeSplit past header saved outsideHistory result current front) :
+    target = frontTarget.append (.live dynamicTicket result data.answer capturedTarget data.scope tail) := by
+  induction split <;> simp_all [Stack.append,stack_append_assoc]
+
 structure ResumeInput (current : Endpoint graph) where
   handler : Nat
   owner : Nat
@@ -753,8 +878,7 @@ structure ResumeInput (current : Endpoint graph) where
   pass : PassFront handler owner frontHistory
   physical : current.physical = front ++ .clauseBoundary handler owner occurrence dynamicTicket (some captured) :: outside
   lexical : current.lexical = frontTarget.append (.live dynamicTicket result data.answer capturedTarget data.scope tail)
-  sameHistory : HEq current.history
-    (frontHistory.append (.live (result := result) installation header capturedHistory outsideHistory))
+  split : ResumeSplit installation header capturedHistory outsideHistory result current.history frontHistory
   plain : PlainData
   binder : Nat
   frame : CoreResumeFrames.ResumeRel graph frameOwners current.state.heap (.resume handler owner) plain
@@ -786,19 +910,23 @@ front. The original complete clause/header and captured/outside histories are
 used to construct the cut; scan success is not a premise. -/
 noncomputable def resume_location {graph : Graph} {current : Endpoint graph} (input : ResumeInput current) :
     OwnerLocation graph current.state.heap input.handler input.owner current.physical current.lexical := by
-  let here : OwnerLocation graph current.state.heap input.handler input.owner
-      (.clauseBoundary input.handler input.owner input.occurrence input.dynamicTicket (some input.captured) :: input.outside)
-      (.live input.dynamicTicket input.result input.data.answer input.capturedTarget input.data.scope input.tail) := {
-    front := [],frontTarget := .nil,frontHistory := .nil
+  have hit : CoreMachine.findOwner input.handler input.owner
+      (.clauseBoundary input.handler input.owner input.occurrence input.dynamicTicket (some input.captured) :: input.outside) =
+      .ok ⟨[],input.handler,input.owner,input.occurrence,input.dynamicTicket,input.captured,input.outside⟩ := by
+    simp [CoreMachine.findOwner]
+  have found : CoreMachine.findOwner input.handler input.owner current.physical =
+      .ok ⟨input.front,input.handler,input.owner,input.occurrence,input.dynamicTicket,input.captured,input.outside⟩ := by
+    rw [input.physical]
+    simpa only [List.append_nil] using input.pass.physical_pass _ _ hit
+  exact {
+    front := input.front,frontTarget := input.frontTarget,frontHistory := input.frontHistory
     owners := input.savedOwners,occurrence := input.occurrence,dynamicTicket := input.dynamicTicket
     data := input.data,result := input.result,captured := input.captured,capturedTarget := input.capturedTarget
     capturedHistory := input.capturedHistory,installation := input.installation,header := input.header
     outside := input.outside,tail := input.tail,outsideHistory := input.outsideHistory
-    whole := .live input.installation input.header input.capturedHistory input.outsideHistory
-    physicalSame := rfl,targetSame := rfl
-    cut := .hit input.header input.capturedHistory.related input.outsideHistory.related }
-  have leading := here.prepend input.frontHistory input.pass.physical_pass
-  exact OwnerLocation.reindex leading input.physical input.lexical
+    whole := current.history,physicalSame := input.physical,targetSame := input.lexical
+    cut := .split current.history.related input.frontHistory.related input.header
+      input.capturedHistory.related input.outsideHistory.related input.lexical found }
 
 noncomputable def resume_result {graph : Graph} {current : Endpoint graph} (input : ResumeInput current) : Result current [] [.ticket (resume_location input).dynamicTicket] := by
   let selected := resume_location input
@@ -814,7 +942,7 @@ noncomputable def resume_result {graph : Graph} {current : Endpoint graph} (inpu
     history := selected.restored_history
     frames := by simp [resumeAfter,List.append_assoc,framesOf] }
   have resolve : input.plain.scope.resolve input.binder = some selected.dynamicTicket := by
-    simpa only [selected,resume_location,OwnerLocation.reindex_ticket,OwnerLocation.prepend] using input.resolve
+    exact input.resolve
   have actual := resume_general selected.cut input.frame input.context input.operand resolve input.plain.scope
   have frames : current.state.frames = .resume input.handler input.owner :: current.physical := by
     simpa [input.maps,framesOf] using current.frames
@@ -848,7 +976,7 @@ structure SpentReturnInput (current : Endpoint graph) where
   empty : EmptyFocus current code scope
   physical : current.physical = .clauseBoundary handler owner occurrence dynamicTicket none :: suffixPhysical
   lexical : current.lexical = .spent dynamicTicket data.answer data.scope suffixTarget
-  sameHistory : HEq current.history (GeneralHistory.spent installation header suffix)
+  head : SpentHead installation header current.history suffix
 
 noncomputable def spent_return_result {graph : Graph} {current : Endpoint graph} (input : SpentReturnInput current) : Result current [] [] := by
   let after : Endpoint graph := {
@@ -1059,6 +1187,34 @@ theorem handler_location_stamps (history : GeneralHistory graph heap physical ta
         congrArg (fun stamps => running_stamps first ++ stamps) (ihSecond old oldMember)
 
 
+theorem HandlerHead.stamps
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralHandlerPast graph owners site environment data}
+    {header : CoreEffectFrames.BoundaryRel graph owners heap (.handlerBoundary site environment data.activation) (.handler data)}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : HandlerHead past header current tail) : running_stamps current = running_stamps tail := by
+  induction head <;> simp_all [running_stamps]
+
+theorem SpentHead.stamps
+    {physical tailPhysical : List CoreMachine.Frame} {target tailTarget : Stack}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {current : GeneralHistory graph heap physical target} {tail : GeneralHistory graph heap tailPhysical tailTarget}
+    (head : SpentHead past header current tail) : running_stamps current = running_stamps tail := by
+  induction head <;> simp_all [running_stamps]
+
+theorem ResumeSplit.stamps
+    {physical frontPhysical : List CoreMachine.Frame} {target frontTarget : Stack}
+    {handler owner : Nat}
+    {past : GeneralClausePast graph owners handler owner occurrence dynamicTicket captured data}
+    {header : OwnerHeader graph owners heap handler owner occurrence data}
+    {saved : GeneralHistory graph heap captured capturedTarget}
+    {outsideHistory : GeneralHistory graph heap outside tail}
+    {current : GeneralHistory graph heap physical target} {front : GeneralHistory graph heap frontPhysical frontTarget}
+    (split : ResumeSplit past header saved outsideHistory result current front) :
+    running_stamps current = running_stamps front ++ (running_stamps saved ++ running_stamps outsideHistory) := by
+  induction split <;> simp_all [running_stamps,List.append_assoc]
+
 private theorem restored_stamps (selected : OwnerLocation graph heap handler owner physical target) :
     running_stamps selected.restored_history = running_stamps selected.capturedHistory ++
       (running_stamps selected.frontHistory ++ running_stamps selected.outsideHistory) := rfl
@@ -1088,9 +1244,7 @@ theorem Operation.running_receipts {graph : Graph} {before after : Endpoint grap
     simpa only [bind_return_result,CallerBindPast.current_history,running_stamps] using perm_of_eq same
   | handler input => simp [handler_result,running_stamps]
   | handlerReturn input =>
-    have same := stamps_heq before.history
-      (GeneralHistory.handler input.installation input.header input.suffix)
-      input.physical input.lexical input.sameHistory
+    have same := input.head.stamps
     simpa only [handler_return_result,running_stamps] using perm_of_eq same
   | literal input => simp [literal_result]
   | entry input => simp [entry_result]
@@ -1101,24 +1255,17 @@ theorem Operation.running_receipts {graph : Graph} {before after : Endpoint grap
       (by exact List.getElem_mem _)
     simpa [capture_result,captureAfter,running_stamps] using perm_of_eq same
   | resume input =>
-    have same := stamps_heq before.history
-      (input.frontHistory.append (.live input.installation input.header input.capturedHistory input.outsideHistory))
-      input.physical input.lexical input.sameHistory
+    have same := input.split.stamps
     have afterSame : running_stamps (resume_result input).after.history =
         running_stamps input.capturedHistory ++ (running_stamps input.frontHistory ++ running_stamps input.outsideHistory) := by
       change running_stamps (resume_location input).restored_history = _
-      unfold resume_location
-      rw [reindex_restored_stamps]
-      simp only [restored_stamps,OwnerLocation.prepend,running_stamps,List.append_nil]
+      rfl
     rw [afterSame,same]
-    simp only [running_stamps]
     simpa only [List.append_assoc] using
       (List.perm_append_comm : (running_stamps input.frontHistory ++ running_stamps input.capturedHistory).Perm
         (running_stamps input.capturedHistory ++ running_stamps input.frontHistory)).append_right (running_stamps input.outsideHistory)
   | spentReturn input =>
-    have same := stamps_heq before.history
-      (GeneralHistory.spent input.installation input.header input.suffix)
-      input.physical input.lexical input.sameHistory
+    have same := input.head.stamps
     simpa [spent_return_result,observedState,running_stamps] using perm_of_eq same
 
 noncomputable def original_stamp
@@ -1195,6 +1342,15 @@ theorem matching_spent_blocks
   have impossible := passed.physical_pass _ _ hit
   simp [CoreMachine.findOwner] at impossible
 
+#print axioms HandlerHead.physical
+#print axioms HandlerHead.lexical
+#print axioms SpentHead.physical
+#print axioms SpentHead.lexical
+#print axioms ResumeSplit.physical
+#print axioms ResumeSplit.lexical
+#print axioms HandlerHead.stamps
+#print axioms SpentHead.stamps
+#print axioms ResumeSplit.stamps
 #print axioms Operation.actual
 #print axioms Operation.bounded_matching
 #print axioms Operation.running_receipts

@@ -1554,23 +1554,26 @@ saved cleanup receipt from actual registration's current scope and callback
 lookup. Normal callback entry retains the entire ActionData and saved caller
 receipt while clearing current scope. Unit return restores the same saved
 value, installation map and scope over an arbitrary outside general segment.
-CleanupRel alone does not supply scope provenance. The running-cleanup transport below extends these receipts through actual
+CleanupRel alone does not supply scope provenance. At the preceding `d2f26e1`
+checkpoint, the running-cleanup transport extended these receipts through actual
 capture and inside-anchored restoration. Outside-anchored restoration, armed
-projection, disposal history and the combined reachable invariant remain open;
-these factories do not prove callback termination.
+projection, disposal history and the combined reachable invariant remained open.
+Checked outside restoration is now retained; general changed-tail activation,
+projection/disposal and whole reachability remain open. These factories do not
+prove callback termination.
 
 Independent reviews pass for these bounded components. Integration additionally
 detected historical source/artifact association errors in the saved frame and
 unwind dependency caches. Frozen worker reviews retain their recorded graph
-scope. The current registered integration freshly compiles all 891 modules
-from every registered current source, recording each command, direct imported
+scope. The preceding `d2f26e1` integration freshly compiled all 891 modules
+from every then-registered source, recording each command, direct imported
 artifact, log and output hash. The 11,814 exact reports use standard axioms only;
 the independent packaging audit also verifies the compilation source association.
-Full `cargo xtask verify` passes: 2,902 tests, no failures and two intentionally
-ignored tests. General admission, the rich resource/cleanup constructor extension,
-whole-fragment simulation and Rust preparation remain separate acceptance
-obligations. The task's current phase board records locally verified producer
-and cleanup-extension work separately from this retained integration.
+Full `cargo xtask verify` passed at that checkpoint: 2,902 tests, no failures and
+two intentionally ignored tests. General admission, rich resource/cleanup
+construction, whole-fragment simulation and Rust preparation remained open then.
+The current phase board records subsequent rich constructor and bounded
+preparation progress separately from whole-package acceptance.
 
 ### Recursive source production and rich cleanup construction
 
@@ -1594,9 +1597,11 @@ and body Source/Auth are recursively supplied by the producer. Actual execution
 plans retain `sequence callbackPlan (cleanup publicPlan bodyPlan)` and the matching
 complete rows. Environment, owner, scope, world, allowance, substitution and
 restored-support transports derive the same target children and keep the immutable
-public callback suffix. Resource construction remains absent until actual
-returned-storage evidence and its exact substitution contract are available.
-Source/transport coverage does not establish general cleanup execution preservation.
+public callback suffix. The rich resource constructor and its full pointwise
+transports are now retained, with the same original full contracts and independently
+checked storage receipts. The finite StaticProducer resource annotation/checker
+branch remains absent. Source/transport coverage does not establish general
+cleanup execution preservation or whole-fragment initial admission.
 
 [CoreCallableReturnStorageProducer.lean](CoreCallableReturnStorageProducer.lean)
 constructs the independent CallableContracts storage/domain/result derivation for
@@ -1943,8 +1948,8 @@ this is an audited assembly, not an uncached rebuild of every module.
 Checkpoint `2de8f55` added three independently reviewed components.
 [Outer lambda evaluation](CoreCallableOuterLambdaOrigins.lean) derives actual evaluation and ValueRel
 at the same completed binding environment, retaining the original full private
-family and exact finite/storage checks. It covers one binding; recursive open
-initializer origins and general resource admission remain open.
+family and exact finite/storage checks. It covers one binding. At that checkpoint,
+recursive open initializer origins and general resource admission remained open.
 
 [Clause execution](CoreCallableRunningClauseOccurrence.lean) derives actual bind/beta/return fronts,
 heap extension from tuple allocation, first physical owner selection and
@@ -1961,11 +1966,12 @@ source/artifact/log/direct-import associations. Their three productive
 registration commands compile together against one coherent audited cache;
 the measured leaf compilation takes 9.7 seconds. Reused dependency artifacts
 are immutable hardlinks; this is an audited incremental assembly. Rust sources
-are unchanged. Generated mixed callback/clause chronology, spent-marker
-retirement, derived activation guards, projection/disposal, resource admission
-and whole simulation remain open. M0–M4 and the declared fragment are unchanged.
+were unchanged. At that checkpoint, generated mixed callback/clause chronology,
+spent-marker retirement, derived activation guards, projection/disposal, resource
+admission and whole simulation remained open. M0–M4 and the declared fragment
+were unchanged.
 
-The next independently reviewed batch constructs
+Checkpoint `aa71286` constructed
 [recursive ordinary runtime origins](CoreCallableOrdinaryRuntimeOrigins.lean)
 for arbitrary-length original prefixes of literal lambda bindings. The producer
 starts with an actual empty environment, retains the same original binding path,
@@ -1981,11 +1987,10 @@ open C2 obligations.
 through twelve named current-operation producers at the preceding exact endpoint.
 It derives actual Core steps, positive or ranked administrative matching,
 accounting and the complete original running receipt, including dormant captures.
-One concrete callback path has six generated operations and seven Core steps
-including cleanup start. Mixed current fronts and the spent-owner barrier have
-checked probes; a concrete nested generated handler/capture/resume cycle is still
-uninstantiated. General current-guard production, deeper strict maps, cleanup
-retirement/activation and projection/disposal remain open C3 obligations.
+At checkpoint `aa71286`, one callback had six generated operations and seven
+Core steps including start. Mixed fronts and the spent barrier were checked;
+the nested cycle and normal retirement were open. The current increment below
+supplies those bounded paths.
 
 [Runtime preparation](CoreRuntimePreparation.lean) computes represented
 cleanup/resume/discard-preflight checks from current control and the actual owner
@@ -1997,18 +2002,69 @@ check exact budgets, one-short refusal, finite keys, invariant exclusion and
 reservation order. Complete metadata/cost/ledger origin, surrounding disposal
 checks and whole C3.4 remain open.
 
-Four productive registrations add 64 freshly compiled standard-only reports.
-The current audited assembly contains 918 modules and 12,090 ordered reports;
-all 914 preceding source/artifact/log/direct-import associations remain unchanged.
-The related leaf batch compiles in 10.0 seconds against one coherent cache
-with immutable dependency hardlinks. This is incremental verification, not an
-uncached whole-suite rebuild. Independent review also replays seven focused Rust
-tests. The new internal-machine fixture distinguishes pre-consumption work
-refusal from actual environment-disposal refusal after owner consumption, with no
-published Discard or cleanup replay. It is bounded executable evidence, not a
-validated-program reachability or general Rust correspondence theorem. Runtime
-behavior is unchanged; only QA registration and a misleading preflight comment
-change. M0–M4, the fragment and whole-package acceptance counts are unchanged.
+Checkpoint `aa71286` added four registrations/64 reports, reaching 918 modules
+and 12,090 reports with all 914 preceding associations unchanged. Its leaf batch
+compiled in 10.0 seconds. Seven independent Rust tests checked the consumed
+discard disposal boundary, without general reachability.
+
+The current coherent increment retains the
+[rich resource foundation](CoreCallableRichResourceFoundation.lean).
+It adds the existing lower resource rule to IndexedSource and hereditary
+authentication, preserving fresh world/receiver opening, original-world output
+formation, residual allowance and Hides. Substitution and restoration retain
+total full Plan/Rows families at every identity; Source/Auth recursion applies
+only to fresh openings. The paired-formal consumer constructs integer-init and
+formal-return resource Source/Auth from the same upstream paired receipt,
+preserving full rich/storage contracts, original map and exact slot result.
+It does not manufacture that upstream Admission.
+[Pointwise probes](ResourcePointwiseProbes.lean) reproduce the old
+substitution failure and preserve varying identities;
+[retention/namespace probes](ResourceFoundationProbes.lean) reject fresh
+capture into an older receiver and preserve ordinary formals with equal names.
+Both missing rich source constructors are supplied. The finite checker remains
+14/16; handler/resource annotations and general admission remain open.
+
+[Generated completion](CoreCallableGeneratedCleanupCompletion.lean)
+computes normal finish from the same generated history and original receipt,
+restores saved value/code/scope and retires that cleanup owner. CaptureData
+retains clause/closing equations already produced by capture. Structural
+resume and handler/spent head decompositions fix direct-versus-append history
+composition, deriving physical selection and complete receipt partitions from
+the same current constructors. No arbitrary equivalence or desired matching is
+accepted. The [nested probe](GeneratedNestedHandlerProbes.lean) has
+17 post-start edges and 18 actual Core steps including start, exact four-frame
+full-prefix restoration, both handler returns, spent return and completion.
+Original typed receipts persist through capture, operand evaluation, resume and
+return. [Completion guards](GeneratedCompletionGuards.lean) preserve the
+spent barrier. General current guards/TicketBound, changed-tail activation,
+deeper maps, projection/disposal and whole reachable simulation remain open.
+
+[Metadata preparation](CoreRuntimeMetadataPreparation.lean) retains
+finite map presence/distinct activation entries and rejects rows/nonactivation
+entries. Current literal resource/request control computes ordered requests:
+acquisition 2n+3 even for a shadowing key; cell effect 3 before top-down frame
+visits. Clone failures report optional request None, parameter charges Some(1).
+Produced map/effect/cut agreement connects to the same actual Core endpoint.
+Same effect-ID handler metadata and wider structural type/row traversal remain
+unsupported. Runtime ledger/word/disposal/map-erasure/physical-length guards
+are supplied current obligations. Generic Origin is an unindexed passthrough;
+it proves no full C2 lineage or observer origin. Faithful Rust Host replies
+must return at the zero-size row reservation while retaining its ordinal;
+arbitrary abstract refusals are not executable failure equivalence.
+[Metadata probes](CoreRuntimeMetadataPreparationExamples.lean) and two
+independently replayed internal-Machine Rust tests check computed exact/one-short
+budgets, shadowing, diagnostics and published observation prefixes. They do not
+prove validated-program reachability. The initially selected write operation
+was a fixture error; retained QA uses the original read. Runtime behavior and
+normative semantics are unchanged.
+
+Seventeen existing modules change; nine new modules/probes are registered.
+The 64 affected modules compile once in 205.8 seconds, with 6.3 seconds
+preparation/hash checking. Immutable hardlinks reuse 863 unaffected artifacts
+and logs. Every selected direct-import hash agrees in one cache. The current
+audited assembly contains 927 modules and 12,170 ordered standard-only reports,
+80 more than `aa71286`. This is incremental verification. M0–M4, the fragment
+and whole-package acceptance counts are unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

@@ -50,6 +50,16 @@ def restoredRows (code : Code) (plan : Plan dependencies) (rows : Rows (signatur
             .sequence (restoredRows action first left lexical receiver)
               (.cleanup latent publicRows (restoredRows body bodyPlan bodyRows lexical receiver))
         | _ => .sequence left right
+      | .resource binder initial body =>
+        match second with
+        | .resource bodyPlans =>
+          match right with
+          | .resource bodyRows =>
+            .sequence (restoredRows initial first left lexical receiver)
+              (.resource (fun identity => restoredRows
+                (body.instantiate (Instantiation.Environment.empty.bind binder identity))
+                (bodyPlans identity) (bodyRows identity) lexical (identity :: receiver)))
+        | _ => .sequence left right
       | .perform _ _ operand | .resume _ operand => .sequence (restoredRows operand first left lexical receiver) right
       | _ => .sequence left right
   | .handler _required declarations bodyPlan =>
@@ -157,6 +167,16 @@ theorem erase_restoredRows (code : Code) (plan : Plan dependencies) (rows : Rows
         congr 1; apply erase_restoredRows
       · change Rows.sequence _ _ = Rows.sequence _ _
         congr 1; apply erase_restoredRows
+      · cases second <;> try rfl
+        cases right with
+        | resource bodyRows =>
+          change Rows.sequence _ _ = Rows.sequence _ _
+          congr 1
+          · apply erase_restoredRows
+          · change Rows.resource _ = Rows.resource _
+            congr 1
+            funext identity
+            apply erase_restoredRows
       · cases second <;> try rfl
         cases right with
         | cleanup latent publicRows bodyRows =>
@@ -359,6 +379,30 @@ theorem Authenticated.restore_receiver
       obtain ⟨sourceA, authA⟩ := ihA receiverLarger domain received
       exact ⟨.app sourceF sourceA (by assumption) (by assumption),
         .app (admitted := by assumption) (publicCertified := by assumption) authF authA⟩
+  | resource initial body ihI ihB =>
+      rename_i nextLexical nextReceiver receiverLarger domain received
+      rename_i bodyDemand owners world allowed scope environment initialCode initialDemand initialRequirements
+        initialDependencies initialPlan initialRows residual binder output lexical receiver template
+        bodyRequirements bodyDependencies bodyPlans bodyRows initialSource bodySource outwardRequirements
+        formed effectsBound admitted hidden
+      obtain ⟨sourceI, authI⟩ := ihI receiverLarger domain received
+      let nextRows := fun identity => restoredRows
+        (template.instantiate (Instantiation.Environment.empty.bind binder identity))
+        (bodyPlans identity) (bodyRows identity) nextLexical (identity :: nextReceiver)
+      have produced : ∀ identity (fresh : identity ∉ world),
+          ∃ source : IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+            scope environment (template.instantiate (Instantiation.Environment.empty.bind binder identity))
+            output bodyDemand (bodyRequirements identity) (bodyPlans identity) (nextRows identity),
+          Authenticated registry outward source nextLexical (identity :: nextReceiver) := by
+        intro identity fresh
+        apply ihB identity fresh (List.cons_subset_cons _ receiverLarger) domain
+        intro name id member
+        exact List.mem_cons_of_mem _ (received name member)
+      let opened := fun identity fresh => Classical.choose (produced identity fresh)
+      exact ⟨IndexedSource.resource sourceI opened formed effectsBound admitted hidden,
+        Hereditary.resource (bodySource := opened) (formed := formed) (effectsBound := effectsBound)
+          (admitted := admitted) (hidden := hidden) authI
+          (fun identity fresh => Classical.choose_spec (produced identity fresh))⟩
   | cleanup callback body ihC ihB =>
       rename_i nextLexical nextReceiver receiverLarger domain received
       obtain ⟨sourceC, authC⟩ := ihC receiverLarger domain received
@@ -478,6 +522,25 @@ theorem Authenticated.world_transport
       rename_i nextWorld larger nextSource
       exact .app (admitted := by assumption) (publicCertified := certified_world (by assumption) larger)
         (ihF larger (IndexedSource.world_weaken (by assumption) larger)) (ihA larger (IndexedSource.world_weaken (by assumption) larger))
+  | resource initial body ihI ihB =>
+      rename_i nextWorld larger nextSource
+      rename_i bodyDemand owners world allowed scope environment initialCode initialDemand initialRequirements
+        initialDependencies initialPlan initialRows residual binder output lexical receiver template
+        bodyRequirements bodyDependencies bodyPlans bodyRows initialSource bodySource outwardRequirements
+        formed effectsBound admitted hidden
+      have extended : ∀ identity, world ++ [identity] ⊆ nextWorld ++ [identity] := by
+        intro identity name member
+        rcases List.mem_append.mp member with old | current
+        · exact List.mem_append_left _ (larger old)
+        · exact List.mem_append_right _ current
+      let opened := fun identity (fresh : identity ∉ nextWorld) =>
+        (bodySource identity (fun old => fresh (larger old))).world_weaken (extended identity)
+      refine .resource (bodySource := opened) (formed := ScopedPorts.in_world_mono formed larger)
+        (effectsBound := effectsBound.trans larger) (admitted := admitted)
+        (hidden := fun identity fresh => hidden identity (fun old => fresh (larger old)))
+        (ihI larger (initialSource.world_weaken larger)) ?_
+      intro identity fresh
+      exact ihB identity (fun old => fresh (larger old)) (extended identity) (opened identity fresh)
   | cleanup callback body ihC ihB =>
       rename_i nextWorld larger nextSource
       exact .cleanup (admitted := by assumption) (publicCertified := certified_world (by assumption) larger)

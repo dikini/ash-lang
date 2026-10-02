@@ -83,6 +83,8 @@ theorem Source.lower (source : Source globals outward world allowed scope enviro
   | app function argument admitted publicCertified ihF ihA => exact .app ihF ihA admitted
   | bind initial body ihI ihB => exact .bind ihI (by simpa using ihB)
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup ihC ihB admitted
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .scopedResource ihI ihB formed effectsBound admitted hidden
   | branch condition yes no same ihC ihY ihN => exact .branch ihC ihY ihN same
   | perform known admitted operand formed ih =>
       dsimp only at known
@@ -765,7 +767,7 @@ theorem Source.value_silent {dependencies : Dependencies} {plan : Plan dependenc
     (motive_4 := fun _ _ _ _ _ _ _ _ _ _ _ _ => True) with
   | unit | boolean | integer | reference | lambda | receiverLambda | purePair => exact .pure
   | pair left right ihL ihR => exact .sequence (ihL isValue.1) (ihR isValue.2)
-  | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup => cases isValue
+  | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup | resource => cases isValue
   | typed | unavailable | available | nil | cons => trivial
 
 omit evidence in

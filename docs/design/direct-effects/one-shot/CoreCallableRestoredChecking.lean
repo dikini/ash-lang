@@ -99,7 +99,7 @@ variable [evidence : DeclarationPolicy]
 
 /-- Source-owned changes carry the original authentication and exact computed
 row transformation. Public contract suffixes use the unchanged constructor. -/
-inductive RestoredSourceRows (world receiver : List Nat) :
+inductive RestoredSourceRows : (world receiver : List Nat) →
     {dependencies : SourceDependencyAnnotations.Dependencies} →
     {checking : SourcePlanSignatures.Signature dependencies} → Rows checking → Rows checking → Prop where
   | same : RestoredSourceRows world receiver rows rows
@@ -120,6 +120,17 @@ inductive RestoredSourceRows (world receiver : List Nat) :
       RestoredSourceRows world receiver (.cleanup (needs := needs) latent publicRows beforeBody)
         (.cleanup (needs := needs) latent publicRows afterBody)
 
+  /-- Total row equality preserves all non-support fields, including occupied
+  identities. Source-owned checking receipts are needed only at fresh openings. -/
+  | resource {family : Nat → SourceDependencyAnnotations.Dependencies}
+      {signatures : ∀ identity, SourcePlanSignatures.Signature (family identity)}
+      {beforeBodies afterBodies : ∀ identity, Rows (signatures identity)}
+      (complete : ∀ identity, SupportOnly (beforeBodies identity) (afterBodies identity))
+      (body : ∀ identity, identity ∉ world →
+        RestoredSourceRows (world ++ [identity]) (identity :: receiver)
+          (beforeBodies identity) (afterBodies identity)) :
+      RestoredSourceRows world receiver (Rows.resource beforeBodies) (Rows.resource afterBodies)
+
 theorem RestoredSourceRows.complete (receipt : RestoredSourceRows world receiver before after) : SupportOnly before after := by
   induction receipt with
   | same => rfl
@@ -133,6 +144,9 @@ theorem RestoredSourceRows.complete (receipt : RestoredSourceRows world receiver
   | cleanup body ih =>
     simp only [SupportOnly, eraseSupportBounds] at ih ⊢
     rw [ih]
+  | resource complete body ih =>
+    simp only [SupportOnly, eraseSupportBounds] at complete ⊢
+    exact congrArg Rows.resource (funext complete)
 
 end Ash.OneShot.CoreCallableRestoredChecking
 
@@ -516,7 +530,8 @@ def SourceRowView (world receiver : List Nat) (before after : Rows checking) : P
       beforeLatent = afterLatent ∧ RestoredSourceRows world receiver beforeCallback afterCallback ∧
         RestoredSourceRows world receiver beforeBody afterBody
   | .resource beforeBodies, .resource afterBodies =>
-      ∀ identity, RestoredSourceRows (world ++ [identity]) receiver (beforeBodies identity) (afterBodies identity)
+      ∀ identity, identity ∉ world →
+        RestoredSourceRows (world ++ [identity]) (identity :: receiver) (beforeBodies identity) (afterBodies identity)
   | _, _ => True
 
 omit evidence in
@@ -562,6 +577,21 @@ theorem Authenticated.restored_row_view
       exact ⟨.canonical condition worldExtended receiverExtended domain received,
         .choice (.canonical yes worldExtended receiverExtended domain received)
           (.canonical no worldExtended receiverExtended domain received)⟩
+    | resource initial body =>
+      refine ⟨.canonical initial worldExtended receiverExtended domain received, ?_⟩
+      apply RestoredSourceRows.resource
+      · intro identity
+        exact restoredRows_supportOnly _ _ _ _ _
+      intro identity fresh
+      apply RestoredSourceRows.canonical (body identity (fun old => fresh (worldExtended old)))
+      · intro name member
+        rcases List.mem_append.mp member with old | current
+        · exact List.mem_append_left _ (worldExtended old)
+        · exact List.mem_append_right _ current
+      · exact List.cons_subset_cons _ receiverExtended
+      · exact domain
+      · intro name id member
+        exact List.mem_cons_of_mem _ (received name member)
     | cleanup callback body =>
       exact ⟨.canonical callback worldExtended receiverExtended domain received,
         .cleanup (.canonical body worldExtended receiverExtended domain received)⟩
@@ -574,12 +604,13 @@ theorem Authenticated.restored_row_view
 theorem RestoredSourceRows.view (receipt : RestoredSourceRows world receiver before after) :
     SourceRowView world receiver before after := by
   cases receipt with
-  | same => cases before <;> first | exact ⟨.same, .same⟩ | exact ⟨rfl, .same, .same⟩ | exact fun identity => .same | trivial
+  | same => cases before <;> first | exact ⟨.same, .same⟩ | exact ⟨rfl, .same, .same⟩ | exact fun identity fresh => .same | trivial
   | canonical authenticated worldExtended receiverExtended domain received =>
       exact Authenticated.restored_row_view authenticated worldExtended receiverExtended domain received
   | sequence left right => exact ⟨left, right⟩
   | choice left right => exact ⟨left, right⟩
   | cleanup body => exact ⟨rfl, .same, body⟩
+  | resource complete body => exact body
 
 theorem RestoredSourceRows.handler_parts
     (receipt : RestoredSourceRows world receiver
@@ -803,13 +834,22 @@ open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual
 
 theorem RestoredSourceRows.world_weaken (receipt : RestoredSourceRows world receiver before after)
     (larger : world ⊆ nextWorld) : RestoredSourceRows nextWorld receiver before after := by
-  induction receipt with
+  induction receipt generalizing nextWorld with
   | same => exact .same
   | canonical authenticated extended receiverExtended domain received =>
       exact .canonical authenticated (extended.trans larger) receiverExtended domain received
-  | sequence left right ihLeft ihRight => exact .sequence ihLeft ihRight
-  | choice left right ihLeft ihRight => exact .choice ihLeft ihRight
-  | cleanup body ih => exact .cleanup ih
+  | sequence left right ihLeft ihRight => exact .sequence (ihLeft larger) (ihRight larger)
+  | choice left right ihLeft ihRight => exact .choice (ihLeft larger) (ihRight larger)
+  | cleanup body ih => exact .cleanup (ih larger)
+
+  | resource complete body ih =>
+      apply RestoredSourceRows.resource complete
+      intro identity fresh
+      apply ih identity (fun old => fresh (larger old))
+      intro name member
+      rcases List.mem_append.mp member with old | current
+      · exact List.mem_append_left _ (larger old)
+      · exact List.mem_append_right _ current
 
 theorem RestoredDeclarations.world_weaken (receipt : RestoredDeclarations world receiver effect table before after)
     (larger : world ⊆ nextWorld) : RestoredDeclarations nextWorld receiver effect table before after := by
@@ -992,8 +1032,8 @@ theorem CodeChecked.restore_receipts
     rename_i body inside ih receiver nextRows nextContext rows received delta
     cases nextRows with
     | resource nextBodies =>
-      exact .resource (fun identity fresh => ih identity fresh _ _ _ (rows.view identity)
-        (by intro token member; exact List.mem_cons_of_mem identity (received member))
+      exact .resource (fun identity fresh => ih identity fresh _ _ _ (rows.view identity fresh)
+        (List.cons_subset_cons identity received)
         (.cell (delta.world_weaken (by intro token member; exact List.mem_append_left _ member))))
   · intros
     rename_i first second left right ihLeft ihRight receiver nextRows nextContext rows received delta

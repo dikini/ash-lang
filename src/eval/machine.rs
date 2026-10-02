@@ -6512,3 +6512,7 @@ mod tests {
             .expect("evaluator conversion erasure must fit a small stack");
     }
 }
+
+#[cfg(test)]
+#[path = "machine/core_runtime_metadata_preparation_tests.rs"]
+mod core_runtime_metadata_preparation_tests;

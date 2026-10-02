@@ -39,6 +39,8 @@ theorem IndexedSource.allowed_weaken
   | pair left right ihL ihR => exact .pair (ihL larger) (ihR larger)
   | app function argument admitted publicCertified ihF ihA => exact .app (ihF larger) (ihA larger) (admitted.trans larger) publicCertified
   | bind initial body ihI ihB => exact .bind (ihI larger) (ihB larger)
+  | resource initializer body formed effectsBound admitted hidden ihI ihB =>
+      exact .resource (ihI larger) body formed effectsBound (admitted.trans larger) hidden
   | cleanup callback body admitted publicCertified ihC ihB => exact .cleanup (ihC larger) (ihB larger) (admitted.trans larger) publicCertified
   | branch condition yes no same ihC ihY ihN => exact .branch (ihC larger) (ihY larger) (ihN larger) same
   | perform known admitted operand formed ih => exact .perform known (larger admitted) (ih larger) formed
@@ -78,6 +80,10 @@ theorem Authenticated.allowed_weaken
   | pair left right ihL ihR =>
       rename_i nextAllowed larger nextSource
       exact .pair (ihL larger) (ihR larger)
+  | resource initial body ihI ihB =>
+      rename_i nextAllowed larger nextSource
+      exact .resource (bodySource := by assumption) (formed := by assumption) (effectsBound := by assumption)
+        (admitted := List.Subset.trans (by assumption) larger) (hidden := by assumption) (ihI larger) body
   | cleanup callback body ihC ihB =>
       rename_i nextAllowed larger nextSource
       exact .cleanup (admitted := List.Subset.trans (by assumption) larger) (publicCertified := by assumption) (ihC larger) (ihB larger)
