@@ -145,8 +145,22 @@ Use [the template](template.md), allocate the next `DN-NNNN` ID, and link relate
 - [DN-0011: Modules, Providers, and Resolution](DN-0011-modules-providers-and-resolution.md) — passive modules and typed composition at static-link and runtime-load stages.
 - [DN-0012: Coeffects and Hooks](DN-0012-coeffects-and-hooks.md) — typed handler hook points, subscription, composition, effects, and lifetime.
 
+- [DN-0034: Verification Foundation for Ash Semantics and Implementation](DN-0034-one-shot-kernel-soundness-and-practicality.md)
+  — one-shot and Core correspondence as a base for soundness and correctness,
+  parallel development, tooling, and lightweight verification artifacts.
+
 ### Downstream type-system and resource exploration
 
+- [DN-0037: Ash-Authored Foreign-Library Interfaces](DN-0037-ash-authored-foreign-library-interfaces.md)
+  — a separate program for typed foreign contracts, generic host ABI calls,
+  memory and linking, with Ash binding code and declarative native build inputs.
+- [DN-0036: Foreign Library and Memory Provider Experiments](DN-0036-foreign-library-and-memory-provider-experiments.md)
+  — coordinated SQLite and scoped-arena experiments, type-checking contracts,
+  surface syntax and Core semantics, a foreign-library authoring blueprint,
+  tooling, and an adoption path into Ash and its standard library.
+- [DN-0035: Region Memory Management and Verified Providers](DN-0035-region-memory-management-and-verified-providers.md)
+  — nested lexical regions, statically selected library policies, immutable
+  sharing, provider verification, and a memory-management reference corpus.
 - [DN-0013: Session and Resource Protocol Stress Tests](DN-0013-session-and-resource-protocol-stress-tests.md) — tests for protocol, multiplicity, continuation, and handler composition machinery.
 - [DN-0014: Finite Kinds and Promotion](DN-0014-finite-kinds-and-promotion.md) — finite nominal static domains and restricted datatype promotion.
 - [DN-0017: Resource Management and Storage Policy](DN-0017-resource-management-and-storage-policy.md) — deterministic cleanup, plural storage policies, transfer, sharing, and cost visibility.

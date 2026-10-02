@@ -1,0 +1,320 @@
+# Provider experiment and adoption plan
+
+> These are bounded experiment steps under
+> [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
+> Candidate semantics remain informative until accepted through the product
+> workflow. This plan records experiment steps and the path to product adoption;
+> it does not independently authorize new language semantics.
+
+## Goal and boundary
+
+Extend the existing Ash compiler and runtime to test library-defined SQLite and
+scoped arena providers. Compare source descriptions, inferred and explicit
+contracts, type checking, Core execution, and native behavior. Develop the
+extensions so successful work can become part of Ash and its standard library.
+
+Work in `.worktree/provider-experiments` on `codex/provider-experiments`, using
+the root Cargo workspace and lockfile. The [package](README.md) records the
+baseline and carried design inputs. Worktree isolation keeps candidate behavior
+off `main`; bounded scope does not require a disposable implementation.
+
+The plan covers the copying SQLite bridge, a fixed-capacity scoped arena, and
+their first borrowing comparison. Arena owner transport, callbacks, concurrency,
+reference counting, tracing, and processes remain outside these slices. A
+semantic gap returns to the design documents before implementation continues.
+
+[DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md) records a separate
+program for Ash-authored foreign-library interfaces. These experiments can
+supply evidence for that program. Its requirements do not expand this plan's
+native-call profile, steps or completion criteria.
+
+## Existing implementation and planned changes
+
+Current [syntax](../../../spec/syntax.md) selects only `cell` or `native_buffer`
+in a `resource` expression. Their provider authority is compiler-defined and
+sealed. Current capture and completion rules already constrain scoped handles.
+The experiment tests how to generalize those boundaries for library-defined
+provision and typed arena objects while preserving existing behavior.
+
+Use the current pipeline throughout:
+
+| Existing files | Experimental responsibility |
+| --- | --- |
+| `src/lexer/`, `src/parser/grammar.rs`, `src/parser/expression.rs`, `src/parser/project.rs`, `src/parser/cst.rs`, `src/surface.rs` | Extend existing parsing and projection for the selected surface additions. |
+| `src/module.rs`, `src/resolve.rs`, `src/resolved.rs` | Resolve resource type definitions, associated providers, foreign declarations, fresh binders, imports, and public contracts. |
+| `src/types.rs`, `src/kind.rs`, `src/elaborate.rs`, `src/evidence_validation.rs` | Check authority, dependencies, effects, foreign signatures, and module evidence; elaborate the selected contract. |
+| `src/core/capture/value.rs`, `src/core/capture/control.rs` | Extend dependency and captured-access analysis where the candidate requires it. |
+| `src/core/effect.rs`, `src/core/dialect.rs`, `src/core/validate.rs`, `src/core/transform.rs` | Extend shared typed Core, independent validation, and transforms together. |
+| `src/eval/machine.rs`, `src/eval/disposal.rs`, `src/eval/value.rs` | Execute acquisition, contracted calls, arena access, and completion through the existing Effect machine. |
+| `src/driver.rs`, `tests/support/mod.rs` | Exercise source cases through the public modular driver and existing integration helpers. |
+| Root `Cargo.toml`, `Cargo.lock` | Add only necessary native dependencies and adapter membership. Keep one workspace. |
+
+These are extension points, not a requirement to edit every listed file. Each
+slice identifies its actual changes from the selected semantic delta. Reuse
+existing effects, handlers, resource completion, and data representations where
+their contracts suffice; explain any new primitive or retained Core metadata.
+
+The main crate forbids unsafe Rust. Follow the existing
+[native-buffer boundary](../../../native-buffer/README.md) when isolating foreign
+calls: private pointers, explicit ABI and layout assumptions, and audited native
+operations behind a safe Rust API. Add a small adapter crate to the root
+workspace only if needed for that boundary. Its role is foreign calls and native
+storage primitives. All Ash parsing, checking, validation, and execution remain
+in the existing implementation. Rust borrowing alone does not verify Ash source.
+
+Plan new integration suites under the root `tests/` directory:
+
+| Planned suite | Evidence |
+| --- | --- |
+| `foreign_provider_syntax.rs` | Resource type definitions, provider associations, instance forms, scopes, imports, and diagnostics. |
+| `foreign_provider_typing.rs`, `foreign_provider_core.rs` | Checked foreign contracts, authority, owner relations, Core validation, and transform preservation. |
+| `foreign_provider_runtime.rs`, `foreign_provider_modules.rs` | SQLite execution and completion from source, including imported providers and generic helpers. |
+| `arena_resource_typing.rs`, `arena_resource_runtime.rs` | Layout, allocation, aliasing, non-escape, nested dependencies, and independent copies. |
+| `foreign_memory_interactions.rs`, `provider_control.rs` | Retained access, view invalidation, capture, resume, discard, and combined completion. |
+
+These suites do not exist yet. Native helper tests supplement them with ABI and
+storage observations. They cannot substitute for source-to-Core execution.
+
+## Step 1: fix the first contract and native inputs
+
+1. Check the worktree revision and carried design inputs against
+   [environment.json](environment.json). Record changes before using them.
+2. Review [contracts](contracts.md), [cases](cases.md), and
+   [semantics](semantics.md) together. Map each admitted case to source scope,
+   checking obligations, Core transitions, and native observations.
+3. Classify each fact as a foreign assumption, provider obligation, client
+   obligation, inferred relationship, runtime check, or open design question.
+   Follow the types from a resource type definition to its provider, effect
+   interface, checked handlers, and instance. Instantiate the input, state,
+   bound resource type, result family, exact operation types, and outward rows
+   for the first case using the schema in `semantics.md`. No surface form is an
+   implementation target before this mapping is specified.
+4. Settle acquisition refusal, publication failure, consumed versus retained
+   owners on completion, and body-versus-completion failure order for the first
+   slice. Define its rules before implementing those transitions.
+5. Specify explicit interpretation of foreign-call effects in the existing
+   Effect execution path. Preserve the current empty entry-row contract unless
+   the candidate deliberately proposes and tests a change to it.
+6. Select the first resource definition, provider assembly, instance form, and
+   checked foreign declaration after comparing their typing. Reuse current
+   effect and handler conventions. Name every unsupported authoring feature.
+7. Resolve missing SQLite headers and link metadata. Use a matching development
+   package or an explicitly pinned upstream build with its checksum and config.
+   Record ABI widths, headers, linked library, runtime version, and compile
+   options. Verify a native smoke call before interpreting database failures.
+
+Discovery commands, from the experiment worktree:
+
+```bash
+git rev-parse HEAD
+rustc --version
+cc --version
+pkg-config --modversion sqlite3
+pkg-config --cflags --libs sqlite3
+```
+
+The last two currently fail. That setup gap is separate from Ash typing and
+native allocation failure. Exit evidence is a specified first contract, its
+pipeline change map, and a reproducible version-matched native smoke build.
+
+## Step 2: connect one SQLite provider through Ash
+
+1. Add an Ash-source integration case for S-01: acquire an in-memory connection,
+   prepare `SELECT ?1`, bind integer `42`, observe a row and completion, and
+   return independent `42`. Its expected initial failure must identify missing
+   experimental support after native setup has passed.
+2. Extend the existing parser and resolver for the selected resource type
+   definition, provider association, instance form, and foreign descriptions.
+   Config evaluates in the preceding scope; the fresh identity and access value
+   bind only in the acquired body. Infer the statement's connection parameter
+   from the checked initializer, keeping it distinct from the fresh identity.
+3. Extend existing checking and elaboration to retain the provider contract,
+   exact operation instance, owner dependencies, and acquisition/completion
+   effects. Reject fabricated authority, wrong instances, and escaping handles
+   before native access.
+4. Extend existing typed Core, its validator, and transforms for the selected
+   representation. Use the test pattern in `tests/native_buffer_core.rs` to
+   validate linked modules and transformed Core. Mutate an owner, operation
+   instance, primitive signature, result relation, and origin separately.
+5. Implement the thin foreign boundary for the required initialize/open,
+   prepare, integer bind, step, column access, finalize, and close operations.
+   Wire them into the existing Effect machine with guarded publication and
+   statement-before-connection completion.
+6. Express the provider API and SQLite protocol in Ash library modules as far
+   as the checked mechanism permits. Record each remaining compiler privilege
+   and its safety reason. A new hardcoded SQLite resource kind is insufficient
+   evidence for library-defined provision.
+7. Run the source case through `driver::run_path`; compare validated Core traces,
+   returned data, and native release observations. Distinguish two independent
+   connections and repeated activations.
+
+Exit evidence is the first complete source-to-native path in the existing Ash
+implementation, with paired rejection cases and a named trusted foreign
+contract. Hand-built Core and Rust-only wrappers cannot close this step.
+
+## Step 3: complete the copying bridge and public contracts
+
+1. Add S-02 through S-05 using the same pipeline: setup failure, malformed and
+   empty SQL, copied bytes, protocol/error behavior, persistence, and imports.
+2. Use `SQLITE_TRANSIENT` for copied inputs and independent returned bytes.
+   Specify the Ash byte representation using or extending existing data and
+   heap support. Keep empty BLOB, SQL null, and conversion failure distinct.
+3. Preserve whether finalize consumes a statement and whether refused close
+   retains a connection. Label deterministic fault injection separately from
+   actual native failures.
+4. Add a temporary-file persistence test owning its temporary directory and
+   cleanup. Add imported provider APIs, facades, and generic helpers. Check
+   clients against exported contracts without inspecting provider bodies.
+5. Record which properties inference recovers and which require declarations.
+   Pair useful source examples with escaping state, hidden capture, wrong-owner,
+   and invalid protocol cases. Keep diagnostic causes tied to acquisition and
+   the offending operation.
+
+Exit evidence is a useful copying SQLite library with reviewed contracts and
+module-boundary checking. Observations distinguish adapter calls from actual
+native allocation events; unmeasured costs remain labeled.
+
+## Step 4: implement the scoped arena through the same mechanism
+
+1. Specify capacity units, alignment, arithmetic overflow, zero-sized values,
+   initialization failure, cursor rollback, and release obligations before
+   adding allocation tests for M-01.
+   Specify allocation operand/result types and handler coverage for every
+   admitted payload type before heterogeneous cases. Current effect operations
+   have no operation-local type binders; a generic allocation method alone
+   cannot establish a handler for all its exact instances.
+2. Implement stable backing storage and typed allocation through the provider
+   mechanism from the SQLite slice. Extend existing value/heap representation
+   only where required; keep native addresses private.
+3. Publish typed access only after complete initialization. Failed allocation
+   preserves earlier objects and the specified cursor state. Object bindings
+   and aliases do not own separate storage release.
+4. Extend Ash checking and capture analysis for M-02 through M-05: immutable
+   aliases, closures, nested owner dependencies, safe outer projections,
+   independent copies, scratch scopes, and rejected owner transport.
+5. Exercise M-06 through the existing continuation and disposal machinery.
+   Preserve owner and access obligations across capture and resume; complete
+   them in the specified order on normal return and admitted owned discard.
+6. Compare explicit allocation with construction directed to a scoped provider.
+   Measure friction, annotations, copying, and retained storage without assuming
+   nearest-region construction is the accepted rule.
+
+Exit evidence connects Ash type checking to native storage lifetime for the
+admitted objects and control paths. A Rust lifetime or merely enclosing lexical
+block cannot substitute for Ash dependency checks. Do not execute stale native
+pointers as rejection tests.
+
+## Step 5: compare retained storage and temporary views
+
+1. Define access validity, conflicting operations, branch joins, and captured
+   obligations for X-01 through X-04 before extending the implementation.
+2. Compare copied input with arena-backed retained input. Relinquish retention
+   through rebind, clearing bindings, or finalization according to the contract.
+   Show that reset alone does not discharge it.
+3. Reject arena completion and incompatible mutation while retention remains.
+   Obtain a row view and reject step, reset, conversion, or finalization that
+   would invalidate active access. Accept an independent copy followed by those
+   operations. Owner lifetime alone does not authorize the view.
+4. Exercise handlers with reachable aliases while a conflicting borrow is
+   captured. Capture/resume must preserve the obligation; temporary inactivity
+   must not grant conflicting access.
+5. Compare derived Core transitions, runtime state, native behavior, and
+   combined discard order. State which access facts erase after checking and
+   which remain for execution or validation.
+
+If the candidate rejects a required useful case, preserve that finding and
+compare alternatives. Do not silently copy in the borrowing variant.
+
+## Step 6: evaluate results, blueprint, and developer tools
+
+Create `results.md`, `blueprint.md`, and `tooling.md` here after observations
+exist. For each case record admission, inferred and explicit information,
+Core/native agreement, diagnostics, completion, assumptions, and measured costs.
+
+Compare provider assembly styles against the same cases. Extract the library
+author's actual workflow: ABI and symbol inputs, foreign contracts, provider
+definitions, checked handlers and operations, initialization, linking, errors,
+tests, and packaging. Repeat the blueprint with the arena to distinguish general
+requirements from SQLite-specific policy.
+
+Try a small tool for an observed difficulty, such as a binding contract check,
+build-input report, or owner/access diagnostic. Compare its output with the
+manual workflow. Separate syntax, checking, runtime, and authoring-tool gaps.
+
+The result assessment uses DN-0036's success criteria:
+
+| Result | Branch outcome |
+| --- | --- |
+| Successful supported design | Retain useful implementation and proceed to product adoption below. |
+| Failed design | Do not merge the experiment branch. Record counterexamples and reasons; disposal is optional. |
+| Inconclusive or partial result | State the supported fragment and remaining questions. Do not merge unresolved behavior; refine or plan the next bounded comparison. |
+
+Experiment completion means its questions have answers. Merge readiness
+additionally requires a successful design and the adoption work below.
+
+## Step 7: bring successful work into Ash and its standard library
+
+1. Produce the adoption report required by DN-0036. Map each proposed general
+   mechanism to evidence from both experiments or state its tested scope.
+   Identify current behavior, semantic delta, trust assumptions, compatibility,
+   supported targets, and remaining limits.
+2. Prepare the change proposal for language semantics and architectural
+   decisions for converged non-language choices. Retain successful code on this
+   branch while those contracts are reviewed; rewriting it from scratch is not
+   a prerequisite for adoption.
+3. Following acceptance, create product tasks and detailed execution plans for
+   coherent checkpoints. Map existing experimental code to each checkpoint's
+   requirements: retain conforming parts, revise gaps, and remove failed
+   candidate machinery from the proposed product tree.
+4. Specify surface grammar, binding and import rules, static checking,
+   elaboration, and Core operational transitions with the retained
+   implementation and tests. Update the affected `spec/` files in the same
+   product checkpoint. Include failure, capture, resume, discard, and completion
+   derivations rather than only the successful native call.
+5. Place reusable provider, arena, view, conversion, and completion APIs in Ash
+   library modules. Decide standard-library organization through the adoption
+   review. Keep SQLite policy in its library, with a decision on optional
+   standard-library inclusion or separate distribution. Keep both examples
+   testing the public mechanism after adoption.
+6. Compare with existing cell/native-buffer mechanisms and simplify only where
+   evidence supports it. Preserve existing Pure and Effect behavior and add
+   compatibility checks. Document supported native builds, authoring workflow,
+   developer tools, costs, errors, and explicit foreign assumptions.
+7. Run the full product verification and required review. Integrate the
+   successful branch only when the accepted contract, implementation,
+   specification, library documentation, and evidence agree. Integration into
+   `main` establishes current Ash behavior.
+
+An unsuccessful experiment remains unmerged. Useful code need not be discarded;
+retention does not waive the successful-design and product-verification gates.
+
+## Verification and pause conditions
+
+During implementation, run the suites affected by each slice from the root
+workspace. The following test targets are planned, not checks already run:
+
+```bash
+cargo test --locked --test foreign_provider_syntax --test foreign_provider_typing --test foreign_provider_core
+cargo test --locked --test foreign_provider_runtime --test foreign_provider_modules
+cargo test --locked --test arena_resource_typing --test arena_resource_runtime
+cargo test --locked --test foreign_memory_interactions --test provider_control
+```
+
+Use native helper tests for the unsafe boundary and actual ABI behavior. Reuse
+the current resource, native-buffer, module, evidence, and Core tests for
+affected invariants. At coherent compiler/runtime checkpoints, run the existing
+workspace verification:
+
+```bash
+cargo xtask verify
+```
+
+Documentation checks cover authority labels, case links, Markdown, and formal
+notation. Current baseline observations are in the package README. No
+experimental test pass is claimed by this plan.
+
+Pause a slice to revise its contracts when execution disagrees with a required
+case, checking needs an unstated assumption, or native behavior contradicts the
+model. Report setup failure separately. Preserve the copying baseline when a
+borrowing candidate fails. Passing checks alone cannot make a failed design
+eligible for merge.
