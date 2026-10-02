@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 11:01 UTC
+### Current deliverable board — 2026-10-02 11:58 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,11 +72,14 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Higher-order resource-body composition | **3 / 3 leaves** | **Passed** | **32 reports; nine interface checks; same graph Source/Auth** | **This checkpoint** | **Finite lambda/app/Bool body producer; initializer executed; storage boundary retained** |
-| Initial execution to callback start | **3 / 3 leaves** | **Passed** | **26 reports; same original graph; six actual Core edges** | **This checkpoint** | **Exact initial state → registration → body → start → Generated; original bound derived** |
-| **Composition/initial-history integration batch** | **6 / 6 leaves** | **Passed** | **58 additional reports; 953 unchanged artifacts reused** | **This checkpoint** | **Initial six-leaf batch; EOF-only three-leaf correction reused every C3 artifact** |
-| Compositional stored-capture admission | ABI assessed | Pending | Same Code dependencies and whole paired storage maps identified | Not integrated | Source/Auth acceptance of pure handle alias is retained counterevidence; producer next |
-| Dormant cleanup activation and first-anchor transport | Causal initial/start link integrated; next ABI assessment | Pending | Original history now retained; changed-tail first-anchor proof still open | Not integrated | No outsideCheck/position guard removed by this checkpoint |
+| Higher-order resource-body composition | **3 / 3 leaves** | **Passed** | **32 reports; nine interface checks; same graph Source/Auth** | **`5688835`** | **Finite lambda/app/Bool body producer; initializer executed; storage boundary retained** |
+| Initial execution to callback start | **3 / 3 leaves** | **Passed** | **26 reports; same original graph; six actual Core edges** | **`5688835`** | **Exact initial state → registration → body → start → Generated; original bound derived** |
+| **Composition/initial-history integration batch** | **6 / 6 leaves** | **Passed** | **58 additional reports; 953 unchanged artifacts reused** | **`5688835`** | **Initial six-leaf batch; EOF-only three-leaf correction reused every C3 artifact** |
+| Compositional stored-capture admission | **2 / 2 leaves** | **Passed** | **40 reports; SAME23-node Code; all-fresh lower judgment; alias escape rejected** | **This checkpoint** | **Actual dependency captures and executed original prefix; full paired maps retained** |
+| Dormant cleanup activation: intervening handler case | **3 / 3 leaves** | **Passed** | **26 reports; actual initial→finish23 edges; SAME resume tail** | **This checkpoint** | **Saved-scope/split/position/outsideCheck produced; current-tail guard and general transport remain** |
+| **Storage/outside-activation integration batch** | **5 / 5 leaves** | **Passed** | **66 additional reports; 959 unchanged artifacts reused** | **This checkpoint** | **One related compile batch; original source hashes unchanged** |
+| Contextual composed initial-admission facets | ABI assessed; implementation started | Pending | Existing certificate/CodeChecked/accounting/Uses APIs identified | Not integrated | SAME23-node root; source requirements and accounting root remain separate |
+| General saved-anchor and strict-frame transport | ABI assessed; implementation started | Pending | Existing actual bind_enter reused; restored right-origin gap identified | Not integrated | No general multi-cycle or deeper strict availability claim |
 | Physical current-scope ownership across restored prefixes | **13 / 13 evaluate/saved-map cases** | **Passed** | **Four producer reports; exact dynamic paths from SAME history** | **`2484040`** | **Independent current origin → simultaneous operation-derived origin; dormant anchors remain open** |
 | Cleanup and handler without supplied current ownership/origin | **2 / 2 factories** | **Passed** | **Six consumer and thirteen probe reports** | **`2484040`** | **Actual control inversion; original-start bound retained; same nested/resumed execution** |
 | **Current-scope three-leaf integration batch** | **3 / 3 leaves** | **Passed** | **23 additional reports; 950 unchanged artifacts reused** | **`2484040`** | **One related compile batch; no parent-source changes** |
@@ -1774,8 +1777,8 @@ preparation remain existing obligations. The fragment and inventory stay fixed.
 | Package | Completed / total identified items | Current state | Outstanding items | Dependencies or blockers | Estimated remaining active work |
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
-| C2 | 0 / 4 | 14/16 original forms; compositional resource Source/Auth and checked general initializer integrated | General initial admission and finite handlers; composed storage/capture and metadata origins | Original graph/private-family/storage origins; checked cell-registry transport | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
-| C3 | 0 / 5 | Initial→registration→callback causal history integrated; SAME-start scope/ownership over 13 Generated forms | Dormant activation/saved anchors; deeper strict frames; projection/disposal; full simulation/preparation | C2 admission; dormant anchor/position transport and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next first-anchor ABI/producer 2–4 active hours; causal start now integrated |
+| C2 | 0 / 4 | 14/16 original forms; compositional Source/Auth/storage and checked general initializer integrated | Contextual composed initial admission and finite handlers; general capture and metadata origins | Original graph/private-family/storage origins; checked cell-registry transport | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
+| C3 | 0 / 5 | Causal initial history and intervening-handler outside activation integrated; SAME-start scope/ownership over 13 forms | Dormant activation/saved anchors; deeper strict frames; projection/disposal; full simulation/preparation | C2 admission; dormant anchor/position transport and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next generic bind/strict provider 2–4 active hours; general first-anchor transport remains open |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
@@ -2169,14 +2172,66 @@ independently reviewed whitespace-only correction recompiles that file and its
 two consumers in 42.6
 seconds, with 9.4
 seconds of preparation. It reuses 956 artifacts, including every C3 leaf. All
-affected reports and artifact bytes match the initial assembly. The final
-coherent assembly contains 959 modules and 12,447 ordered standard-only reports,
+affected reports and artifact bytes match the initial assembly. The
+assembly committed as `5688835` contains 959 modules and 12,447 ordered standard-only reports,
 fifty-eight more than committed `2484040`. Both assembly gates are retained;
 neither is presented as a separate Git commit.
 No Rust source changed or Rust test was rerun. M0–M4, the declared fragment and
 whole-package acceptance counts remain unchanged. General handler/resource
 admission, stored captures, dormant first-anchor transport, deeper strict-frame
 promotion, disposal, complete simulation and the integrated theorem remain open.
+
+The [compositional storage producer](../design/direct-effects/one-shot/CoreCallableCompositionalResourceStorage.lean)
+now checks the SAME finite resource Code. It computes captures from actual Code
+dependencies and the nearest whole paired storage binding. Symbolic old/fresh
+atoms preserve complete function domains, results and captures; structural
+transport derives the lower judgment for every fresh identity. Lambda,
+application, bindings, products and Bool branches reuse the existing lower
+constructors. Only the checked original cell API authorizes read/write.
+This lower storage judgment is paired with the Source/Auth gate for typing.
+
+The combined checker executes the rich initializer/body check, original storage
+initializer check and symbolic body opening. It preserves the original paired
+maps and constructs the lower judgment for the exact resource Code. The
+[connected probes](../design/direct-effects/one-shot/CompositionalResourceStorageProbes.lean) reuse the
+23-node resource graph and nonliteral initializer; the outer paired prefix
+comes from executed original checks. The retained pure-handle-alias example
+passes Source/Auth but fails outside storage admission. Nearest shadowed return
+and full opaque application-domain negatives also reject. This is stored-capture
+admission for the finite composed body, not general Core admission or concrete
+runtime environment/storage lineage. Original checker coverage stays 14/16.
+
+The [outside-activation origins](../design/direct-effects/one-shot/GeneratedOutsideActivationOrigins.lean)
+retain SAME initial chronology, intervening handler installation and immediate
+cleanup registration. The [finish consumer](../design/direct-effects/one-shot/GeneratedOutsideActivationConsumers.lean)
+derives saved-scope alignment, the original kept split/first-owner position and
+inserted spent-marker outsideCheck. It supplies the existing Activation.outside
+without independent proofs of those desired checks. Current RunningHead,
+physical-tail shape, returned Unit and EmptyFocus remain explicit guards.
+
+The [connected outside-activation prefix](../design/direct-effects/one-shot/GeneratedOutsideActivationProbes.lean)
+has 23 actual Core edges from CoreMachine.initial through cleanup finish and
+the corresponding target trace. The callback captures completion plus the
+intervening handler; its actual resume inserts that handler's spent marker
+before the original caller. SAME CaptureData, selected installation and
+ResumeSplit determine the tail. The enclosing handler capability remains live
+at this endpoint: this is represented-prefix evidence, not admitted
+whole-program execution. Stable callback operations, immediate installation to
+cleanup, empty resume front and the current tail guard bound this result.
+General changed-tail/multi-cycle transport and deeper strict promotion remain
+open. Conditional same-pair obstruction is not an admitted product bug.
+
+These two independently reviewed components compile together as five new
+leaves in 42.9 seconds,
+with 7.2 seconds of preparation and
+association checks. All 959 parent artifacts and logs are reused unchanged.
+The current coherent assembly contains 964 modules and
+12,513 ordered standard-only reports,
+66 more than `5688835`.
+No Rust source changed or Rust test was rerun. General initial admission,
+handler/resource integration, runtime storage origins, saved-anchor transport,
+disposal, whole simulation/preparation and the integrated theorem remain open.
+M0–M4, normative semantics, exclusions and C1–C5 acceptance counts are unchanged.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected
@@ -2189,20 +2244,17 @@ commits. General admission and generated simulation are harder integration
 obligations, so component delivery rates are not extrapolated directly.
 These whole-goal estimates replace prior estimates covering only bounded gates.
 
-C2 now constructs stored-capture admission on the SAME composed resource body
-before connecting original resource/paired admission and missing handler forms.
-Source/Auth acceptance of a pure handle alias is the retained boundary case;
-the storage producer must reject its escape using actual dependencies and whole
-paired maps. C3 retains the causal initial-to-registration-to-callback history
-and now assesses actual nested-cycle physical tails against the existing
-activation cases. A possible multiple-cut shape is an unanswered representation
-question, not a demonstrated reachable disagreement or reason to add a broad
-invariant. Dormant saved-anchor transport, deeper strict promotion and
-projection/disposal remain separate dependencies. Original Rust map/ledger
-origins and remaining metadata consumers remain C3.4 dependencies. Next
-checkpoints remain bounded at 2–4 active hours with disjoint outputs. These
-components do not themselves narrow the whole-goal estimate. Batch related
-edits and reverse consumers without narrowing acceptance.
+C2 next constructs contextual certification, checked accounting and one-shot
+usage for the SAME23-node composed root, reusing the executed rich and storage
+receipts. General graph/private-family and handler/resource production remains
+open. C3 next derives generic saved-bind inputs from SAME current history;
+deeper focus/plug and restored right-site origins remain distinct obligations.
+General saved-anchor transport, disposal, runtime metadata origins and complete
+simulation/preparation are not closed by the one intervening-handler prefix.
+Next checkpoints remain bounded at 2–4 active hours with disjoint outputs.
+The unchanged 40–71 base/50–90 contingency agent-hour estimate is not reduced
+from module or report counts. Batch related changes and reverse consumers while
+preserving the original acceptance inventory.
 
 ### Acceptance detail at the current checkpoint
 
@@ -2216,12 +2268,12 @@ semantic coverage or equal amounts of work.
 
 | Item | Verified component and status | Exact remaining acceptance obligation |
 | --- | --- | --- |
-| C2.1 typed translation | Finite Core syntax translation and supported type realization are integrated. [GraphAnnotationChecks](../design/direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean) independently verifies same-site function/binder/body metadata and computed support guards. | Construct the recursive structural source and authentication derivation from validated graph/annotation data; the lambda gate currently receives the body derivation. The producer retains 14 of 16 constructor forms, including receiver-aware lambda, cleanup, resume and discard. Rich cleanup/resource source and full pointwise transports are retained. The bounded storage producer is retained; the finite resource sidecar now constructs exact opened Source/Auth from finite data, including full returned slots. The exact original registry bridge and one closed initial Program are now constructed; the new finite higher-order/Bool resource body constructs Source/Auth with the exact general initializer. General admission, original resource/paired integration, handler checking and composed storage/full-contract recipe origins remain open. |
+| C2.1 typed translation | Finite Core syntax translation and supported type realization are integrated. [GraphAnnotationChecks](../design/direct-effects/one-shot/CoreCallableGraphAnnotationChecks.lean) independently verifies same-site function/binder/body metadata and computed support guards. | Construct the recursive structural source and authentication derivation from validated graph/annotation data; the lambda gate currently receives the body derivation. The producer retains 14 of 16 constructor forms, including receiver-aware lambda, cleanup, resume and discard. Rich cleanup/resource source and full pointwise transports are retained. The bounded storage producer is retained; the finite resource sidecar now constructs exact opened Source/Auth from finite data, including full returned slots. The exact original registry bridge and one closed initial Program are now constructed; the new finite higher-order/Bool resource body constructs Source/Auth with the exact general initializer. General admission, original resource/paired integration, handler checking and general stored-capture/full-contract recipe origins and contextual composed Program facets remain open. |
 | C2.2 exact identities/signatures | Exact effect argument trees, type realization and conflict-checked declaration-port construction are integrated. Structured declarations now come from the same Rust registry traversal and identity maps; independent review passes with nine Rust tests and fresh Lean metadata compilation against 52 dependencies. One regeneration test is intentionally ignored. | The generated declaration checker is independently reviewed and current-source verified; this checkpoint retains its integration. Manifest equality pairs the artifacts; it does not prove general Rust-to-Lean translation soundness or private callable certification. |
-| C2.3 lexical resources/capabilities | Receiver-conditioned source support, actual operand authentication and restored support/checking are integrated. The new graph annotation gate has passed independent review. | Derive actual bound-value/captured-environment authentication and literal private-plan origin. Recursive body authentication and private-row refinement remain inputs to the gate. |
+| C2.3 lexical resources/capabilities | Receiver-conditioned source support, actual operand authentication and restored support/checking are integrated. The new graph annotation gate has passed independent review. | Derive actual bound-value/captured-environment authentication and literal private-plan origin. The finite composed resource storage receipt now derives actual dependency captures and preserves the whole original map. General recursive body authentication and private-row refinement remain inputs to the graph gate. |
 | C2.4 initial admission | [InitialAdmission](../design/direct-effects/one-shot/CoreCallableInitialAdmission.lean) constructs the rich initial Site from the same supplied static Source/Auth, contracts, plan, rows and accounting; independent review passes. It projects typing/joint validity and an actual first progress step. | A finite original closed cell root now constructs every Program facet and derives its builtin ABI/actual calculus first step. General production from validated Core, rich successor preservation and M4 availability are not established by the first-step projection. |
 | C3.1 configuration relation | Existing value/environment/frame relations are integrated. [ReachableResume](../design/direct-effects/one-shot/CoreCallableReachableResume.lean) has passed independent review for current and saved frame ownership/scope receipts. | Construct and preserve the combined relation for all reachable states, including cleanup, disposal, handler exit and restored saved-prefix scopes. Arbitrary GeneralChain data do not authenticate these receipts. |
-| C3.2 transition simulation | Actual transition components include strict computation, cells, handlers, capture, resume, discard and cleanup. The checked resume successor inhabits the actual Core endpoint. Newly reviewed capture/beta/bind/resume factories produce their current coherence premises. | Assemble whole-fragment step coverage under the same reachable relation. The cleanup-origin batch is independently reviewed and current-source verified for actual registration, callback entry and return; later disposal/projection transport remains open. |
+| C3.2 transition simulation | Actual transition components include strict computation, cells, handlers, capture, resume, discard and cleanup. The checked resume successor inhabits the actual Core endpoint. Newly reviewed capture/beta/bind/resume factories produce their current coherence premises. | Assemble whole-fragment step coverage under the same reachable relation. The cleanup-origin batch is independently reviewed and current-source verified for actual registration, callback entry and return; the intervening-handler outside-activation case now derives saved scope, split/position and outsideCheck from actual initial capture/resume; its live-H prefix is not whole-program admission. General saved-anchor and disposal/projection transport remain open. |
 | C3.3 observations/ownership | Exact restored prefix, consumed root, spent phase, resume observation and accounting are integrated. Current history now derives dynamic ticket uniqueness in the reviewed resume factory. | Preserve these observations and ownership guarantees throughout every covered execution, including cleanup and disposal, using one reachable invariant. |
 | C3.4 capacity and preparation | Runtime failure classes are recorded. The formal resume-readiness component derives post-consumption handler availability from the actual physical segment. | Connect allocation, storage, control-work, registration and disposal preparation to Rust execution; do not equate successful formal freshness with runtime reservation success. |
 | C3.5 nonvacuity | Existing transition consumers use actual Core endpoints and positive calculus steps; ranked administrative components are integrated. | Establish the justified administrative matching/progress measure for the complete simulation, not only its individual transition components. |

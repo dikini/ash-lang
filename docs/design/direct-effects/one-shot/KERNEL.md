@@ -878,14 +878,66 @@ independently reviewed whitespace-only correction recompiles that file and its
 two consumers in 42.6
 seconds, with 9.4
 seconds of preparation. It reuses 956 artifacts, including every C3 leaf. All
-affected reports and artifact bytes match the initial assembly. The final
-coherent assembly contains 959 modules and 12,447 ordered standard-only reports,
+affected reports and artifact bytes match the initial assembly. The
+assembly committed as `5688835` contains 959 modules and 12,447 ordered standard-only reports,
 fifty-eight more than committed `2484040`. Both assembly gates are retained;
 neither is presented as a separate Git commit.
 No Rust source changed or Rust test was rerun. M0–M4, the declared fragment and
 whole-package acceptance counts remain unchanged. General handler/resource
 admission, stored captures, dormant first-anchor transport, deeper strict-frame
 promotion, disposal, complete simulation and the integrated theorem remain open.
+
+The [compositional storage producer](CoreCallableCompositionalResourceStorage.lean)
+now checks the SAME finite resource Code. It computes captures from actual Code
+dependencies and the nearest whole paired storage binding. Symbolic old/fresh
+atoms preserve complete function domains, results and captures; structural
+transport derives the lower judgment for every fresh identity. Lambda,
+application, bindings, products and Bool branches reuse the existing lower
+constructors. Only the checked original cell API authorizes read/write.
+This lower storage judgment is paired with the Source/Auth gate for typing.
+
+The combined checker executes the rich initializer/body check, original storage
+initializer check and symbolic body opening. It preserves the original paired
+maps and constructs the lower judgment for the exact resource Code. The
+[connected probes](CompositionalResourceStorageProbes.lean) reuse the
+23-node resource graph and nonliteral initializer; the outer paired prefix
+comes from executed original checks. The retained pure-handle-alias example
+passes Source/Auth but fails outside storage admission. Nearest shadowed return
+and full opaque application-domain negatives also reject. This is stored-capture
+admission for the finite composed body, not general Core admission or concrete
+runtime environment/storage lineage. Original checker coverage stays 14/16.
+
+The [outside-activation origins](GeneratedOutsideActivationOrigins.lean)
+retain SAME initial chronology, intervening handler installation and immediate
+cleanup registration. The [finish consumer](GeneratedOutsideActivationConsumers.lean)
+derives saved-scope alignment, the original kept split/first-owner position and
+inserted spent-marker outsideCheck. It supplies the existing Activation.outside
+without independent proofs of those desired checks. Current RunningHead,
+physical-tail shape, returned Unit and EmptyFocus remain explicit guards.
+
+The [connected outside-activation prefix](GeneratedOutsideActivationProbes.lean)
+has 23 actual Core edges from CoreMachine.initial through cleanup finish and
+the corresponding target trace. The callback captures completion plus the
+intervening handler; its actual resume inserts that handler's spent marker
+before the original caller. SAME CaptureData, selected installation and
+ResumeSplit determine the tail. The enclosing handler capability remains live
+at this endpoint: this is represented-prefix evidence, not admitted
+whole-program execution. Stable callback operations, immediate installation to
+cleanup, empty resume front and the current tail guard bound this result.
+General changed-tail/multi-cycle transport and deeper strict promotion remain
+open. Conditional same-pair obstruction is not an admitted product bug.
+
+These two independently reviewed components compile together as five new
+leaves in 42.9 seconds,
+with 7.2 seconds of preparation and
+association checks. All 959 parent artifacts and logs are reused unchanged.
+The current coherent assembly contains 964 modules and
+12,513 ordered standard-only reports,
+66 more than `5688835`.
+No Rust source changed or Rust test was rerun. General initial admission,
+handler/resource integration, runtime storage origins, saved-anchor transport,
+disposal, whole simulation/preparation and the integrated theorem remain open.
+M0–M4, normative semantics, exclusions and C1–C5 acceptance counts are unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
