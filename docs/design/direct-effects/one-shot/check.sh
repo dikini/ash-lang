@@ -916,3 +916,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCapturedLambdaConstr
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableCapturedRecipes.olean" CoreCallableCapturedRecipes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningCapture.olean" CoreCallableRunningCapture.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableInitializerHead.olean" CoreCallableInitializerHead.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableOuterLambdaOrigins.olean" CoreCallableOuterLambdaOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningClauseOccurrence.olean" CoreCallableRunningClauseOccurrence.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRunningLocalHandler.olean" CoreCallableRunningLocalHandler.lean

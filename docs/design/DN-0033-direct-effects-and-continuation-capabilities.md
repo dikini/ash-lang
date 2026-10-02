@@ -156,7 +156,7 @@ derives actual marker return/finish with explicit current guards.
 Their 26 fresh standard-only reports join an audited 908-module, 11,976-report
 assembly, preserving the 903 unchanged dependency associations.
 
-The current checkpoint integrates
+The preceding checkpoint `f1fc1e4` integrates
 [finite captured recipes](direct-effects/one-shot/CoreCallableCapturedRecipes.lean)
 and [generated-marker capture/resume](direct-effects/one-shot/CoreCallableRunningCapture.lean).
 The first transports the exact successful finite checker with separate original
@@ -167,31 +167,54 @@ generating the spent marker. Both pass independent review; exact fresh source,
 artifact, log and report matches join an audited 910-module, 11,997-report
 assembly with all 908 preceding associations unchanged.
 
-Continuous clause/callback history, actual heap-changing transport, derived
-activation guards, varied storage/resource/control admission, projection/disposal
-and whole correspondence remain open. [The generated initializer connection](direct-effects/one-shot/CoreCallableInitializerHead.lean) now passes independent
+At checkpoint `f1fc1e4`, continuous clause/callback history, actual heap-changing
+transport, derived activation guards, varied storage/resource/control admission,
+projection/disposal and whole correspondence remained open. [The generated initializer connection](direct-effects/one-shot/CoreCallableInitializerHead.lean) now passes independent
 review and exact fresh source/artifact/log/report verification. Its five reports
 extract the same original initializer/path and rich/storage checks, derive
 actual three-step evaluation and the completed binding MEnv/raw-body closing,
 and construct the same whole lambda family plus finite/storage judgments.
-It covers one closed initializer; outer callee evaluation, multi-binding/open
-initializer lineage and general resource/control admission remain open.
+At that checkpoint it covered one closed initializer; outer callee evaluation,
+multi-binding/open initializer lineage and general resource/control admission
+remained open.
 
-The final audited assembly contains 911 modules and 12,002 ordered standard-only
-reports, with all 910 preceding associations unchanged. This checkpoint's three
-new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
+The preceding audited assembly contains 911 modules and 12,002 ordered standard-only
+reports, with all 910 preceding associations unchanged. Checkpoint `f1fc1e4`'s
+three new leaves add 26 exact reviewed reports above parent `c5fb370`'s 908 modules.
 The other two leaves were freshly compiled in the preceding 910-module assembly;
 this is an audited assembly, not an uncached rebuild of every module.
-The separate four-report outer-lambda evaluation producer has passed independent
-review and remains unregistered at this checkpoint.
+The resumed integration adds three independently reviewed components.
+[Outer lambda evaluation](direct-effects/one-shot/CoreCallableOuterLambdaOrigins.lean) derives actual evaluation and ValueRel
+at the same completed binding environment, retaining the original full private
+family and exact finite/storage checks. It covers one binding; recursive open
+initializer origins and general resource admission remain open.
 
-Packaging review caught three registrations without compiled output paths.
+[Clause execution](direct-effects/one-shot/CoreCallableRunningClauseOccurrence.lean) derives actual bind/beta/return fronts,
+heap extension from tuple allocation, first physical owner selection and
+full-prefix resume into the same running completion. Its local carrier does
+not establish that arbitrary traces are generated executions.
+[Local handler execution](direct-effects/one-shot/CoreCallableRunningLocalHandler.lean) derives actual installation,
+head-local capture and normal return from that same clause occurrence. Capture
+retains the old running completion outside the local cut, dormant in the
+original owner receipt; normal return restores the same suffix.
+
+These three leaves add 24 fresh standard-only reports. The current assembly
+contains 914 modules and 12,026 reports, retaining all 911 preceding
+source/artifact/log/direct-import associations. Their three productive
+registration commands compile together against one coherent audited cache;
+the measured leaf compilation takes 9.7 seconds. Reused dependency artifacts
+are immutable hardlinks; this is an audited incremental assembly. Rust sources
+are unchanged. Generated mixed callback/clause chronology, spent-marker
+retirement, derived activation guards, projection/disposal, resource admission
+and whole simulation remain open. M0–M4 and the declared fragment are unchanged.
+
+Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
 outputs. Replaying those three literal registrations over the audited 908-module
 dependency set passes 26 reports with exactly the reviewed artifacts. The prior
 missing-import failure was reproduced. This is a registered-tail replay, not a
 new uncached run of every module.
- These are bounded prototype results
+These are bounded prototype results
 within the existing C2/C3 obligations; the supported fragment, whole-package
 inventory and normative semantics are unchanged.
 
