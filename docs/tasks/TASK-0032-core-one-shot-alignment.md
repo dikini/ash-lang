@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-02 05:06 UTC
+### Current deliverable board — 2026-10-02 06:02 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -80,7 +80,7 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Generated operation declaration checker | Yes | Passed | Passed | `d2f26e1` | Unchanged |
 | **Retained six-deliverable batch** | **6 / 6** | **6 / 6** | **6 / 6** | **`d2f26e1`** | **Unchanged** |
 | Recursive C2 source/authentication checker: 16 Code constructors | **14 / 16** | **14 / 16** | **14 / 16** | **`ab71211`** | Unchanged |
-| Missing rich source constructors: cleanup and resource | **2 / 2** | **2 / 2** | **2 / 2** | **This checkpoint** | **1 / 2 → 2 / 2; finite checker remains 14 / 16** |
+| Missing rich source constructors: cleanup and resource | **2 / 2** | **2 / 2** | **2 / 2** | **`acb7724`** | **1 / 2 → 2 / 2; finite checker remains 14 / 16** |
 | Bounded returned-storage and actual-initializer origin producer | Yes | Passed | Passed | `ab71211` | Unchanged |
 | Running cleanup capture/restore/finish: inside-anchored path family | Implemented | Passed | Passed | `3fad8e8` | Unchanged |
 | Literal-site ancestry through actual capture/beta/bind | Implemented | **Passed** | **Passed** | `3fad8e8` | Unchanged |
@@ -119,14 +119,18 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 | Preparation exact-budget/finite-key/reservation probes: twenty-one named reports | **21 / 21** | **Passed** | **Exact current-source replay passed** | **`aa71286`** | **New represented-operation counterevidence** |
 | Discard failure-boundary Rust QA: success, pre-consumption and post-consumption cases | **3 / 3 cases** | **Passed** | **Seven-test related group passed independently** | **`aa71286`** | **New actual disposal-refusal evidence; internal shape, no general reachability claim** |
 | **Recursive/chronology/preparation four-leaf batch** | **4 / 4 leaves** | **4 / 4** | **4 / 4; 64 reports** | **`aa71286`** | **Frozen → reviewed, registered and verified together** |
-
-| Resource foundation: fifteen changed modules and three leaves/probes | **18 / 18 sources** | **Passed** | **53 consumers + three modules; 444 reports** | **This checkpoint** | **Resource rule and full pointwise transports supplied** |
-| History composition: capture outputs and resume/handler/spent heads | **4 / 4 interfaces** | **Passed** | **Twenty chronology reports passed** | **This checkpoint** | **Equality failure → same-current structural decomposition** |
-| Computed normal cleanup completion: nine named reports | **9 / 9** | **Passed** | **Passed** | **This checkpoint** | **Running owner → restored saved result/scope, retired owner** |
-| SAME-start nested cycle: eighteen actual Core steps including start | **18 / 18 steps** | **Passed** | **Eight nested reports, seven simple probes and six guards** | **This checkpoint** | **Six-edge callback → seventeen-edge nested path through completion** |
-| Activation-map preparation: fourteen reports and twenty probes | **34 / 34 reports** | **Passed** | **Passed** | **This checkpoint** | **Computed requests and same endpoint agreement** |
-| Runtime metadata Rust QA: two computed-budget tests | **2 / 2 tests** | **Passed** | **Passed** | **This checkpoint** | **Exact/one-short diagnostics and observation prefix; bounded internal shape** |
-| **Resource/cycle/metadata coherent batch** | **3 / 3 components** | **3 / 3** | **64 affected modules; 80 additional reports** | **This checkpoint** | **Compiled once; 863 unaffected artifacts reused** |
+| Resource foundation: fifteen changed modules and three leaves/probes | **18 / 18 sources** | **Passed** | **53 consumers + three modules; 444 reports** | **`acb7724`** | **Resource rule and full pointwise transports supplied** |
+| History composition: capture outputs and resume/handler/spent heads | **4 / 4 interfaces** | **Passed** | **Twenty chronology reports passed** | **`acb7724`** | **Equality failure → same-current structural decomposition** |
+| Computed normal cleanup completion: nine named reports | **9 / 9** | **Passed** | **Passed** | **`acb7724`** | **Running owner → restored saved result/scope, retired owner** |
+| SAME-start nested cycle: eighteen actual Core steps including start | **18 / 18 steps** | **Passed** | **Eight nested reports, seven simple probes and six guards** | **`acb7724`** | **Six-edge callback → seventeen-edge nested path through completion** |
+| Activation-map preparation: fourteen reports and twenty probes | **34 / 34 reports** | **Passed** | **Passed** | **`acb7724`** | **Computed requests and same endpoint agreement** |
+| Runtime metadata Rust QA: two computed-budget tests | **2 / 2 tests** | **Passed** | **Passed** | **`acb7724`** | **Exact/one-short diagnostics and observation prefix; bounded internal shape** |
+| **Resource/cycle/metadata coherent batch** | **3 / 3 components** | **3 / 3** | **64 affected modules; 80 additional reports** | **`acb7724`** | **Compiled once; 863 unaffected artifacts reused** |
+| Current ticket bounds: twelve named operation families | **12 / 12 families** | **Passed** | **Seven producer reports + eleven probes/five interfaces** | **This checkpoint** | **External current TicketBound → produced from original start** |
+| First acquired map origin: two indexed transition consumers | **2 / 2 consumers** | **Passed** | **Nine producer reports + thirteen probes** | **This checkpoint** | **Supplied map agreement → derived empty and installed agreement** |
+| **Current-bound/map-origin two-component batch** | **2 / 2 components** | **2 / 2** | **Four fresh leaves; forty additional reports** | **This checkpoint** | **927 unchanged artifacts reused; 3.5-second compile** |
+| Finite resource opening and original cell API | Authoring | Pending | Cell adapter, Body.derive and resourceCheck locally green; registry/admission connection pending | Not integrated | New finite symbolic registry prerequisite identified |
+| Saved active-scope registration provenance | Required ABI identified | Pending producer | Existing direct re-entry restriction reused; general exclusion unproved | Assessment only | Registration-site lineage must survive to running receipt |
 
 The cleanup, site-lineage and past-frame rows are components of C3.1/C3.2;
 the paired-operand row serves C2.3/C4.1. They are not new package acceptance items.
@@ -1750,19 +1754,19 @@ preparation remain existing obligations. The fragment and inventory stay fixed.
 | --- | --- | --- | --- | --- | --- |
 | C1 | 5 / 5 | Integrated comparison and discrepancy inventory | Maintain findings | None | Complete |
 | C2 | 0 / 4 | 14/16 checker forms; both missing rich source constructors and full resource transports integrated | Finite handler/resource annotations; metadata and general initializer origins; admission | Original graph/private-family/storage/registry origins; finite symbolic specialization | 15–26 combined agent-hours before contingency; next producer checkpoint 2–4 active hours |
-| C3 | 0 / 5 | SAME-start nested cycle through completion and activation-map preparation integrated | All reachable current guards; changed-tail activation/projection/disposal; full ownership/simulation/preparation | C2 rich successor evidence; current TicketBound/scope and actual indexed map/ledger origins | 16–29 combined agent-hours before contingency; next guard checkpoint 2–4 active hours |
+| C3 | 0 / 5 | SAME-start nested completion, produced current TicketBound and first-acquisition map agreement integrated | All reachable saved-scope guards; projection/disposal; full ownership/simulation/preparation | C2 rich successor evidence; registration-site lineage/position transport and original Rust map/ledger origins | 16–29 combined agent-hours before contingency; next guard checkpoint 2–4 active hours |
 | C4 | 2 / 3 | Restoration/resume repairs and regressions retained | Discrepancy closure across the declared fragment | General C2/C3 coverage may expose further required repairs | 3–6 combined agent-hours before contingency |
 | C5 | 0 / 4 | Full 90-step admitted example independently verified | General theorem, coverage records, grouped verification and independent review | C2–C4 | 6–10 combined agent-hours before contingency |
 
 Checkpoints `2de8f55` and `aa71286` integrated three leaves/24 reports and
-four leaves/64 reports respectively. The current increment coalesces three
-reviewed components; related dependencies compile once. The original paired
+four leaves/64 reports respectively. Checkpoint `acb7724` coalesced three
+reviewed components; the current increment batches two additive consumers. The original paired
 Admission/static/storage successes remain upstream providers; 14/16 checker forms
 do not establish arbitrary initial admission. Current guards, changed-tail
 activation and projection/disposal remain open. Two user-owned unregistered
 handler prototypes remain excluded and unchanged.
 
-The current coherent increment retains the
+Checkpoint `acb7724` retained the
 [rich resource foundation](../design/direct-effects/one-shot/CoreCallableRichResourceFoundation.lean).
 It adds the existing lower resource rule to IndexedSource and hereditary
 authentication, preserving fresh world/receiver opening, original-world output
@@ -1791,8 +1795,10 @@ accepted. The [nested probe](../design/direct-effects/one-shot/GeneratedNestedHa
 full-prefix restoration, both handler returns, spent return and completion.
 Original typed receipts persist through capture, operand evaluation, resume and
 return. [Completion guards](../design/direct-effects/one-shot/GeneratedCompletionGuards.lean) preserve the
-spent barrier. General current guards/TicketBound, changed-tail activation,
-deeper maps, projection/disposal and whole reachable simulation remain open.
+spent barrier. At that checkpoint, the current TicketBound provider remained
+external; the following increment derives it for this generated chronology.
+Saved-scope activation, deeper maps, projection/disposal and whole reachable
+simulation remain open.
 
 [Metadata preparation](../design/direct-effects/one-shot/CoreRuntimeMetadataPreparation.lean) retains
 finite map presence/distinct activation entries and rejects rows/nonactivation
@@ -1813,13 +1819,47 @@ prove validated-program reachability. The initially selected write operation
 was a fixture error; retained QA uses the original read. Runtime behavior and
 normative semantics are unchanged.
 
-Seventeen existing modules change; nine new modules/probes are registered.
-The 64 affected modules compile once in 205.8 seconds, with 6.3 seconds
-preparation/hash checking. Immutable hardlinks reuse 863 unaffected artifacts
-and logs. Every selected direct-import hash agrees in one cache. The current
-audited assembly contains 927 modules and 12,170 ordered standard-only reports,
-80 more than `aa71286`. This is incremental verification. M0–M4, the fragment
-and whole-package acceptance counts are unchanged.
+Seventeen existing modules changed; nine new modules/probes were registered.
+The 64 affected modules compiled once in 205.8 seconds, with 6.3 seconds
+preparation/hash checking. Immutable hardlinks reused 863 unaffected artifacts
+and logs. Every selected direct-import hash agreed in one cache. That checkpoint
+contained 927 modules and 12,170 ordered standard-only reports, 80 more than
+`aa71286`. M0–M4, the fragment and whole-package counts were unchanged.
+
+The current increment retains the
+[current ticket-bound producer](../design/direct-effects/one-shot/CoreCallableGeneratedTicketBound.lean).
+It derives actual capture-event coupling for all twelve named operations,
+transports ticket-name counts through their finite target traces, and derives
+the current full-point and lexical-suffix bounds by induction over the same
+generated chronology. Multi-step bind return uses the existing transition
+name bound. Completion consumes the produced current bound; only the original
+pre-start suffix bound remains an input. [Ticket probes](../design/direct-effects/one-shot/GeneratedTicketBoundProbes.lean)
+reuse the eighteen-step nested cycle, including its nonempty captured/spent
+name, and reject an unissued spent name. Seven producer and eleven probe reports
+pass. Original admission and saved-scope activation remain separate obligations.
+
+[First-acquisition map origin](../design/direct-effects/one-shot/CoreRuntimeIndexedMetadataOrigin.lean)
+derives empty-map agreement from the existing ProducedBindings output indexed
+by the same full rich/storage/lexical environment. The original empty finite
+map retains its supplied absent or present-empty flag. The actual acquisition
+computes the singleton map and its agreement with the installed environment;
+a current request consumes that exact key/map/environment without a supplied
+erasure-agreement premise. [Origin probes](../design/direct-effects/one-shot/CoreRuntimeIndexedMetadataOriginProbes.lean)
+check exact/one-short acquisition and request budgets, original presence,
+finite keys and diagnostics. Nine producer and thirteen probe reports pass.
+These are separate conditional current steps: no continuous acquisition-to-request
+execution, original Rust presence/ledger/physical-length origin, prior mixed
+map coverage or general graph admission is proved. The translated resource's
+original handle-binding wrapper and full Source/Auth/storage association remain
+C2 dependencies; this leaf contains no arbitrary Origin passthrough.
+
+Both additive components pass author-disjoint semantic and quality reviews.
+Their four leaves compile together in 3.5 seconds, with 8.1 seconds of
+preparation/hash checks; all 927 prior artifacts and logs are reused unchanged.
+The current audited assembly contains 931 modules and 12,210 ordered standard-only
+reports, forty more than `acb7724`, with exact selected direct-import hashes.
+No Rust source changed, so no Rust test group was rerun. M0–M4, the declared
+fragment and whole-package acceptance counts remain unchanged.
 
 The planning range is 40–71 combined agent-hours of identified work, or 50–90
 with approximately 25% unexpected proof-failure/rework allowance. Expected
@@ -1833,10 +1873,11 @@ obligations, so component delivery rates are not extrapolated directly.
 These whole-goal estimates replace prior estimates covering only bounded gates.
 
 After this gate, C2 constructs finite original-template handler/resource
-annotations and their source/authentication outputs. C3 constructs current
-activation/TicketBound/guard providers and connects projection/disposal under
-the same generated history. Indexed runtime map/ledger origin and remaining
-metadata consumers are C3.4 dependencies. Next checkpoints remain bounded at
+annotations, exact cell-schema specialization and source/authentication outputs.
+C3 retains registration-site lineage and derives capture/resume position transport
+for saved-scope activation, then connects projection/disposal under the same
+generated history. Original Rust map/ledger origin and remaining metadata
+consumers are C3.4 dependencies. Next checkpoints remain bounded at
 2–4 active hours with disjoint outputs. Reassess at the original 4–6 resumed-hour
 gate; this prerequisite progress does not itself narrow the whole-goal range.
 Batch related edits/reverse consumers without narrowing acceptance.

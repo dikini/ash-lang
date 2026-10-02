@@ -932,3 +932,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/GeneratedCleanupCompletionProbes
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedNestedHandlerProbes.olean" GeneratedNestedHandlerProbes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/GeneratedCompletionGuards.olean" GeneratedCompletionGuards.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreRuntimeMetadataPreparationExamples.olean" CoreRuntimeMetadataPreparationExamples.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableGeneratedTicketBound.olean" CoreCallableGeneratedTicketBound.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreRuntimeIndexedMetadataOrigin.olean" CoreRuntimeIndexedMetadataOrigin.lean
+lean -DwarningAsError=true -o "$proof_build_dir/GeneratedTicketBoundProbes.olean" GeneratedTicketBoundProbes.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreRuntimeIndexedMetadataOriginProbes.olean" CoreRuntimeIndexedMetadataOriginProbes.lean

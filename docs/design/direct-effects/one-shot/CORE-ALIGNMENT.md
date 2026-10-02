@@ -2007,7 +2007,7 @@ and 12,090 reports with all 914 preceding associations unchanged. Its leaf batch
 compiled in 10.0 seconds. Seven independent Rust tests checked the consumed
 discard disposal boundary, without general reachability.
 
-The current coherent increment retains the
+Checkpoint `acb7724` retained the
 [rich resource foundation](CoreCallableRichResourceFoundation.lean).
 It adds the existing lower resource rule to IndexedSource and hereditary
 authentication, preserving fresh world/receiver opening, original-world output
@@ -2036,8 +2036,10 @@ accepted. The [nested probe](GeneratedNestedHandlerProbes.lean) has
 full-prefix restoration, both handler returns, spent return and completion.
 Original typed receipts persist through capture, operand evaluation, resume and
 return. [Completion guards](GeneratedCompletionGuards.lean) preserve the
-spent barrier. General current guards/TicketBound, changed-tail activation,
-deeper maps, projection/disposal and whole reachable simulation remain open.
+spent barrier. At that checkpoint, the current TicketBound provider remained
+external; the following increment derives it for this generated chronology.
+Saved-scope activation, deeper maps, projection/disposal and whole reachable
+simulation remain open.
 
 [Metadata preparation](CoreRuntimeMetadataPreparation.lean) retains
 finite map presence/distinct activation entries and rejects rows/nonactivation
@@ -2058,13 +2060,47 @@ prove validated-program reachability. The initially selected write operation
 was a fixture error; retained QA uses the original read. Runtime behavior and
 normative semantics are unchanged.
 
-Seventeen existing modules change; nine new modules/probes are registered.
-The 64 affected modules compile once in 205.8 seconds, with 6.3 seconds
-preparation/hash checking. Immutable hardlinks reuse 863 unaffected artifacts
-and logs. Every selected direct-import hash agrees in one cache. The current
-audited assembly contains 927 modules and 12,170 ordered standard-only reports,
-80 more than `aa71286`. This is incremental verification. M0–M4, the fragment
-and whole-package acceptance counts are unchanged.
+Seventeen existing modules changed; nine new modules/probes were registered.
+The 64 affected modules compiled once in 205.8 seconds, with 6.3 seconds
+preparation/hash checking. Immutable hardlinks reused 863 unaffected artifacts
+and logs. Every selected direct-import hash agreed in one cache. That checkpoint
+contained 927 modules and 12,170 ordered standard-only reports, 80 more than
+`aa71286`. M0–M4, the fragment and whole-package counts were unchanged.
+
+The current increment retains the
+[current ticket-bound producer](CoreCallableGeneratedTicketBound.lean).
+It derives actual capture-event coupling for all twelve named operations,
+transports ticket-name counts through their finite target traces, and derives
+the current full-point and lexical-suffix bounds by induction over the same
+generated chronology. Multi-step bind return uses the existing transition
+name bound. Completion consumes the produced current bound; only the original
+pre-start suffix bound remains an input. [Ticket probes](GeneratedTicketBoundProbes.lean)
+reuse the eighteen-step nested cycle, including its nonempty captured/spent
+name, and reject an unissued spent name. Seven producer and eleven probe reports
+pass. Original admission and saved-scope activation remain separate obligations.
+
+[First-acquisition map origin](CoreRuntimeIndexedMetadataOrigin.lean)
+derives empty-map agreement from the existing ProducedBindings output indexed
+by the same full rich/storage/lexical environment. The original empty finite
+map retains its supplied absent or present-empty flag. The actual acquisition
+computes the singleton map and its agreement with the installed environment;
+a current request consumes that exact key/map/environment without a supplied
+erasure-agreement premise. [Origin probes](CoreRuntimeIndexedMetadataOriginProbes.lean)
+check exact/one-short acquisition and request budgets, original presence,
+finite keys and diagnostics. Nine producer and thirteen probe reports pass.
+These are separate conditional current steps: no continuous acquisition-to-request
+execution, original Rust presence/ledger/physical-length origin, prior mixed
+map coverage or general graph admission is proved. The translated resource's
+original handle-binding wrapper and full Source/Auth/storage association remain
+C2 dependencies; this leaf contains no arbitrary Origin passthrough.
+
+Both additive components pass author-disjoint semantic and quality reviews.
+Their four leaves compile together in 3.5 seconds, with 8.1 seconds of
+preparation/hash checks; all 927 prior artifacts and logs are reused unchanged.
+The current audited assembly contains 931 modules and 12,210 ordered standard-only
+reports, forty more than `acb7724`, with exact selected direct-import hashes.
+No Rust source changed, so no Rust test group was rerun. M0–M4, the declared
+fragment and whole-package acceptance counts remain unchanged.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
