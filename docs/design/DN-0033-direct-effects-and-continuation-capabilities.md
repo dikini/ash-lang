@@ -1266,7 +1266,7 @@ These outputs are declaration prerequisites, not a complete target handler
 program or future-receiver authentication. The receiver probes do not establish
 a validated Core or Rust defect.
 
-The current coherent assembly has 1,018 modules and 13,172 ordered standard-only
+The `1771711` coherent assembly has 1,018 modules and 13,172 ordered standard-only
 reports, 48 more than `9977fca`. All six additive sources pass independent replay
 with exact author source/artifact/log associations. The combined review resolves
 614 dependencies and verifies all 1,012 parent associations and eight compiler
@@ -1275,12 +1275,81 @@ libraries before and after. One final gate compiles the six additions in
 6.0 seconds. The 1,012 unaffected artifact/log pairs are reused as real hard links.
 No old proof source or Rust source changes, and no Rust verification is repeated.
 
-The next dependencies are the original higher-order application current providers
-through e20/e21 and e25/e26, actual delivered clause-operand support and contextual
-receiver provenance for the original recursive handler branch, and execution
-after the restored bind through outer-owner completion. General reachable typed
-preservation, initial admission and final observation/accounting composition
-remain open. Full C2–C5 remain open.
+The next integrated increment connects the original first-beta current provider
+and actual delivered clause support in one batch. These remain informative
+DN-0033 experiments within existing C2/C3 obligations. The whole-fragment
+inventory and remaining-work estimates are unchanged.
+
+The [higher current producer](direct-effects/one-shot/CoreCallableOriginalHigherCurrent.lean)
+executes the original installed program, higher installation and current checks.
+It retains the full reader input contract and the original higher constructor
+Family, Origin and Auth. Reader12, handle9 and outer7 substitutions produce
+all-point private Plan/full Rows transport. The original checked resource body's
+three silent value prefixes yield the exact application/branch certificate and
+accounting, and the actual prefix reaches p15 in 15 Core edges. The
+[first-beta producer](direct-effects/one-shot/CoreCallableOriginalBetaCurrent.lean)
+focuses original bind5 with its saved branch FrameSource, cell Pending and
+accounting. Four ranked administrative transitions retain the same e16/e20
+calculus machine. Selection constructs the actual reader support `[0,0]` and
+chooses the already-produced full higher Family directly. Receiver refinement
+then produces the private successor Source/Auth, exact Plan/Rows, checked
+certificate, root transport and accounting before joining the actual Core beta.
+The captured E12 callee and saved E13 caller remain distinct. No Family identity
+is inferred from code, public ports, output or Source proof equality. The
+[connected probes](direct-effects/one-shot/OriginalBetaCurrentProviderProbes.lean)
+give one no-input original initial-to-e21 witness with 21 actual Core edges and
+the rich current successor. They retain the full-domain erasure negative,
+chosen Family/private successor equalities and positive administrative matches.
+Independent replay passes 23 standard-only reports, twelve interfaces and two
+expected missing interfaces without artifacts, checking 606 selected parent
+dependencies. Original second-beta e25/e26 and general rich preservation remain
+open; a complete operational trace does not establish them.
+
+The [operand-support checker](direct-effects/one-shot/CoreCallableDeliveredOperandSupport.lean)
+consumes the same current ValueRel and executes the exact original OperationRef,
+full rich annotation and storage recipe checks. Closedness, rich Source/Auth,
+full stored contract and actual formal support are outputs. Actual scalar Code
+has empty support while conservative stored scalar support remains intact.
+Every other value retains the whole stored capture/result support. The
+[clause receiving checker](direct-effects/one-shot/CoreCallableClauseActualSupport.lean)
+indexes the same original SourceDeclarations/table/families/private Plans/full
+Rows by finite formal supports. Both modes and every compatible logical owner
+retain the original use, capability, stored/body-bound and availability checks.
+Whole-receiver specialization is exactly equivalent to the old judgment. The
+public route also executes complete target registry coverage and selected mode
+availability. The [delivery probes](direct-effects/one-shot/ClauseActualSupportProbes.lean)
+retain the original four-node graph and actual literal42-to-clause binding.
+That graph uses handler7/binder4 and resumes literal42. The binder10 formal-resume
+interface at receiver `[73]` is a separate conditional witness. It is not a
+reachable whole-program state, validated Core defect or Rust trace. Positive
+ordinary/protected scalar probes, conservative storage, unused literal bounds,
+denied/unavailable modes, shadowing and mismatched Code are checked. Omitting an
+actual captured identity cannot satisfy the same formal bound. No positive
+aggregate operation handoff is claimed: the original operation domain is integer,
+and an executed tuple alone supplies no full selected-operation/rich-source
+association. The inherited Unit/Product qualification remains. Independent
+replay passes 32 reports, sixteen interfaces and two expected missing interfaces
+without artifacts, checking 540 selected parent dependencies. This new current
+judgment does not imply old Hereditary.handler or initial admission. Original
+constructor coverage remains 14/16, with handler/resource producers outstanding.
+
+The current coherent assembly has 1,024 modules and 13,227 ordered standard-only
+reports, 55 more than `1771711`. Independent review reproduces all six exact
+source/artifact/log associations, resolves 617 dependencies and checks all 1,018
+parent associations and eight compiler libraries before and after. One combined
+gate compiles the six additions in 74.0 seconds; preparation and association
+checks take 5.9 seconds. All 1,018 unaffected artifact/log pairs are real
+hard-link reuse. Successful compiles are retained after packaging-only schema,
+platform-import and whitespace exit-code corrections. No old proof source or
+Rust source changes, and Rust checks are not repeated for this proof-only batch.
+
+Next are the original second-beta/read/branch/release current providers, static
+full-domain clause support and its exact reauthentication/substitution consumer,
+and completion after the restored bind through H/K returns and cleanup. The
+H capture association through both actual K restorations, heap growth and bind
+removal is locally proved; its final completion checkpoint is not integrated
+here. General typed initial admission, reachable runtime preservation,
+observations/accounting composition and full C2–C5 remain open.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean
