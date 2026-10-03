@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-03 resource/handler checkpoint
+### Current deliverable board — 2026-10-03 index/freshness checkpoint
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,9 +72,13 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Checked resource tree provenance | **4 modified + 1 new / 5 sources** | **Passed** | **Eight added reports; SAME computed output; all fresh body families** | **This checkpoint** | **Successful resource output now carries a tree; general Annotation.resource stays open** |
-| Conditional generic handler entry | **2 / 2 new leaves** | **Passed** | **Four reports; eleven interfaces; actual Core handler next/full prior history** | **This checkpoint** | **Body Site/frame computed from current source; actual counter freshness stays explicit** |
-| **Resource/handler integration batch** | **2 / 2 components; 7 / 7 Lean deltas** | **Passed** | **Twelve added reports; 83 affected compiled once; 960 paired reuses** | **This checkpoint** | **Coherent latest-parent gate; whole-fragment counts/estimates unchanged** |
+| Upstream resource index factoring | **4 modified + 2 new / 6 sources** | **Passed** | **73 moved; 64 retained; explicit bridge import; 79 public ports; four new reports** | **This checkpoint; unsigned integration pending** | **Full indices retained; general registry backend/Opening split open** |
+| Actual handler history and freshness | **3 / 3 new leaves** | **Passed** | **28 reports; SAME current counter from two actual-past facts** | **This checkpoint; unsigned integration pending** | **Existing handler consumer reused; Current supplies no rich registry join** |
+| **Index/freshness integration batch** | **2 / 2 components; 9 / 9 Lean deltas** | **Passed** | **32 added reports; 66 affected compiled once; 982 paired reuses** | **This checkpoint; unsigned integration pending** | **Latest parent d086e5a; whole counts/estimates unchanged** |
+| Next resource carrier and handler Event | **5 + 2 SOURCE ready; light pending** | **Scoped source reviews passed** | **Current-parent light/canonical pending** | **Pending** | **No admission or full M4 completion claim** |
+| Checked resource tree provenance | **4 modified + 1 new / 5 sources** | **Passed** | **Eight added reports; SAME computed output; all fresh body families** | **`d086e5a`** | **Successful resource output now carries a tree; general Annotation.resource stays open** |
+| Conditional generic handler entry | **2 / 2 new leaves** | **Passed** | **Four reports; eleven interfaces; actual Core handler next/full prior history** | **`d086e5a`** | **Body Site/frame computed from current source; actual counter freshness stays explicit** |
+| **Resource/handler integration batch** | **2 / 2 components; 7 / 7 Lean deltas** | **Passed** | **Twelve added reports; 83 affected compiled once; 960 paired reuses** | **`d086e5a`** | **Coherent latest-parent gate; whole-fragment counts/estimates unchanged** |
 | Domain-aware handler runtime support | **18 / 18 Lean deltas** | **Passed** | **Twenty-one added reports; both modes/all owners/capture/restoration** | **`453ccc6`** | **Literal full plans/rows retained; general handler admission open** |
 | General Boolean branch decision | **3 / 3 new leaves** | **Passed** | **Eighteen reports; twenty-three interfaces; either arbitrary typed arm/actual Event** | **`453ccc6`** | **Current decision linked; general branch entry/reachability open** |
 | **Handler/branch integration batch** | **2 / 2 components; 21 / 21 Lean deltas** | **Passed** | **Thirty-nine added reports; 171 affected compiled once; 869 paired reuses** | **`453ccc6`** | **Separate old/current author parents qualified; whole-fragment counts unchanged** |
@@ -3300,3 +3304,55 @@ parallelism; these component checks do not close whole-fragment acceptance.
 
 Entry points: [resource output tree](<../design/direct-effects/one-shot/CoreCallableCompositionalResourceOpening.lean>), [resource tree interfaces](<../design/direct-effects/one-shot/CoreCallableResourceTreeInterfaces.lean>), [handler entry](<../design/direct-effects/one-shot/CoreCallableRichHandlerEntry.lean>)
 and [actual handler step](<../design/direct-effects/one-shot/CoreCallableRichHandlerCore.lean>).
+
+### Resource index factoring and actual handler freshness — 2026-10-03
+
+This DN-0033 increment changes proof organization and connects actual past
+handler installations to their current counter. It changes no Ash semantics or
+supported-fragment boundary.
+
+The registry bridge now imports StaticProducer explicitly after the upstream
+index cut removed CellRegistry's transitive producer visibility. Its existing
+proof bodies and guards remain unchanged. The first gate's failed bridge command
+is preserved; six earlier successful commands are recovered only by exact
+execution keys, hashes, report names and selected imports.
+
+| Component | Result | Remaining boundary |
+| --- | --- | --- |
+| Resource index Data | 73 declarations moved once, preserving original namespaces and full opaque Contracts/private Plans/Rows; upstream Data has no producer ancestry | General registry backend and resource Opening split |
+| Retained resource consumers | 64 retained declarations/proofs and checker guards keep their original bodies; 79 public checks and four added reports retain full indices | Generic resource annotation production and initial admission |
+| Handler past | Every actual Core next alternative supplies counter/entered-history deltas; all thirteen Generated operation forms retain the SAME predecessor/body/suffix | Arbitrary Generated alone supplies no original-root history |
+| Handler freshness | Two actual-past facts derive absence of the SAME current counter from Site.installations; the unchanged full handler consumer computes its successor | Current remains machine alignment; rich source/registry/store correspondence is separate |
+
+InstallationsPast carries original-root Core Steps to the current endpoint and
+membership of the current installation list in actual historical handlerEntered
+keys. Program and InitialInput index this companion; neither is a field that
+joins the current rich source to a runtime registry. The initial seed uses the
+existing accepted Program and SAME executed InitialInput. The handler wrapper
+derives freshness internally, retains the current full source/authentication,
+whole/domain clauses, owner modes and private Families/Plans/Rows, and extends
+the actual past through its computed handler edge. The heap, owners and other
+allocation counters retain the existing consumer's behavior; nextHandler
+advances and handler-entered observations append. Mathematical Nat freshness
+makes no Rust capacity or allocation-success claim.
+
+One ROOT serial affected replay also supplies the integration gate: 1,048 modules, 13,471 ordered standard-only reports, 66 fresh modules with 725 reports and 982 actual paired artifact/log hardlink reuses. The net addition is 32 reports. All 655 selected recursive dependency commands retain actual ordered outputs, including duplicate Init entries and external Std. The 79 index and 33 freshness public checks pass; two absent-module and three missing-symbol diagnostics from three honest original-parent RED commands produce no negative artifacts; full parent and eight compiler/library associations remain exact before/after. Compiler time is 809.541 seconds; preparation is 46.298 seconds. Per-source receipts retain wall time and peak RSS. The gate uses jobs=1 and explicit -j1/-M4096 options. It asserts exact sources/ordered axioms and qualified current parent reuse, with no SOURCE/light author canonical artifact/log equality claim.
+
+Author SOURCE checkpoints have zero full canonical builds. Index owned light
+checks use the current 1,043-module parent; freshness light checks use the
+1,040-module parent plus the separately frozen handler-entry pair. Those scopes
+remain qualified. ROOT/peer source reviews are author-disjoint; ROOT separately
+read the replay adapter and receipt helper in full. Adapter/tool authorship does
+not make packaging review alone a wholly source-author-disjoint review.
+
+Original constructor coverage stays 14/16. Whole acceptance stays C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. Estimates remain 40–71 base agent-hours,
+50–90 with rework and 25–45 elapsed working hours under parallelism. General
+registry production and the resource Opening split remain open, together with
+rich initial admission, reachable preservation, full M4 Valid/availability,
+observations/preparation and Rust correspondence. The next original resource
+carrier5 and allocating handler-Event2 sources are SOURCE ready; current-parent light checks and
+canonical compilation are pending. These serve existing C2/C3/C5 obligations.
+
+Entry points: [resource index Data](<../design/direct-effects/one-shot/CoreCallableResourceIndexData.lean>), [resource index interfaces](<../design/direct-effects/one-shot/CoreCallableResourceIndexInterfaces.lean>), [actual handler history](<../design/direct-effects/one-shot/CoreHandlerHistory.lean>) and
+[current handler freshness](<../design/direct-effects/one-shot/CoreCallableRichHandlerFreshness.lean>).

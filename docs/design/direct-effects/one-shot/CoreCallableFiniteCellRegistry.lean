@@ -1,4 +1,4 @@
-import CoreCallableStaticProducer
+import CoreCallableStaticFiniteData
 import CoreExportedOperationMetadata
 
 /-! Finite original declaration schemas. This adapter does not add a fallback

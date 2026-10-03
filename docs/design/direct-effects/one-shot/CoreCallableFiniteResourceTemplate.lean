@@ -1,3 +1,4 @@
+import CoreCallableResourceIndexData
 import CoreCallableFiniteCellRegistry
 import CoreCallableStorageRecipes
 
@@ -18,14 +19,6 @@ open CoreCallableFiniteCellRegistry (CellApi)
 local instance : SourcePlannedChecks.DeclarationPolicy :=
   SourceScheduledCleanupInterfaces.Lexical.Recursive.declarationPolicy
 
-def nameValue (identity : Nat) : Instantiation.ResourceName → Nat
-  | .activation value => value
-  | .bound _ => identity
-
-def nameCheck (binder : Nat) (world : List Nat) : Instantiation.ResourceName → Bool
-  | .activation value => decide (value ∈ world)
-  | .bound name => decide (name = binder)
-
 theorem name_instantiates (valid : nameCheck binder world name = true) :
     name.instantiate (Instantiation.Environment.empty.bind binder identity) = .activation (nameValue identity name) := by
   cases name with
@@ -40,37 +33,6 @@ theorem name_issued (valid : nameCheck binder world name = true) : nameValue ide
   | activation value => exact List.mem_append_left _ (of_decide_eq_true valid)
   | bound name => exact List.mem_append_right _ (by simp [nameValue])
 
-/-- Slots select a literal original list position, not a name-only join. -/
-inductive ContractPattern where
-  | unit | boolean | integer
-  | reference : Instantiation.ResourceName → ContractPattern
-  | pair : ContractPattern → ContractPattern → ContractPattern
-  | slot : Nat → ContractPattern
-  deriving DecidableEq, Repr
-
-def slotContract (original : Bindings) (index : Nat) : Contract :=
-  ((original[index]?).map Prod.snd).getD .unit
-
-def ContractPattern.value (original : Bindings) (identity : Nat) : ContractPattern → Contract
-  | .unit => .unit
-  | .boolean => .boolean
-  | .integer => .integer
-  | .reference name => .reference (nameValue identity name)
-  | .pair left right => .pair (left.value original identity) (right.value original identity)
-  | .slot index => slotContract original index
-
-def ContractPattern.check (original : Bindings) (binder : Nat) (world : List Nat) : ContractPattern → Bool
-  | .unit | .boolean | .integer => true
-  | .reference name => nameCheck binder world name
-  | .pair left right => left.check original binder world && right.check original binder world
-  | .slot index => decide (index < original.length) &&
-      CoreCallableGraphAnnotationChecks.subsetB (slotContract original index).port.resources world
-
-def ContractPattern.closed : ContractPattern → Bool
-  | .reference (.bound _) => false
-  | .pair left right => left.closed && right.closed
-  | _ => true
-
 theorem ContractPattern.constant {pattern : ContractPattern} (closed : pattern.closed = true) :
     pattern.value original identity = pattern.value original other := by
   induction pattern with
@@ -83,13 +45,6 @@ theorem ContractPattern.constant {pattern : ContractPattern} (closed : pattern.c
 theorem slot_exact (located : original[index]? = some (name,contract)) :
     (ContractPattern.slot index).value original identity = contract := by simp [ContractPattern.value,slotContract,located]
 
-abbrev Context := List (Nat × ContractPattern)
-def bindings (original : Bindings) (identity : Nat) : Context → Bindings
-  | [] => []
-  | (name,pattern) :: rest => (name,pattern.value original identity) :: bindings original identity rest
-
-def contextClosed (context : Context) : Bool := context.all (fun entry => entry.2.closed)
-
 theorem bindings_constant (closed : contextClosed context = true) :
     bindings original identity context = bindings original other context := by
   induction context with
@@ -98,15 +53,6 @@ theorem bindings_constant (closed : contextClosed context = true) :
     obtain ⟨a,b⟩ : entry.2.closed = true ∧ contextClosed rest = true := by simpa [contextClosed] using closed
     simp only [bindings,ih b]
     rw [ContractPattern.constant (original := original) (identity := identity) (other := other) a]
-
-/-- Exact original ordinary names and positional slots, in original shadow
-order. Only recursive Body.bind extends this list during the check. -/
-def aligned (original : Bindings) (context : Context) (index : Nat := 0) : Bool :=
-  match original,context with
-  | [],[] => true
-  | (name,_) :: rest,(selected,pattern) :: tail =>
-      decide (selected = name) && decide (pattern = .slot index) && aligned rest tail (index+1)
-  | _,_ => false
 
  theorem aligned_realization (whole remaining : Bindings) (context : Context) (index identity : Nat)
     (valid : aligned remaining context index = true)
@@ -135,12 +81,6 @@ def aligned (original : Bindings) (context : Context) (index : Nat := 0) : Bool 
  theorem aligned_original (valid : aligned original context = true) : bindings original identity context = original :=
   aligned_realization original original context 0 identity valid (fun _ => by simp)
 
-/-- Finite exact-position view of all original ordinary bindings. -/
-def contextTemplate (original : Bindings) (index : Nat := 0) : Context :=
-  match original with
-  | [] => []
-  | (name,_) :: rest => (name,.slot index) :: contextTemplate rest (index+1)
-
  theorem contextTemplate_aligned (original : Bindings) (index : Nat) : aligned original (contextTemplate original index) index = true := by
   induction original generalizing index with
   | nil => rfl
@@ -151,79 +91,10 @@ def contextTemplate (original : Bindings) (index : Nat := 0) : Context :=
   | nil => rfl
   | cons entry rest ih => simpa [contextTemplate,contextClosed,ContractPattern.closed] using ih (index+1)
 
-inductive LocalRef : Context → Nat → ContractPattern → Type where
-  | head : LocalRef ((name,pattern) :: rest) name pattern
-  | tail (next : LocalRef rest name pattern) : LocalRef ((bound,value) :: rest) name pattern
-
-def LocalRef.check : LocalRef context name pattern → Bool
-  | .head => true
-  | .tail (bound := bound) next => decide (name ≠ bound) && next.check
-
-def LocalRef.realize (reference : LocalRef context name pattern) :
-    BindingRef (bindings original identity context) name (pattern.value original identity) :=
-  match reference with
-  | .head => .head
-  | .tail next => .tail next.realize
-
 theorem LocalRef.realize_check (original : Bindings) (identity : Nat) (reference : LocalRef context name pattern) : (reference.realize (original := original) (identity := identity)).check = reference.check := by
   induction reference with
   | head => rfl
   | tail next ih => simp [LocalRef.realize,BindingRef.check,LocalRef.check,ih]
-
-/-- A resource handle is an ordinary bind; this tree records its exact shadow
-order. The bound resource name lives in the independent resource namespace. -/
-inductive Body : Context → Code → ContractPattern → Type where
-  | unit : Body context .unit .unit
-  | boolean (value : Bool) : Body context (.boolean value) .boolean
-  | integer (value : Int) : Body context (.integer value) .integer
-  | reference (name : Instantiation.ResourceName) : Body context (.resourceRef name) (.reference name)
-  | variable (reference : LocalRef context name pattern) : Body context (.variable name) pattern
-  | pair (left : Body context first a) (right : Body context second b) : Body context (.pair first second) (.pair a b)
-  | bind (initial : Body context first input) (body : Body ((parameter,input) :: context) second output) :
-      Body context (.bind parameter first second) output
-  | read (operand : Body context code (.reference name)) : Body context (.perform (.cell name) 0 code) .integer
-  | write (operand : Body context code (.pair (.reference name) .integer)) : Body context (.perform (.cell name) 1 code) .unit
-
-/-- The allowed-effect check is finite: bound names denote this fresh cell;
-already closed cell names must be present in the original residual allowance. -/
-def allowedName (binder : Nat) (residual : List Instance) : Instantiation.ResourceName → Bool
-  | .bound name => decide (name = binder)
-  | .activation value => decide (.cell value ∈ residual)
-
-def Body.check (original : Bindings) (binder : Nat) (world : List Nat) (residual : List Instance) :
-    Body context code pattern → Bool
-  | .unit | .boolean _ | .integer _ => true
-  | .reference name => nameCheck binder world name
-  | .variable ref => ref.check && pattern.check original binder world
-  | .pair left right | .bind left right => left.check original binder world residual && right.check original binder world residual
-  | .read (name := name) operand | .write (name := name) operand =>
-      operand.check original binder world residual && nameCheck binder world name && allowedName binder residual name
-
-def Body.dependencies (body : Body context code pattern) (identity : Nat) : Dependencies :=
-  match body with
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => .pure
-  | .pair left right | .bind left right => .sequence (left.dependencies identity) (right.dependencies identity)
-  | .read (name := name) operand => .sequence (operand.dependencies identity) (.request (.cell (nameValue identity name)) 0)
-  | .write (name := name) operand => .sequence (operand.dependencies identity) (.request (.cell (nameValue identity name)) 1)
-
-def Body.plan (body : Body context code pattern) (identity : Nat) : Plan (body.dependencies identity) :=
-  match body with
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => .pure
-  | .pair left right | .bind left right => .sequence (left.plan identity) (right.plan identity)
-  | .read operand | .write operand => .sequence (operand.plan identity) .request
-
-def Body.rows (body : Body context code pattern) (identity : Nat) : Rows (signature (body.plan identity)) :=
-  match body with
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => Rows.pure
-  | .pair left right | .bind left right => sequenceRows (left.rows identity) (right.rows identity)
-  | .read operand | .write operand => sequenceRows (operand.rows identity) Rows.request
-
-def Body.requirements (body : Body context code pattern) (identity : Nat) : Requirements [] :=
-  match body with
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => .request [] []
-  | .pair left right | .bind left right => .sequence (left.requirements identity) (right.requirements identity)
-  | .read (name := name) operand => .emitAfter (operand.requirements identity) [] [⟨.cell (nameValue identity name),0,false⟩]
-  | .write (name := name) operand => .emitAfter (operand.requirements identity) [] [⟨.cell (nameValue identity name),1,false⟩]
 
  theorem ContractPattern.formed {pattern : ContractPattern}
     (valid : pattern.check original binder world = true) :
@@ -354,18 +225,6 @@ structure Derived (api : CellApi) (entries : CoreCallableStaticProducer.Operatio
         by simpa [ContractPattern.check] using valid
       exact CoreCallableGraphAnnotationChecks.subsetB_sound ports
 
-/-- Residual requirements are computed from the SAME literal name tags. -/
-def outsideName (operation : Nat) : Instantiation.ResourceName → Footprint
-  | .bound _ => []
-  | .activation value => [⟨.cell value,operation,false⟩]
-
-def Body.outsideRequirements (body : Body context code pattern) : Requirements [] :=
-  match body with
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => .request [] []
-  | .pair left right | .bind left right => .sequence left.outsideRequirements right.outsideRequirements
-  | .read (name := name) operand => .emitAfter operand.outsideRequirements [] (outsideName 0 name)
-  | .write (name := name) operand => .emitAfter operand.outsideRequirements [] (outsideName 1 name)
-
  theorem outsideName_exact (valid : nameCheck binder world name = true) (fresh : identity ∉ world) :
     CallableProtection.outsideCell identity [⟨.cell (nameValue identity name),operation,false⟩] = outsideName operation name := by
   cases name with
@@ -465,12 +324,6 @@ structure Opening (api : CellApi) (entries : CoreCallableStaticProducer.Operatio
   intro identity fresh
   simpa only [src,env identity,output identity] using
     (derived identity).tree.authenticate_world (List.Subset.refl _) (opening_known known) (opening_bounds bounds)
-
-def Body.resourcePlan (body : Body context code pattern) :
-    Plan (.sequence .pure (.resource (fun identity => body.dependencies identity))) :=
-  .sequence .pure (.resource (fun identity => body.plan identity))
-def Body.resourceRows (body : Body context code pattern) : Rows (signature body.resourcePlan) :=
-  sequenceRows Rows.pure (Rows.resource (fun identity => body.rows identity))
 
 /-- Resource check remains a separate additive entry point; it does not claim
 the existing StaticProducer grammar has gained its resource branch. -/

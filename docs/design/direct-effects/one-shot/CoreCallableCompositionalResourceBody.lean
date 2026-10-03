@@ -1,3 +1,4 @@
+import CoreCallableResourceIndexData
 import CoreCallableFiniteResourceTemplate
 import CoreCallableFiniteRegistryBridge
 namespace Ash.OneShot.CoreCallableCompositionalResourceBody
@@ -13,74 +14,6 @@ open SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows
 local instance : SourcePlannedChecks.DeclarationPolicy :=
   SourceScheduledCleanupInterfaces.Lexical.Recursive.declarationPolicy
 
-/-- Finite symbolic cell effects and unchanged original user effects. -/
-inductive EffectName where
-  | cell : Instantiation.ResourceName → EffectName
-  | closed : Instance → EffectName
-  deriving DecidableEq
-
-def EffectName.value (identity : Nat) : EffectName → Instance
-  | .cell name => .cell (CoreCallableFiniteResourceTemplate.nameValue identity name)
-  | .closed effect => effect
-
-def EffectName.check (binder : Nat) (world : List Nat) : EffectName → Bool
-  | .cell name => CoreCallableFiniteResourceTemplate.nameCheck binder world name
-  | .closed effect => CoreCallableGraphAnnotationChecks.subsetB effect.resources world
-
-def EffectName.outside : EffectName → Bool
-  | .cell (.bound _) => false
-  | _ => true
-
-structure RequestName where
-  effect : EffectName
-  operation : Nat
-  held : Bool := false
-  deriving DecidableEq
-
-def RequestName.value (identity : Nat) (request : RequestName) : ProtectionContracts.Demand :=
-  ⟨request.effect.value identity,request.operation,request.held⟩
-
-/-- Full checking data is retained. Closed recipe tags are finite data, never
-Certified or Source/Auth premises. New identity families are structural. -/
-inductive Checking where
-  | pure
-  | embedded (body : CoreCallableFiniteResourceTemplate.Body context code pattern)
-  | request (effect : EffectName) (operation : Nat)
-  | sequence : Checking → Checking → Checking
-  | choice : Checking → Checking → Checking
-  | closed {dependencies : Dependencies} (plan : Plan dependencies)
-      (rows : Rows (signature plan)) (recipe : RecipeTag plan)
-
-def Checking.dependencies (identity : Nat) : Checking → Dependencies
-  | .pure => .pure
-  | .embedded body => body.dependencies identity
-  | .request effect operation => .request (effect.value identity) operation
-  | .sequence first second => .sequence (first.dependencies identity) (second.dependencies identity)
-  | .choice first second => .choice (first.dependencies identity) (second.dependencies identity)
-  | @Checking.closed dependencies _ _ _ => dependencies
-
-def Checking.plan (identity : Nat) : (checking : Checking) → Plan (checking.dependencies identity)
-  | .pure => .pure
-  | .embedded body => body.plan identity
-  | .request _ _ => .request
-  | .sequence first second => .sequence (first.plan identity) (second.plan identity)
-  | .choice first second => .choice (first.plan identity) (second.plan identity)
-  | .closed plan _ _ => plan
-
-def Checking.rows (identity : Nat) : (checking : Checking) → Rows (signature (checking.plan identity))
-  | .pure => Rows.pure
-  | .embedded body => body.rows identity
-  | .request _ _ => Rows.request
-  | .sequence first second => sequenceRows (first.rows identity) (second.rows identity)
-  | .choice first second => CoreCallableContractSource.choiceRows (first.rows identity) (second.rows identity)
-  | .closed _ rows _ => rows
-
-def oldRecipe (identity : Nat) : (body : CoreCallableFiniteResourceTemplate.Body context code pattern) →
-    RecipeTag (body.plan identity)
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => .pure
-  | .pair first second | .bind first second => .sequence (oldRecipe identity first) (oldRecipe identity second)
-  | .read operand | .write operand => .sequence (oldRecipe identity operand) .request
-
  theorem oldRecipe_check (body : CoreCallableFiniteResourceTemplate.Body context code pattern) (identity : Nat) :
     (oldRecipe identity body).check = true := by
   induction body with
@@ -89,19 +22,6 @@ def oldRecipe (identity : Nat) : (body : CoreCallableFiniteResourceTemplate.Body
       simp [oldRecipe,RecipeTag.check,ihF,ihS]
   | read operand ih | write operand ih => simp [oldRecipe,RecipeTag.check,ih]
 
-def Checking.recipe (identity : Nat) : (checking : Checking) → RecipeTag (checking.plan identity)
-  | .pure => .pure
-  | .embedded body => oldRecipe identity body
-  | .request _ _ => .request
-  | .sequence first second => .sequence (first.recipe identity) (second.recipe identity)
-  | .choice first second => .choice (first.recipe identity) (second.recipe identity)
-  | .closed _ _ recipe => recipe
-
-def Checking.check : Checking → Bool
-  | .pure | .embedded _ | .request _ _ => true
-  | .sequence first second | .choice first second => first.check && second.check
-  | .closed _ _ recipe => recipe.check
-
  theorem Checking.recipe_check (checking : Checking) (identity : Nat) :
     (checking.recipe identity).check = checking.check := by
   induction checking with
@@ -109,70 +29,6 @@ def Checking.check : Checking → Bool
   | embedded body => exact oldRecipe_check body identity
   | sequence first second ihF ihS | choice first second ihF ihS =>
       simp only [Checking.recipe,RecipeTag.check,Checking.check,ihF,ihS]
-
-/-- Requirements and their exact empty-owner isolated summaries are generated
-from the same finite tree, including branch choices and call latent rows. -/
-inductive Need where
-  | empty
-  | embedded (body : CoreCallableFiniteResourceTemplate.Body context code pattern)
-  | emit : Need → List RequestName → Need
-  | sequence : Need → Need → Need
-  | choice : Need → Need → Need
-
-def Need.requirements (identity : Nat) : Need → Requirements []
-  | .empty => .request [] []
-  | .embedded body => body.requirements identity
-  | .emit body requests => .emitAfter (body.requirements identity) [] (requests.map (RequestName.value identity))
-  | .sequence first second => .sequence (first.requirements identity) (second.requirements identity)
-  | .choice first second => .choice (first.requirements identity) (second.requirements identity) (List.Perm.refl [])
-
-def oldSummary : CoreCallableFiniteResourceTemplate.Body context code pattern → List RequestName
-  | .unit | .boolean _ | .integer _ | .reference _ | .variable _ => []
-  | .pair first second | .bind first second => oldSummary first ++ oldSummary second
-  | .read (name := name) operand => oldSummary operand ++ [⟨.cell name,0,false⟩]
-  | .write (name := name) operand => oldSummary operand ++ [⟨.cell name,1,false⟩]
-
-def Need.summary : Need → List RequestName
-  | .empty => []
-  | .embedded body => oldSummary body
-  | .emit body requests => body.summary ++ requests
-  | .sequence first second | .choice first second => first.summary ++ second.summary
-
-/-- New functions retain full computed checking data. Original contracts remain
-opaque exact data, including higher-order private checking rows. -/
-inductive Pattern where
-  | old : CoreCallableFiniteResourceTemplate.ContractPattern → Pattern
-  | closed : Contract → Pattern
-  | pair : Pattern → Pattern → Pattern
-  | function (input output : Pattern) (requests : List EffectName)
-      (latent : List RequestName) (checking : Checking)
-
-def Pattern.value (original : Bindings) (identity : Nat) : Pattern → Contract
-  | .old pattern => pattern.value original identity
-  | .closed contract => contract
-  | .pair first second => .pair (first.value original identity) (second.value original identity)
-  | .function input output requests latent checking =>
-      .function (input.value original identity) (output.value original identity)
-        (requests.map (EffectName.value identity)) (latent.map (RequestName.value identity))
-        (checking.plan identity) (checking.rows identity)
-
-abbrev Context := List (Nat × Pattern)
-def bindings (original : Bindings) (identity : Nat) : Context → Bindings
-  | [] => []
-  | (name,pattern)::rest => (name,pattern.value original identity)::bindings original identity rest
-
-inductive Ref : Context → Nat → Pattern → Type where
-  | head : Ref ((name,pattern)::rest) name pattern
-  | tail : Ref rest name pattern → Ref ((bound,value)::rest) name pattern
-
-def Ref.check : Ref context name pattern → Bool
-  | .head => true
-  | .tail (bound := bound) next => decide (name ≠ bound) && next.check
-
-def Ref.realize (original : Bindings) (identity : Nat) : Ref context name pattern →
-    CoreCallableStaticProducer.BindingRef (bindings original identity context) name (pattern.value original identity)
-  | .head => .head
-  | .tail next => .tail (next.realize original identity)
 
  theorem Ref.realize_check (ref : Ref context name pattern) (original : Bindings) (identity : Nat) :
     (ref.realize original identity).check = ref.check := by
@@ -247,115 +103,11 @@ theorem StaticTree.rebase_basic
               exact ⟨.perform known current o formed,.perform (known := known) (admitted := current) (formed := formed) ot⟩
   | app | cleanup | branch | lambda | receiverLambda | resume | discard | resource => cases plain
 
-/-- Full closed function slots are selected by literal original list position. -/
-inductive FunctionSlot : Bindings → Nat → Contract → Contract → List Instance → Footprint →
-    {dependencies : Dependencies} → (plan : Plan dependencies) → Rows (signature plan) → Type where
-  | head : FunctionSlot ((name,.function input output requests latent plan rows)::rest) 0 input output requests latent plan rows
-  | tail : FunctionSlot rest index input output requests latent plan rows →
-      FunctionSlot ((name,value)::rest) (index+1) input output requests latent plan rows
-
  theorem FunctionSlot.exact (slot : FunctionSlot original index input output requests latent plan rows) :
     CoreCallableFiniteResourceTemplate.slotContract original index = .function input output requests latent plan rows := by
   induction slot with
   | head => rfl
   | tail next ih => simpa [CoreCallableFiniteResourceTemplate.slotContract] using ih
-
-def closedRequests (requests : Footprint) : List RequestName :=
-  requests.map fun request => ⟨.closed request.effect,request.operation,request.held⟩
-
-/-- Each constructor computes its entire family indices from finite children. -/
-inductive Body (original : Bindings) : Context → Code → Pattern → Checking → Need → Type where
-  | embedded (old : CoreCallableFiniteResourceTemplate.Body oldContext code pattern) :
-      Body original context code (.old pattern) (.embedded old) (.embedded old)
-  | variable (ref : Ref context name pattern) : Body original context (.variable name) pattern .pure .empty
-  | slotCallable (ref : Ref context name (.old (.slot index)))
-      (slot : FunctionSlot original index input output requests latent plan rows) (recipe : RecipeTag plan) :
-      Body original context (.variable name)
-        (.function (.closed input) (.closed output) (requests.map EffectName.closed) (closedRequests latent) (.closed plan rows recipe)) .pure .empty
-  | pair (first : Body original context a input checkingA needsA) (second : Body original context b output checkingB needsB) :
-      Body original context (.pair a b) (.pair input output) (.sequence checkingA checkingB) (.sequence needsA needsB)
-  | bind (first : Body original context a input checkingA needsA)
-      (second : Body original ((parameter,input)::context) b output checkingB needsB) :
-      Body original context (.bind parameter a b) output (.sequence checkingA checkingB) (.sequence needsA needsB)
-  | lambda (input : Pattern) (requests : List EffectName)
-      (body : Body original ((parameter,input)::context) code output checking needs) :
-      Body original context (.lambda parameter code) (.function input output requests needs.summary checking) .pure .empty
-  | app (function : Body original context f (.function input output requests latent exposed) checkingF needsF)
-      (argument : Body original context a input checkingA needsA) :
-      Body original context (.app f a) output (.sequence checkingF (.sequence checkingA exposed))
-        (.emit (.sequence needsF needsA) latent)
-  | branch (condition : Body original context test (.old .boolean) checkingC needsC)
-      (yes : Body original context a output checkingA needsA) (no : Body original context b output checkingB needsB) :
-      Body original context (.branch test a b) output (.sequence checkingC (.choice checkingA checkingB))
-        (.sequence needsC (.choice needsA needsB))
-
-def lookup : Context → Nat → Option Pattern
-  | [],_ => none
-  | (name,pattern)::rest,wanted => if wanted = name then some pattern else lookup rest wanted
-
-def oldLookup : CoreCallableFiniteResourceTemplate.Context → Nat → Option CoreCallableFiniteResourceTemplate.ContractPattern
-  | [],_ => none
-  | (name,pattern)::rest,wanted => if wanted = name then some pattern else oldLookup rest wanted
-
-def sameOld (old : CoreCallableFiniteResourceTemplate.Context) (current : Context) (name : Nat) : Bool :=
-  match oldLookup old name,lookup current name with
-  | none,none => true
-  | some first,some (.old second) => decide (first = second)
-  | _,_ => false
-
-def embeddingCheck (old : CoreCallableFiniteResourceTemplate.Context) (current : Context) (code : Code) : Bool :=
-  code.dependencies.all fun dependency => match dependency with
-    | .variable name => sameOld old current name
-    | _ => true
-
-def Pattern.check (original : Bindings) (binder : Nat) (world : List Nat) : Pattern → Bool
-  | .old pattern => pattern.check original binder world
-  | .closed value => CoreCallableGraphAnnotationChecks.subsetB value.port.resources world
-  | .pair first second => first.check original binder world && second.check original binder world
-  | .function input output requests latent _ =>
-      input.check original binder world && output.check original binder world &&
-      requests.all (EffectName.check binder world) && latent.all (fun request => request.effect.check binder world)
-
-def Checking.isClosed : Checking → Bool
-  | .pure | .closed _ _ _ => true
-  | .request effect _ => effect.outside
-  | .sequence first second | .choice first second => first.isClosed && second.isClosed
-  | .embedded body => (oldSummary body).all (fun request => request.effect.outside)
-
-def Pattern.isClosed : Pattern → Bool
-  | .old pattern => pattern.closed
-  | .closed _ => true
-  | .pair first second => first.isClosed && second.isClosed
-  | .function input output requests latent checking =>
-      input.isClosed && output.isClosed && requests.all EffectName.outside &&
-      latent.all (fun request => request.effect.outside) && checking.isClosed
-
-def EffectName.canonical : EffectName → EffectName
-  | .closed (.cell identity) => .cell (.activation identity)
-  | other => other
-
-def effectsSubset (first second : List EffectName) : Bool :=
-  first.all fun effect => decide (effect.canonical ∈ second.map EffectName.canonical)
-
-def Body.check (original : Bindings) (binder : Nat) (world : List Nat) (residual : List Instance)
-    (allowed : List EffectName) : Body original context code pattern checking needs → Bool
-  | .embedded (oldContext := oldContext) old =>
-      old.check original binder world residual && embeddingCheck oldContext context code &&
-      effectsSubset ((oldSummary old).map RequestName.effect) allowed
-  | .variable ref => ref.check && pattern.check original binder world
-  | .slotCallable ref _ recipe => ref.check && pattern.check original binder world && recipe.check
-  | .pair first second | .bind first second =>
-      first.check original binder world residual allowed && second.check original binder world residual allowed
-  | .lambda (output := output) (checking := privateChecking) (needs := privateNeeds) input requests body =>
-      body.check original binder world residual requests &&
-      (Pattern.function input output requests privateNeeds.summary privateChecking).check original binder world && privateChecking.check &&
-      effectsSubset (privateNeeds.summary.map RequestName.effect) requests
-  | .app (requests := requests) (exposed := exposed) function argument =>
-      function.check original binder world residual allowed && argument.check original binder world residual allowed &&
-      effectsSubset requests allowed && exposed.check
-  | .branch condition yes no =>
-      condition.check original binder world residual allowed && yes.check original binder world residual allowed &&
-      no.check original binder world residual allowed
 
  theorem EffectName.canonical_value (effect : EffectName) (identity : Nat) :
     effect.canonical.value identity = effect.value identity := by
@@ -636,14 +388,6 @@ structure Derived (api : CoreCallableFiniteCellRegistry.CellApi) (entries : Core
         by simpa [Code.instantiate,Pattern.value,CoreCallableFiniteResourceTemplate.ContractPattern.value,
           Checking.dependencies,Checking.plan,Checking.rows,Need.requirements] using StaticTree.branch (sameDemand := List.Perm.refl []) tested.tree first.tree second.tree⟩
 
-abbrev CheckingValue := (dependencies : Dependencies) × (plan : Plan dependencies) × Rows (signature plan)
-def Checking.value (identity : Nat) (checking : Checking) : CheckingValue :=
-  ⟨checking.dependencies identity,checking.plan identity,checking.rows identity⟩
-def sequenceValue (first second : CheckingValue) : CheckingValue :=
-  ⟨.sequence first.1 second.1,.sequence first.2.1 second.2.1,sequenceRows first.2.2 second.2.2⟩
-def choiceValue (first second : CheckingValue) : CheckingValue :=
-  ⟨.choice first.1 second.1,.choice first.2.1 second.2.1,CoreCallableContractSource.choiceRows first.2.2 second.2.2⟩
-
  theorem EffectName.constant (effect : EffectName) (closed : effect.outside = true) :
     effect.value first = effect.value second := by
   cases effect with
@@ -718,9 +462,6 @@ def choiceValue (first second : CheckingValue) : CheckingValue :=
   intro name member
   exact name.constant ((List.all_eq_true.mp closed) name member)
 
-def functionValue (input output : Contract) (requests : List Instance) (latent : Footprint) (checking : CheckingValue) : Contract :=
-  .function input output requests latent checking.2.1 checking.2.2
-
  theorem Pattern.constant (pattern : Pattern) (closed : pattern.isClosed = true) :
     pattern.value original first = pattern.value original second := by
   induction pattern with
@@ -769,12 +510,6 @@ private theorem andTrue {first second : Bool} (accepted : (first && second) = tr
       exact (andTrue (andTrue (andTrue f).1).1).2
   | branch condition yes no ihC ihY ihN => exact ihY (andTrue (andTrue accepted).1).2
 
-def Need.valid (original : Bindings) (binder : Nat) (world : List Nat) (residual : List Instance) : Need → Bool
-  | .empty => true
-  | .embedded body => body.check original binder world residual
-  | .sequence first second | .choice first second => first.valid original binder world residual && second.valid original binder world residual
-  | .emit body requests => body.valid original binder world residual && requests.all (fun request => request.effect.check binder world)
-
  theorem Body.needs_valid (body : Body original context code pattern checking needs)
     (accepted : body.check original binder world residual allowed = true) : needs.valid original binder world residual = true := by
   induction body with
@@ -790,9 +525,6 @@ def Need.valid (original : Bindings) (binder : Nat) (world : List Nat) (residual
   | branch condition yes no ihC ihY ihN =>
       obtain ⟨⟨a,b⟩,c⟩ := (by simpa only [Body.check,Bool.and_eq_true] using accepted)
       simp only [Need.valid,ihC a,ihY b,ihN c,Bool.and_self]
-
-def outsideRequests (requests : List RequestName) : Footprint :=
-  (requests.filter fun request => request.effect.outside).map (RequestName.value 0)
 
  theorem RequestName.outside_exact (request : RequestName)
     (valid : request.effect.check binder world = true) (fresh : identity ∉ world) :
@@ -836,13 +568,6 @@ def outsideRequests (requests : List RequestName) : Footprint :=
         cases kept : (head.value identity).effect != Instance.cell identity <;>
         simpa [CallableProtection.outsideCell,outsideRequests,outside,kept] using both
 
-
-def Need.outsideRequirements : Need → Requirements []
-  | .empty => .request [] []
-  | .embedded body => body.outsideRequirements
-  | .sequence first second => .sequence first.outsideRequirements second.outsideRequirements
-  | .choice first second => .choice first.outsideRequirements second.outsideRequirements (List.Perm.refl [])
-  | .emit body requests => .emitAfter body.outsideRequirements [] (outsideRequests requests)
 
  theorem Need.hides (needs : Need) (valid : needs.valid original binder world residual = true) (fresh : identity ∉ world) :
     ResourceRequirements.Hides identity (needs.requirements identity) needs.outsideRequirements := by
@@ -894,16 +619,6 @@ theorem Pattern.formed_closed (pattern : Pattern)
       simpa [Pattern.value,ScopedPorts.InWorld,Contract.port,Contract.value,
         SourcePlannedTyping.Value.erase,SourceDependencyAnnotations.Value.erase,CoherentSourceTypes.Value.port,
         ScopedPorts.Port.resources] using List.append_subset.mpr ⟨List.append_subset.mpr ⟨ihI a d,ihO b e⟩,issued⟩
-
-def oldContext : Context → Option CoreCallableFiniteResourceTemplate.Context
-  | [] => some []
-  | (name,.old pattern)::rest => (oldContext rest).map ((name,pattern)::·)
-  | _ => none
-
-def aligned (original : Bindings) (context : Context) : Bool :=
-  match oldContext context with
-  | some old => CoreCallableFiniteResourceTemplate.aligned original old
-  | none => false
 
 theorem oldContext_bindings (same : oldContext context = some old) :
     bindings original identity context = CoreCallableFiniteResourceTemplate.bindings original identity old := by

@@ -3732,3 +3732,39 @@ counter/past-installation provenance. See [TASK-0032](<../../../tasks/TASK-0032-
 
 Entry points: [resource output tree](<CoreCallableCompositionalResourceOpening.lean>), [resource tree interfaces](<CoreCallableResourceTreeInterfaces.lean>), [handler entry](<CoreCallableRichHandlerEntry.lean>)
 and [actual handler step](<CoreCallableRichHandlerCore.lean>).
+
+### Upstream resource indices and actual handler freshness — 2026-10-03
+
+This DN-0033 experiment moves 73 resource-index declarations into an upstream
+Data module. Their original namespaces, full Contracts and private Plans/Rows
+remain intact; 64 retained declarations/proofs and existing checker guards keep
+their original bodies. Data depends on the checking/index slice without producer
+ancestry. The new interface checks all 79 public ports and four full-index
+reports. This factors existing finite data; it adds no resource grammar or
+registry backend.
+
+The registry bridge now imports StaticProducer explicitly after the upstream
+index cut removed CellRegistry's transitive producer visibility. Its existing
+proof bodies and guards remain unchanged. The first gate's failed bridge command
+is preserved; six earlier successful commands are recovered only by exact
+execution keys, hashes, report names and selected imports.
+
+Handler freshness now follows from two actual-past facts beside the SAME full
+Site: original-root Core Steps reach the current machine, and every current
+installation belongs to its historical handler-entered keys. Core history
+bounds those keys below the SAME current nextHandler counter. The wrapper derives
+counter absence internally and invokes the unchanged whole/domain handler
+consumer, retaining its opaque Source/Auth, declarations, Families and Plans/Rows.
+Program and InitialInput index the companion; its two fields do not establish a
+rich source/runtime registry join. Current still expresses machine alignment.
+
+One ROOT serial affected replay also supplies the integration gate: 1,048 modules, 13,471 ordered standard-only reports, 66 fresh modules with 725 reports and 982 actual paired artifact/log hardlink reuses. The net addition is 32 reports. All 655 selected recursive dependency commands retain actual ordered outputs, including duplicate Init entries and external Std. The 79 index and 33 freshness public checks pass; two absent-module and three missing-symbol diagnostics from three honest original-parent RED commands produce no negative artifacts; full parent and eight compiler/library associations remain exact before/after. Compiler time is 809.541 seconds; preparation is 46.298 seconds. Per-source receipts retain wall time and peak RSS. The gate uses jobs=1 and explicit -j1/-M4096 options. It asserts exact sources/ordered axioms and qualified current parent reuse, with no SOURCE/light author canonical artifact/log equality claim.
+
+Original constructor coverage remains 14/16. C1–C5 counts, estimates and the
+supported fragment remain unchanged. General registry production, the resource
+Opening split, rich admission/reachability, M4 Valid/availability and Rust
+correspondence remain open. The next carrier5 and handler-Event2 sources are
+SOURCE ready; current-parent light checks and their canonical gate are pending. See [TASK-0032](<../../../tasks/TASK-0032-core-one-shot-alignment.md>).
+
+Entry points: [resource index Data](<CoreCallableResourceIndexData.lean>), [resource index interfaces](<CoreCallableResourceIndexInterfaces.lean>), [actual handler history](<CoreHandlerHistory.lean>) and
+[current handler freshness](<CoreCallableRichHandlerFreshness.lean>).

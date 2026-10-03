@@ -1,3 +1,4 @@
+import CoreCallableStaticProducer
 import CoreCallableFiniteRegistryCompatibility
 namespace Ash.OneShot.CoreCallableFiniteRegistryBridge
 open ScopedExpressions ScopedExecution ProtectionContracts
