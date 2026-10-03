@@ -3095,7 +3095,7 @@ without artifacts, checking 540 selected parent dependencies. This new current
 judgment does not imply old Hereditary.handler or initial admission. Original
 constructor coverage remains 14/16, with handler/resource producers outstanding.
 
-The current coherent assembly has 1,024 modules and 13,227 ordered standard-only
+The `937b84b` coherent assembly has 1,024 modules and 13,227 ordered standard-only
 reports, 55 more than `1771711`. Independent review reproduces all six exact
 source/artifact/log associations, resolves 617 dependencies and checks all 1,018
 parent associations and eight compiler libraries before and after. One combined
@@ -3105,13 +3105,84 @@ hard-link reuse. Successful compiles are retained after packaging-only schema,
 platform-import and whitespace exit-code corrections. No old proof source or
 Rust source changes, and Rust checks are not repeated for this proof-only batch.
 
-Next are the original second-beta/read/branch/release current providers, static
-full-domain clause support and its exact reauthentication/substitution consumer,
-and completion after the restored bind through H/K returns and cleanup. The
-H capture association through both actual K restorations, heap growth and bind
-removal is locally proved; its final completion checkpoint is not integrated
-here. General typed initial admission, reachable runtime preservation,
-observations/accounting composition and full C2–C5 remain open.
+The current increment integrates original rich completion, restored-H continuation
+completion and selected-domain declaration transfer. These informative DN-0033
+proof changes address existing C2/C3 dependencies. They preserve the supported
+fragment, constructor coverage 14/16 and whole-fragment acceptance counts.
+
+The [second-beta producer](CoreCallableOriginalSecondBetaCurrent.lean)
+continues the SAME original first-beta factory. Two existing constructors retain
+already-computed current outputs: exact dependency-index equality and the closed
+reader Family's Authentic evidence. Full higher/reader Families, all private
+Plans/Rows, original graph and saved caller remain intact. The actual Unit call
+uses captured E9 extended with parameter10; its saved caller is E13. The
+[read/completion producer](CoreCallableOriginalReadCompletionCurrent.lean)
+constructs current read0/Integer0, restores bind5, projects the checked true arm,
+and drops only the actual cell boundary after outer17. The
+[connected witness](OriginalSecondBetaCompletionCurrentProbes.lean)
+contains one no-input original initial35 path, rich current Sites, composed root
+transport, result Integer17, read0/0 and release0. The final receiver and resource
+stack are empty while historical world `[0]` remains. General reachable typed
+preservation is still open. The dependency join described by an older diagnostic
+helper comment is now supplied by the current constructor output. Independent
+replay passes eight affected modules, 82 reports and 26 interfaces; two honest
+missing-provider checks fail without artifacts. It audits 606 unchanged selected
+parents and all 1,024 parent associations.
+
+The [continuation origins](CoreCallableRestoredBindContinuationOrigins.lean)
+retain H's original capture receipt through both K episodes, rich bind removal
+and heap growth. Live-owner search uses the actual restored path. Spent K2/K1/H0
+positions retain their full original Type histories, maps and saved scopes;
+physical empty-prefix guards do not erase that history. The
+[completion consumers](CoreCallableRestoredBindContinuationConsumers.lean)
+derive normal finish from the original cleanup registration receipt and current
+guards. The [same-graph trace](RestoredBindContinuationInterfaces.lean)
+reaches Unit in 36 transitions from the authenticated running start, or 37
+including cleanup-start. It creates owners0/1/2 and retires cleanup0/H0/K2/K1.
+This boundary does not begin at CoreMachine.initial. The inherited Product/Unit
+PlainData annotation gap remains explicit, so this operational trace establishes
+neither typed initial admission nor general rich preservation. Independent replay
+passes three modules, 60 reports, 39 interfaces and two missing-interface failures
+without artifacts, checking 550 selected parents. One final blank line was
+removed in immutable checkpoint-v2; all three author artifacts/logs equal v1.
+
+The [domain-support proof](CoreCallableSelectedOperandDomainSupport.lean)
+derives scalar shape from the same full Source and ClosedValue. Unit, Bool and
+Int have empty selected domain support; every other full Contract retains the
+receiver. The [declaration transfer](CoreCallableSelectedDomainDeclarationTransfer.lean)
+checks static metadata, then combines that acceptance with the SAME current
+delivery to execute the existing receiving checker. Only the selected formal
+narrows; every unselected formal retains receiver exactly. Existing finite
+Pure/Template/mode/declaration inductions preserve guards, availability, both
+modes, all compatible owners, literal bounds and full private Plans/Rows. Two
+finish helpers become public without body changes. The assignment loop is exposed
+and its selected wrapper factored once; exact frozen wrapper behavior is proved.
+This does not establish old Hereditary.handler, arbitrary future-world
+StaticTree authentication, original handler/resource Annotation or initial
+Program admission. Independent replay passes 18 affected modules, 258 reports,
+20 interfaces and two missing-interface failures without artifacts, checking
+546 unchanged selected parents. The original checker remains 14/16.
+
+The current coherent assembly has 1,032 modules and 13,350 ordered standard-only
+reports, 123 more than `937b84b`. Eight new and four modified sources integrate in
+one gate: 29 affected modules compile once in
+255.7 seconds, with
+8.0 seconds for preparation and association checks.
+All 1,003 unaffected artifact/log pairs are real hard-link reuse. Author-disjoint
+ROOT replay and separate peer source/evidence reviews precede this combined gate;
+all parent associations and eight compiler libraries are checked before/after.
+Successful compiles survive metadata-only platform-import/schema corrections.
+No Rust or normative specification source changes, and no Rust tests are repeated
+for this proof-only increment.
+
+Next are general domain-aware handler authentication and its future-world
+producer, corrected original Product frame typing, and the rich admission/runtime
+invariant bridge to completed M4. A rich original accepted Program already
+exists; endpoint Current/Site alone does not provide the legacy M4 Valid invariant.
+General C2 admission, C3 reachable preservation, C4's remaining discrepancy
+obligation and C5's integrated result remain open. The 40–71 base agent-hour and
+50–90 rework planning ranges, with 25–45 elapsed working hours under parallelism,
+remain unchanged; these finite completions do not close the general obligations.
 
 Packaging review of `f1fc1e4` caught three registrations without compiled output paths.
 The corrected commands use warnings as errors and explicit temporary olean

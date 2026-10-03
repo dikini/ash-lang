@@ -136,6 +136,7 @@ structure FirstBeta (higher : HigherInstalled) (focused : Focused higher) where
   rootTransport : CoreCallableRootRefinement.RootTransport CoreCallableOriginalResourceCurrent.Original.root nextRoot
   next : Site globals [] [0] [.cell 0] (fun _ => none) (OwnerPhaseTransitions.available []) [] [] []
     (runtime.closedBody.subst 11 reader.initializer) .none e21.lexical .integer .integer callerContext nextRoot
+  exactDependencies : next.dependencies = selected.family.dependencies [] (originalCall higher)
   exactDemand : next.sourceDemand = selected.family.demand
   exactRequirements : HEq next.requirements selected.family.requirements
   exactPlan : HEq next.plan selected.nextPlan
@@ -193,7 +194,7 @@ theorem beta_current (higher : HigherInstalled) (focused : Focused higher) :
               certificate := nextCertificate,certificateChecked := nextChecked,pending := site.pending,
               retained := site.retained,retainedChecked := site.retainedChecked,accounting := nextRun,
               annotated := nextAnnotated,row := nextRow,annotation := nextAnnotation,checked := nextRootChecked,bounded := nextBounded }
-          exact ⟨⟨selected,chosen,nextRoot,rootTransport,next,rfl,HEq.rfl,HEq.rfl,HEq.rfl,⟨rfl⟩,
+          exact ⟨⟨selected,chosen,nextRoot,rootTransport,next,rfl,rfl,HEq.rfl,HEq.rfl,HEq.rfl,⟨rfl⟩,
             (CoreCallableGeneratedChronology.Operation.actual (.beta outerBeta)).1,
             (CoreCallableGeneratedChronology.Operation.actual (.beta outerBeta)).2,
             .beta 11 runtime.closedBody reader.initializer .none e20.lexical

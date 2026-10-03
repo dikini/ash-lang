@@ -119,7 +119,7 @@ structure ReceiptAt (entries : OperationEntries) (policy : Syntax.TicketPolicy)
   capabilities : ClausesUse policy clauses
   recipes : ClauseDeclarations outward clauses data.families []
 
-private def checkAt (data : Declarations entries requested answer bindings clauses)
+def checkAssignments (data : Declarations entries requested answer bindings clauses)
     (policy : Syntax.TicketPolicy) (outward : List Instance) (owners : Owners) (world : List Nat) (allowed : List Instance)
     (lexical : LexicalBounds) (receiver : List Nat) (assignment : FormalSupports clauses) :
     Except Error (ReceiptAt entries policy outward owners world allowed data lexical receiver assignment) :=
@@ -139,7 +139,7 @@ private def checkAt (data : Declarations entries requested answer bindings claus
                     let _checked ← body.check entries policy outward owners world allowed (lexical.extend parameter formalSupport) receiver
                     let a ← checkMode body ordinary entries policy outward owners world allowed resumeEffects closeEffects false false (lexical.extend parameter formalSupport) receiver
                     let b ← checkMode body protectedMode entries policy outward owners world allowed resumeEffects closeEffects true false (lexical.extend parameter formalSupport) receiver
-                    let tail ← checkAt rest policy outward owners world allowed lexical receiver tailSupports
+                    let tail ← checkAssignments rest policy outward owners world allowed lexical receiver tailSupports
                     let known := reference.sound located
                     let source := SourceDeclarations.cons supportBound known a.source b.source tail.source
                     let ordinaryRecipe : DeclarationModes outward code.requiredActions [] (modeFamily body ordinary) := by
@@ -178,17 +178,15 @@ structure ReceivingReceipt (api : CoreCallableFiniteCellRegistry.CellApi) (entri
   selectedFound : ProtectionContracts.lookup operation data.table = some selectedContract
   selectedAvailable : selectedContract.row held = some selectedRow
 
-/-- This public route computes assignment from the same delivered operand. The
-existing complete target registry coverage and selected availability are executed. -/
-def checkDeliveredDeclarations
-    {reference : OperationRef entries requested operation argument input}
-    {annotation : Annotation entries owners richBindings code argument demand requirements plan rows}
-    (delivered : CoreCallableDeliveredOperandSupport.DeliveredSupport storageDeclarations reference annotation storageBindings inst recipe
-      graph machineOwners heap value policy outward world allowed lexical receiver)
+/-- The original selected coverage and availability wrapper shares one assignment interpreter. -/
+def checkSelectedDeclarations
     (api : CoreCallableFiniteCellRegistry.CellApi) (held : Bool)
-    (data : Declarations entries requested answer bindings clauses) :
-    Except CoreCallableStaticProducer.Error (ReceivingReceipt api entries policy outward owners world allowed data lexical receiver
-      (selected clauses operation (CoreCallableDeliveredOperandSupport.actualSupport code delivered.stored) receiver) operation held) := do
+    (data : Declarations entries requested answer bindings clauses)
+    (policy : Syntax.TicketPolicy) (outward : List Instance) (owners : Owners)
+    (world : List Nat) (allowed : List Instance) (lexical : LexicalBounds)
+    (receiver : List Nat) (operation : Nat) (support : List Nat) :
+    Except Error (ReceivingReceipt api entries policy outward owners world allowed data lexical receiver
+      (selected clauses operation support receiver) operation held) := do
   let coverage ← match CoreCallableFiniteHandlerRegistryCoverage.check api entries policy requested clauses with
     | .error _ => .error .operationShadowing
     | .ok receipt => .ok receipt
@@ -199,10 +197,51 @@ def checkDeliveredDeclarations
       match available : contract.row held with
       | none => .error .capability
       | some row =>
-        let checked ← checkAt data policy outward owners world allowed lexical receiver
-          (selected clauses operation (CoreCallableDeliveredOperandSupport.actualSupport code delivered.stored) receiver)
+        let checked ← checkAssignments data policy outward owners world allowed lexical receiver
+          (selected clauses operation support receiver)
         .ok ⟨checked,coverage.down,contract,row,found,available⟩
   else .error .operationShadowing
+
+
+/-- This public route computes assignment from the same delivered operand. The
+existing complete target registry coverage and selected availability are executed. -/
+def checkDeliveredDeclarations
+    {reference : OperationRef entries requested operation argument input}
+    {annotation : Annotation entries owners richBindings code argument demand requirements plan rows}
+    (delivered : CoreCallableDeliveredOperandSupport.DeliveredSupport storageDeclarations reference annotation storageBindings inst recipe
+      graph machineOwners heap value policy outward world allowed lexical receiver)
+    (api : CoreCallableFiniteCellRegistry.CellApi) (held : Bool)
+    (data : Declarations entries requested answer bindings clauses) :
+    Except CoreCallableStaticProducer.Error (ReceivingReceipt api entries policy outward owners world allowed data lexical receiver
+      (selected clauses operation (CoreCallableDeliveredOperandSupport.actualSupport code delivered.stored) receiver) operation held) :=
+  checkSelectedDeclarations api held data policy outward owners world allowed lexical receiver operation
+    (CoreCallableDeliveredOperandSupport.actualSupport code delivered.stored)
+
+/-- Exact frozen wrapper behavior, with only the approved loop visibility name. -/
+theorem checkDeliveredDeclarations_frozen
+    {reference : OperationRef entries requested operation argument input}
+    {annotation : Annotation entries owners richBindings code argument demand requirements plan rows}
+    (delivered : CoreCallableDeliveredOperandSupport.DeliveredSupport storageDeclarations reference annotation storageBindings inst recipe
+      graph machineOwners heap value policy outward world allowed lexical receiver)
+    (api : CoreCallableFiniteCellRegistry.CellApi) (held : Bool)
+    (data : Declarations entries requested answer bindings clauses) :
+    checkDeliveredDeclarations delivered api held data = (do
+  let coverage ← match CoreCallableFiniteHandlerRegistryCoverage.check api entries policy requested clauses with
+    | .error _ => .error .operationShadowing
+    | .ok receipt => .ok receipt
+  if _covered : clauseKeysCheck entries requested clauses = true then
+    match found : ProtectionContracts.lookup operation data.table with
+    | none => .error .operationShadowing
+    | some contract =>
+      match available : contract.row held with
+      | none => .error .capability
+      | some row =>
+        let checked ← checkAssignments data policy outward owners world allowed lexical receiver
+          (selected clauses operation (CoreCallableDeliveredOperandSupport.actualSupport code delivered.stored) receiver)
+        .ok ⟨checked,coverage.down,contract,row,found,available⟩
+  else .error .operationShadowing) := by
+  unfold checkDeliveredDeclarations checkSelectedDeclarations
+  cases CoreCallableFiniteHandlerRegistryCoverage.check api entries policy requested clauses <;> rfl
 
 /-- Target lookup keeps the same complete original argument/result record.
 It follows from the executed coverage compatibility, never port equality. -/
@@ -221,6 +260,9 @@ theorem delivered_target_record
 #print axioms whole_forward
 #print axioms whole_backward
 #print axioms whole_iff
+#print axioms checkAssignments
+#print axioms checkSelectedDeclarations
+#print axioms checkDeliveredDeclarations_frozen
 #print axioms checkDeliveredDeclarations
 #print axioms delivered_target_record
 end Ash.OneShot.CoreCallableClauseActualSupport

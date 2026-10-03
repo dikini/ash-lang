@@ -36,7 +36,7 @@ structure PureReceipt (entries : OperationEntries) (policy : Syntax.TicketPolicy
   authenticated : ∀ owners scope, Authenticated (registry entries policy) outward
     (source owners scope) lexical receiver
 
-private def finishPure
+def finishPure
     (source : ∀ owners scope, IndexedSource (registry entries policy) outward owners world allowed scope
       (environment bindings) code contract [] (.request [] []) .pure Rows.pure)
     (hereditary : ∀ owners scope, Hereditary (registry entries policy) outward (source owners scope) lexical receiver) :
@@ -242,7 +242,7 @@ structure Receipt (entries : OperationEntries) (policy : Syntax.TicketPolicy)
   specialize : ∀ owner contract, contract.input = input → contract.answer = answer →
     contract.resumeEffects = allowed → Specialization entries policy outward owners world allowed data owner contract lexical receiver
 
-private def finishTemplate {entries : OperationEntries} {policy : Syntax.TicketPolicy}
+def finishTemplate {entries : OperationEntries} {policy : Syntax.TicketPolicy}
     {outward : List Instance} {owners : Owners} {world : List Nat} {allowed : List Instance}
     {input answer : Contract} {binder : Nat} {bindings : Bindings} {code : Code}
     {data : Template input answer binder bindings code} {lexical : LexicalBounds} {receiver : List Nat}

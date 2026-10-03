@@ -130,6 +130,7 @@ structure ClosedReaderOrigin {opened : CoreCallableComposedResourceOrigins.Probe
   outerReceipt : CoreCallableCapturedLambdaConstructor.Receipt (first.whole (allowed := [.cell 0]) (scope := .none))
     CoreCallableOriginalResourceCurrent.Original.integerSupported.source
     CoreCallableComposedCapturedHandle.structural_policy_stable outerClosed reader.closedBody family
+  authentic : family.Authentic
   authenticated : Authenticated globals.registry [] (family.whole (allowed := [.cell 0]) (scope := .none)) [] [0]
 
 /-- Both complete constructor receipts are output from the original current
@@ -191,7 +192,7 @@ theorem closed_reader_origin {opened : CoreCallableComposedResourceOrigins.Probe
   exact ⟨⟨first,replacement,firstReceipt,lower,lowerClosed,firstAuthentic,family,
     (fun lexical call => first.changed_plan _ _ _ _ lexical call),
     (fun lexical call => first.changed_rows _ _ _ _ lexical call),
-    .changed first (.receiver first) (by decide),auth⟩⟩
+    .changed first (.receiver first) (by decide),authentic,auth⟩⟩
 
 private theorem tail_facets : ∃ certificate : SourceAdmission.Code [] (fun _ => none) []
     (OwnerPhaseTransitions.available []) [0] [] (tailChecking.rows 0)
