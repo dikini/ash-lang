@@ -245,7 +245,7 @@ theorem StaticTree.rebase_basic
                 (fun _ m => admitted (List.mem_cons_of_mem _ m))
               have current : Instance.cell identity ∈ nextAllowed := admitted List.mem_cons_self
               exact ⟨.perform known current o formed,.perform (known := known) (admitted := current) (formed := formed) ot⟩
-  | app | cleanup | branch | lambda | receiverLambda | resume | discard => cases plain
+  | app | cleanup | branch | lambda | receiverLambda | resume | discard | resource => cases plain
 
 /-- Full closed function slots are selected by literal original list position. -/
 inductive FunctionSlot : Bindings → Nat → Contract → Contract → List Instance → Footprint →

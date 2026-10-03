@@ -4639,3 +4639,37 @@ remain open. This is informative proof evidence; Ash semantics are unchanged.
 
 See [TASK-0032](<../tasks/TASK-0032-core-one-shot-alignment.md>) for the acceptance inventory and [domain authentication](<direct-effects/one-shot/CoreCallableDomainHandlerAuthentication.lean>),
 [branch origins](<direct-effects/one-shot/CoreCallableRichBranchCurrentOrigins.lean>) and [branch/event interfaces](<direct-effects/one-shot/RichBranchEventInterfaces.lean>) for the new proof interfaces.
+
+### Checked resource trees and current handler entry — 2026-10-03
+
+This DN-0033 experiment adds tree provenance for the SAME successful resource
+checker output and conditional generic rich handler entry. Ash semantics and the
+supported fragment are unchanged.
+
+The resource tree retains the full initializer and all fresh-identity body
+families, private Plans/Rows and exact Contracts. Existing authentication,
+outward and registry consumers now accept that resource tree. Guard behavior,
+checker result schemas and Annotation grammar are unchanged. The handler
+consumer computes its original whole/domain frame and body Site from the
+current full source; actual Core lookup, translations and past generated
+history compute the successor and retain the full history. Actual nextHandler
+freshness remains explicit. Machine Current alone supplies no new runtime
+registry or owner-map correspondence.
+
+Independent ROOT/peer source reviews and one combined current-parent affected
+gate pass: 1,043 modules, 13,439 ordered standard-only reports,
+83 fresh compilations and 960 actual paired hardlink reuses. The
+same affected sources compile once. Parent associations, actual recursive
+dependencies, public interfaces, honest missing-interface failures and eight
+compiler/library pins pass. Resource and handler author parents differ; byte
+identity is qualified by unchanged transitive source/import graphs. Every
+other path is checked against its full coherent current source/report graph.
+
+Original checker coverage remains 14/16. General resource/handler admission,
+reachable preservation, full M4 Valid/availability, preparation and Rust
+correspondence remain open. Existing C1–C5 counts and estimates are unchanged.
+The next dependencies are finite resource annotation factoring and actual
+counter/past-installation provenance. See [TASK-0032](<../tasks/TASK-0032-core-one-shot-alignment.md>) for acceptance detail.
+
+Entry points: [resource output tree](<direct-effects/one-shot/CoreCallableCompositionalResourceOpening.lean>), [resource tree interfaces](<direct-effects/one-shot/CoreCallableResourceTreeInterfaces.lean>), [handler entry](<direct-effects/one-shot/CoreCallableRichHandlerEntry.lean>)
+and [actual handler step](<direct-effects/one-shot/CoreCallableRichHandlerCore.lean>).

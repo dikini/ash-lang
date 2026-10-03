@@ -123,6 +123,28 @@ inductive StaticTree (registry : CoreCallableContractRegistries.Registry) (outwa
       StaticTree registry outward (IndexedSource.branch conditionSource yesSource noSource sameDemand)
   | lambda (body : StaticTree registry outward bodySource) :
       StaticTree registry outward (IndexedSource.lambda bodySource refinement bodyOutward latentBound publicCertified formed)
+  /-- All fresh opened trees retain the source's complete total checking families. -/
+  | resource {code : Code} {environment : Environment}
+      {bodyRequirements : Nat → RecursiveRequirements.Requirements bodyDemand}
+      {bodyDependencies : Nat → Dependencies}
+      {bodyPlans : ∀ identity, Plan (bodyDependencies identity)}
+      {bodyRows : ∀ identity, Rows (signature (bodyPlans identity))}
+      {initialSource : IndexedSource registry outward owners world allowed scope environment
+        initial .integer initialDemand initialRequirements initialPlan initialRows}
+      {bodySource : ∀ identity, identity ∉ world →
+        IndexedSource registry outward owners (world ++ [identity]) (.cell identity :: residual)
+          scope environment (code.instantiate (Instantiation.Environment.empty.bind binder identity))
+          output bodyDemand (bodyRequirements identity) (bodyPlans identity) (bodyRows identity)}
+      {outwardRequirements : RecursiveRequirements.Requirements bodyDemand}
+      {formed : ScopedPorts.InWorld world output.port}
+      {effectsBound : residual.flatMap Instance.resources ⊆ world} {admitted : residual ⊆ allowed}
+      {hidden : ∀ identity, identity ∉ world →
+        ResourceRequirements.Hides identity (bodyRequirements identity) outwardRequirements}
+      (initial : StaticTree registry outward initialSource)
+      (body : ∀ identity (fresh : identity ∉ world),
+        StaticTree registry outward (bodySource identity fresh)) :
+      StaticTree registry outward
+        (IndexedSource.resource initialSource bodySource formed effectsBound admitted hidden)
   | receiverLambda
       {publicDependencies : Dependencies} {publicPlan : Plan publicDependencies} {publicRows : Rows (signature publicPlan)}
       {valueEnvironment : Environment}
@@ -258,6 +280,45 @@ theorem StaticTree.authenticate_world {actualRegistry : CoreCallableContractRegi
       intro nextLexical call capturedKnown capturedReceived
       exact ih (larger.trans call.worldExtended) (known_extend capturedKnown)
         (bounds_extend (SourceSupport.bounds_iff.mpr capturedReceived) call.argumentReceived)
+  | @resource bodyDemand owners0 world0 allowed0 scope0 initial0 initialDemand initialRequirements
+      initialDependencies initialPlan initialRows residual binder output code0 environment0
+      bodyRequirements bodyDependencies bodyPlans bodyRows initialSource bodySource outwardRequirements
+      formed effectsBound admitted hidden initial body ihI ihB =>
+      apply Authenticated.checked bounds
+      have extension : ∀ identity, world0 ++ [identity] ⊆ later ++ [identity] := by
+        intro identity
+        exact List.append_subset.mpr
+          ⟨fun _ present => List.mem_append_left _ (larger present),
+            fun _ present => List.mem_append_right _ present⟩
+      refine Hereditary.resource
+        (bodySource := fun identity fresh =>
+          (bodySource identity (fun present => fresh (larger present))).world_weaken
+            (extension identity))
+        (formed := ScopedPorts.in_world_mono formed larger)
+        (effectsBound := effectsBound.trans larger) (admitted := admitted)
+        (hidden := fun identity fresh => hidden identity (fun present => fresh (larger present)))
+        (ihI larger (known_left known) (bounds_left bounds)) ?_
+      intro identity fresh
+      have oldFresh : identity ∉ world0 := fun present => fresh (larger present)
+      have extended : world0 ++ [identity] ⊆ later ++ [identity] :=
+        List.append_subset.mpr ⟨fun _ present => List.mem_append_left _ (larger present),
+          fun _ present => List.mem_append_right _ present⟩
+      apply ihB identity oldFresh extended
+      · intro name member
+        rcases List.mem_append.mp
+          (ScopedExpressions.acquisition_dependency_bound _ _ _ member) with original | extra
+        · exact known_right known name original
+        · simp at extra
+      · apply SourceSupport.bounds_iff.mpr
+        intro value member
+        obtain ⟨dependency,present,retained⟩ := List.mem_flatMap.mp member
+        rcases List.mem_append.mp
+          (ScopedExpressions.acquisition_dependency_bound _ _ _ present) with original | extra
+        · exact List.mem_cons_of_mem _ (SourceSupport.bounds_iff.mp (bounds_right bounds)
+            (List.mem_flatMap.mpr ⟨dependency,original,retained⟩))
+        · have same : dependency = Syntax.Dependency.resource identity := by simpa using extra
+          subst dependency
+          exact List.mem_cons.mpr (Or.inl (by simpa [ScopedPorts.Support.evaluate] using retained))
   | receiverLambda body refinement ih =>
       apply Authenticated.checked bounds
       refine Hereditary.receiverLambda
@@ -294,6 +355,15 @@ theorem StaticTree.outward {outward : List Instance}
       obtain ⟨b, second⟩ := ihY normal
       obtain ⟨c, third⟩ := ihN normal
       exact ⟨_, .sequence first (.choice second third)⟩
+  | @resource bodyDemand owners0 world0 allowed0 scope0 initial0 initialDemand initialRequirements
+      initialDependencies initialPlan initialRows residual binder output code0 environment0
+      bodyRequirements bodyDependencies bodyPlans bodyRows initialSource bodySource outwardRequirements
+      formed effectsBound admitted hidden initial body ihI ihB =>
+      obtain ⟨firstRow,first⟩ := ihI normal
+      obtain ⟨identity,fresh⟩ := ScopedTyping.fresh_world_name _
+      obtain ⟨bodyRow,opened⟩ := ihB identity fresh normal
+      obtain ⟨closedRow,closed⟩ := RecursiveOutward.hidden (hidden identity fresh) opened
+      exact ⟨_,.sequence first closed⟩
   | resume | discard =>
       cases normal
       simp_all [Execution.Scope.resolve]

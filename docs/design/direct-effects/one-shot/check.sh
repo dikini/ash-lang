@@ -1045,3 +1045,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableDomainHandlerAuthent
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBranchCurrentOrigins.olean" CoreCallableRichBranchCurrentOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBranchEventConsumers.olean" CoreCallableRichBranchEventConsumers.lean
 lean -DwarningAsError=true -o "$proof_build_dir/RichBranchEventInterfaces.olean" RichBranchEventInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableResourceTreeInterfaces.olean" CoreCallableResourceTreeInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichHandlerEntry.olean" CoreCallableRichHandlerEntry.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichHandlerCore.olean" CoreCallableRichHandlerCore.lean

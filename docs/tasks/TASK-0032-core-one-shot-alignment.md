@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-03 09:07 UTC
+### Current deliverable board — 2026-10-03 resource/handler checkpoint
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,9 +72,15 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Original Product frame typing | **3 / 3 modified leaves** | **Passed** | **83 reports; 62 interfaces; exact three Product fields; same 36/37 operational trace** | **This checkpoint** | **Actual initializer/context/frame/pair/spent-scope ports connected; full rich initial admission remains open** |
-| Generic admitted seed and beta/event | **3 / 3 additive leaves** | **Passed** | **15 reports; 17 interfaces; accepted original resource seed; positive actual beta Event** | **This checkpoint** | **Program+existing InitialInput removes extra graph-check restriction; full rich M4 Valid/availability remains open** |
-| **Product/event integration batch** | **2 / 2 components; 6 / 6 Lean deltas** | **Passed** | **38 added reports; six affected compiled; 1,029 artifact/log pairs reused** | **This checkpoint** | **One grouped gate in 12.3 seconds; whole-fragment counts/estimates unchanged** |
+| Checked resource tree provenance | **4 modified + 1 new / 5 sources** | **Passed** | **Eight added reports; SAME computed output; all fresh body families** | **This checkpoint** | **Successful resource output now carries a tree; general Annotation.resource stays open** |
+| Conditional generic handler entry | **2 / 2 new leaves** | **Passed** | **Four reports; eleven interfaces; actual Core handler next/full prior history** | **This checkpoint** | **Body Site/frame computed from current source; actual counter freshness stays explicit** |
+| **Resource/handler integration batch** | **2 / 2 components; 7 / 7 Lean deltas** | **Passed** | **Twelve added reports; 83 affected compiled once; 960 paired reuses** | **This checkpoint** | **Coherent latest-parent gate; whole-fragment counts/estimates unchanged** |
+| Domain-aware handler runtime support | **18 / 18 Lean deltas** | **Passed** | **Twenty-one added reports; both modes/all owners/capture/restoration** | **`453ccc6`** | **Literal full plans/rows retained; general handler admission open** |
+| General Boolean branch decision | **3 / 3 new leaves** | **Passed** | **Eighteen reports; twenty-three interfaces; either arbitrary typed arm/actual Event** | **`453ccc6`** | **Current decision linked; general branch entry/reachability open** |
+| **Handler/branch integration batch** | **2 / 2 components; 21 / 21 Lean deltas** | **Passed** | **Thirty-nine added reports; 171 affected compiled once; 869 paired reuses** | **`453ccc6`** | **Separate old/current author parents qualified; whole-fragment counts unchanged** |
+| Original Product frame typing | **3 / 3 modified leaves** | **Passed** | **83 reports; 62 interfaces; exact three Product fields; same 36/37 operational trace** | **`3415b80`** | **Actual initializer/context/frame/pair/spent-scope ports connected; full rich initial admission remains open** |
+| Generic admitted seed and beta/event | **3 / 3 additive leaves** | **Passed** | **15 reports; 17 interfaces; accepted original resource seed; positive actual beta Event** | **`3415b80`** | **Program+existing InitialInput removes extra graph-check restriction; full rich M4 Valid/availability remains open** |
+| **Product/event integration batch** | **2 / 2 components; 6 / 6 Lean deltas** | **Passed** | **38 added reports; six affected compiled; 1,029 artifact/log pairs reused** | **`3415b80`** | **One grouped gate in 12.3 seconds; whole-fragment counts/estimates unchanged** |
 | Original second-beta and rich normal completion | **3 / 3 new; 2 / 2 shared sources** | **Passed** | **45 added reports; 26 interfaces; same initial21→35/result17/read0/release0** | **`2aaf6c1`** | **Actual private reader selected; current root/caller preserved; general reachable preservation open** |
 | Restored-bind H continuation completion | **3 / 3 leaves** | **Passed** | **60 reports; 39 interfaces; original running-start27→36, Unit/cleanup0** | **`2aaf6c1`** | **K2/K1/H0 spent returns and full capture histories connected; Product typing corrected above; rich initial admission open** |
 | Static selected-domain declaration transfer | **2 / 2 new; 2 / 2 shared sources** | **Passed** | **18 added reports; 20 interfaces; existing checker/narrowing/guards** | **`2aaf6c1`** | **Selected formal narrows; unselected unchanged; handler future-world admission still open** |
@@ -3240,3 +3246,57 @@ correspondence remain open. Estimates remain 40–71 base agent-hours, 50–90
 with rework and 25–45 elapsed working hours with parallelism.
 
 Entry points: [domain authentication](<../design/direct-effects/one-shot/CoreCallableDomainHandlerAuthentication.lean>), [branch origins](<../design/direct-effects/one-shot/CoreCallableRichBranchCurrentOrigins.lean>) and [branch/event interfaces](<../design/direct-effects/one-shot/RichBranchEventInterfaces.lean>).
+
+### Resource tree provenance and conditional handler entry — 2026-10-03
+
+This DN-0033 experiment connects existing checked resource outputs and current
+handler execution. It changes no Ash semantics or supported-fragment boundary.
+
+| Component | Integrated result | Exact remaining boundary |
+| --- | --- | --- |
+| Resource source tree | The existing successful checker receipt produces a StaticTree for the SAME full resource source, initializer and every fresh opened body | General Annotation.resource and upstream finite index factoring |
+| Resource consumers | Authentication under world extension, outward interpretation and registry transfer retain full contracts, total families and private Plans/Rows | Recursive original admission and exact same-registry selectors |
+| Handler entry | The current full rich handler Site computes its installed whole/domain frame and body Site; actual Core lookup and generated history compute the successor | Actual nextHandler freshness still supplied; general reachable relation and runtime registry correspondence |
+
+StaticTree.resource retains the literal IndexedSource.resource indices. Its
+authentication proof derives body support from actual acquisition dependencies.
+Its outward proof hides the exact opened requirements. Registry transfer is
+pointwise over all fresh identities. The new tree lemmas derive provenance from
+the SAME successful check_opening/check_compositional output; no source family
+is a new checker input. Existing guards, result schemas and Annotation grammar
+are unchanged.
+
+Site.enter_handler_at computes the original declaration table, full clause
+families, Plans/Rows, body certificate, pending frame and accounting from the
+current source and authentication. The runtime consumer uses the actual node,
+body, translations, environment closure and past Generated history. It derives
+the existing HandlerInput and actual Core next internally, retains the full
+prior history, heap, owners and other allocation counters; nextHandler advances
+and the entered observations append. The
+CURRENT nextHandler absence from installations remains an explicit premise.
+Current establishes machine alignment here; no new owner-map or registry
+correspondence is inferred from it.
+
+Author-disjoint ROOT and peer source/ABI reviews pass. One combined current-parent
+replay also supplies the affected integration gate: 1,043 registered
+modules, 13,439 ordered standard-only reports, 83 affected modules
+compiled once and 960 verified artifact/log pairs reused as hardlinks.
+The net addition is twelve reports. Actual recursive dependencies, interfaces,
+honest original-parent missing-interface failures without artifacts, all parent
+associations and eight compiler/library pins pass. The resource author freeze
+uses the preceding 1,035-module parent; handler entry uses the current
+1,040-module parent. Exact artifact/log equality is required only for unchanged
+transitive source/import graphs; other paths retain exact source/report checks
+and are compiled in the coherent current graph.
+
+Constructor coverage stays 14/16. TASK-0032 acceptance stays C1 5/5, C2 0/4,
+C3 0/5, C4 2/3 and C5 0/4. The next bounded admission work identifies the minimum
+upstream finite index cut; the next runtime work connects actual past handler
+installations to the current allocation counter. These serve existing C2/C3
+obligations. Whole rich admission/reachability, M4 Valid/availability, complete
+observations/preparation and Rust correspondence remain open. Estimates stay
+40–71 base agent-hours, 50–90 with rework and 25–45 elapsed working hours under
+parallelism; these component checks do not close whole-fragment acceptance.
+
+Entry points: [resource output tree](<../design/direct-effects/one-shot/CoreCallableCompositionalResourceOpening.lean>), [resource tree interfaces](<../design/direct-effects/one-shot/CoreCallableResourceTreeInterfaces.lean>), [handler entry](<../design/direct-effects/one-shot/CoreCallableRichHandlerEntry.lean>)
+and [actual handler step](<../design/direct-effects/one-shot/CoreCallableRichHandlerCore.lean>).

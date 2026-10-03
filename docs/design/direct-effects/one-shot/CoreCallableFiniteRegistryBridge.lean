@@ -8,7 +8,7 @@ open CoreCallableFiniteCellRegistry (CellApi)
 local instance : SourcePlannedChecks.DeclarationPolicy :=
   SourceScheduledCleanupInterfaces.Lexical.Recursive.declarationPolicy
 
-/-- Limited to StaticTree, which has no handler/resource constructor. Full
+/-- Limited to StaticTree, which has no handler constructor. Full
 original code, contracts, dependencies, plans and rows remain exact indices. -/
 theorem transfer_tree
     {source : IndexedSource (CoreCallableStaticProducer.registry entries policy) outward owners world allowed scope
@@ -65,6 +65,17 @@ theorem transfer_tree
       exact ⟨.lambda b (by assumption) (by assumption) (by assumption) (by assumption) (by assumption),
         .lambda (refinement := by assumption) (bodyOutward := by assumption) (latentBound := by assumption)
           (publicCertified := by assumption) (formed := by assumption) bt⟩
+  | resource initial body ihI ihB =>
+      obtain ⟨i,it⟩ := ihI
+      let sources := fun identity fresh =>
+        (ihB identity fresh).elim (fun next _tree => next)
+      have trees : ∀ identity fresh, StaticTree _ outward (sources identity fresh) := by
+        intro identity fresh
+        obtain ⟨next,tree⟩ := ihB identity fresh
+        exact tree
+      exact ⟨.resource i sources (by assumption) (by assumption) (by assumption) (by assumption),
+        .resource (formed := by assumption) (effectsBound := by assumption)
+          (admitted := by assumption) (hidden := by assumption) it trees⟩
   | receiverLambda body refinement ih =>
       obtain ⟨b,bt⟩ := ih
       exact ⟨.receiverLambda (fun _ call => b.world_weaken call.worldExtended)

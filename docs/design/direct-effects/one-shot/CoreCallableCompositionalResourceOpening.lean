@@ -64,6 +64,27 @@ theorem check_opening (body : Body original context code pattern checking needs)
     (derived identity).tree.authenticate_world (List.Subset.refl _)
       (CoreCallableFiniteResourceTemplate.opening_known known) (CoreCallableFiniteResourceTemplate.opening_bounds bounds)
 
+/-- The successful finite opening check computes a tree for each SAME opened
+source, retaining all identity-indexed checking data. -/
+theorem check_opening_tree (body : Body original context code pattern checking needs)
+    (accepted : openingCheck original body api binder world residual lexical receiver = true)
+    (identity : Nat) (fresh : identity ∉ world) :
+    CoreCallableStaticProducer.StaticTree
+      (CoreCallableFiniteCellRegistry.registry (some api) entries policy) outward
+      ((check_opening (entries := entries) (policy := policy) (outward := outward)
+        (owners := owners) (scope := scope) body accepted).source identity fresh) := by
+  obtain ⟨⟨⟨⟨⟨⟨⟨a,b⟩,h⟩,d⟩,_e⟩,_f⟩,_g⟩,_r⟩ :=
+    (by simpa only [openingCheck,Bool.and_eq_true] using accepted)
+  have env : bindings original identity context = original := aligned_original h
+  have output : pattern.value original identity = pattern.value original 0 := pattern.constant d
+  have allowed : (allowedNames binder residual).map (EffectName.value identity) =
+      .cell identity :: residual := by
+    simp [allowedNames,EffectName.value,CoreCallableFiniteResourceTemplate.nameValue,
+      List.map_map,Function.comp_def]
+  simpa only [env,output,allowed] using
+    (body.derive (entries := entries) (policy := policy) (outward := outward)
+      (owners := owners) (scope := scope) (identity := identity) a b).tree
+
 def resourceCheck (original : CoreCallableStaticProducer.Bindings) (body : Body original context code pattern checking needs)
     (api : CoreCallableFiniteCellRegistry.CellApi)
     (binder : Nat) (world : List Nat) (residual allowed : List Instance) (lexical : LexicalBounds) (receiver : List Nat) : Bool :=
@@ -184,6 +205,38 @@ theorem check_inputs
       by_cases valid : resourceCheck original body api binder world residual allowed lexical receiver = true
       · exact valid
       · simp [check_compositional,checked,valid] at accepted
+
+/-- SAME successful checker receipt, full initializer and all fresh opened
+bodies produce resource provenance; no source family is a checker input. -/
+theorem check_compositional_tree
+    {annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows}
+    {receipt : PLift (Result api entries policy outward owners world residual allowed scope
+      original binder annotation body lexical receiver)}
+    (accepted : check_compositional annotation body api policy outward world residual allowed
+      scope binder lexical receiver = .ok receipt) :
+    CoreCallableStaticProducer.StaticTree
+      (CoreCallableFiniteCellRegistry.registry (some api) entries policy) outward
+      receipt.down.source := by
+  obtain ⟨⟨initialReceipt,initialAccepted⟩,resourceAccepted⟩ := check_inputs accepted
+  obtain ⟨initialSource,initialTree,_initialAuth,_issued⟩ :=
+    CoreCallableFiniteRegistryBridge.recheck_success initialAccepted
+  obtain ⟨⟨opened,effects⟩,admitted⟩ :
+      (openingCheck original body api binder world residual lexical receiver = true ∧
+      CoreCallableGraphAnnotationChecks.subsetB (residual.flatMap Instance.resources) world = true) ∧
+      CoreCallableGraphAnnotationChecks.subsetB residual allowed = true := by
+    simpa [resourceCheck] using resourceAccepted
+  let opening := check_opening (entries := entries) (policy := policy) (outward := outward)
+    (owners := owners) (scope := scope) body opened
+  exact CoreCallableStaticProducer.StaticTree.resource
+    (formed := opening.formed)
+    (effectsBound := CoreCallableGraphAnnotationChecks.subsetB_sound effects)
+    (admitted := CoreCallableGraphAnnotationChecks.subsetB_sound admitted)
+    (hidden := opening.hidden) initialTree
+    (check_opening_tree body opened)
+
+#print axioms check_opening_tree
+#print axioms check_compositional_tree
 
 #print axioms check_opening
 #print axioms check_success
