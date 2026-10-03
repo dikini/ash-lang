@@ -27771,3 +27771,64 @@ correspondence remain open. These are existing C2/C3/C5 dependencies.
 
 Entry points: [resource tree carrier](<CoreCallableStaticTreeCarrier.lean>), [fixed registry backend](<CoreCallableStaticRegistryBackend.lean>), [direct bridge](<CoreCallableFiniteRegistryBridge.lean>),
 [cell resource opening](<CoreCallableCompositionalResourceOpening.lean>) and [actual handler Event](<CoreCallableRichHandlerEventConsumers.lean>).
+
+### Resource requirement closing and current resume past — 2026-10-03
+
+This DN-0033 increment supplies two existing C2/C3 dependencies. It changes no
+Ash semantics, supported fragment or whole-package acceptance count.
+
+The requirement fold uses the existing Requirements and Hides relations at the
+same demand index. It preserves invocation keys and modes, callee demands,
+nearer owner phases and the actual choice permutation. Request and emit rows
+recover an ordinary context, execute residualization and check interpreted cell
+names against the current world. The returned all-fresh Hides proof comes from
+existing constructors. Combining the current Need executes its original
+validator and retains demand ++ []; it supplies no body Source, StaticTree,
+authentication, private Plans/Rows or universal resource annotation. Unsupported
+retire/spent and nonordinary owner contexts remain explicit checker outcomes,
+not changes to Ash admission.
+
+The resume wrapper consumes the existing typed ResumeInput, full rich Site and
+Current, and actual installation past. InitialChronology or SAME CausalStart
+with Generated supplies lexical ticket uniqueness privately. Existing
+Site.resume and live_cut_unique identify the complete literal front, input and
+answer types, captured scope, caller and tail; restored checking retains the
+original opaque Contracts and private Plans/Rows. The result is at the SAME
+resume_result endpoint and actual Core operation. One positive Event extends
+the actual RawTrace: issued stays unchanged, the dynamic ticket is prepended to
+completed, the event count increases and the ledger is transported. Machine
+Current and phantom Program/input indices do not supply ResumeReady, a runtime
+registry join or full M4 validity.
+
+The retained initial attempts stopped at dependent rewriting motives, an
+unqualified OwnerHeader and Interface monadic target reductions. Reviewed proof
+script repairs preserve the same theorem statements, inputs, outputs, guards
+and public interfaces. All five leaves now have actual productive PASS; Checks
+and Closing successes were reused under exact validated keys. Failed logs and
+absent artifacts remain historical. Local verification and the shared canonical gate have separate evidence.
+
+A read-only capture demonstration considers deriving current-owner freshness
+from a SAME-original-root registry/execution invariant. Conditional on that
+missing invariant, capture, restore and discard retain the exact Core states,
+selected handlers, values, owner lifecycle and cleanup order. The demonstration
+inspects existing source assertions; it executes no new trace and establishes
+no new proof. Nested-cell composition remains schematic. No crossing ban,
+source restriction or Core behavior change is proposed or implemented here.
+
+The ROOT coalesced gate checks 1,059 registered modules and 13,527 ordered standard-only reports. Its five affected leaves carry 28 reports; 1,054 unchanged parent artifact/log pairs retain actual hardlink identity. The accepted scheduler records 5 validated receipt hits and 0 new productive modules. Compiler-gate wall time is 0.852 seconds; preparation is 9.502 seconds. The 51 public source checks are exercised by canonical compilation or validated exact-key receipt reuse, without a second successful interface compile for metadata. Five original-parent missing-module failures and generic rejection proof reports remain distinct evidence. The metadata supplement retains 617 actual ordered recursive dependency outputs and the full 1,054-parent/eight-library before-after associations. Applied/staged audit, lint and packaging are required before the unsigned integration commit.
+
+A separate external private-API check resolves both module imports against the
+coalesced cache, then rejects access to interpreted_hides and resume_with_names.
+It exits with status 1 and produces no artifact. This supplemental two-name RED
+result is distinct from the 51 public source checks and five original-parent
+missing-module RED checks; those acceptance counts are unchanged.
+
+Original constructor coverage stays 14/16. Whole acceptance stays C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. Estimates remain 40–71 base agent-hours,
+50–90 with rework and 25–45 elapsed working hours. General resource annotation,
+body Source/Auth and private-family production, rich initial admission,
+reachable preservation, runtime registry correspondence, M4 Valid/availability
+and Rust correspondence remain open. This increment closes no whole C2/C3 item.
+
+Entry points: [requirement row checks](<CoreCallableResourceRequirementChecks.lean>), [all-fresh requirement closing](<CoreCallableResourceRequirementClosing.lean>), [requirement interfaces](<ResourceRequirementInterfaces.lean>),
+[actual current resume past](<CoreCallableRichResumePastConsumers.lean>) and [resume interfaces](<RichResumePastInterfaces.lean>).

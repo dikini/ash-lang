@@ -1,0 +1,50 @@
+import CoreCallableRichResumePastConsumers
+
+/-! Generic full resume/current/past interfaces. Current remains the existing
+machine relation plus RawTrace ledger, with independent Program indices. -/
+namespace Ash.OneShot.RichResumePastInterfaces
+open CoreCallableRichResumePastConsumers
+
+#check resume_raw
+#check resume_transition
+#check ResumePastOutput
+#check resume_from_initial_past
+#check resume_from_causal_past
+#check resume_full_physical
+#check resume_full_history
+#check resume_full_lexical
+#check resume_runtime_preserved
+#check resume_resolution_mismatch
+#check resume_physical_mismatch
+#check resume_lexical_mismatch
+#check resume_spent_front_rejected
+#check CoreCallableRichAdmittedCurrentOrigins.Current
+#check CoreCallableRichAdmittedCurrentOrigins.Current.input
+#check CoreCallableRichAdmittedCurrentOrigins.Current.related
+#check CoreCallableRichAdmittedCurrentOrigins.Current.run
+#check CoreCallableRichAdmittedCurrentOrigins.Current.machine
+#check CoreCallableRichAdmittedCurrentOrigins.Current.past
+#check CoreCallableRichAdmittedCurrentOrigins.Current.ledger
+#check CoreCallableRichHandlerFreshness.InstallationsPast
+#check CoreCallableRichHandlerFreshness.InstallationsPast.actual
+#check CoreCallableRichHandlerFreshness.InstallationsPast.membership
+#check CoreCallableRichHandlerFreshness.InstallationsPast.history
+#check CoreCallableRichHandlerFreshness.InstallationsPast.fresh
+#check CoreCallableRichHandlerFreshness.InstallationsPast.operation
+#check CoreCallableGeneratedChronology.ResumeInput
+#check CoreCallableGeneratedChronology.ResumeInput.split
+#check CoreCallableGeneratedChronology.ResumeInput.capturedHistory
+#check CoreCallableGeneratedChronology.ResumeInput.frontHistory
+#check CoreCallableGeneratedChronology.ResumeInput.outsideHistory
+#check CoreCallableGeneratedChronology.ResumeInput.operand
+#check CoreCallableGeneratedChronology.resume_location
+#check CoreCallableGeneratedChronology.resume_result
+#check CoreCallableGeneratedChronology.Generated.next
+#check CoreCallableInitialChronology.InitialChronology.lexical_ticket_bound
+#check CoreCallableInitialChronology.CausalStart.generated_from_initial
+#check CoreCallableGeneratedTicketBound.Generated.lexical_ticket_bound
+#check CoreCallableReachableResume.TicketBound.names
+#check CoreCallableResumeCorrespondence.live_cut_unique
+#check CoreCallableContractExecution.Site.resume
+
+end Ash.OneShot.RichResumePastInterfaces
