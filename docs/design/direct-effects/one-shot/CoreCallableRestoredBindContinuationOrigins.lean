@@ -1,6 +1,7 @@
 import CoreCallableRestoredBindConsumers
 import CoreCallableGeneratedCleanupCompletion
 import CoreCallableGeneratedTicketBound
+import ScopedPortRetained
 namespace Ash.OneShot.CoreCallableRestoredBindContinuationOrigins
 open CoreSyntax CoreMachine CoreTranslation CoreValueRelation CoreStrictFrames CoreStrictStack
 open CoreCaptureEntry CoreGeneralStack CoreRequestFrames
@@ -819,4 +820,49 @@ noncomputable def spent_position (history : GeneralHistory graph heap physical t
 #print axioms owner_from_live_path_picked
 #print axioms owner_from_live_path_ticket
 
+end Ash.OneShot.CoreCallableRestoredBindContinuationOrigins
+
+namespace Ash.OneShot.CoreCallableRestoredBindContinuationOrigins
+
+/-- Local ports for the actual two Unit operands do not admit surrounding code. -/
+theorem unit_pair_port : ScopedPorts.Typed signature world environment ticket allowed
+    (.pair .unit .unit) (.product .unit .unit) := .pair .unit .unit
+
+theorem pair_left_product_context
+    (right : ScopedPorts.Typed signature world environment ticket allowed code .unit) :
+    ScopedPorts.ContextTyped signature world environment ticket allowed
+      (.pairLeft code) .unit (.product .unit .unit) := .pairLeft right
+
+theorem pair_right_product_context :
+    ScopedPorts.ContextTyped signature world environment ticket allowed
+      (.pairRight .unit) .unit (.product .unit .unit) := .pairRight .unit
+
+/-- The original H suffix ignores parameter20. Its input comes from the actual
+Product initializer, not from an inferred use of that parameter. -/
+theorem product_bind_resume_context
+    (residual : residualEffects ⊆ allowed) :
+    ScopedPorts.ContextTyped signature world ScopedPorts.TypeEnv.empty
+      (.bound binder .unit .unit residualEffects closingEffects) allowed
+      (.bind parameter (.resume binder .unit)) (.product .unit .unit) .unit := by
+  exact .bind (.resume .unit residual (by simp [ScopedPorts.InWorld,ScopedPorts.Port.resources]))
+
+theorem pair_output_not_unit
+    (typed : ScopedPorts.Typed signature world environment ticket allowed (.pair left right) .unit) : False := by
+  cases typed
+
+theorem pair_left_context_output_not_unit
+    (typed : ScopedPorts.ContextTyped signature world environment ticket allowed (.pairLeft right) input .unit) : False := by
+  cases typed
+
+theorem pair_right_context_output_not_unit
+    (typed : ScopedPorts.ContextTyped signature world environment ticket allowed (.pairRight left) input .unit) : False := by
+  cases typed
+
+#print axioms unit_pair_port
+#print axioms pair_left_product_context
+#print axioms pair_right_product_context
+#print axioms product_bind_resume_context
+#print axioms pair_output_not_unit
+#print axioms pair_left_context_output_not_unit
+#print axioms pair_right_context_output_not_unit
 end Ash.OneShot.CoreCallableRestoredBindContinuationOrigins

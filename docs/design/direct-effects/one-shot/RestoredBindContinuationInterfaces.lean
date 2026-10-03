@@ -271,7 +271,7 @@ private noncomputable def installed_trace : Generated start s10 10 [.ticket 0] [
 private def callerScope : Execution.Scope := .ticket (ticket graph 0) 0
 private def callerOwners : OwnerMap := [⟨0,0,ticket graph 0⟩]
 private def callerEnv : CoreMachine.Environment := .binding 13 .unit (.binding 12 .unit .empty)
-private def bindPlain : PlainData := ⟨.bind 20 (.resume (ticket graph 0) .unit),callerScope,.unit,.unit,[0],rfl⟩
+private def bindPlain : PlainData := ⟨.bind 20 (.resume (ticket graph 0) .unit),callerScope,.product .unit .unit,.unit,[0],rfl⟩
 private noncomputable def bindingReady : BindReady s10 := {
   site := 6,binder := ⟨20,.product .unit .unit⟩,initializer := 5,body := 3
   environment := callerEnv,plain := bindPlain,node := graph.nodes[6]'(by decide)
@@ -298,7 +298,7 @@ private theorem bound_code : bound.focus = ⟨.pair requestK requestK,callerScop
   change (⟨bindingInput.past.contextCode,callerScope,.nil⟩ : Configuration) = _
   rw [code]
 private noncomputable def original_prefix : Prefix graph bound := .generated ordered bound_trace
-private def pairPlain : PlainData := ⟨.pairLeft requestK,callerScope,.unit,.unit,[],rfl⟩
+private def pairPlain : PlainData := ⟨.pairLeft requestK,callerScope,.unit,.product .unit .unit,[],rfl⟩
 private noncomputable def strictReady : EntryReady .pair bound := {
   site := 5,left := 4,right := 4,environment := callerEnv,plain := pairPlain
   node := graph.nodes[5]'(by decide),known := rfl,shape := rfl
@@ -405,7 +405,7 @@ private noncomputable def resumeReady : ResumeReady captureK e5 := {
   control := e5_returned,maps := rfl,focus := by
     change e3.focus = _
     exact e3_focus }
-private def returnPlain : PlainData := ⟨.pairRight .unit,callerScope,.unit,.unit,[],rfl⟩
+private def returnPlain : PlainData := ⟨.pairRight .unit,callerScope,.unit,.product .unit .unit,[],rfl⟩
 private theorem kept_exact : (dormant b2 captureK).kept =
     [.bind 20 3 callerEnv,.handlerBoundary 8 callerEnv 1] := by
   have same := dormant_original_tail b2 captureK
@@ -773,7 +773,7 @@ theorem original_tail_not_reused : completedBind.physical ≠ s10.physical := by
   change 5 = 3 at lengths
   cases lengths
 
-theorem preserved_annotation_boundary : bindPlain.input = .unit ∧ returnPlain.output = .unit ∧
+theorem preserved_annotation_boundary : bindPlain.input = .product .unit .unit ∧ returnPlain.output = .product .unit .unit ∧
     (graph.nodes[6]'(by decide)).kind = .bind ⟨20,.product .unit .unit⟩ 5 3 := ⟨rfl,rfl,rfl⟩
 
 open CoreCallableRestoredBindContinuationOrigins CoreCallableRestoredBindContinuationConsumers
@@ -1500,4 +1500,177 @@ theorem complete_original_owner_retirement :
 #print axioms computed_H_ticket
 #print axioms actual_H_resume
 #print axioms actual_H_positive
+end Ash.OneShot.RestoredBindContinuationInterfaces.Connected
+
+namespace Ash.OneShot.RestoredBindContinuationInterfaces.Connected
+open CoreCallableRestoredBindContinuationOrigins CoreCallableRestoredBindContinuationConsumers
+open CoreCallableGeneratedChronology
+open CoreSyntax CoreTranslation CoreMachine CoreValueRelation CoreStrictFrames CoreStrictStack
+open ScopedExpressions ScopedExecution CoreGeneralStack CoreGeneralCaptureResume CoreGeneralRestoration
+open CoreCallableGeneralHistory CoreCallableCallerBarriers CoreCallableRunningOccurrence CoreCallableReachableResume
+open CoreCallableRunningCapture CoreCallableSiteLineage CoreCaptureEntry CoreRequestFrames CoreCallableCleanupOrigins
+open CoreCallableCleanupReachableTransport CoreCleanupFrames
+
+/-- The finite local operation ports are projected from the SAME actual H/K
+request receipts. This is not a validated whole-program registry or admission. -/
+private noncomputable def originalSignature : ScopedPorts.Signature := fun effect operation =>
+  if effect = captureRequest.requested ∧ operation = captureRequest.operation then
+    some (ScopedPorts.eraseType captureRequest.plain.input,ScopedPorts.eraseType captureRequest.result)
+  else if effect = captureK.requested ∧ operation = captureK.operation then
+    some (ScopedPorts.eraseType captureK.plain.input,ScopedPorts.eraseType captureK.result)
+  else none
+
+/-- Historical ticket ports retain each actual allocated owner and original
+selected handler answer, including spent owners. Presence is not live readiness. -/
+private noncomputable def originalTicketPorts : ScopedPorts.TicketSignatures := fun owner =>
+  if owner = s8.state.nextOwner then
+    some (ScopedPorts.eraseType captureRequest.result,ScopedPorts.eraseType outerData.answer)
+  else if owner = e2.state.nextOwner then
+    some (ScopedPorts.eraseType captureK.result,ScopedPorts.eraseType frontData.answer)
+  else if owner = f2.state.nextOwner then
+    some (ScopedPorts.eraseType secondCaptureK.result,ScopedPorts.eraseType frontData.answer)
+  else none
+
+private def originalHTicket : ScopedPorts.Ticket := .bound (ticket graph 0) .unit .unit [] []
+
+/-- All ports come from the original literal request/handler annotations; the
+Core tuple and binder remain Product while their result remains Unit. -/
+theorem original_product_annotations :
+    bindPlain.input = .product .unit .unit ∧ bindPlain.output = .unit ∧
+    pairPlain.input = .unit ∧ pairPlain.output = .product .unit .unit ∧
+    returnPlain.input = .unit ∧ returnPlain.output = .product .unit .unit ∧
+    (graph.nodes[5]'(by decide)).type = .product .unit .unit ∧
+    (graph.nodes[6]'(by decide)).kind = .bind ⟨20,.product .unit .unit⟩ 5 3 :=
+  ⟨rfl,rfl,rfl,rfl,rfl,rfl,rfl,rfl⟩
+
+theorem original_capture_port_projection :
+    captureRequest.plain.input = .unit ∧ captureRequest.result = .unit ∧ outerData.answer = .unit ∧
+    captureK.plain.input = .unit ∧ captureK.result = .unit ∧ frontData.answer = .unit ∧
+    secondCaptureK.plain.input = .unit ∧ secondCaptureK.result = .unit ∧
+    originalSignature (.user 0 []) 0 = some (.unit,.unit) ∧
+    originalSignature (.user 1 []) 0 = some (.unit,.unit) :=
+  ⟨rfl,rfl,rfl,rfl,rfl,rfl,rfl,rfl,rfl,rfl⟩
+
+theorem original_allocated_ticket_ports :
+    s8.state.nextOwner = 0 ∧ e2.state.nextOwner = 1 ∧ f2.state.nextOwner = 2 ∧
+    originalTicketPorts 0 = some (.unit,.unit) ∧
+    originalTicketPorts 1 = some (.unit,.unit) ∧
+    originalTicketPorts 2 = some (.unit,.unit) := ⟨rfl,rfl,rfl,rfl,rfl,rfl⟩
+
+private theorem original_H_scope_typed :
+    ScopedPorts.ScopeTyped originalTicketPorts callerScope originalHTicket :=
+  .bound original_allocated_ticket_ports.2.2.2.1
+
+private theorem original_K_request_port :
+    ScopedPorts.Typed originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []] requestK .unit := by
+  exact .perform original_capture_port_projection.2.2.2.2.2.2.2.2.2 (by simp) .unit
+    (by simp [ScopedPorts.InWorld,ScopedPorts.Port.resources])
+
+theorem original_product_initializer_port :
+    ScopedPorts.Typed originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      bindingReady.initializerCode (.product .unit .unit) :=
+  .pair original_K_request_port original_K_request_port
+
+theorem original_bind_suffix_port :
+    ScopedPorts.Typed originalSignature []
+      (ScopedPorts.TypeEnv.empty.extend 20 (.product .unit .unit)) originalHTicket [.user 1 []]
+      bindingReady.suffix .unit := by
+  exact .resume .unit (by simp) (by simp [ScopedPorts.InWorld,ScopedPorts.Port.resources])
+
+theorem original_product_contexts :
+    ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      bindPlain.context (ScopedPorts.eraseType bindPlain.input) (ScopedPorts.eraseType bindPlain.output) ∧
+    ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      pairPlain.context (ScopedPorts.eraseType pairPlain.input) (ScopedPorts.eraseType pairPlain.output) ∧
+    ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      returnPlain.context (ScopedPorts.eraseType returnPlain.input) (ScopedPorts.eraseType returnPlain.output) :=
+  ⟨product_bind_resume_context (by simp),pair_left_product_context original_K_request_port,pair_right_product_context⟩
+
+theorem original_product_plain_frames :
+    ScopedPorts.FrameTyped originalSignature originalTicketPorts [] (.plain bindPlain) ∧
+    ScopedPorts.FrameTyped originalSignature originalTicketPorts [] (.plain pairPlain) ∧
+    ScopedPorts.FrameTyped originalSignature originalTicketPorts [] (.plain returnPlain) :=
+  ⟨plain_frame_at_current_ports original_H_scope_typed original_product_contexts.1,
+   plain_frame_at_current_ports original_H_scope_typed original_product_contexts.2.1,
+   plain_frame_at_current_ports original_H_scope_typed original_product_contexts.2.2⟩
+
+theorem original_pair_value_port :
+    ValueRel graph callerOwners discharged.state.heap (.location 0) (.pair .unit .unit) ∧
+    ScopedPorts.AtType originalSignature originalTicketPorts [] callerScope (.pair .unit .unit) (.product .unit .unit) :=
+  related_unit_pair_port fresh_pair original_H_scope_typed
+
+theorem original_bind_actual_typed_composition :
+    ScopedPorts.Typed originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      kBody .unit := .bind original_product_initializer_port original_bind_suffix_port
+
+/-- Pair contexts intrinsically cannot claim Unit output. -/
+theorem original_wrong_unit_pair_output :
+    ¬ ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      pairPlain.context .unit .unit ∧
+    ¬ ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      returnPlain.context .unit .unit :=
+  ⟨pair_left_context_output_not_unit,pair_right_context_output_not_unit⟩
+
+/-- The unused suffix can type under Unit, but the SAME actual Product
+initializer cannot compose at that input. The graph's original binder is retained. -/
+theorem original_wrong_unit_bind_input :
+    bindingReady.binder = ⟨20,.product .unit .unit⟩ ∧
+    ¬ (ScopedPorts.Typed originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+        bindingReady.initializerCode .unit ∧
+       ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+        bindPlain.context .unit .unit) :=
+  ⟨rfl,fun inconsistent => pair_output_not_unit inconsistent.1⟩
+
+private theorem K2_saved_scope : K2Position.data.scope = frontData.scope := by
+  have same := K2Position.targetSame.symm.trans h4_lexical
+  rw [K2_prefix_empty] at same
+  exact ((Stack.spent.inj same).2.2.1).trans (congrArg HandlerData.scope second_data)
+private theorem K1_saved_scope : K1Position.data.scope = frontData.scope := by
+  have same := K1Position.targetSame.symm.trans h5_lexical
+  rw [K1_prefix_empty] at same
+  exact (Stack.spent.inj same).2.2.1
+private theorem H_saved_scope : HPosition.data.scope = outerData.scope := by
+  have same := HPosition.targetSame.symm.trans h6_lexical
+  rw [H_prefix_empty] at same
+  exact (Stack.spent.inj same).2.2.1
+
+/-- These scopes are derived from actual full history selections. Historical
+port presence for consumed H is not an evaluating CurrentScopeOrigin. -/
+theorem original_spent_saved_scopes_typed :
+    ScopedPorts.ScopeKnown originalTicketPorts K2Position.data.scope ∧
+    ScopedPorts.ScopeKnown originalTicketPorts K1Position.data.scope ∧
+    ScopedPorts.ScopeKnown originalTicketPorts HPosition.data.scope := by
+  rw [K2_saved_scope,K1_saved_scope,H_saved_scope]
+  exact ⟨⟨originalHTicket,original_H_scope_typed⟩,⟨originalHTicket,original_H_scope_typed⟩,⟨.none,.none⟩⟩
+
+/-- Corrected annotations retain the SAME graph/runtime36/37 path, endpoint
+pair heap and all exact observations/ownership proofs. This is local port typing. -/
+theorem original_corrected_connected_trace :
+    CoreAllocationHistory.Steps graph 36 s0.state h8.state ∧
+    CoreAllocationHistory.Steps graph 37 (CoreCallableGeneratedChronology.start_before start).state h8.state ∧
+    h8.state.control = .returned .unit ∧ h8.state.heap = [.pair .unit .unit] :=
+  ⟨original_running_to_done,original_start_edge_to_done,final_saved_unit.1,final_pair_heap⟩
+
+#print axioms original_product_annotations
+#print axioms original_capture_port_projection
+#print axioms original_allocated_ticket_ports
+#print axioms original_product_initializer_port
+#print axioms original_bind_suffix_port
+#print axioms original_product_contexts
+#print axioms original_product_plain_frames
+#print axioms original_pair_value_port
+#print axioms original_bind_actual_typed_composition
+#print axioms original_wrong_unit_pair_output
+#print axioms original_wrong_unit_bind_input
+#print axioms original_spent_saved_scopes_typed
+#print axioms original_corrected_connected_trace
+
+/-- Parameter20 is unused, so a Unit-input suffix context is locally typable.
+This does not type the actual Product initializer at Unit. -/
+theorem unused_bind_unit_context_still_types :
+    ScopedPorts.ContextTyped originalSignature [] ScopedPorts.TypeEnv.empty originalHTicket [.user 1 []]
+      bindPlain.context .unit .unit := by
+  exact .bind (.resume .unit (by simp) (by simp [ScopedPorts.InWorld,ScopedPorts.Port.resources]))
+
+#print axioms unused_bind_unit_context_still_types
 end Ash.OneShot.RestoredBindContinuationInterfaces.Connected

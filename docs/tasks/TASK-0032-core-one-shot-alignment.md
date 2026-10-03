@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-03 08:09 UTC
+### Current deliverable board — 2026-10-03 09:07 UTC
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,10 +72,13 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Original second-beta and rich normal completion | **3 / 3 new; 2 / 2 shared sources** | **Passed** | **45 added reports; 26 interfaces; same initial21→35/result17/read0/release0** | **This checkpoint** | **Actual private reader selected; current root/caller preserved; general reachable preservation open** |
-| Restored-bind H continuation completion | **3 / 3 leaves** | **Passed** | **60 reports; 39 interfaces; original running-start27→36, Unit/cleanup0** | **This checkpoint** | **K2/K1/H0 spent returns and full capture histories connected; Product typing and initial admission open** |
-| Static selected-domain declaration transfer | **2 / 2 new; 2 / 2 shared sources** | **Passed** | **18 added reports; 20 interfaces; existing checker/narrowing/guards** | **This checkpoint** | **Selected formal narrows; unselected unchanged; handler future-world admission still open** |
-| **Completion/domain integration batch** | **3 / 3 components; 12 / 12 Lean deltas** | **Passed** | **123 added reports; 29 affected compiled; 1,003 artifact/log pairs reused** | **This checkpoint** | **One combined gate; stable whole-fragment counts/estimates unchanged** |
+| Original Product frame typing | **3 / 3 modified leaves** | **Passed** | **83 reports; 62 interfaces; exact three Product fields; same 36/37 operational trace** | **This checkpoint** | **Actual initializer/context/frame/pair/spent-scope ports connected; full rich initial admission remains open** |
+| Generic admitted seed and beta/event | **3 / 3 additive leaves** | **Passed** | **15 reports; 17 interfaces; accepted original resource seed; positive actual beta Event** | **This checkpoint** | **Program+existing InitialInput removes extra graph-check restriction; full rich M4 Valid/availability remains open** |
+| **Product/event integration batch** | **2 / 2 components; 6 / 6 Lean deltas** | **Passed** | **38 added reports; six affected compiled; 1,029 artifact/log pairs reused** | **This checkpoint** | **One grouped gate in 12.3 seconds; whole-fragment counts/estimates unchanged** |
+| Original second-beta and rich normal completion | **3 / 3 new; 2 / 2 shared sources** | **Passed** | **45 added reports; 26 interfaces; same initial21→35/result17/read0/release0** | **`2aaf6c1`** | **Actual private reader selected; current root/caller preserved; general reachable preservation open** |
+| Restored-bind H continuation completion | **3 / 3 leaves** | **Passed** | **60 reports; 39 interfaces; original running-start27→36, Unit/cleanup0** | **`2aaf6c1`** | **K2/K1/H0 spent returns and full capture histories connected; Product typing corrected above; rich initial admission open** |
+| Static selected-domain declaration transfer | **2 / 2 new; 2 / 2 shared sources** | **Passed** | **18 added reports; 20 interfaces; existing checker/narrowing/guards** | **`2aaf6c1`** | **Selected formal narrows; unselected unchanged; handler future-world admission still open** |
+| **Completion/domain integration batch** | **3 / 3 components; 12 / 12 Lean deltas** | **Passed** | **123 added reports; 29 affected compiled; 1,003 artifact/log pairs reused** | **`2aaf6c1`** | **One combined gate; stable whole-fragment counts/estimates unchanged** |
 | Original first-beta rich current provider | **3 / 3 leaves** | **Passed** | **23 reports; twelve interfaces; actual initial21 and rich e21 current** | **`937b84b`** | **Original higher Family and reader support chosen directly; Second beta and rich completion now connected above** |
 | Actual delivered clause support | **3 / 3 leaves** | **Passed** | **32 reports; sixteen interfaces; actual literal handoff and conditional formal receipt** | **`937b84b`** | **Scalar support separated from retained storage; exact old whole-receiver specialization; general handler admission open** |
 | **First-beta/delivery batch integration** | **6 / 6 additive sources** | **Passed** | **55 additional reports; six compiled; 1,018 artifact/log pairs reused** | **`937b84b`** | **One combined gate; stable whole-fragment counts/estimates unchanged** |
@@ -3130,3 +3133,64 @@ plain/cell checkpoint. This records existing scope rather than adding a package.
 
 No scope change. The C1 fragment and transition inventories remain the acceptance
 boundary for C2–C5; verified components do not replace their full coverage.
+
+### Original Product typing and admitted beta/event integration — 2026-10-03
+
+This DN-0033 experiment connects two reviewed components without changing Ash
+semantics or the supported fragment. It supersedes the Product annotation gap
+in the current H continuation leaves; the older standalone bind/tuple witnesses
+retain their documented historical gap.
+
+| Component | Concrete result | Remaining boundary |
+| --- | --- | --- |
+| Original Product frames | Three current PlainData fields corrected; 83 reports, 62 interfaces; actual bind initializer, pair contexts, frames, returned location0 pair and saved spent scopes typed | Full Supported suffix/returned-pair Source/Auth and original initial admission remain open |
+| Rich admitted seed and beta/event | Any accepted Program plus SAME executed InitialInput constructs the zero-event seed; existing accepted resource Program connected; 15 reports, 17 interfaces | A graph-coherence producer for every accepted Core input and whole rich reachable preservation remain open |
+| Generic actual beta | Existing full BetaPreserved and private Plans/Rows/root transport retained; actual Core next and positive Event append the genuine past RawTrace; issued/completed unchanged | Allocating freshness, other transitions, full rich M4 Valid/availability and Rust capacity remain open |
+
+The Product corrections are bindPlain.input and pairPlain/returnPlain.output,
+all Product(Unit,Unit). The original graph, operational 36/37 edges, Unit result,
+pair heap, owner retirement, saved scopes and full rich histories are retained.
+The wrong Unit-input bind negative includes the SAME actual Product initializer;
+the unused suffix alone is explicitly shown typable under Unit. Finite operation
+and historical ticket ports project actual capture/allocated-owner fields; they
+do not establish a validated global registry or a live resume capability.
+
+ROOT review found V1's extra GraphResult seed premise unnecessarily restricted
+use to the existing 14/16 static constructor grammar. V2 reuses the accepted
+Program's admission and the existing shape/root translation InitialInput. The
+old GraphResult interface delegates. The original resource instance uses its
+already executed CheckedGraphPrefix input and accepted rootCheck Program;
+there is no new fixture, source validator or admission factory. V1 and the
+clarification remain immutable. Beta's source is unchanged by this correction.
+
+Current causal authority retains the full rich Site and actual past RawTrace and
+ledger. Nonallocating beta inherits historical freshness from issued.Nodup and
+creates no owner. It does not infer full histories from physical emptiness,
+convert rich Auth to legacy Valid, or take desired future Source/Site/chain as
+input. Terminal accounting consumes the actual terminal guard.
+
+Both components passed author-disjoint ROOT source review and isolated replay;
+all six source/artifact/log associations match the author freezes byte for byte.
+The combined gate has 1,035 modules and 13,388 ordered standard-only reports,
+a net 38 reports. Six affected modules compiled once in 12.3 seconds; 1,029 actual
+unaffected artifact/log pairs were reused through verified hardlinks. All direct
+imports and eight compiler/library pins were checked. The Product batch has 62
+interfaces and the event batch 17; each has two honest parent-only missing-interface
+failures with no output artifact. Domain handler consumers will be compiled as a
+separate affected closure after their coherent implementation is reviewed.
+
+Domain-aware handler propagation is a separate active batch: the proof carrier
+explicitly distinguishes whole/domain evidence through installed frames,
+capture and exact canonical restoration. Rich handler entry and future
+receiver-sensitive private-row production are still missing. Constructor
+coverage stays 14/16. The TASK-0032 whole-fragment counts remain C1 5/5, C2 0/4,
+C3 0/5, C4 2/3 and C5 0/4. The planning ranges remain 40–71 base agent-hours,
+50–90 with rework and 25–45 elapsed working hours with parallelism. Local
+components are completed; these ranges are not reduced until general acceptance
+obligations close. General C2/C3/C5, allocating freshness, full M4 Valid and
+availability, and Rust capacity/preparation correspondence remain open.
+
+Entry points: [Product frame interfaces](../design/direct-effects/one-shot/RestoredBindContinuationInterfaces.lean),
+[generic admitted origins](../design/direct-effects/one-shot/CoreCallableRichAdmittedCurrentOrigins.lean),
+[actual beta/event consumer](../design/direct-effects/one-shot/CoreCallableRichAdmittedEventConsumers.lean),
+and [resource seed/negative interfaces](../design/direct-effects/one-shot/RichAdmittedEventInterfaces.lean).

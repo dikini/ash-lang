@@ -1037,3 +1037,6 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableOriginalReadCompleti
 lean -DwarningAsError=true -o "$proof_build_dir/OriginalSecondBetaCompletionCurrentProbes.olean" OriginalSecondBetaCompletionCurrentProbes.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSelectedOperandDomainSupport.olean" CoreCallableSelectedOperandDomainSupport.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableSelectedDomainDeclarationTransfer.olean" CoreCallableSelectedDomainDeclarationTransfer.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichAdmittedCurrentOrigins.olean" CoreCallableRichAdmittedCurrentOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichAdmittedEventConsumers.olean" CoreCallableRichAdmittedEventConsumers.lean
+lean -DwarningAsError=true -o "$proof_build_dir/RichAdmittedEventInterfaces.olean" RichAdmittedEventInterfaces.lean

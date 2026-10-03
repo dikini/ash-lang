@@ -145,3 +145,26 @@ noncomputable def finish_original_result {graph : Graph} {current : Endpoint gra
 
 #print axioms resume_live_result
 end Ash.OneShot.CoreCallableRestoredBindContinuationConsumers
+
+namespace Ash.OneShot.CoreCallableRestoredBindContinuationConsumers
+open ScopedExpressions ScopedExecution CoreValueRelation
+
+/-- The existing frame judgment retains the original runtime scope and context. -/
+theorem plain_frame_at_current_ports
+    (scope : ScopedPorts.ScopeTyped tickets data.scope ticket)
+    (context : ScopedPorts.ContextTyped signature world ScopedPorts.TypeEnv.empty ticket allowed
+      data.context (ScopedPorts.eraseType data.input) (ScopedPorts.eraseType data.output)) :
+    ScopedPorts.FrameTyped signature tickets world (.plain data) := .plain scope context
+
+/-- Pair typing is paired with the SAME actual returned value correspondence.
+No Source, authentication, whole heap typing or future scope readiness is inferred. -/
+theorem related_unit_pair_port
+    (related : ValueRel graph owners heap value (.pair .unit .unit))
+    (scope : ScopedPorts.ScopeTyped tickets runtimeScope ticket) :
+    ValueRel graph owners heap value (.pair .unit .unit) ∧
+      ScopedPorts.AtType signature tickets world runtimeScope (.pair .unit .unit) (.product .unit .unit) :=
+  ⟨related,.checked scope (CoreCallableRestoredBindContinuationOrigins.unit_pair_port (allowed := []))⟩
+
+#print axioms plain_frame_at_current_ports
+#print axioms related_unit_pair_port
+end Ash.OneShot.CoreCallableRestoredBindContinuationConsumers
