@@ -1,6 +1,9 @@
 # Architectural decisions
 
-Architectural decisions record accepted non-language choices after exploration converges. They may cover parser architecture, Core representation, compiler passes, repository workflow, or implementation tooling. They do not change Ash language semantics.
+Architectural decisions record accepted non-language choices after exploration
+converges. They may cover parser architecture, Core representation, compiler
+passes, repository workflow, or implementation tooling. They do not change Ash
+language semantics.
 
 Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 
@@ -17,3 +20,4 @@ Use [the template](template.md) and allocate the next `AD-NNNN` ID.
 - [AD-0009: Ordered Resolved-Global Binder Authority](AD-0009-ordered-resolved-global-binder-authority.md)
 - [AD-0010: Human Diagnostic Presentation and Localization](AD-0010-human-diagnostic-presentation-and-localization.md)
 - [AD-0011: Milestone Worktree Lifecycle](AD-0011-milestone-worktree-lifecycle.md)
+- [AD-0012: Proof development feedback and build reuse](AD-0012-proof-development-feedback-and-build-reuse.md)
