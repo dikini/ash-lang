@@ -277,15 +277,15 @@ theorem Authenticated.substitution_reannotated_at
         BodyAuthentication registry outward nextSource lexical receiver ∧
         nextPlan = CoreCallablePlanSubstitution.plan code plan name value ∧ signature nextPlan = signature plan ∧ HEq nextRows rows)
     (motive_4 := fun {owners world sourceEnvironment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source sourceLexical receiver _ =>
-      ∀ environment name replacementType value lexical valueBound,
-      sourceEnvironment = environment.extend name replacementType → (∀ n, Syntax.Dependency.variable n ∈ code.dependencies → sourceLexical.lookup n = ((lexical.extend name valueBound).extend parameter receiver).lookup n) →
+      ∀ formalSupport environment name replacementType value lexical valueBound,
+      sourceEnvironment = environment.extend name replacementType → (∀ n, Syntax.Dependency.variable n ∈ code.dependencies → sourceLexical.lookup n = ((lexical.extend name valueBound).extend parameter formalSupport).lookup n) →
       (replacement : IndexedSource registry outward owners world allowed .none environment value replacementType [] (.request [] []) .pure Rows.pure) →
       ClosedValue value → Syntax.resourceDependencies value.dependencies ⊆ valueBound →
       (Syntax.Dependency.variable name ∈ Syntax.without (.variable parameter) code.dependencies → Authenticated registry outward replacement lexical receiver) →
       ∃ nextPlans : ModePlans family, ∃ nextRows : ModeRows (modeSignatures nextPlans),
         ∃ nextSource : SourceOffer registry outward owners world environment allowed parameter binder argument input answer resumeEffects closeEffects
           (if name = parameter then code else code.subst name value) held disposes row nextPlans nextRows,
-        OfferAuthentication registry outward nextSource (lexical.extend parameter receiver) receiver ∧
+        OfferAuthentication registry outward nextSource (lexical.extend parameter formalSupport) receiver ∧
         nextPlans = (if name = parameter then plans else CoreCallablePlanSubstitution.modes code plans name value) ∧ modeSignatures nextPlans = modeSignatures plans ∧ HEq nextRows rows)
     (motive_5 := fun {owners world sourceEnvironment allowed requested answer clauses table families plans rows} source sourceLexical receiver _ =>
       ∀ environment name input value lexical valueBound,
@@ -296,6 +296,16 @@ theorem Authenticated.substitution_reannotated_at
       ∃ nextPlans : ClausePlans (clauses.subst name value) families, ∃ nextRows : ClauseRows (clauseSignatures nextPlans),
         ∃ nextSource : SourceDeclarations registry outward owners world environment allowed requested answer (clauses.subst name value) table nextPlans nextRows,
         DeclarationAuthentication registry outward nextSource lexical receiver ∧
+        nextPlans = CoreCallablePlanSubstitution.clauses plans name value ∧ clauseSignatures nextPlans = clauseSignatures plans ∧ HEq nextRows rows)
+    (motive_6 := fun {owners world sourceEnvironment allowed requested answer clauses table families plans rows} source sourceLexical receiver _ =>
+      ∀ environment name input value lexical valueBound,
+      sourceEnvironment = environment.extend name input → (∀ n, Syntax.Dependency.variable n ∈ clauses.dependencies → sourceLexical.lookup n = (lexical.extend name valueBound).lookup n) →
+      (replacement : IndexedSource registry outward owners world allowed .none environment value input [] (.request [] []) .pure Rows.pure) →
+      ClosedValue value → Syntax.resourceDependencies value.dependencies ⊆ valueBound →
+      (Syntax.Dependency.variable name ∈ clauses.dependencies → Authenticated registry outward replacement lexical receiver) →
+      ∃ nextPlans : ClausePlans (clauses.subst name value) families, ∃ nextRows : ClauseRows (clauseSignatures nextPlans),
+        ∃ nextSource : SourceDeclarations registry outward owners world environment allowed requested answer (clauses.subst name value) table nextPlans nextRows,
+        DomainDeclarationAuthentication registry outward nextSource lexical receiver ∧
         nextPlans = CoreCallablePlanSubstitution.clauses plans name value ∧ clauseSignatures nextPlans = clauseSignatures plans ∧ HEq nextRows rows) with
   | checked current hereditary ih =>
       intro environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
@@ -484,10 +494,12 @@ theorem Authenticated.substitution_reannotated_at
       obtain ⟨next, nextRows, nextSource, auth, phiSame, sameSig, aligned⟩ := ih environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       exact ⟨_, _, .typed nextSource (by assumption) (by assumption), .typed (normal := by assumption) (closing := by assumption) auth, phiSame, sameSig, aligned⟩
   | unavailable =>
-      rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      rename_i formalSupport environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       exact ⟨.unavailable, .unavailable, .unavailable, .unavailable, by simp [CoreCallablePlanSubstitution.modes], rfl, HEq.rfl⟩
   | nil =>
       exact ⟨.nil, .nil, .nil, .nil, rfl, rfl, HEq.rfl⟩
+  | domainNil =>
+      exact ⟨.nil, .nil, .nil, .domainNil, rfl, rfl, HEq.rfl⟩
   | bind initial body ihI ihB =>
       rename_i owners world allowed scope sourceEnvironment a parameterInput initialDemand initialReq initialDeps initialPlan initialRows parameter b output bodyDemand bodyReq bodyDeps bodyPlan bodyRows sourceLexical receiver initialSource bodySource environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       cases sameEnvironment
@@ -548,14 +560,14 @@ theorem Authenticated.substitution_reannotated_at
         bodyOutward latentBound publicCertified formed known sameLexical replacement closed authReplacement
       exact ⟨.pure, Rows.pure, nextSource, hereditary, rfl, rfl, HEq.rfl⟩
   | available resumeInterface closeInterface body ih =>
-      rename_i resumeEffects closeEffects held allowed binder parameter code disposes row sourceLexical receiver owners world sourceEnv argument parameterInput answer family originalPlans originalRows bodySource environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      rename_i resumeEffects closeEffects held allowed binder parameter code disposes row sourceLexical receiver owners world sourceEnv argument parameterInput answer family originalPlans originalRows bodySource formalSupport environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       cases sameEnvironment
       by_cases shadow : name = parameter
       · subst name
         have typeAgree : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies →
             (environment.extend parameter input).extend parameter argument n = environment.extend parameter argument n := by
           intro n _; by_cases same : n = parameter <;> simp [Environment.extend, same]
-        have lexicalAgree : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies → sourceLexical.lookup n = (lexical.extend parameter receiver).lookup n := by
+        have lexicalAgree : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies → sourceLexical.lookup n = (lexical.extend parameter formalSupport).lookup n := by
           intro n mem
           have old := sameLexical n mem
           by_cases same : n = parameter <;> simpa [lexical_lookup_extend, same] using old
@@ -569,7 +581,7 @@ theorem Authenticated.substitution_reannotated_at
         let changedRows := fun owner =>
           (CoreCallablePlanSubstitution.plan_signature code (originalPlans owner) name closed.1).symm ▸ originalRows owner
         have lexicalAgree : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies →
-            sourceLexical.lookup n = ((lexical.extend parameter receiver).extend name bound).lookup n := by
+            sourceLexical.lookup n = ((lexical.extend parameter formalSupport).extend name bound).lookup n := by
           intro n mem
           have old := sameLexical n mem
           by_cases same : n = parameter
@@ -580,16 +592,16 @@ theorem Authenticated.substitution_reannotated_at
             (balanced : contract.closeDemand.Perm contract.resumeDemand),
             ∃ nextSource : SourceBody registry outward (owners.insert owner contract) world allowed (.ticket binder owner)
               (environment.extend parameter argument) (code.subst name value) answer ⟨owner, contract.lower, disposes, row⟩ (changedPlans owner) (changedRows owner),
-              BodyAuthentication registry outward nextSource (lexical.extend parameter receiver) receiver := by
+              BodyAuthentication registry outward nextSource (lexical.extend parameter formalSupport) receiver := by
           intro owner contract a b c d e balanced
           let replacementAt := (((replacement.value_owner_insert closed.1 owner contract).value_allowed closed.1 allowed (.ticket binder owner)).closed_environment closed (environment.extend parameter argument))
           have replacementAuth : Syntax.Dependency.variable name ∈ code.dependencies →
-              Authenticated registry outward replacementAt (lexical.extend parameter receiver) receiver := by
+              Authenticated registry outward replacementAt (lexical.extend parameter formalSupport) receiver := by
             intro occurs
             exact ((((authReplacement (Syntax.mem_without.mpr ⟨occurs, by simpa using shadow⟩)).value_owner_insert closed.1 owner contract).value_allowed closed.1 allowed (.ticket binder owner)).closed_environment closed _).lexical_congr
               (fun _ mem => False.elim (ScopedTyping.closedValue_no_variable closed mem))
           obtain ⟨nextPlan, nextRows, nextSource, auth, exactPlan, sameSignature, aligned⟩ := ih owner contract a b c d e balanced
-            _ name input value (lexical.extend parameter receiver) bound
+            _ name input value (lexical.extend parameter formalSupport) bound
             (Environment.extend_commute environment name parameter input argument shadow) lexicalAgree replacementAt closed actual replacementAuth
           cases exactPlan
           have sameRows : HEq nextRows (changedRows owner) := aligned.trans
@@ -623,9 +635,9 @@ theorem Authenticated.substitution_reannotated_at
         intro occurs
         exact authReplacement (List.mem_append_left _ (Syntax.mem_without.mpr ⟨occurs, by simp⟩))
       obtain ⟨nextOrd, rowsOrd, sourceOrd, authOrd, phiOrd, sigOrd, alignedOrd⟩ :=
-        ihO environment name input value lexical bound rfl lookupBody replacement closed actual authMode
+        ihO receiver environment name input value lexical bound rfl lookupBody replacement closed actual authMode
       obtain ⟨nextProt, rowsProt, sourceProt, authProt, phiProt, sigProt, alignedProt⟩ :=
-        ihP environment name input value lexical bound rfl lookupBody replacement closed actual authMode
+        ihP receiver environment name input value lexical bound rfl lookupBody replacement closed actual authMode
       obtain ⟨nextRest, rowsRest, sourceRest, authRest, phiRest, sigRest, alignedRest⟩ :=
         ihR environment name input value lexical bound rfl (fun n mem => sameLexical n (List.mem_append_right _ mem)) replacement closed actual
           (fun occurs => authReplacement (List.mem_append_right _ occurs))
@@ -654,6 +666,53 @@ theorem Authenticated.substitution_reannotated_at
       · simp only [CoreCallablePlanSubstitution.clauses]; rw [phiOrd, phiProt, phiRest]; split <;> simp_all <;> try rfl
       · simp only [clauseSignatures]; exact signature_declaration_cons_same sigOrd sigProt sigRest rights
       · exact (transport_heq _ _).trans ((declaration_cons_heq sigOrd sigProt sigRest rights alignedOrd alignedProt alignedRest).trans (transport_heq _ _).symm)
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i owners world sourceEnv allowed parameter binder argument parameterInput answer resumeEffects closeEffects code disposes ordinaryRow ordinaryFamily originalOrdinary originalOrdinaryRows protectedRow protectedFamily originalProtected originalProtectedRows requested clauses table restFamily originalRest originalRestRows operation receiver formalSupport supportBound sourceLexical ordinarySource protectedSource restSource environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      cases sameEnvironment
+      have lookupBody : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies →
+          (sourceLexical.extend parameter formalSupport).lookup n = ((lexical.extend name bound).extend parameter formalSupport).lookup n := by
+        intro n mem
+        by_cases shadow : n = parameter
+        · subst n; simp
+        · have old := sameLexical n (List.mem_append_left _
+            (Syntax.mem_without.mpr ⟨Syntax.mem_without.mpr ⟨mem, by simpa using shadow⟩, by simp⟩))
+          simpa [lexical_lookup_extend, shadow] using old
+      have authMode : Syntax.Dependency.variable name ∈ Syntax.without (.variable parameter) code.dependencies →
+          Authenticated registry outward replacement lexical receiver := by
+        intro occurs
+        exact authReplacement (List.mem_append_left _ (Syntax.mem_without.mpr ⟨occurs, by simp⟩))
+      obtain ⟨nextOrd, rowsOrd, sourceOrd, authOrd, phiOrd, sigOrd, alignedOrd⟩ :=
+        ihO formalSupport environment name input value lexical bound rfl lookupBody replacement closed actual authMode
+      obtain ⟨nextProt, rowsProt, sourceProt, authProt, phiProt, sigProt, alignedProt⟩ :=
+        ihP formalSupport environment name input value lexical bound rfl lookupBody replacement closed actual authMode
+      obtain ⟨nextRest, rowsRest, sourceRest, authRest, phiRest, sigRest, alignedRest⟩ :=
+        ihR environment name input value lexical bound rfl (fun n mem => sameLexical n (List.mem_append_right _ mem)) replacement closed actual
+          (fun occurs => authReplacement (List.mem_append_right _ occurs))
+      have newBound : SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.Bounds
+          (lexical.extend parameter formalSupport).environment (if name = parameter then code else code.subst name value).dependencies supportBound := by
+        apply SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mpr
+        have oldReceived := SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.bounds_iff.mp bodyBound
+        rw [evaluated_lookup_congr lookupBody] at oldReceived
+        by_cases shadow : name = parameter
+        · subst name
+          have sameLookup : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies →
+              ((lexical.extend parameter bound).extend parameter formalSupport).lookup n = (lexical.extend parameter formalSupport).lookup n := by
+            intro n _; by_cases same : n = parameter <;> simp [lexical_lookup_extend, same]
+          simpa only [↓reduceIte] using (evaluated_lookup_congr sameLookup ▸ oldReceived)
+        · have sameLookup : ∀ n, Syntax.Dependency.variable n ∈ code.dependencies →
+              ((lexical.extend name bound).extend parameter formalSupport).lookup n = ((lexical.extend parameter formalSupport).extend name bound).lookup n := by
+            intro n _; by_cases same : n = parameter <;> simp [lexical_lookup_extend, same, Ne.symm shadow]
+          rw [evaluated_lookup_congr sameLookup, LexicalBounds.environment_extend] at oldReceived
+          simpa only [if_neg shadow] using
+            (ScopedPorts.Support.substitution_support_bound (environment := (lexical.extend parameter formalSupport).environment) code name closed actual).trans oldReceived
+      have rights : (if name = parameter then code else code.subst name value).requiredActions = code.requiredActions := by
+        split <;> simp only [Code.substitution_required_actions code name closed.1]
+      refine ⟨.cons nextOrd nextProt nextRest, _,
+        by simpa only [Clauses.subst] using SourceDeclarations.cons supportBound known sourceOrd sourceProt sourceRest,
+        by simpa only [Clauses.subst] using DomainDeclarationAuthentication.domainCons known domainCovered formalReceived newBound storedReceived authOrd authProt authRest, ?_, ?_, ?_⟩
+      · simp only [CoreCallablePlanSubstitution.clauses]; rw [phiOrd, phiProt, phiRest]; split <;> simp_all <;> try rfl
+      · simp only [clauseSignatures]; exact signature_declaration_cons_same sigOrd sigProt sigRest rights
+      · exact (transport_heq _ _).trans ((declaration_cons_heq sigOrd sigProt sigRest rights alignedOrd alignedProt alignedRest).trans (transport_heq _ _).symm)
   | handler clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
       rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
       cases sameEnvironment
@@ -675,6 +734,31 @@ theorem Authenticated.substitution_reannotated_at
         by simpa only [Code.subst] using (IndexedSource.handler sourceBody
           (by simpa only [Environment.ports_extend] using nextClauses) nextCapabilities (by simpa only [ScopedPorts.Covers, ScopedTyping.clause_keys_substitution] using coverage) (by simpa only [ScopedTyping.clause_keys_substitution] using unique) admitted _ nextModes sourceDecl (stable recipes sigDecl.symm)),
         by simpa only [Code.subst] using (Hereditary.handler
+          (by simpa only [Environment.ports_extend] using nextClauses) nextCapabilities (by simpa only [ScopedPorts.Covers, ScopedTyping.clause_keys_substitution] using coverage) (by simpa only [ScopedTyping.clause_keys_substitution] using unique) admitted nextModes (stable recipes sigDecl.symm) authBody authDecl), ?_, ?_, ?_⟩
+      · simp only [CoreCallablePlanSubstitution.plan]; rw [phiBody, phiDecl]
+      · simp only [signature]; exact signature_handler_same sigDecl sigBody
+      · exact (transport_heq _ _).trans ((handler_rows_heq sigDecl sigBody alignedDecl alignedBody).trans (transport_heq _ _).symm)
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i environment name input value lexical bound sameEnvironment sameLexical replacement closed actual authReplacement
+      cases sameEnvironment
+      obtain ⟨nextBody, rowsBody, sourceBody, authBody, phiBody, sigBody, alignedBody⟩ :=
+        ihB environment name input value lexical bound rfl
+          (fun n mem => sameLexical n (List.mem_append_left _ (List.mem_append_right _ mem))) (replacement.value_allowed closed.1 _ _) closed actual
+          (fun occurs => (authReplacement (List.mem_append_left _ (List.mem_append_right _ occurs))).value_allowed closed.1 _ _)
+      obtain ⟨nextDecl, rowsDecl, sourceDecl, authDecl, phiDecl, sigDecl, alignedDecl⟩ :=
+        ihD environment name input value lexical bound rfl
+          (fun n mem => sameLexical n (List.mem_append_right _ mem)) (replacement.value_allowed closed.1 _ .none) closed actual
+          (fun occurs => (authReplacement (List.mem_append_right _ occurs)).value_allowed closed.1 _ .none)
+      have nextClauses := ScopedPorts.clauses_typed_substitution
+        (by simpa only [Environment.ports_extend] using clauses)
+        ((replacement.value_allowed closed.1 [] .none).erase) closed
+      have nextCapabilities := ScopedExpressions.clauses_usage_substitution capabilities closed.1
+        ((replacement.value_allowed closed.1 [] .none).usage_for_substitution rfl) name
+      have nextModes := SourceTemplates.clause_modes_substitution modes closed.1 name
+      refine ⟨.handler _ nextDecl nextBody, _,
+        by simpa only [Code.subst] using (IndexedSource.handler sourceBody
+          (by simpa only [Environment.ports_extend] using nextClauses) nextCapabilities (by simpa only [ScopedPorts.Covers, ScopedTyping.clause_keys_substitution] using coverage) (by simpa only [ScopedTyping.clause_keys_substitution] using unique) admitted _ nextModes sourceDecl (stable recipes sigDecl.symm)),
+        by simpa only [Code.subst] using (Hereditary.handlerDomain
           (by simpa only [Environment.ports_extend] using nextClauses) nextCapabilities (by simpa only [ScopedPorts.Covers, ScopedTyping.clause_keys_substitution] using coverage) (by simpa only [ScopedTyping.clause_keys_substitution] using unique) admitted nextModes (stable recipes sigDecl.symm) authBody authDecl), ?_, ?_, ?_⟩
       · simp only [CoreCallablePlanSubstitution.plan]; rw [phiBody, phiDecl]
       · simp only [signature]; exact signature_handler_same sigDecl sigBody

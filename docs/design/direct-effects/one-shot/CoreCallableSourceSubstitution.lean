@@ -1,5 +1,6 @@
 import CoreCallablePlanSubstitution
 import CoreCallableReceiverRefinement
+import CoreCallableContractOperandDomain
 
 /-! Experimental authenticated contract source. Exact global operation contracts,
 execution scope, scalar requirements, actual declaration plans and contextual
@@ -238,6 +239,19 @@ inductive SourceDeclarations (registry : Registry) (outward : List Instance) :
           (@ClauseRows.cons _ (modeSignatures ordinaryPlan) _ (modeSignatures protectedPlan) _ (clauseSignatures restPlan)
             operation body.requiredActions ordinaryRows protectedRows restRows supportBound))
 end
+
+/-- Current closed operand support is bounded by its SAME full operation domain. -/
+theorem IndexedSource.closed_support_in_domain
+    (source : IndexedSource registry outward owners world allowed scope environment code argument demand requirements plan rows)
+    (closed : ClosedValue code)
+    (received : ScopedPorts.Support.evaluate ScopedPorts.Support.empty code.dependencies ⊆ receiver) :
+    ScopedPorts.Support.evaluate ScopedPorts.Support.empty code.dependencies ⊆
+      CoreCallableContractOperandDomain.domainSupport argument receiver := by
+  cases argument <;> simp only [CoreCallableContractOperandDomain.domainSupport]
+  all_goals first
+    | exact received
+    | cases code <;> simp_all [ClosedValue, Code.IsValue]
+      all_goals cases source <;> simp [Code.dependencies, ScopedPorts.Support.evaluate]
 
 /-- Compatibility view: the immutable registry is a parameter; owner table
 and historical world are genuine recursive indices. -/
@@ -818,6 +832,18 @@ inductive Hereditary (registry : Registry) (outward : List Instance) :
       (body : Authenticated registry outward bodySource lexical receiver)
       (declarations : DeclarationAuthentication registry outward declarationSource lexical receiver) :
       Hereditary registry outward (IndexedSource.handler bodySource clauses capabilities coverage unique admitted table modes declarationSource recipes) lexical receiver
+  | handlerDomain
+      {bodySource : IndexedSource registry outward owners world (effect :: residual) scope environment code answer demand requirements bodyPlan bodyRows}
+      {declarationSource : SourceDeclarations registry outward owners world environment residual effect answer arms table plans declarationRows}
+      (clauses : ScopedPorts.ClausesTyped registry.ports world environment.ports effect answer.port residual arms)
+      (capabilities : ClausesUse registry.policy arms)
+      (coverage : ScopedPorts.Covers registry.ports effect arms)
+      (unique : (ScopedTyping.clauseKeys arms).Nodup) (admitted : residual ⊆ allowed)
+      (modes : SourceTemplates.ClauseModes arms table)
+      (recipes : evidence.accepts outward required plans)
+      (body : Authenticated registry outward bodySource lexical receiver)
+      (declarations : DomainDeclarationAuthentication registry outward declarationSource lexical receiver) :
+      Hereditary registry outward (IndexedSource.handler bodySource clauses capabilities coverage unique admitted table modes declarationSource recipes) lexical receiver
 
 inductive BodyAuthentication (registry : Registry) (outward : List Instance) :
     {owners : Owners} → {world : List Nat} → {allowed : List Instance} → {scope : Execution.Scope} →
@@ -872,6 +898,32 @@ inductive DeclarationAuthentication (registry : Registry) (outward : List Instan
       (protectedMode : OfferAuthentication registry outward protectedSource (lexical.extend parameter receiver) receiver)
       (rest : DeclarationAuthentication registry outward restSource lexical receiver) :
       DeclarationAuthentication registry outward (SourceDeclarations.cons (parameter := parameter) (body := body)
+        supportBound known ordinarySource protectedSource restSource) lexical receiver
+
+/-- Authenticate every operation domain at an explicit admissible formal bound. -/
+inductive DomainDeclarationAuthentication (registry : Registry) (outward : List Instance) :
+    {owners : Owners} → {world : List Nat} → {environment : Environment} → {allowed : List Instance} →
+    {requested : Instance} → {answer : Contract} → {clauses : Clauses} → {table : List (Nat × ClauseContract)} →
+    {families : ClauseDependencies} → {plans : ClausePlans clauses families} → {rows : ClauseRows (clauseSignatures plans)} →
+    SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows →
+    LexicalBounds → List Nat → Prop where
+  | domainNil : DomainDeclarationAuthentication registry outward SourceDeclarations.nil lexical receiver
+  | domainCons
+      {ordinarySource : SourceOffer registry outward owners world environment allowed parameter binder argument input answer
+        resumeEffects closeEffects body false dispose ordinaryRow ordinaryPlan ordinaryRows}
+      {protectedSource : SourceOffer registry outward owners world environment allowed parameter binder argument input answer
+        resumeEffects closeEffects body true dispose protectedRow protectedPlan protectedRows}
+      {restSource : SourceDeclarations registry outward owners world environment allowed requested answer clauses table restPlan restRows}
+      (known : registry.operations requested operation = some (argument, input))
+      (domainCovered : CoreCallableContractOperandDomain.domainSupport argument receiver ⊆ formalSupport)
+      (formalReceived : formalSupport ⊆ receiver)
+      (bodyBound : SourceScheduledCleanupInterfaces.Lexical.Recursive.SourceSupport.Bounds
+        (lexical.extend parameter formalSupport).environment body.dependencies supportBound)
+      (storedReceived : supportBound ⊆ receiver)
+      (ordinary : OfferAuthentication registry outward ordinarySource (lexical.extend parameter formalSupport) receiver)
+      (protectedMode : OfferAuthentication registry outward protectedSource (lexical.extend parameter formalSupport) receiver)
+      (rest : DomainDeclarationAuthentication registry outward restSource lexical receiver) :
+      DomainDeclarationAuthentication registry outward (SourceDeclarations.cons (parameter := parameter) (body := body)
         supportBound known ordinarySource protectedSource restSource) lexical receiver
 end
 
@@ -1408,3 +1460,7 @@ theorem IndexedSource.substitution_reannotated_at
 end
 end Ash.OneShot.CoreCallableContractAdmission
 #print axioms Ash.OneShot.CoreCallableContractAdmission.IndexedSource.substitution_reannotated_at
+
+#print axioms Ash.OneShot.CoreCallableContractAdmission.IndexedSource.closed_support_in_domain
+#print axioms Ash.OneShot.CoreCallableContractAdmission.Hereditary.handlerDomain
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.domainCons

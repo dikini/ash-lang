@@ -67,6 +67,7 @@ theorem Authenticated.allowed_weaken
     (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
     (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
     (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
     generalizing nextAllowed with
   | checked current hereditary ih => exact .checked current (ih _ larger _)
   | unit => intros; exact .unit
@@ -114,7 +115,10 @@ theorem Authenticated.allowed_weaken
   | handler clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
       rename_i nextAllowed larger nextSource
       exact .handler clauses capabilities coverage unique (admitted.trans larger) modes recipes body declarations
-  | typed | unavailable | available | nil | cons => trivial
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i nextAllowed larger nextSource
+      exact .handlerDomain clauses capabilities coverage unique (admitted.trans larger) modes recipes body declarations
+  | typed | unavailable | available | nil | cons | domainNil | domainCons => trivial
 
 /-- Bounds and receiver evidence are unchanged by outer allowance subsumption. -/
 theorem Supported.allowed_weaken

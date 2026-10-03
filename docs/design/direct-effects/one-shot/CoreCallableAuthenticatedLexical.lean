@@ -62,6 +62,8 @@ theorem Authenticated.lexical_congr
       ∀ destination, LexicalAgree lexical destination code.dependencies → OfferAuthentication registry outward source destination receiver)
     (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
       ∀ destination, LexicalAgree lexical destination clauses.dependencies → DeclarationAuthentication registry outward source destination receiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ destination, LexicalAgree lexical destination clauses.dependencies → DomainDeclarationAuthentication registry outward source destination receiver)
     generalizing destination with
   | checked current hereditary ih => exact .checked (bounds_lexical current agree) (ih destination agree)
   | unit => exact .unit
@@ -127,6 +129,11 @@ theorem Authenticated.lexical_congr
       exact .handler clauses capabilities coverage unique admitted modes recipes
         (ihB (fun n mem => agree n (List.mem_append_left _ (List.mem_append_right _ mem))))
         (ihD destination (fun n mem => agree n (List.mem_append_right _ mem)))
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i destination agree
+      exact .handlerDomain clauses capabilities coverage unique admitted modes recipes
+        (ihB (fun n mem => agree n (List.mem_append_left _ (List.mem_append_right _ mem))))
+        (ihD destination (fun n mem => agree n (List.mem_append_right _ mem)))
   | typed source ih =>
       rename_i destination agree
       exact .typed (normal := by assumption) (closing := by assumption) (ih agree)
@@ -135,10 +142,16 @@ theorem Authenticated.lexical_congr
       rename_i destination agree
       exact .available resumeInterface closeInterface (fun owner contract a b c d e balanced => ih owner contract a b c d e balanced destination agree)
   | nil => exact .nil
+  | domainNil => exact .domainNil
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i receiver lexical ordinarySource protectedSource restSource destination agree
       have bodyAgree := LexicalAgree.extend (resources := receiver) (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
       exact .cons known (bounds_lexical bodyBound bodyAgree) storedReceived
+        (ihO _ bodyAgree) (ihP _ bodyAgree) (ihR destination (fun n mem => agree n (List.mem_append_right _ mem)))
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i formalSupport supportBound lexical ordinarySource protectedSource restSource destination agree
+      have bodyAgree := LexicalAgree.extend (resources := formalSupport) (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
+      exact .domainCons known domainCovered formalReceived (bounds_lexical bodyBound bodyAgree) storedReceived
         (ihO _ bodyAgree) (ihP _ bodyAgree) (ihR destination (fun n mem => agree n (List.mem_append_right _ mem)))
 end
 end Ash.OneShot.CoreCallableContractAdmission

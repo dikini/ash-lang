@@ -154,7 +154,38 @@ structure HandlerSource (globals : Globals) (outward : List Instance) (world : L
   source : CoreCallableContractAdmission.SourceDeclarations globals.registry outward globals.owners world Environment.empty
     residual data.effectInst answer data.clauses table plans rows
   authentication : ∃ lexical : LexicalBounds, lexical.environment = ScopedPorts.Support.empty ∧
-    CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward source lexical receiver
+    (CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward source lexical receiver ∨
+      CoreCallableContractAdmission.DomainDeclarationAuthentication globals.registry outward source lexical receiver)
+
+/-- Preserve the original whole-receiver frame path explicitly. -/
+theorem HandlerSource.of_whole
+    {families : SourceDependencyAnnotations.ClauseDependencies}
+    {plans : SourceDeclarationPlans.ClausePlans data.clauses families}
+    {rows : ClauseRows (SourcePlanSignatures.clauseSignatures plans)}
+    (annotation : ScopedPorts.eraseType data.answer = answer.port)
+    (modes : SourceTemplates.ClauseModes data.clauses table)
+    (source : CoreCallableContractAdmission.SourceDeclarations globals.registry outward globals.owners world Environment.empty
+      residual data.effectInst answer data.clauses table plans rows)
+    (authentication : ∃ lexical : LexicalBounds, lexical.environment = ScopedPorts.Support.empty ∧
+      CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward source lexical receiver) :
+    HandlerSource globals outward world residual data answer table plans rows receiver := by
+  obtain ⟨lexical, empty, checked⟩ := authentication
+  exact ⟨annotation,modes,source,lexical,empty,Or.inl checked⟩
+
+/-- Domain evidence installs the SAME complete source without whole relabeling. -/
+theorem HandlerSource.of_domain
+    {families : SourceDependencyAnnotations.ClauseDependencies}
+    {plans : SourceDeclarationPlans.ClausePlans data.clauses families}
+    {rows : ClauseRows (SourcePlanSignatures.clauseSignatures plans)}
+    (annotation : ScopedPorts.eraseType data.answer = answer.port)
+    (modes : SourceTemplates.ClauseModes data.clauses table)
+    (source : CoreCallableContractAdmission.SourceDeclarations globals.registry outward globals.owners world Environment.empty
+      residual data.effectInst answer data.clauses table plans rows)
+    (authentication : ∃ lexical : LexicalBounds, lexical.environment = ScopedPorts.Support.empty ∧
+      CoreCallableContractAdmission.DomainDeclarationAuthentication globals.registry outward source lexical receiver) :
+    HandlerSource globals outward world residual data answer table plans rows receiver := by
+  obtain ⟨lexical, empty, checked⟩ := authentication
+  exact ⟨annotation,modes,source,lexical,empty,Or.inr checked⟩
 
 /- Saved frame contracts, installed handler families and current live owners
 share the same physical and contextual boundary. -/
@@ -383,8 +414,13 @@ theorem HandlerSource.owners_congr
     (frame : HandlerSource globals outward world residual data answer table plans rows receiver) (destination : CoreCallableContractRegistries.Owners) :
     HandlerSource (globals.withOwners destination) outward world residual data answer table plans rows receiver := by
   obtain ⟨lexical, sameEnvironment, authenticated⟩ := frame.authentication
-  obtain ⟨nextSource, nextAuthentication⟩ := authenticated.owners_congr destination
-  exact ⟨frame.annotation, frame.modes, nextSource, ⟨lexical, sameEnvironment, nextAuthentication⟩⟩
+  cases authenticated with
+  | inl whole =>
+    obtain ⟨nextSource, nextAuthentication⟩ := whole.owners_congr destination
+    exact ⟨frame.annotation, frame.modes, nextSource, ⟨lexical, sameEnvironment, Or.inl nextAuthentication⟩⟩
+  | inr domain =>
+    obtain ⟨nextSource, nextAuthentication⟩ := domain.owners_congr destination
+    exact ⟨frame.annotation, frame.modes, nextSource, ⟨lexical, sameEnvironment, Or.inr nextAuthentication⟩⟩
 theorem Pending.owners_known_mono
     (pending : Pending globals outward world allowed ambient stack input output context)
     (agree : CoreCallableContractAdmission.OwnerKnownMonotone globals.owners destination) :
@@ -1021,6 +1057,8 @@ theorem ReadRows.accounting {scope : SourceDependencyCapture.Scope} {hints : Ret
 #print axioms SelectedPending.owners_known_mono
 #print axioms Pending.owners_known_mono
 #print axioms HandlerSource.owners_congr
+#print axioms HandlerSource.of_whole
+#print axioms HandlerSource.of_domain
 #print axioms FrameSource.owners_known_mono
 #print axioms Site.plug_bind
 #print axioms Site.bind_value

@@ -59,6 +59,8 @@ theorem Authenticated.lexical_environment_congr
       ∀ destination, EnvironmentExtension lexical destination → OfferAuthentication registry outward source destination receiver)
     (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
       ∀ destination, EnvironmentExtension lexical destination → DeclarationAuthentication registry outward source destination receiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ destination, EnvironmentExtension lexical destination → DomainDeclarationAuthentication registry outward source destination receiver)
     generalizing destination with
   | checked current hereditary ih => exact .checked (bounds_environment current agree) (ih destination agree)
   | unit => exact .unit
@@ -118,6 +120,11 @@ theorem Authenticated.lexical_environment_congr
       exact .handler clauses capabilities coverage unique admitted modes recipes
         (ihB agree)
         (ihD destination agree)
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i destination agree
+      exact .handlerDomain clauses capabilities coverage unique admitted modes recipes
+        (ihB agree)
+        (ihD destination agree)
   | typed source ih =>
       rename_i destination agree
       exact .typed (normal := by assumption) (closing := by assumption) (ih agree)
@@ -126,10 +133,16 @@ theorem Authenticated.lexical_environment_congr
       rename_i destination agree
       exact .available resumeInterface closeInterface (fun owner contract a b c d e balanced => ih owner contract a b c d e balanced destination agree)
   | nil => exact .nil
+  | domainNil => exact .domainNil
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i owners world environment allowed parameter binder argument input answer resumeEffects closeEffects body disposes ordinaryRow ordinaryFamilies ordinaryPlan ordinaryRows protectedRow protectedFamilies protectedPlan protectedRows requested clauses table restFamilies restPlan restRows operation supportBound receiver lexical ordinarySource protectedSource restSource destination agree
       have bodyAgree : EnvironmentExtension (lexical.extend parameter receiver) (destination.extend parameter receiver) := EnvironmentExtension.extend agree
       exact .cons known (bounds_environment bodyBound bodyAgree) storedReceived
+        (ihO _ bodyAgree) (ihP _ bodyAgree) (ihR destination agree)
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i owners world environment allowed parameter binder argument input answer resumeEffects closeEffects body disposes ordinaryRow ordinaryFamilies ordinaryPlan ordinaryRows protectedRow protectedFamilies protectedPlan protectedRows requested clauses table restFamilies restPlan restRows operation receiver formalSupport supportBound lexical ordinarySource protectedSource restSource destination agree
+      have bodyAgree : EnvironmentExtension (lexical.extend parameter formalSupport) (destination.extend parameter formalSupport) := EnvironmentExtension.extend agree
+      exact .domainCons known domainCovered formalReceived (bounds_environment bodyBound bodyAgree) storedReceived
         (ihO _ bodyAgree) (ihP _ bodyAgree) (ihR destination agree)
 theorem Authenticated.complete_binding
     (checked : Authenticated registry outward

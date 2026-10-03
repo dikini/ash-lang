@@ -53,6 +53,10 @@ theorem Authenticated.owners_congr
       ∀ destination,
       ∃ nextSource : SourceDeclarations registry outward destination world environment allowed requested answer clauses table plans rows,
       DeclarationAuthentication registry outward nextSource lexical receiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ destination,
+      ∃ nextSource : SourceDeclarations registry outward destination world environment allowed requested answer clauses table plans rows,
+      DomainDeclarationAuthentication registry outward nextSource lexical receiver)
     generalizing destination with
   | checked current hereditary ih => exact .checked current (ih destination agree nextSource)
   | unit => exact .unit
@@ -122,6 +126,12 @@ theorem Authenticated.owners_congr
       refine .handler (bodySource := ?_) clauses capabilities coverage unique admitted modes recipes ?_ authDecl
       · apply IndexedSource.owners_congr (by assumption); exact agree
       · exact ihB agree _
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i destination agree nextSource
+      obtain ⟨nextDecl, authDecl⟩ := ihD destination
+      refine .handlerDomain (bodySource := ?_) clauses capabilities coverage unique admitted modes recipes ?_ authDecl
+      · apply IndexedSource.owners_congr (by assumption); exact agree
+      · exact ihB agree _
   | typed source ih =>
       rename_i destination agree
       refine ⟨SourceBody.typed ?_ (by assumption) (by assumption), .typed (normal := by assumption) (closing := by assumption) (ih agree ?_)⟩
@@ -135,12 +145,19 @@ theorem Authenticated.owners_congr
       intro owner contract a b c d e balanced
       exact Classical.choose_spec (ih owner contract a b c d e balanced (destination.insert owner contract) owner_insert)
   | nil => exact ⟨.nil, .nil⟩
+  | domainNil => exact ⟨.nil, .domainNil⟩
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i destination
       obtain ⟨nextOrd, authOrd⟩ := ihO destination
       obtain ⟨nextProt, authProt⟩ := ihP destination
       obtain ⟨nextRest, authRest⟩ := ihR destination
       exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i destination
+      obtain ⟨nextOrd, authOrd⟩ := ihO destination
+      obtain ⟨nextProt, authProt⟩ := ihP destination
+      obtain ⟨nextRest, authRest⟩ := ihR destination
+      exact ⟨.cons _ known nextOrd nextProt nextRest, .domainCons known domainCovered formalReceived bodyBound storedReceived authOrd authProt authRest⟩
 set_option maxRecDepth 4000
 set_option maxHeartbeats 800000
 private theorem authenticated_value_allowed
@@ -165,7 +182,7 @@ private theorem authenticated_value_allowed
       exact .lambda (bodySource := by assumption) refinement bodyOutward latentBound publicCertified formed known body
     | receiverLambda bodyOutward latentBound publicCertified formed known body refinement =>
       exact .receiverLambda bodyOutward latentBound publicCertified formed known body refinement
-    | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup | resource => exact False.elim isValue
+    | «variable» | app | bind | branch | perform | resume | discard | handler | handlerDomain | cleanup | resource => exact False.elim isValue
 termination_by sizeOf value
 
 theorem Authenticated.value_allowed

@@ -3194,3 +3194,49 @@ Entry points: [Product frame interfaces](../design/direct-effects/one-shot/Resto
 [generic admitted origins](../design/direct-effects/one-shot/CoreCallableRichAdmittedCurrentOrigins.lean),
 [actual beta/event consumer](../design/direct-effects/one-shot/CoreCallableRichAdmittedEventConsumers.lean),
 and [resource seed/negative interfaces](../design/direct-effects/one-shot/RichAdmittedEventInterfaces.lean).
+
+### Domain handler propagation and general branch correspondence — 2026-10-03
+
+This DN-0033 proof experiment integrates domain-aware handler authentication
+with general Boolean decision correspondence. Ash semantics and the supported
+fragment are unchanged.
+
+| Component | Integrated result | Exact remaining boundary |
+| --- | --- | --- |
+| Handler declaration domain | The same full source and private Plans/Rows flow through both modes, every owner, installed frames, capture and restoration | General handler static production and actual handler-entry freshness |
+| Capture and restoration | Actual closed operand support supplies formal S; substitution retains exact private rows. Restoration records the BEFORE whole/domain tag and computes authentication on NEW canonical rows | Whole reachable saved-prefix and disposal preservation |
+| Boolean decision | Either arbitrary typed arm is selected from the original source; its accounting demand keeps explicit permutation. Actual Core next appends one positive Event to the past ledger | General branch entry/scrutinee linkage and all remaining event families |
+
+The old whole-receiver authentication case remains available. Unit, Bool and
+Int operands have empty resource domains; other full Contracts conservatively
+use the receiver. No private family is reconstructed from a port or Code
+equality. World-only transport retains literal rows; receiver restoration
+reannotates exactly the existing restoredClauses recipe.
+
+The branch consumer projects translations and saved environments from the
+current mapped FrameRel, including independent arm fuels. It preserves the full
+history, heap, owners and physical/lexical scopes. The actual returned Boolean
+selects the arm through Core's existing decision rule. Its issued/completed
+ledger is unchanged and its event count increases by one. Equal-code arms are
+admitted; distinctness is required only by wrong-arm rejection.
+
+Both author checkpoints and author-disjoint ROOT/peer source reviews pass.
+The coalesced current-parent replay is also the integration gate: 1,040
+modules, 13,427 ordered standard-only reports, 171 fresh affected
+modules and 869 verified paired hardlink reuses. The same coherent
+sources/dependencies are compiled once. All parent associations, selected
+imports and eight compiler/library pins remain exact. The handler author freeze
+used the older parent; current Product corrections and admitted-event leaves
+are retained and checked separately. Blanket byte equality with that older
+freeze is not claimed. Public ABI checks and both parent-only missing-interface
+checks pass for each component, with no RED artifact.
+
+Constructor coverage remains 14/16. The original TASK-0032 acceptance counts
+remain C1 5/5, C2 0/4, C3 0/5, C4 2/3 and C5 0/4. General resource admission
+needs a finite annotation that computes fresh-identity-indexed checks and
+sources. General handler entry needs actual counter/installation provenance.
+Whole rich reachability, M4 Valid/availability and Rust capacity/preparation
+correspondence remain open. Estimates remain 40–71 base agent-hours, 50–90
+with rework and 25–45 elapsed working hours with parallelism.
+
+Entry points: [domain authentication](<../design/direct-effects/one-shot/CoreCallableDomainHandlerAuthentication.lean>), [branch origins](<../design/direct-effects/one-shot/CoreCallableRichBranchCurrentOrigins.lean>) and [branch/event interfaces](<../design/direct-effects/one-shot/RichBranchEventInterfaces.lean>).

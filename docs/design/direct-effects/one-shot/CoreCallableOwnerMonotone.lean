@@ -136,6 +136,7 @@ theorem DeclarationAuthentication.owners_congr
     (motive_2 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
     (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
     (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
     generalizing destination with
   | nil => exact ⟨.nil, .nil⟩
   | cons known bodyBound storedReceived ordinary protectedMode rest _ihO _ihP ihR =>
@@ -144,7 +145,29 @@ theorem DeclarationAuthentication.owners_congr
     obtain ⟨nextProt, authProt⟩ := protectedMode.owners_congr destination
     obtain ⟨nextRest, authRest⟩ := ihR destination
     exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
-  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | resource | typed | unavailable | available => trivial
+  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | handlerDomain | resource | typed | unavailable | available | domainNil | domainCons => trivial
+
+theorem DomainDeclarationAuthentication.owners_congr
+    (checked : DomainDeclarationAuthentication registry outward
+      (source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows)
+      lexical receiver) (destination : Owners) :
+    ∃ nextSource : SourceDeclarations registry outward destination world environment allowed requested answer clauses table plans rows,
+      DomainDeclarationAuthentication registry outward nextSource lexical receiver := by
+  induction checked using DomainDeclarationAuthentication.rec
+    (motive_1 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_2 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
+    (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
+    (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
+    generalizing destination with
+  | domainNil => exact ⟨.nil, .domainNil⟩
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest _ihO _ihP ihR =>
+    rename_i destination
+    obtain ⟨nextOrd, authOrd⟩ := ordinary.owners_congr destination
+    obtain ⟨nextProt, authProt⟩ := protectedMode.owners_congr destination
+    obtain ⟨nextRest, authRest⟩ := ihR destination
+    exact ⟨.cons _ known nextOrd nextProt nextRest, .domainCons known domainCovered formalReceived bodyBound storedReceived authOrd authProt authRest⟩
+  | checked | unit | boolean | integer | reference | «variable» | purePair | pair | app | branch | perform | resume | discard | cleanup | bind | lambda | receiverLambda | handler | handlerDomain | resource | typed | unavailable | available | nil | cons => trivial
 
 theorem Authenticated.owners_known_mono
     {source : IndexedSource registry outward owners world allowed scope environment code contract demand requirements plan rows}
@@ -160,6 +183,7 @@ theorem Authenticated.owners_known_mono
     (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
     (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
     (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
     generalizing destination with
   | checked current hereditary ih => exact .checked current (ih destination agree nextSource)
   | unit => exact .unit
@@ -229,7 +253,13 @@ theorem Authenticated.owners_known_mono
       refine .handler (bodySource := ?_) clauses capabilities coverage unique admitted modes recipes ?_ authDecl
       · apply IndexedSource.owners_known_mono (by assumption); exact agree
       · exact ihB agree _
-  | typed | unavailable | available | nil | cons => trivial
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB _ihD =>
+      rename_i destination agree nextSource
+      obtain ⟨nextDecl, authDecl⟩ := declarations.owners_congr destination
+      refine .handlerDomain (bodySource := ?_) clauses capabilities coverage unique admitted modes recipes ?_ authDecl
+      · apply IndexedSource.owners_known_mono (by assumption); exact agree
+      · exact ihB agree _
+  | typed | unavailable | available | nil | cons | domainNil | domainCons => trivial
 def Globals.withOwners (globals : Globals) (owners : Owners) : Globals := {globals with owners := owners}
 theorem Supported.owners_known_mono
     (supported : Supported globals outward world allowed scope environment supportEnvironment code contract demand requirements plan rows bound receiver)
@@ -246,3 +276,5 @@ end Ash.OneShot.CoreCallableContractAdmission
 #print axioms Ash.OneShot.CoreCallableContractAdmission.DeclarationAuthentication.owners_congr
 
 #print axioms Ash.OneShot.CoreCallableContractAdmission.Supported.owners_known_mono
+
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.owners_congr

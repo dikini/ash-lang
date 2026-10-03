@@ -53,6 +53,10 @@ theorem Authenticated.environment_congr
       ∀ destination, EnvAgree environment destination clauses.dependencies →
       ∃ nextSource : SourceDeclarations registry outward owners world destination allowed requested answer clauses table plans rows,
       DeclarationAuthentication registry outward nextSource lexical receiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ destination, EnvAgree environment destination clauses.dependencies →
+      ∃ nextSource : SourceDeclarations registry outward owners world destination allowed requested answer clauses table plans rows,
+      DomainDeclarationAuthentication registry outward nextSource lexical receiver)
     generalizing destination with
   | checked current hereditary ih => exact .checked current (ih destination agree nextSource)
   | unit => exact .unit
@@ -152,6 +156,16 @@ theorem Authenticated.environment_congr
         intro n mem
         exact congrArg (fun binding => binding.map Contract.port) (agree n (List.mem_append_right _ mem))
       · refine ihB (fun n mem => agree n (List.mem_append_left _ (List.mem_append_right _ mem))) ?_
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i destination agree nextSource
+      obtain ⟨nextDecl, authDecl⟩ := ihD destination (fun n mem => agree n (List.mem_append_right _ mem))
+      refine .handlerDomain (bodySource := ?_) ?_ capabilities coverage unique admitted modes recipes ?_ authDecl
+      · apply IndexedSource.environment_congr (by assumption)
+        exact fun n mem => agree n (List.mem_append_left _ (List.mem_append_right _ mem))
+      · apply ScopedPorts.clauses_environment_congr clauses
+        intro n mem
+        exact congrArg (fun binding => binding.map Contract.port) (agree n (List.mem_append_right _ mem))
+      · refine ihB (fun n mem => agree n (List.mem_append_left _ (List.mem_append_right _ mem))) ?_
   | typed source ih =>
       rename_i destination agree
       refine ⟨SourceBody.typed ?_ (by assumption) (by assumption), .typed (normal := by assumption) (closing := by assumption) (ih agree ?_)⟩
@@ -165,12 +179,19 @@ theorem Authenticated.environment_congr
       intro owner contract a b c d e balanced
       exact Classical.choose_spec (ih owner contract a b c d e balanced (destination.extend parameter argument) (EnvAgree.bound agree))
   | nil => exact ⟨.nil, .nil⟩
+  | domainNil => exact ⟨.nil, .domainNil⟩
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i destination agree
       obtain ⟨nextOrd, authOrd⟩ := ihO destination (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
       obtain ⟨nextProt, authProt⟩ := ihP destination (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
       obtain ⟨nextRest, authRest⟩ := ihR destination (fun n mem => agree n (List.mem_append_right _ mem))
       exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i destination agree
+      obtain ⟨nextOrd, authOrd⟩ := ihO destination (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
+      obtain ⟨nextProt, authProt⟩ := ihP destination (fun n mem => agree n (List.mem_append_left _ (Syntax.mem_without.mpr ⟨mem, by simp⟩)))
+      obtain ⟨nextRest, authRest⟩ := ihR destination (fun n mem => agree n (List.mem_append_right _ mem))
+      exact ⟨.cons _ known nextOrd nextProt nextRest, .domainCons known domainCovered formalReceived bodyBound storedReceived authOrd authProt authRest⟩
 theorem Authenticated.closed_environment
     (authenticated : Authenticated registry outward
       (source : IndexedSource registry outward owners world allowed scope environment value contract [] (.request [] []) .pure Rows.pure)

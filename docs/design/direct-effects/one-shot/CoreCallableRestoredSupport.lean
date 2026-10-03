@@ -351,6 +351,12 @@ theorem Authenticated.restore_receiver
       ∃ nextSource : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans
         (restoredClauses plans rows nextLexical nextReceiver),
       DeclarationAuthentication registry outward nextSource nextLexical nextReceiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ nextLexical nextReceiver, receiver ⊆ nextReceiver → RestoredLexicalDomain lexical nextLexical →
+      (∀ name, nextLexical.environment name ⊆ nextReceiver) →
+      ∃ nextSource : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans
+        (restoredClauses plans rows nextLexical nextReceiver),
+      DeclarationAuthentication registry outward nextSource nextLexical nextReceiver)
     generalizing nextLexical nextReceiver with
   | checked current hereditary ih =>
       obtain ⟨nextSource, nextAuth⟩ := ih nextLexical nextReceiver receiverLarger domain received
@@ -449,6 +455,12 @@ theorem Authenticated.restore_receiver
       obtain ⟨sourceD, authD⟩ := ihD nextLexical nextReceiver receiverLarger domain received
       exact ⟨.handler sourceB clauses capabilities coverage unique admitted _ modes sourceD recipes,
         .handler clauses capabilities coverage unique admitted modes recipes authB authD⟩
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i nextLexical nextReceiver receiverLarger domain received
+      obtain ⟨sourceB, authB⟩ := ihB receiverLarger domain received
+      obtain ⟨sourceD, authD⟩ := ihD nextLexical nextReceiver receiverLarger domain received
+      exact ⟨.handler sourceB clauses capabilities coverage unique admitted _ modes sourceD recipes,
+        .handler clauses capabilities coverage unique admitted modes recipes authB authD⟩
   | typed source ih =>
       rename_i nextLexical nextReceiver receiverLarger domain received
       obtain ⟨nextSource, nextAuth⟩ := ih receiverLarger domain received
@@ -463,7 +475,17 @@ theorem Authenticated.restore_receiver
       intro owner contract a b c d e balanced
       exact Classical.choose_spec (ih owner contract a b c d e balanced nextLexical nextReceiver receiverLarger domain received)
   | nil => exact ⟨.nil, .nil⟩
+  | domainNil => exact ⟨.nil, .nil⟩
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i nextLexical nextReceiver receiverLarger domain received
+      obtain ⟨sourceO, authO⟩ := ihO _ nextReceiver receiverLarger domain.extend (restored_lexical_range received)
+      obtain ⟨sourceP, authP⟩ := ihP _ nextReceiver receiverLarger domain.extend (restored_lexical_range received)
+      obtain ⟨sourceR, authR⟩ := ihR nextLexical nextReceiver receiverLarger domain received
+      exact ⟨.cons _ known sourceO sourceP sourceR,
+        .cons known (SourceSupport.Bounds.canonical _ _)
+          (SourceSupport.bounds_iff.mp (restored_bounds bodyBound (storedReceived.trans receiverLarger) (restored_lexical_range received))) authO authP authR⟩
+
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i nextLexical nextReceiver receiverLarger domain received
       obtain ⟨sourceO, authO⟩ := ihO _ nextReceiver receiverLarger domain.extend (restored_lexical_range received)
       obtain ⟨sourceP, authP⟩ := ihP _ nextReceiver receiverLarger domain.extend (restored_lexical_range received)
@@ -497,6 +519,10 @@ theorem Authenticated.world_transport
       ∀ nextWorld, world ⊆ nextWorld →
       ∃ nextSource : SourceDeclarations registry outward owners nextWorld environment allowed requested answer clauses table plans rows,
       DeclarationAuthentication registry outward nextSource lexical receiver)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ =>
+      ∀ nextWorld, world ⊆ nextWorld →
+      ∃ nextSource : SourceDeclarations registry outward owners nextWorld environment allowed requested answer clauses table plans rows,
+      DomainDeclarationAuthentication registry outward nextSource lexical receiver)
     generalizing nextWorld with
   | checked current hereditary ih =>
       rename_i nextWorld larger nextSource
@@ -585,6 +611,11 @@ theorem Authenticated.world_transport
       obtain ⟨nextDecl, authDecl⟩ := ihD nextWorld larger
       exact .handler (restored_port_clauses_world clauses larger) capabilities coverage unique admitted modes recipes
         (ihB larger (IndexedSource.world_weaken (by assumption) larger)) authDecl
+  | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations ihB ihD =>
+      rename_i nextWorld larger nextSource
+      obtain ⟨nextDecl, authDecl⟩ := ihD nextWorld larger
+      exact .handlerDomain (restored_port_clauses_world clauses larger) capabilities coverage unique admitted modes recipes
+        (ihB larger (IndexedSource.world_weaken (by assumption) larger)) authDecl
   | typed source ih =>
       rename_i nextWorld larger
       refine ⟨SourceBody.typed (IndexedSource.world_weaken (by assumption) larger) (by assumption) (by assumption), ?_⟩
@@ -600,12 +631,19 @@ theorem Authenticated.world_transport
       intro owner contract a b c d e balanced
       exact Classical.choose_spec (ih owner contract a b c d e balanced nextWorld larger)
   | nil => rename_i nextWorld larger; exact ⟨.nil, .nil⟩
+  | domainNil => rename_i nextWorld larger; exact ⟨.nil, .domainNil⟩
   | cons known bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
       rename_i nextWorld larger
       obtain ⟨nextOrd, authOrd⟩ := ihO nextWorld larger
       obtain ⟨nextProt, authProt⟩ := ihP nextWorld larger
       obtain ⟨nextRest, authRest⟩ := ihR nextWorld larger
       exact ⟨.cons _ known nextOrd nextProt nextRest, .cons known bodyBound storedReceived authOrd authProt authRest⟩
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest ihO ihP ihR =>
+      rename_i nextWorld larger
+      obtain ⟨nextOrd, authOrd⟩ := ihO nextWorld larger
+      obtain ⟨nextProt, authProt⟩ := ihP nextWorld larger
+      obtain ⟨nextRest, authRest⟩ := ihR nextWorld larger
+      exact ⟨.cons _ known nextOrd nextProt nextRest, .domainCons known domainCovered formalReceived bodyBound storedReceived authOrd authProt authRest⟩
 /-- A leading clause that reads its formal needs every resource in the actual
 receiver. In particular its stored declaration support cannot remain empty
 when restoration admits a newly acquired resource. -/
@@ -666,6 +704,56 @@ theorem Supported.restore_world_receiver
   exact Supported.canonical nextSource nextLexical nextReceiver nextAuthentication
     ((SourceSupport.bounds_iff.mp nextAuthentication.current_support).trans issued) issued
 
+/-- World-only transport preserves every literal private row. -/
+theorem BodyAuthentication.world_transport
+    {source : SourceBody registry outward owners world allowed scope environment code answer header plan rows}
+    (authenticated : BodyAuthentication registry outward source lexical receiver)
+    (larger : world ⊆ nextWorld) :
+    ∃ nextSource : SourceBody registry outward owners nextWorld allowed scope environment code answer header plan rows,
+      BodyAuthentication registry outward nextSource lexical receiver := by
+  cases authenticated with
+  | typed checked =>
+    exact ⟨.typed (IndexedSource.world_weaken (by assumption) larger) (by assumption) (by assumption),
+      .typed (normal := by assumption) (closing := by assumption) (checked.world_weaken larger)⟩
+
+/-- Both modes retain their complete owner-indexed private source rows. -/
+theorem OfferAuthentication.world_transport
+    {source : SourceOffer registry outward owners world environment allowed parameter binder argument input answer
+      resumeEffects closeEffects code held disposes row plans rows}
+    (authenticated : OfferAuthentication registry outward source lexical receiver)
+    (larger : world ⊆ nextWorld) :
+    ∃ nextSource : SourceOffer registry outward owners nextWorld environment allowed parameter binder argument input answer
+      resumeEffects closeEffects code held disposes row plans rows,
+      OfferAuthentication registry outward nextSource lexical receiver := by
+  cases authenticated with
+  | unavailable => exact ⟨.unavailable,.unavailable⟩
+  | available resumeInterface closeInterface bodies =>
+    let changed := fun owner contract a b c d e balanced =>
+      Classical.choose ((bodies owner contract a b c d e balanced).world_transport larger)
+    exact ⟨.available resumeInterface closeInterface changed,
+      .available (bodySource := changed) resumeInterface closeInterface
+        (fun owner contract a b c d e balanced =>
+          Classical.choose_spec ((bodies owner contract a b c d e balanced).world_transport larger))⟩
+
+/-- Same lexical receiver and literal full declaration rows in the later world. -/
+theorem DomainDeclarationAuthentication.world_transport
+    {families : ClauseDependencies} {plans : ClausePlans clauses families} {rows : ClauseRows (clauseSignatures plans)}
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical receiver)
+    (larger : world ⊆ nextWorld) :
+    ∃ nextSource : SourceDeclarations registry outward owners nextWorld environment allowed requested answer clauses table plans rows,
+      DomainDeclarationAuthentication registry outward nextSource lexical receiver := by
+  induction clauses using Clauses.rec (motive_1 := fun _ => True) generalizing table families with
+  | nil => cases authenticated; exact ⟨.nil,.domainNil⟩
+  | cons operation parameter binder body rest ihBody ihRest =>
+    cases authenticated with
+    | domainCons known covered received bounded stored ordinary protectedMode tail =>
+      obtain ⟨sourceO,authO⟩ := ordinary.world_transport larger
+      obtain ⟨sourceP,authP⟩ := protectedMode.world_transport larger
+      obtain ⟨sourceR,authR⟩ := ihRest tail
+      exact ⟨.cons _ known sourceO sourceP sourceR,.domainCons known covered received bounded stored authO authP authR⟩
+  | unit | boolean | integer | resourceRef | «variable» | pair | lambda | app | bind | branch | perform | resume | discard | handle | cleanup | resource => trivial
+
 theorem BodyAuthentication.restore_world_receiver
     {source : SourceBody registry outward owners world allowed scope environment code answer header plan rows}
     (authenticated : BodyAuthentication registry outward source lexical receiver)
@@ -716,6 +804,29 @@ theorem DeclarationAuthentication.restore_world_receiver
   | cons operation parameter binder body rest ihBody ihRest =>
       cases authenticated with
       | cons known bodyBound storedReceived ordinary protectedMode tail =>
+          obtain ⟨sourceO, authO⟩ := ordinary.restore_world_receiver larger receiverLarger domain.extend (restored_lexical_range received)
+          obtain ⟨sourceP, authP⟩ := protectedMode.restore_world_receiver larger receiverLarger domain.extend (restored_lexical_range received)
+          obtain ⟨sourceR, authR⟩ := ihRest tail
+          exact ⟨.cons _ known sourceO sourceP sourceR,
+            .cons known (SourceSupport.Bounds.canonical _ _)
+              (SourceSupport.bounds_iff.mp (restored_bounds bodyBound (storedReceived.trans receiverLarger) (restored_lexical_range received))) authO authP authR⟩
+  | unit | boolean | integer | resourceRef | «variable» | pair | lambda | app | bind | branch | perform | resume | discard | handle | cleanup | resource => trivial
+
+theorem DomainDeclarationAuthentication.restore_world_receiver
+    {families : ClauseDependencies} {plans : ClausePlans clauses families} {rows : ClauseRows (clauseSignatures plans)}
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical receiver)
+    (larger : world ⊆ nextWorld) (receiverLarger : receiver ⊆ nextReceiver)
+    (domain : RestoredLexicalDomain lexical nextLexical)
+    (received : ∀ name, nextLexical.environment name ⊆ nextReceiver) :
+    ∃ nextSource : SourceDeclarations registry outward owners nextWorld environment allowed requested answer clauses table plans
+        (restoredClauses plans rows nextLexical nextReceiver),
+      DeclarationAuthentication registry outward nextSource nextLexical nextReceiver := by
+  induction clauses using Clauses.rec (motive_1 := fun _ => True) generalizing table families with
+  | nil => cases authenticated; exact ⟨.nil, .nil⟩
+  | cons operation parameter binder body rest ihBody ihRest =>
+      cases authenticated with
+      | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode tail =>
           obtain ⟨sourceO, authO⟩ := ordinary.restore_world_receiver larger receiverLarger domain.extend (restored_lexical_range received)
           obtain ⟨sourceP, authP⟩ := protectedMode.restore_world_receiver larger receiverLarger domain.extend (restored_lexical_range received)
           obtain ⟨sourceR, authR⟩ := ihRest tail
@@ -819,9 +930,16 @@ theorem HandlerSource.restore_support
     intro name
     rw [empty]
     simp [ScopedPorts.Support.empty]
-  obtain ⟨nextSource, nextAuth⟩ := authentication.restore_world_receiver larger receiverLarger domain received
+  have restored : ∃ nextSource : CoreCallableContractAdmission.SourceDeclarations globals.registry outward globals.owners nextWorld
+      CoreCallableContractSource.Environment.empty residual data.effectInst answer data.clauses table plans
+      (CoreCallableRestoredSupport.restoredClauses plans rows lexical nextReceiver),
+      CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward nextSource lexical nextReceiver := by
+    cases authentication with
+    | inl whole => exact whole.restore_world_receiver larger receiverLarger domain received
+    | inr precise => exact precise.restore_world_receiver larger receiverLarger domain received
+  obtain ⟨nextSource,nextAuth⟩ := restored
   refine ⟨lexical, empty, ?_, CoreCallableRestoredSupport.erase_restoredClauses _ _ _ _⟩
-  exact ⟨frame.annotation, frame.modes, nextSource, lexical, empty, nextAuth⟩
+  exact ⟨frame.annotation, frame.modes, nextSource, lexical, empty, Or.inl nextAuth⟩
 
 end
 end Ash.OneShot.CoreCallableContractExecution
@@ -1166,6 +1284,21 @@ theorem DeclarationAuthentication.received_support
   all_goals intros
   all_goals first | trivial | exact List.append_subset.mpr ⟨by assumption, by assumption⟩ | simp [ClauseRows.resourceSupport]
 
+theorem DomainDeclarationAuthentication.received_support
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical receiver) :
+    rows.resourceSupport ⊆ receiver := by
+  apply DomainDeclarationAuthentication.rec
+    (motive_1 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_2 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
+    (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => rows.resourceSupport ⊆ receiver)
+    (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
+    (t := authenticated)
+  all_goals intros
+  all_goals first | trivial | exact List.append_subset.mpr ⟨by assumption, by assumption⟩ | simp [ClauseRows.resourceSupport]
+
 end Ash.OneShot.CoreCallableContractAdmission
 
 namespace Ash.OneShot.CoreCallableContractExecution
@@ -1177,7 +1310,9 @@ theorem HandlerSource.received_support
     (source : HandlerSource globals outward world residual data answer table plans rows receiver) :
     rows.resourceSupport ⊆ receiver := by
   obtain ⟨lexical, empty, authenticated⟩ := source.authentication
-  exact authenticated.received_support
+  cases authenticated with
+  | inl whole => exact whole.received_support
+  | inr domain => exact domain.received_support
 
 end Ash.OneShot.CoreCallableContractExecution
 #print axioms Ash.OneShot.CoreCallableRestoredSupport.ContextSupportOnly.selected
@@ -1572,3 +1707,7 @@ end Ash.OneShot.CoreCallableRestoredSupport
 #print axioms Ash.OneShot.CoreCallableRestoredSupport.ClauseRows.Selected.restore_support
 #print axioms Ash.OneShot.CoreCallableRestoredSupport.CapturedClauseRows.restore_support
 #print axioms Ash.OneShot.CoreCallableRestoredSupport.RequestBudget.restore_support
+
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.world_transport
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.restore_world_receiver
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.received_support

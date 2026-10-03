@@ -45,7 +45,7 @@ private theorem authenticated_closed_receiver
     | receiverLambda bodyOutward latentBound publicCertified formed known body refinement =>
       exact Hereditary.receiverLambda bodyOutward latentBound publicCertified formed
         (fun name member => False.elim (ScopedTyping.closedValue_no_variable closed member)) body refinement
-    | «variable» | app | bind | branch | perform | resume | discard | handler | cleanup | resource => exact False.elim closed.1
+    | «variable» | app | bind | branch | perform | resume | discard | handler | handlerDomain | cleanup | resource => exact False.elim closed.1
 termination_by sizeOf value
 theorem Authenticated.value_reauthenticate
     (checked : Authenticated registry outward

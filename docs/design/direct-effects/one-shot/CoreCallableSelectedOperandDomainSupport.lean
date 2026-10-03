@@ -1,4 +1,5 @@
 import CoreCallableDeliveredOperandSupport
+import CoreCallableContractOperandDomain
 namespace Ash.OneShot.CoreCallableSelectedOperandDomainSupport
 open ScopedExpressions ScopedExecution ProtectionContracts
 open CoreCallableContractSource (Contract)
@@ -15,14 +16,18 @@ inductive ScalarDomain : Contract → Prop where
   | integer : ScalarDomain .integer
 
 def domainSupport (argument : Contract) (receiver : List Nat) : List Nat :=
-  match argument with | .unit | .boolean | .integer => [] | _ => receiver
+  CoreCallableContractOperandDomain.domainSupport argument receiver
+
+/-- The original full-Contract matcher is extensionally unchanged. -/
+theorem domainSupport_frozen : domainSupport argument receiver =
+    (match argument with | .unit | .boolean | .integer => [] | _ => receiver) := rfl
 
 theorem domainSupport_received : domainSupport argument receiver ⊆ receiver := by
-  cases argument <;> simp [domainSupport]
+  cases argument <;> simp [domainSupport,CoreCallableContractOperandDomain.domainSupport]
 
 theorem nonscalar_domainSupport (nonScalar : ¬ ScalarDomain argument) :
     domainSupport argument receiver = receiver := by
-  cases argument <;> simp_all [domainSupport,ScalarDomain.unit,ScalarDomain.boolean,ScalarDomain.integer]
+  cases argument <;> simp_all [domainSupport,CoreCallableContractOperandDomain.domainSupport,ScalarDomain.unit,ScalarDomain.boolean,ScalarDomain.integer]
 
 /-- Shape comes from the same full source and actual closed operand. -/
 theorem closed_scalar_shape {registry : CoreCallableContractRegistries.Registry} {environment : CoreCallableContractSource.Environment} (scalar : ScalarDomain argument)
@@ -47,6 +52,7 @@ theorem delivered_support_in_domain
   · rw [nonscalar_domainSupport scalar]
     exact actualSupport_storage.trans delivered.storedReceived
 
+#print axioms domainSupport_frozen
 #print axioms domainSupport_received
 #print axioms nonscalar_domainSupport
 #print axioms closed_scalar_shape

@@ -19,6 +19,22 @@ theorem DeclarationAuthentication.received_support_current [evidence : SourcePla
   all_goals intros
   all_goals first | trivial | exact List.append_subset.mpr ⟨by assumption, by assumption⟩ | simp [ClauseRows.resourceSupport]
 
+
+theorem DomainDeclarationAuthentication.received_support_current [evidence : SourcePlannedChecks.DeclarationPolicy]
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans rows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical receiver) :
+    rows.resourceSupport ⊆ receiver := by
+  apply DomainDeclarationAuthentication.rec
+    (motive_1 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_2 := fun {owners world allowed scope environment code contract demand requirements dependencies plan rows} source lexical receiver _ => True)
+    (motive_3 := fun {owners world allowed scope environment code answer header dependencies plan rows} source lexical receiver _ => True)
+    (motive_4 := fun {owners world environment allowed parameter binder argument input answer resumeEffects closeEffects code held disposes row family plans rows} source lexical receiver _ => True)
+    (motive_5 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => True)
+    (motive_6 := fun {owners world environment allowed requested answer clauses table families plans rows} source lexical receiver _ => rows.resourceSupport ⊆ receiver)
+    (t := authenticated)
+  all_goals intros
+  all_goals first | trivial | exact List.append_subset.mpr ⟨by assumption, by assumption⟩ | simp [ClauseRows.resourceSupport]
+
 end Ash.OneShot.CoreCallableContractAdmission
 
 namespace Ash.OneShot.CoreCallableContractExecution
@@ -28,7 +44,9 @@ theorem HandlerSource.received_support_current [evidence : SourcePlannedChecks.D
     (source : HandlerSource globals outward world residual data answer table plans rows receiver) :
     rows.resourceSupport ⊆ receiver := by
   obtain ⟨lexical, empty, authenticated⟩ := source.authentication
-  exact authenticated.received_support_current
+  cases authenticated with
+  | inl whole => exact whole.received_support_current
+  | inr domain => exact domain.received_support_current
 
 end Ash.OneShot.CoreCallableContractExecution
 
@@ -51,7 +69,8 @@ structure HandlerRestorationReceipt
   receiverExtended : receiver ⊆ actualReceiver nextWorld receiving ambient
   canonicalRows : ∃ lexical : LexicalBounds,
     lexical.environment = ScopedPorts.Support.empty ∧
-    CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward before.source lexical receiver ∧
+    (CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward before.source lexical receiver ∨
+      CoreCallableContractAdmission.DomainDeclarationAuthentication globals.registry outward before.source lexical receiver) ∧
     nextRows = restoredClauses plans rows lexical (actualReceiver nextWorld receiving ambient)
   completeRows : eraseModeSupportBoundsClauses nextRows = eraseModeSupportBoundsClauses rows
   receiverIssued : actualReceiver nextWorld receiving ambient ⊆ nextWorld
@@ -74,11 +93,19 @@ theorem HandlerSource.restore_receipt
     intro name
     rw [empty]
     simp [ScopedPorts.Support.empty]
-  obtain ⟨nextSource, nextAuthenticated⟩ := authenticated.restore_world_receiver larger receiverLarger domain received
+  have restored : ∃ nextSource : CoreCallableContractAdmission.SourceDeclarations globals.registry outward globals.owners nextWorld
+      CoreCallableContractSource.Environment.empty residual data.effectInst answer data.clauses table plans
+      (restoredClauses plans rows lexical (actualReceiver nextWorld receiving ambient)),
+      CoreCallableContractAdmission.DeclarationAuthentication globals.registry outward nextSource lexical
+        (actualReceiver nextWorld receiving ambient) := by
+    cases authenticated with
+    | inl whole => exact whole.restore_world_receiver larger receiverLarger domain received
+    | inr precise => exact precise.restore_world_receiver larger receiverLarger domain received
+  obtain ⟨nextSource,nextAuthenticated⟩ := restored
   let after : HandlerSource globals outward nextWorld residual data answer table plans
       (restoredClauses plans rows lexical (actualReceiver nextWorld receiving ambient))
       (actualReceiver nextWorld receiving ambient) :=
-    ⟨before.annotation, before.modes, nextSource, lexical, empty, nextAuthenticated⟩
+    ⟨before.annotation, before.modes, nextSource, lexical, empty, Or.inl nextAuthenticated⟩
   refine ⟨_, after, larger, receiverLarger, ⟨lexical, empty, authenticated, rfl⟩,
     erase_restoredClauses _ _ _ _, actualReceiver.issued, ?_⟩
   exact after.received_support_current.trans actualReceiver.received
@@ -178,6 +205,14 @@ inductive RestoredDeclarations (world receiver : List Nat) (requested : Instance
       (received : ∀ name, nextLexical.environment name ⊆ receiver) :
       RestoredDeclarations world receiver requested table rows (restoredClauses plans rows nextLexical receiver)
 
+  | canonicalDomain
+      {source : SourceDeclarations registry outward owners beforeWorld environment allowed requested answer clauses table plans rows}
+      (authenticated : DomainDeclarationAuthentication registry outward source lexical beforeReceiver)
+      (worldExtended : beforeWorld ⊆ world) (receiverExtended : beforeReceiver ⊆ receiver)
+      (domain : RestoredLexicalDomain lexical nextLexical)
+      (received : ∀ name, nextLexical.environment name ⊆ receiver) :
+      RestoredDeclarations world receiver requested table rows (restoredClauses plans rows nextLexical receiver)
+
 /-- Receipts decorate the existing context delta. They contain no future
 admission or execution result and no duplicate runtime stack judgment. -/
 inductive RestoredContextReceipts (world : List Nat) : (ambient : List Nat) →
@@ -224,6 +259,7 @@ theorem RestoredDeclarations.complete (receipt : RestoredDeclarations world rece
   cases receipt with
   | same => rfl
   | canonical authenticated worldExtended receiverExtended domain received => exact erase_restoredClauses _ _ _ _
+  | canonicalDomain authenticated worldExtended receiverExtended domain received => exact erase_restoredClauses _ _ _ _
 
 theorem RestoredContextReceipts.complete (receipt : RestoredContextReceipts world ambient before after) :
     RestoredContext before after := by
@@ -258,11 +294,19 @@ theorem HandlerRestorationReceipt.declarations
     RestoredDeclarations nextWorld (actualReceiver nextWorld receiving ambient) data.effectInst table rows nextRows := by
   obtain ⟨lexical, empty, authenticated, same⟩ := receipt.canonicalRows
   rw [same]
-  apply RestoredDeclarations.canonical authenticated receipt.worldExtended receipt.receiverExtended
-    (fun name resources found => ⟨resources, found⟩)
-  intro name
-  rw [empty]
-  simp [ScopedPorts.Support.empty]
+  cases authenticated with
+  | inl whole =>
+    apply RestoredDeclarations.canonical whole receipt.worldExtended receipt.receiverExtended
+      (fun name resources found => ⟨resources,found⟩)
+    intro name
+    rw [empty]
+    simp [ScopedPorts.Support.empty]
+  | inr domain =>
+    apply RestoredDeclarations.canonicalDomain domain receipt.worldExtended receipt.receiverExtended
+      (fun name resources found => ⟨resources,found⟩)
+    intro name
+    rw [empty]
+    simp [ScopedPorts.Support.empty]
 
 end Ash.OneShot.CoreCallableContractExecution
 #print axioms Ash.OneShot.CoreCallableRestoredChecking.RestoredSourceRows.complete
@@ -600,6 +644,9 @@ theorem Authenticated.restored_row_view
     | handler clauses capabilities coverage unique admitted modes recipes body declarations =>
       exact ⟨.canonical declarations worldExtended receiverExtended domain received,
         .canonical body worldExtended receiverExtended domain received⟩
+    | handlerDomain clauses capabilities coverage unique admitted modes recipes body declarations =>
+      exact ⟨.canonicalDomain declarations worldExtended receiverExtended domain received,
+        .canonical body worldExtended receiverExtended domain received⟩
 
 theorem RestoredSourceRows.view (receipt : RestoredSourceRows world receiver before after) :
     SourceRowView world receiver before after := by
@@ -626,6 +673,10 @@ theorem RestoredDeclarations.supported
   cases receipt with
   | same => exact supported
   | canonical authenticated worldExtended receiverExtended domain lexicalReceived =>
+      obtain ⟨nextSource, nextAuthenticated⟩ :=
+        authenticated.restore_world_receiver worldExtended receiverExtended domain lexicalReceived
+      exact nextAuthenticated.received_support_current.trans received
+  | canonicalDomain authenticated worldExtended receiverExtended domain lexicalReceived =>
       obtain ⟨nextSource, nextAuthenticated⟩ :=
         authenticated.restore_world_receiver worldExtended receiverExtended domain lexicalReceived
       exact nextAuthenticated.received_support_current.trans received
@@ -724,6 +775,21 @@ theorem DeclarationAuthentication.restored_declaration_view
         OfferAuthentication.restored_mode_view protectedMode worldExtended receiverExtended
           (receipt_domain_extend domain) (receipt_range_extend received),
         .canonical rest worldExtended receiverExtended domain received⟩
+theorem DomainDeclarationAuthentication.restored_declaration_view
+    {source : SourceDeclarations registry outward owners beforeWorld environment allowed requested answer clauses table plans rows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical beforeReceiver)
+    (worldExtended : beforeWorld ⊆ world) (receiverExtended : beforeReceiver ⊆ receiver)
+    (domain : RestoredLexicalDomain lexical nextLexical)
+    (received : ∀ name, nextLexical.environment name ⊆ receiver) :
+    DeclarationRowView world receiver requested table rows (restoredClauses plans rows nextLexical receiver) := by
+  cases authenticated with
+  | domainNil => trivial
+  | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest =>
+      exact ⟨OfferAuthentication.restored_mode_view ordinary worldExtended receiverExtended
+          (receipt_domain_extend domain) (receipt_range_extend received),
+        OfferAuthentication.restored_mode_view protectedMode worldExtended receiverExtended
+          (receipt_domain_extend domain) (receipt_range_extend received),
+        .canonicalDomain rest worldExtended receiverExtended domain received⟩
 
 theorem RestoredDeclarations.view
     (receipt : RestoredDeclarations world receiver requested table before after) :
@@ -737,6 +803,8 @@ theorem RestoredDeclarations.view
         · cases protectedMode <;> first | trivial | exact fun owner => .same
   | canonical authenticated worldExtended receiverExtended domain received =>
       exact DeclarationAuthentication.restored_declaration_view authenticated worldExtended receiverExtended domain received
+  | canonicalDomain authenticated worldExtended receiverExtended domain received =>
+      exact DomainDeclarationAuthentication.restored_declaration_view authenticated worldExtended receiverExtended domain received
 
 theorem RestoredDeclarations.selected
     (receipt : RestoredDeclarations world receiver effect table before after)
@@ -857,6 +925,8 @@ theorem RestoredDeclarations.world_weaken (receipt : RestoredDeclarations world 
   | same => exact .same
   | canonical authenticated extended receiverExtended domain received =>
       exact .canonical authenticated (extended.trans larger) receiverExtended domain received
+  | canonicalDomain authenticated extended receiverExtended domain received =>
+      exact .canonicalDomain authenticated (extended.trans larger) receiverExtended domain received
 
 theorem RestoredContextReceipts.world_weaken (receipt : RestoredContextReceipts world ambient before after)
     (larger : world ⊆ nextWorld) : RestoredContextReceipts nextWorld ambient before after := by
@@ -1194,3 +1264,7 @@ theorem PendingChecked.restore_receipts
 
 end Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport
 #print axioms Ash.OneShot.SourceScheduledCleanupInterfaces.Lexical.Recursive.CleanupRows.Contextual.InstallationSupport.PendingChecked.restore_receipts
+
+#print axioms Ash.OneShot.CoreCallableRestoredChecking.DomainDeclarationAuthentication.restored_declaration_view
+
+#print axioms Ash.OneShot.CoreCallableContractAdmission.DomainDeclarationAuthentication.received_support_current

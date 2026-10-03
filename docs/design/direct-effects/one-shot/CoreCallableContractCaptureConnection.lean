@@ -78,6 +78,98 @@ theorem selected_family
       exact ⟨argument, input, resumeEffects, closeEffects, family, bodies, known, bodyRows, body,
         resumeInterface, closeInterface, .pass different chosen, .pass different located, bodyChecked⟩
 
+theorem domain_selected_family
+    {plans : ClausePlans clauses families}
+    {declarationRows : ClauseRows (clauseSignatures plans)}
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans declarationRows}
+    (authenticated : DomainDeclarationAuthentication registry outward source lexical receiver)
+    (selected : ClauseAt operation clauses parameter binder code)
+    (found : lookup operation table = some offered)
+    (available : offered.row held = some row) :
+    ∃ formalSupport, ∃ argument input resumeEffects closeEffects,
+    ∃ (family : Nat → Dependencies) (bodies : ∀ owner, Plan (family owner)),
+    ∃ _known : registry.operations requested operation = some (argument, input),
+    ∃ bodyRows : ∀ owner, Rows (signature (bodies owner)),
+    ∃ body : ∀ owner (contract : OwnerContract),
+        contract.input = input → contract.answer = answer →
+        contract.resumeEffects = resumeEffects → contract.closeEffects = closeEffects →
+        contract.held = held → contract.closeDemand.Perm contract.resumeDemand →
+        SourceBody registry outward (owners.insert owner contract) world allowed (.ticket binder owner)
+          (environment.extend parameter argument) code answer ⟨owner, contract.lower, offered.dispose, row⟩
+          (bodies owner) (bodyRows owner),
+      CoreCallableContractOperandDomain.domainSupport argument receiver ⊆ formalSupport ∧
+      formalSupport ⊆ receiver ∧
+      (code.requiredActions.resume = true → resumeEffects = allowed) ∧
+      (code.requiredActions.dispose = true → closeEffects = allowed) ∧
+      Selected operation held plans parameter binder code bodies ∧
+      ClauseRows.Selected operation held declarationRows bodyRows ∧
+      ∀ owner contract a b c d e balanced,
+        BodyAuthentication registry outward (body owner contract a b c d e balanced)
+          (lexical.extend parameter formalSupport) receiver := by
+  induction selected generalizing table families with
+  | hit => cases authenticated with
+    | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest =>
+      simp only [lookup, if_true] at found
+      cases Option.some.inj found
+      cases held with
+      | false =>
+        simp [ClauseContract.row] at available
+        cases available
+        cases ordinary with
+        | available resumeInterface closeInterface bodyChecked =>
+          exact ⟨_, _, _, _, _, _, _, known, _, _, domainCovered, formalReceived, resumeInterface, closeInterface, .ordinary, .ordinary, bodyChecked⟩
+      | true =>
+        simp [ClauseContract.row] at available
+        cases available
+        cases protectedMode with
+        | available resumeInterface closeInterface bodyChecked =>
+          exact ⟨_, _, _, _, _, _, _, known, _, _, domainCovered, formalReceived, resumeInterface, closeInterface, .protectedMode, .protectedMode, bodyChecked⟩
+  | pass different next ih => cases authenticated with
+    | domainCons known domainCovered formalReceived bodyBound storedReceived ordinary protectedMode rest =>
+      obtain ⟨formalSupport, argument, input, resumeEffects, closeEffects, family, bodies, known, bodyRows, body,
+        domainCovered, formalReceived, resumeInterface, closeInterface, chosen, located, bodyChecked⟩ :=
+        ih rest (by simpa only [lookup, if_neg different] using found)
+      exact ⟨formalSupport, argument, input, resumeEffects, closeEffects, family, bodies, known, bodyRows, body,
+        domainCovered, formalReceived, resumeInterface, closeInterface, .pass different chosen, .pass different located, bodyChecked⟩
+
+theorem selected_family_at
+    {plans : ClausePlans clauses families}
+    {declarationRows : ClauseRows (clauseSignatures plans)}
+    {source : SourceDeclarations registry outward owners world environment allowed requested answer clauses table plans declarationRows}
+    (authenticated : DeclarationAuthentication registry outward source lexical receiver ∨
+      DomainDeclarationAuthentication registry outward source lexical receiver)
+    (selected : ClauseAt operation clauses parameter binder code)
+    (found : lookup operation table = some offered)
+    (available : offered.row held = some row) :
+    ∃ formalSupport, ∃ argument input resumeEffects closeEffects,
+    ∃ (family : Nat → Dependencies) (bodies : ∀ owner, Plan (family owner)),
+    ∃ _known : registry.operations requested operation = some (argument, input),
+    ∃ bodyRows : ∀ owner, Rows (signature (bodies owner)),
+    ∃ body : ∀ owner (contract : OwnerContract),
+        contract.input = input → contract.answer = answer →
+        contract.resumeEffects = resumeEffects → contract.closeEffects = closeEffects →
+        contract.held = held → contract.closeDemand.Perm contract.resumeDemand →
+        SourceBody registry outward (owners.insert owner contract) world allowed (.ticket binder owner)
+          (environment.extend parameter argument) code answer ⟨owner, contract.lower, offered.dispose, row⟩
+          (bodies owner) (bodyRows owner),
+      CoreCallableContractOperandDomain.domainSupport argument receiver ⊆ formalSupport ∧
+      formalSupport ⊆ receiver ∧
+      (code.requiredActions.resume = true → resumeEffects = allowed) ∧
+      (code.requiredActions.dispose = true → closeEffects = allowed) ∧
+      Selected operation held plans parameter binder code bodies ∧
+      ClauseRows.Selected operation held declarationRows bodyRows ∧
+      ∀ owner contract a b c d e balanced,
+        BodyAuthentication registry outward (body owner contract a b c d e balanced)
+          (lexical.extend parameter formalSupport) receiver := by
+  cases authenticated with
+  | inl whole =>
+    obtain ⟨argument,input,resumeEffects,closeEffects,family,bodies,known,bodyRows,body,
+      resumeInterface,closeInterface,chosen,located,checked⟩ := selected_family whole selected found available
+    exact ⟨receiver,argument,input,resumeEffects,closeEffects,family,bodies,known,bodyRows,body,
+      CoreCallableContractOperandDomain.domainSupport_received,List.Subset.refl _,
+      resumeInterface,closeInterface,chosen,located,checked⟩
+  | inr domain => exact domain_selected_family domain selected found available
+
 /-- Request inversion keeps the actual closed payload's recursive source and
 hereditary authentication from the same current expression. -/
 theorem perform_payload
@@ -124,6 +216,37 @@ theorem payload_supported
   refine ⟨requested, argument, sameEffect, known, ⟨nextSource, ?_, issued, ⟨nextLexical, empty, completed⟩, issued⟩⟩
   exact SourceSupport.bounds_iff.mpr received
 
+/-- The SAME current closed rich operand supplies the formal-S substitution bound. -/
+theorem payload_supported_at
+    (current : CoreCallableContractAdmission.Supported globals outward world allowed scope Environment.empty
+      ScopedPorts.Support.empty (.perform (Instantiation.freezeEffect requested) operation operand) result demand requirements plan rows bound currentReceiver)
+    (closed : ClosedValue operand)
+    (known : globals.operations requested operation = some (argument,result))
+    (domainCovered : CoreCallableContractOperandDomain.domainSupport argument receiver ⊆ formalSupport)
+    (formalReceived : formalSupport ⊆ receiver)
+    (received : ScopedPorts.Support.evaluate ScopedPorts.Support.empty operand.dependencies ⊆ receiver)
+    (issued : receiver ⊆ world)
+    (owner : Nat) (contract : OwnerContract) (residual : List Instance) (binder : Nat)
+    (nextLexical : LexicalBounds) (empty : nextLexical.environment = ScopedPorts.Support.empty) :
+    CoreCallableContractAdmission.Supported (globals.withOwner owner contract) outward world residual
+      (.ticket binder owner) Environment.empty ScopedPorts.Support.empty operand argument [] (.request [] [])
+      .pure Rows.pure formalSupport receiver := by
+  obtain ⟨actualRequested,actualArgument,payload,lexical,sameEffect,payloadKnown,sameEnvironment,authentication⟩ :=
+    perform_payload current closed
+  have sameRequested : requested = actualRequested := Instantiation.effect_realization_unique
+    (Instantiation.frozen_effect_realizes Instantiation.Environment.empty requested)
+    (by rw [sameEffect]; exact Instantiation.frozen_effect_realizes Instantiation.Environment.empty actualRequested)
+  subst actualRequested
+  have sameArgument := (Prod.mk.inj (Option.some.inj (payloadKnown.symm.trans known))).1
+  subst actualArgument
+  have actualBound := (payload.closed_support_in_domain closed received).trans domainCovered
+  let nextSource := (IndexedSource.value_owner_insert payload closed.1 owner contract).value_allowed closed.1 residual (.ticket binder owner)
+  let nextAuthentication := (authentication.value_owner_insert closed.1 owner contract).value_allowed closed.1 residual (.ticket binder owner)
+  have completed : Authenticated globals.registry outward nextSource nextLexical receiver :=
+    nextAuthentication.value_reauthenticate closed (by simpa only [empty] using received)
+  exact ⟨nextSource,SourceSupport.bounds_iff.mpr actualBound,formalReceived.trans issued,
+    ⟨nextLexical,empty,completed⟩,issued⟩
+
 /-- The selected operation's clause syntax is recovered from the installed
 source declaration order, rather than supplied as a private body premise. -/
 theorem declaration_clause
@@ -160,6 +283,24 @@ theorem selected_body_supported
   cases authenticated with
   | typed authenticated =>
     refine ⟨_, _, ⟨_, ?_, issued, ⟨lexical.extend parameter receiver, ?_, authenticated⟩, issued⟩⟩
+    · simpa only [CoreCallableReceiverRefinement.LexicalBounds.environment_extend, empty] using authenticated.current_support
+    · simp only [CoreCallableReceiverRefinement.LexicalBounds.environment_extend, empty]
+
+theorem selected_body_supported_at
+    {lexical : LexicalBounds}
+    {body : SourceBody globals.registry outward globals.owners world allowed (.ticket binder owner)
+      (Environment.empty.extend parameter argument) code answer header plan rows}
+    (authenticated : BodyAuthentication globals.registry outward body (lexical.extend parameter formalSupport) receiver)
+    (empty : lexical.environment = ScopedPorts.Support.empty)
+    (issued : receiver ⊆ world) :
+    ∃ demand, ∃ requirements : RecursiveRequirements.Requirements demand,
+      CoreCallableContractAdmission.Supported globals outward world allowed (.ticket binder owner)
+        (Environment.empty.extend parameter argument)
+        (ScopedPorts.Support.extend ScopedPorts.Support.empty parameter formalSupport)
+        code answer demand requirements plan rows receiver receiver := by
+  cases authenticated with
+  | typed authenticated =>
+    refine ⟨_, _, ⟨_, ?_, issued, ⟨lexical.extend parameter formalSupport, ?_, authenticated⟩, issued⟩⟩
     · simpa only [CoreCallableReceiverRefinement.LexicalBounds.environment_extend, empty] using authenticated.current_support
     · simp only [CoreCallableReceiverRefinement.LexicalBounds.environment_extend, empty]
 
@@ -652,9 +793,9 @@ theorem handler_capture_source
       nextPlan = CoreCallablePlanSubstitution.plan code (bodies owner) parameter operand ∧
       signature nextPlan = signature (bodies owner) ∧ HEq nextRows (bodyRows owner) := by
   obtain ⟨lexical, empty, authentication⟩ := frame.authentication
-  obtain ⟨argument, input, resumeEffects, closeEffects, family, bodies, known, bodyRows, body,
-    resumeInterface, closeInterface, chosen, selectedRows, bodyAuthentication⟩ :=
-    selected_family authentication selected found available
+  obtain ⟨formalSupport, argument, input, resumeEffects, closeEffects, family, bodies, known, bodyRows, body,
+    domainCovered, formalReceived, resumeInterface, closeInterface, chosen, selectedRows, bodyAuthentication⟩ :=
+    selected_family_at authentication selected found available
   obtain ⟨payloadRequested, payloadArgument, payload, payloadLexical, sameEffect, payloadKnown, payloadEmpty, payloadAuthentication⟩ :=
     perform_payload current closed
   have sameRequested : handler.effectInst = payloadRequested := Instantiation.effect_realization_unique
@@ -667,16 +808,9 @@ theorem handler_capture_source
   subst input
   let allocated : OwnerContract := ⟨result, answer, held, resumeDemand, resumeRow, resumeDemand, closeRow, resumeEffects, closeEffects⟩
   have bodyAuth := bodyAuthentication owner allocated rfl rfl rfl rfl rfl (List.Perm.refl _)
-  obtain ⟨bodyDemand, bodyRequirements, bodySupported⟩ := selected_body_supported (globals := globals.withOwner owner allocated) bodyAuth empty issued
-  obtain ⟨actualRequested, actualArgument, actualEffect, actualKnown, replacement⟩ :=
-    payload_supported current closed owner allocated residual binder lexical empty received issued
-  have actualSame : handler.effectInst = actualRequested := Instantiation.effect_realization_unique
-    (Instantiation.frozen_effect_realizes Instantiation.Environment.empty handler.effectInst)
-    (by rw [actualEffect]; exact Instantiation.frozen_effect_realizes Instantiation.Environment.empty actualRequested)
-  subst actualRequested
-  have samePorts := Option.some.inj (known.symm.trans actualKnown)
-  have samePayloadArgument := (Prod.mk.inj samePorts).1
-  subst actualArgument
+  obtain ⟨bodyDemand, bodyRequirements, bodySupported⟩ := selected_body_supported_at (globals := globals.withOwner owner allocated) bodyAuth empty issued
+  have replacement := payload_supported_at current closed known domainCovered formalReceived received issued
+    owner allocated residual binder lexical empty
   obtain ⟨nextPlan, nextRows, successor, exactPlan, sameSignature, sameRows⟩ :=
     bodySupported.substitution_reannotated stable replacement closed
   exact ⟨resumeEffects, closeEffects, family, bodies, bodyRows, bodyDemand, bodyRequirements,
@@ -781,12 +915,16 @@ theorem capture
 
 end
 end Ash.OneShot.CoreCallableContractCaptureConnection
+#print axioms Ash.OneShot.CoreCallableContractCaptureConnection.domain_selected_family
+#print axioms Ash.OneShot.CoreCallableContractCaptureConnection.selected_family_at
 #print axioms Ash.OneShot.CoreCallableContractCaptureConnection.selected_family
 
 #print axioms Ash.OneShot.CoreCallableContractCaptureConnection.request_receiver
 
 #print axioms Ash.OneShot.CoreCallableContractCaptureConnection.pending_visible
 
+#print axioms Ash.OneShot.CoreCallableContractCaptureConnection.selected_body_supported_at
+#print axioms Ash.OneShot.CoreCallableContractCaptureConnection.payload_supported_at
 #print axioms Ash.OneShot.CoreCallableContractCaptureConnection.selected_body_supported
 
 

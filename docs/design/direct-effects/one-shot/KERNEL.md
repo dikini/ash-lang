@@ -27633,3 +27633,22 @@ Entry points: [Product frame interfaces](RestoredBindContinuationInterfaces.lean
 [generic admitted origins](CoreCallableRichAdmittedCurrentOrigins.lean),
 [actual beta/event consumer](CoreCallableRichAdmittedEventConsumers.lean),
 and [resource seed/negative interfaces](RichAdmittedEventInterfaces.lean).
+
+### Domain handler and general branch integration — 2026-10-03
+
+The DN-0033 experiment now propagates whole/domain declaration authentication
+through installed frames, actual capture and exact canonical restoration.
+Both modes, all owner-indexed private bodies and complete Contracts/Plans/Rows
+are retained. The general Boolean decision consumer derives the selected
+original arm and its checks/accounting, actual Core step and one positive
+Event from current mapped-frame evidence and the actual past ledger.
+
+The coalesced independent replay checks 171 affected modules once and
+reuses 869 verified unaffected artifact/log pairs; the complete assembly
+has 1,040 modules and 13,427 ordered standard-only reports. Constructor
+coverage stays 14/16. General static handler/resource production, reachable
+preservation, allocating freshness, M4 availability and Rust correspondence
+remain open. This is informative proof evidence; Ash semantics are unchanged.
+
+See [TASK-0032](<../../../tasks/TASK-0032-core-one-shot-alignment.md>) for the acceptance inventory and [domain authentication](<CoreCallableDomainHandlerAuthentication.lean>),
+[branch origins](<CoreCallableRichBranchCurrentOrigins.lean>) and [branch/event interfaces](<RichBranchEventInterfaces.lean>) for the new proof interfaces.
