@@ -9,4 +9,4 @@ Use [the template](template.md) and allocate the next `TASK-NNNN` ID.
 
 ## Active tasks
 
-- [TASK-0033: Proof development efficiency](TASK-0033-proof-development-efficiency.md)
+No active tasks.

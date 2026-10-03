@@ -2,8 +2,7 @@
 
 - ID: `AD-0012`
 - Status: accepted
-- Related: [AD-0001](AD-0001-implementation-environment.md),
-  [TASK-0032](../tasks/TASK-0032-core-one-shot-alignment.md)
+- Related: [AD-0001](AD-0001-implementation-environment.md)
 
 ## Decision
 
@@ -18,8 +17,9 @@ Key reuse by source, compiler and library pins, options, expected reports and
 selected import hashes. Recheck stored artifact and log hashes before reuse.
 
 Build serially by default. An explicit two-job setting may compile independent
-ready modules when CPU and memory headroom permit. Bound compiler threads and
-memory, serialize integration runners on the host, and record per-module wall
+ready modules when CPU and memory headroom permit. Account for other host
+compilers before admitting another job. Bound compiler threads and
+memory, serialize module compilation stages on the host, and record per-module wall
 time and peak resident memory. A failed module blocks its consumers; independent
 successes remain reusable. Publish complete integration evidence only after all
 existing coherence checks pass.
