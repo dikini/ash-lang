@@ -235,6 +235,81 @@ theorem check_compositional_tree
     (hidden := opening.hidden) initialTree
     (check_opening_tree body opened)
 
+/-- The original finite resource checks share the SAME schema registry with
+an initializer computed directly by the single original constructor checker. -/
+def check_compositional_cell
+    (annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows)
+    (body : Body original context code pattern checking needs) (api : CoreCallableFiniteCellRegistry.CellApi)
+    (policy : Syntax.TicketPolicy) (outward : List Instance) (world : List Nat)
+    (residual allowed : List Instance) (scope : Execution.Scope) (binder : Nat)
+    (lexical : LexicalBounds) (receiver : List Nat) :
+    Except Error (PLift (Result api entries policy outward owners world residual allowed scope original binder annotation body lexical receiver)) :=
+  match CoreCallableFiniteRegistryBridge.recheck_cell annotation api policy outward world allowed scope lexical receiver with
+  | .error error => .error (.initializer error)
+  | .ok receipt =>
+      if accepted : resourceCheck original body api binder world residual allowed lexical receiver = true then
+        .ok ⟨produce annotation receipt.down body accepted⟩
+      else .error .resourceBody
+
+ theorem check_compositional_cell_success
+    {annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows}
+    {receipt : PLift (Result api entries policy outward owners world residual allowed scope original binder annotation body lexical receiver)}
+    (_accepted : check_compositional_cell annotation body api policy outward world residual allowed scope binder lexical receiver = .ok receipt) :
+    Result api entries policy outward owners world residual allowed scope original binder annotation body lexical receiver := receipt.down
+
+ theorem check_compositional_cell_inputs
+    {annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows}
+    {receipt : PLift (Result api entries policy outward owners world residual allowed scope original binder annotation body lexical receiver)}
+    (accepted : check_compositional_cell annotation body api policy outward world residual allowed scope binder lexical receiver = .ok receipt) :
+    (∃ initialReceipt, CoreCallableFiniteRegistryBridge.recheck_cell annotation api policy outward world allowed scope lexical receiver = .ok initialReceipt) ∧
+    resourceCheck original body api binder world residual allowed lexical receiver = true := by
+  cases checked : CoreCallableFiniteRegistryBridge.recheck_cell annotation api policy outward world allowed scope lexical receiver with
+  | error error => simp [check_compositional_cell,checked] at accepted
+  | ok initialReceipt =>
+      refine ⟨⟨initialReceipt,rfl⟩,?_⟩
+      by_cases valid : resourceCheck original body api binder world residual allowed lexical receiver = true
+      · exact valid
+      · simp [check_compositional_cell,checked,valid] at accepted
+
+ theorem cell_initializer_error_propagated
+    {annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows}
+    (rejected : CoreCallableFiniteRegistryBridge.recheck_cell annotation api policy outward world allowed scope lexical receiver = .error error) :
+    check_compositional_cell annotation body api policy outward world residual allowed scope binder lexical receiver = .error (.initializer error) := by
+  simp [check_compositional_cell,rejected]
+
+
+/-- Tree of the SAME direct-schema successful resource receipt. -/
+theorem check_compositional_cell_tree
+    {annotation : CoreCallableStaticProducer.Annotation entries owners original initial .integer
+      initialDemand initialReq initialPlan initialRows}
+    {receipt : PLift (Result api entries policy outward owners world residual allowed scope
+      original binder annotation body lexical receiver)}
+    (accepted : check_compositional_cell annotation body api policy outward world residual allowed
+      scope binder lexical receiver = .ok receipt) :
+    CoreCallableStaticProducer.StaticTree
+      (CoreCallableFiniteCellRegistry.registry (some api) entries policy) outward
+      receipt.down.source := by
+  obtain ⟨⟨initialReceipt,initialAccepted⟩,resourceAccepted⟩ := check_compositional_cell_inputs accepted
+  obtain ⟨initialSource,initialTree,_initialAuth,_issued⟩ :=
+    CoreCallableFiniteRegistryBridge.recheck_cell_success initialAccepted
+  obtain ⟨⟨opened,effects⟩,admitted⟩ :
+      (openingCheck original body api binder world residual lexical receiver = true ∧
+      CoreCallableGraphAnnotationChecks.subsetB (residual.flatMap Instance.resources) world = true) ∧
+      CoreCallableGraphAnnotationChecks.subsetB residual allowed = true := by
+    simpa [resourceCheck] using resourceAccepted
+  let opening := check_opening (entries := entries) (policy := policy) (outward := outward)
+    (owners := owners) (scope := scope) body opened
+  exact CoreCallableStaticProducer.StaticTree.resource
+    (formed := opening.formed)
+    (effectsBound := CoreCallableGraphAnnotationChecks.subsetB_sound effects)
+    (admitted := CoreCallableGraphAnnotationChecks.subsetB_sound admitted)
+    (hidden := opening.hidden) initialTree
+    (check_opening_tree body opened)
+
 #print axioms check_opening_tree
 #print axioms check_compositional_tree
 
@@ -242,4 +317,8 @@ theorem check_compositional_tree
 #print axioms check_success
 #print axioms check_inputs
 #print axioms initializer_error_propagated
+#print axioms check_compositional_cell_tree
+#print axioms check_compositional_cell_success
+#print axioms check_compositional_cell_inputs
+#print axioms cell_initializer_error_propagated
 end Ash.OneShot.CoreCallableCompositionalResourceOpening

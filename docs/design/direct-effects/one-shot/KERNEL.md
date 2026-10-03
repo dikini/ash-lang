@@ -27722,3 +27722,52 @@ SOURCE ready; current-parent light checks and their canonical gate are pending. 
 
 Entry points: [resource index Data](<CoreCallableResourceIndexData.lean>), [resource index interfaces](<CoreCallableResourceIndexInterfaces.lean>), [actual handler history](<CoreHandlerHistory.lean>) and
 [current handler freshness](<CoreCallableRichHandlerFreshness.lean>).
+
+### Resource carrier, fixed registry backend and handler Event — 2026-10-03
+
+This DN-0033 increment factors existing resource evidence and connects a current
+handler successor to actual Event accounting. It changes no Ash semantics or
+supported-fragment boundary.
+
+The carrier moves the original dependent StaticTree and its authentication and
+outward consumers upstream, retaining full Contracts, requirements, private
+Plans/Rows and every original fresh-body identity family. Eight support helpers
+remain private; original checked_outward stays private in Producer. The 71
+retained Template/Body declarations and proof bodies remain unchanged.
+
+The fixed backend selects precisely the original literal registry or the
+existing cell registry. Its one checker retains fourteen Annotation cases,
+original public Result/check/checkGraph interfaces and literal guard/error
+order. Cell checking computes the SAME full source/authentication/tree after
+existing compatibility validation; Bridge and Opening consume that actual
+result directly. No arbitrary registry, future source/authentication, success
+callback, new annotation grammar or registry equality is supplied. Shared
+Producer is selected once across the carrier/backend changes.
+
+The handler wrapper computes the actual Core successor and its full body Site,
+private Families/Plans/Rows and original history, then appends one positive
+RawTrace Event and transports the ledger. Core nextHandler advances and entered
+observations append; owners, heap and unrelated counters remain as before. The
+logical Event has created=[] and discharged=[]; issued and completed lists are
+unchanged, with inherited issued.Nodup supplying freshness. This allocates a
+Core handler identity while adding no ledger ticket. Program/input indices and
+machine Current do not establish a rich source/runtime registry join.
+
+The first coalesced gate stopped when removing Template’s heavy import exposed
+FiniteResourceConsumers’ dependency on StorageRecipes. The repair adds that
+explicit import; all consumer theorem bodies, premises and full indexed
+receipts remain byte-identical. The failed command and its absent artifact are
+retained separately from the 52 saved successful receipts. Repaired gate
+cache reuse requires exact runner keys and fresh validation.
+
+One ROOT coalesced gate checks 1,054 registered modules and 13,499 ordered standard-only reports. Its 86 affected modules carry 903 reports; 968 unaffected artifact/log pairs retain actual parent hardlink identity. The actual accepted scheduler records 52 validated receipt hits and 34 productive compiled modules. Compiler-gate wall time is 473.545 seconds; preparation is 10.782 seconds. Current LIGHT117 public checks are distinguished from those same source interface checks exercised by canonical compilation or validated exact receipt reuse; additional coalesced ABI/RED commands are recorded only where actually run. The six original-parent missing-module failures, the LIGHT overlay's nine hidden-private diagnostics and the generic negative proof reports remain distinct evidence; any additional coalesced-cache RED command is labeled separately. The separate ROOT metadata supplement retains all 669 actual ordered recursive dependency outputs and full 1,048-parent/eight-library before-after associations. Actual supplemental checks and final staged audit/lint/packaging must pass before integration.
+
+Original constructor coverage stays 14/16. Whole acceptance stays C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. Estimates remain 40–71 base agent-hours,
+50–90 with rework and 25–45 elapsed working hours. General annotation production,
+nested lexical resource environments/full owner demands, rich initial
+admission, reachable preservation, joined M4 Valid/availability and Rust
+correspondence remain open. These are existing C2/C3/C5 dependencies.
+
+Entry points: [resource tree carrier](<CoreCallableStaticTreeCarrier.lean>), [fixed registry backend](<CoreCallableStaticRegistryBackend.lean>), [direct bridge](<CoreCallableFiniteRegistryBridge.lean>),
+[cell resource opening](<CoreCallableCompositionalResourceOpening.lean>) and [actual handler Event](<CoreCallableRichHandlerEventConsumers.lean>).

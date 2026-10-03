@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-03 index/freshness checkpoint
+### Current deliverable board — 2026-10-03 carrier/backend/Event checkpoint
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,10 +72,12 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
-| Upstream resource index factoring | **4 modified + 2 new / 6 sources** | **Passed** | **73 moved; 64 retained; explicit bridge import; 79 public ports; four new reports** | **This checkpoint; unsigned integration pending** | **Full indices retained; general registry backend/Opening split open** |
-| Actual handler history and freshness | **3 / 3 new leaves** | **Passed** | **28 reports; SAME current counter from two actual-past facts** | **This checkpoint; unsigned integration pending** | **Existing handler consumer reused; Current supplies no rich registry join** |
-| **Index/freshness integration batch** | **2 / 2 components; 9 / 9 Lean deltas** | **Passed** | **32 added reports; 66 affected compiled once; 982 paired reuses** | **This checkpoint; unsigned integration pending** | **Latest parent d086e5a; whole counts/estimates unchanged** |
-| Next resource carrier and handler Event | **5 + 2 SOURCE ready; light pending** | **Scoped source reviews passed** | **Current-parent light/canonical pending** | **Pending** | **No admission or full M4 completion claim** |
+| Resource carrier and fixed registry backend | **5 modified + 4 new / 9 shared-selected sources** | **Gate passed; included in this checkpoint** | **LIGHT9: 76 reports; 74 public checks** | **Included in this checkpoint** | **One checker; final Producer selected once; general annotation/registry admission open** |
+| Current handler Event | **2 / 2 new leaves** | **Gate passed; included in this checkpoint** | **LIGHT2: 10 reports; 43 public checks; Core allocation/Event created=[]** | **Included in this checkpoint** | **Actual RawTrace/ledger; weak Current/phantom Program qualification retained** |
+| **Carrier/backend/Event integration batch** | **2 / 2 coalesced components plus one import repair; 12 / 12 Lean deltas** | **Gate passed; included in this checkpoint** | **13,499 reports; 86 affected; actual validated cache/scheduler receipts** | **Included in this checkpoint** | **Latest adopted parent 9e03394; whole counts/estimates unchanged** |
+| Upstream resource index factoring | **4 modified + 2 new / 6 sources** | **Passed** | **73 moved; 64 retained; explicit bridge import; 79 public ports; four new reports** | **`72a0fbe`** | **Full indices retained; general registry backend/Opening split open** |
+| Actual handler history and freshness | **3 / 3 new leaves** | **Passed** | **28 reports; SAME current counter from two actual-past facts** | **`72a0fbe`** | **Existing handler consumer reused; Current supplies no rich registry join** |
+| **Index/freshness integration batch** | **2 / 2 components; 9 / 9 Lean deltas** | **Passed** | **32 added reports; 66 affected compiled once; 982 paired reuses** | **`72a0fbe`** | **Latest parent d086e5a; whole counts/estimates unchanged** |
 | Checked resource tree provenance | **4 modified + 1 new / 5 sources** | **Passed** | **Eight added reports; SAME computed output; all fresh body families** | **`d086e5a`** | **Successful resource output now carries a tree; general Annotation.resource stays open** |
 | Conditional generic handler entry | **2 / 2 new leaves** | **Passed** | **Four reports; eleven interfaces; actual Core handler next/full prior history** | **`d086e5a`** | **Body Site/frame computed from current source; actual counter freshness stays explicit** |
 | **Resource/handler integration batch** | **2 / 2 components; 7 / 7 Lean deltas** | **Passed** | **Twelve added reports; 83 affected compiled once; 960 paired reuses** | **`d086e5a`** | **Coherent latest-parent gate; whole-fragment counts/estimates unchanged** |
@@ -3356,3 +3358,52 @@ canonical compilation are pending. These serve existing C2/C3/C5 obligations.
 
 Entry points: [resource index Data](<../design/direct-effects/one-shot/CoreCallableResourceIndexData.lean>), [resource index interfaces](<../design/direct-effects/one-shot/CoreCallableResourceIndexInterfaces.lean>), [actual handler history](<../design/direct-effects/one-shot/CoreHandlerHistory.lean>) and
 [current handler freshness](<../design/direct-effects/one-shot/CoreCallableRichHandlerFreshness.lean>).
+
+### Resource carrier, fixed registry backend and handler Event — 2026-10-03
+
+This DN-0033 increment factors existing resource evidence and connects a current
+handler successor to actual Event accounting. It changes no Ash semantics or
+supported-fragment boundary.
+
+The carrier moves the original dependent StaticTree and its authentication and
+outward consumers upstream, retaining full Contracts, requirements, private
+Plans/Rows and every original fresh-body identity family. Eight support helpers
+remain private; original checked_outward stays private in Producer. The 71
+retained Template/Body declarations and proof bodies remain unchanged.
+
+The fixed backend selects precisely the original literal registry or the
+existing cell registry. Its one checker retains fourteen Annotation cases,
+original public Result/check/checkGraph interfaces and literal guard/error
+order. Cell checking computes the SAME full source/authentication/tree after
+existing compatibility validation; Bridge and Opening consume that actual
+result directly. No arbitrary registry, future source/authentication, success
+callback, new annotation grammar or registry equality is supplied. Shared
+Producer is selected once across the carrier/backend changes.
+
+The handler wrapper computes the actual Core successor and its full body Site,
+private Families/Plans/Rows and original history, then appends one positive
+RawTrace Event and transports the ledger. Core nextHandler advances and entered
+observations append; owners, heap and unrelated counters remain as before. The
+logical Event has created=[] and discharged=[]; issued and completed lists are
+unchanged, with inherited issued.Nodup supplying freshness. This allocates a
+Core handler identity while adding no ledger ticket. Program/input indices and
+machine Current do not establish a rich source/runtime registry join.
+
+The first coalesced gate stopped when removing Template’s heavy import exposed
+FiniteResourceConsumers’ dependency on StorageRecipes. The repair adds that
+explicit import; all consumer theorem bodies, premises and full indexed
+receipts remain byte-identical. The failed command and its absent artifact are
+retained separately from the 52 saved successful receipts. Repaired gate
+cache reuse requires exact runner keys and fresh validation.
+
+One ROOT coalesced gate checks 1,054 registered modules and 13,499 ordered standard-only reports. Its 86 affected modules carry 903 reports; 968 unaffected artifact/log pairs retain actual parent hardlink identity. The actual accepted scheduler records 52 validated receipt hits and 34 productive compiled modules. Compiler-gate wall time is 473.545 seconds; preparation is 10.782 seconds. Current LIGHT117 public checks are distinguished from those same source interface checks exercised by canonical compilation or validated exact receipt reuse; additional coalesced ABI/RED commands are recorded only where actually run. The six original-parent missing-module failures, the LIGHT overlay's nine hidden-private diagnostics and the generic negative proof reports remain distinct evidence; any additional coalesced-cache RED command is labeled separately. The separate ROOT metadata supplement retains all 669 actual ordered recursive dependency outputs and full 1,048-parent/eight-library before-after associations. Actual supplemental checks and final staged audit/lint/packaging must pass before integration.
+
+Original constructor coverage stays 14/16. Whole acceptance stays C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. Estimates remain 40–71 base agent-hours,
+50–90 with rework and 25–45 elapsed working hours. General annotation production,
+nested lexical resource environments/full owner demands, rich initial
+admission, reachable preservation, joined M4 Valid/availability and Rust
+correspondence remain open. These are existing C2/C3/C5 dependencies.
+
+Entry points: [resource tree carrier](<../design/direct-effects/one-shot/CoreCallableStaticTreeCarrier.lean>), [fixed registry backend](<../design/direct-effects/one-shot/CoreCallableStaticRegistryBackend.lean>), [direct bridge](<../design/direct-effects/one-shot/CoreCallableFiniteRegistryBridge.lean>),
+[cell resource opening](<../design/direct-effects/one-shot/CoreCallableCompositionalResourceOpening.lean>) and [actual handler Event](<../design/direct-effects/one-shot/CoreCallableRichHandlerEventConsumers.lean>).

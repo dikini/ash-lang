@@ -140,7 +140,27 @@ def recheck
     (_accepted : recheck annotation api policy outward world allowed scope lexical receiver = .ok receipt) :
     Rechecked api entries policy outward owners world allowed scope bindings code contract demand requirements plan rows lexical receiver := receipt.down
 
+/-- Run the single original constructor checker at the checked schema backend
+and project its SAME computed source. This path performs no tree transfer. -/
+def recheck_cell
+    (annotation : CoreCallableStaticProducer.Annotation entries owners bindings code contract demand requirements plan rows)
+    (api : CellApi) (policy : Syntax.TicketPolicy) (outward : List Instance) (world : List Nat)
+    (allowed : List Instance) (scope : Execution.Scope) (lexical : LexicalBounds) (receiver : List Nat) :
+    Except Error (PLift (Rechecked api entries policy outward owners world allowed scope bindings code contract demand requirements plan rows lexical receiver)) :=
+  match CoreCallableStaticProducer.check_cell annotation api policy outward world allowed scope lexical receiver with
+  | .error .incompatibleRegistry => .error .incompatibleRegistry
+  | .error (.originalCheck error) => .error (.originalCheck error)
+  | .ok actual => .ok ⟨⟨actual.source,actual.tree,actual.authenticated,actual.receivingIssued⟩⟩
+
+/-- A successful direct gate exposes only its actually returned judgment. -/
+theorem recheck_cell_success
+    {annotation : CoreCallableStaticProducer.Annotation entries owners bindings code contract demand requirements plan rows}
+    (_accepted : recheck_cell annotation api policy outward world allowed scope lexical receiver = .ok receipt) :
+    Rechecked api entries policy outward owners world allowed scope bindings code contract demand requirements plan rows lexical receiver := receipt.down
+
+
 #print axioms transfer_tree
 #print axioms produced_rechecked
 #print axioms recheck_success
+#print axioms recheck_cell_success
 end Ash.OneShot.CoreCallableFiniteRegistryBridge

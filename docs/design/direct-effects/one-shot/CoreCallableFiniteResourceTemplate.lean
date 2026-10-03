@@ -1,6 +1,6 @@
 import CoreCallableResourceIndexData
 import CoreCallableFiniteCellRegistry
-import CoreCallableStorageRecipes
+import CoreCallableStaticTreeCarrier
 
 /-! Finite typed instructions for the SAME resource body. All identity families
 are computed from this tree. Slot indices preserve entire original contracts;

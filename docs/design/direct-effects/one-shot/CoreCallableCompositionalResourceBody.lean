@@ -1,6 +1,5 @@
 import CoreCallableResourceIndexData
 import CoreCallableFiniteResourceTemplate
-import CoreCallableFiniteRegistryBridge
 namespace Ash.OneShot.CoreCallableCompositionalResourceBody
 open ScopedExpressions ScopedExecution ProtectionContracts
 open CoreCallableContractSource (Contract sequenceRows)

@@ -1,0 +1,51 @@
+import CoreCallableRichHandlerEventConsumers
+
+/-! Generic current handler event interfaces retain full source and past data. -/
+namespace Ash.OneShot.RichHandlerEventInterfaces
+open CoreCallableRichHandlerEventConsumers
+
+#check handler_transition
+#check HandlerEvent
+#check handler_event
+#check HandlerEvent.handler
+#check HandlerEvent.residual
+#check HandlerEvent.table
+#check HandlerEvent.families
+#check HandlerEvent.plans
+#check HandlerEvent.rows
+#check HandlerEvent.next
+#check HandlerEvent.input
+#check HandlerEvent.activation
+#check HandlerEvent.scope
+#check HandlerEvent.effectSame
+#check HandlerEvent.armsSame
+#check HandlerEvent.frame
+#check HandlerEvent.dataSame
+#check HandlerEvent.codeSame
+#check HandlerEvent.siteSame
+#check HandlerEvent.predecessor
+#check HandlerEvent.suffix
+#check HandlerEvent.bodySame
+#check HandlerEvent.after
+#check HandlerEvent.inputSame
+#check HandlerEvent.past
+#check HandlerEvent.transition
+#check HandlerEvent.event
+#check HandlerEvent.issued
+#check HandlerEvent.completed
+#check HandlerEvent.count
+#check HandlerEvent.actual
+#check HandlerEvent.positive
+#check HandlerEvent.matching
+#check HandlerEvent.siteOrigins
+#check HandlerEvent.scopeOrigins
+#check HandlerEvent.endpoint_accounting
+#check HandlerEvent.full_history
+#check HandlerEvent.full_physical
+#check HandlerEvent.runtime_preserved
+#check HandlerEvent.counter_mismatch
+#check HandlerEvent.no_event_rejected
+#check HandlerEvent.no_core_identity
+#check current_counter_membership_rejected
+
+end Ash.OneShot.RichHandlerEventInterfaces

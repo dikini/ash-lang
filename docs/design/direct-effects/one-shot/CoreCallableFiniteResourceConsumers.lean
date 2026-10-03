@@ -1,4 +1,5 @@
 import CoreCallableFiniteResourceTemplate
+import CoreCallableStorageRecipes
 set_option maxRecDepth 10000
 namespace Ash.OneShot.CoreCallableFiniteResourceConsumers
 open ScopedExpressions ScopedExecution ProtectionContracts
