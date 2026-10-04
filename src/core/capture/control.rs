@@ -46,6 +46,9 @@ pub(super) enum Control {
         source: Span,
     },
     Return,
+    /// Forbidden control retained only in a private provider query graph.
+    /// It remains a refusal whenever the actual selected callable reaches it.
+    Unavailable,
     Sequence(Vec<usize>),
     Choice(Vec<usize>),
     Call {
@@ -159,6 +162,7 @@ impl Control {
                 source: *source,
             },
             Self::Return => Self::Return,
+            Self::Unavailable => Self::Unavailable,
             Self::Sequence(children) | Self::Choice(children) => {
                 let mut copy = copy_slice(children, budget)?;
                 for child in &mut copy {
@@ -811,6 +815,7 @@ pub(super) struct Analysis<'a> {
 impl<'a> Analysis<'a> {
     pub(super) fn new(
         graph: &'a SummaryGraph,
+        seed: Option<&'a Type>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         charge(budget, graph.code.len())?;
@@ -827,6 +832,11 @@ impl<'a> Analysis<'a> {
             .map_err(|_| Failure::Resource)?;
         pending.extend(graph.types.0.iter());
         pending.extend(graph.callables.iter().map(|callable| &callable.ty));
+        if let Some(seed) = seed {
+            charge(budget, 1)?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push(seed);
+        }
         while let Some(ty) = pending.pop() {
             charge(budget, 1)?;
             let mut found = false;
@@ -1150,7 +1160,21 @@ impl<'a> Analysis<'a> {
         actual
             .0
             .push(self.substitute(&self.graph.types.0[*ty], context, budget)?);
-        let actual = &actual.0[0];
+        let result = self.context_for_actual(target, &actual.0[0], *source, budget)?;
+        self.call_cache
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.call_cache.insert((code, target, context), result);
+        Ok(result)
+    }
+
+    fn context_for_actual(
+        &mut self,
+        target: usize,
+        actual: &Type,
+        source: Span,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         let mut pending = Vec::new();
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
         pending.push((&self.graph.callables[target].ty, actual));
@@ -1269,7 +1293,7 @@ impl<'a> Analysis<'a> {
                         }
                     }
                 }
-                let incoming = self.row_binding(variable, &remainder, unproved, *source, budget)?;
+                let incoming = self.row_binding(variable, &remainder, unproved, source, budget)?;
                 charge(budget, rows.len())?;
                 if let Some(previous) = rows.iter_mut().find(|binding| binding.variable == variable)
                 {
@@ -1318,10 +1342,6 @@ impl<'a> Analysis<'a> {
                 id
             }
         };
-        self.call_cache
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        self.call_cache.insert((code, target, context), result);
         Ok(result)
     }
 
@@ -1478,6 +1498,82 @@ impl<'a> Analysis<'a> {
         Self::enqueue_normalized(state, pending, visited, budget)
     }
 
+    /// The private bridge executes only selected pure source calls. Dictionary
+    /// staging is already represented by exact value-graph evidence bindings.
+    pub(super) fn provider_independent_call(
+        graph: &'a SummaryGraph,
+        targets: &[usize],
+        actual: &'a Type,
+        authenticated_wrapper: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut analysis = Self::new(graph, Some(actual), budget)?;
+        let mut data = graph
+            .data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .start_provider(budget)?;
+        let mut pending = Vec::new();
+        let mut visited = HashSet::new();
+        for target in targets {
+            let callable = graph.callables.get(*target).ok_or(Failure::Invalid)?;
+            let source = graph
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .provider_source(*target, budget)?;
+            let context = analysis.context_for_actual(*target, actual, source, budget)?;
+            let value_context = data.provider_invoke(*target, budget)?;
+            if !authenticated_wrapper {
+                data.provider_captures(*target, value_context, budget)?;
+            }
+            charge(budget, 1)?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push((callable.body, context, value_context));
+            data.provider_result(callable.body, value_context, budget)?;
+        }
+        while let Some((code, context, value_context)) = pending.pop() {
+            charge(budget, 1)?;
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            if !visited.insert((code, context, value_context)) {
+                continue;
+            }
+            match graph.code.get(code).ok_or(Failure::Invalid)? {
+                Control::Return => {}
+                Control::Sequence(children) | Control::Choice(children) => {
+                    charge(budget, children.len())?;
+                    pending
+                        .try_reserve(children.len())
+                        .map_err(|_| Failure::Resource)?;
+                    pending.extend(
+                        children
+                            .iter()
+                            .map(|child| (*child, context, value_context)),
+                    );
+                }
+                Control::Call { .. } => {
+                    let successors = data.calls(code, value_context, budget)?;
+                    if successors.unknown || successors.targets.is_empty() && !successors.returns {
+                        return Err(Failure::Invalid);
+                    }
+                    for (target, invoked) in successors.targets {
+                        let substituted = analysis.call_context(code, target, context, budget)?;
+                        data.provider_captures(target, invoked, budget)?;
+                        charge(budget, 1)?;
+                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        pending.push((
+                            graph.callables.get(target).ok_or(Failure::Invalid)?.body,
+                            substituted,
+                            invoked,
+                        ));
+                    }
+                }
+                _ => return Err(Failure::Invalid),
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check(
         &mut self,
         roots: &[usize],
@@ -1554,6 +1650,7 @@ impl<'a> Analysis<'a> {
                 let code = state.position.code;
                 match &self.graph.code[code] {
                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
+                    Control::Unavailable => return Err(Failure::Invalid),
                     Control::Sequence(children) => {
                         let mut ordinal = state.position.next;
                         while children
@@ -2973,7 +3070,8 @@ mod tests {
             ],
         };
         let run = |early: bool, budget: &mut TypeWorkBudget| {
-            let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+            let mut analysis =
+                Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
             let outcome = analysis.discover(&[1], None, budget);
             if early {
                 assert!(
@@ -3069,7 +3167,7 @@ mod tests {
                 };
                 state.normalize(budget)?;
                 let mut pending = VecDeque::new();
-                Analysis::new(&graph, budget)?.completed(
+                Analysis::new(&graph, None, budget)?.completed(
                     state,
                     3,
                     true,
@@ -3189,7 +3287,7 @@ mod tests {
             };
             state.normalize(budget)?;
             let mut pending = VecDeque::new();
-            Analysis::new(&graph, budget)?.completed(
+            Analysis::new(&graph, None, budget)?.completed(
                 state,
                 3,
                 true,
@@ -3797,11 +3895,11 @@ mod tests {
             ],
         };
         assert!(matches!(
-            Analysis::new(&graph, &mut budget),
+            Analysis::new(&graph, None, &mut budget),
             Err(Failure::Invalid)
         ));
         graph.code.pop();
-        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
         let state = State {
             position: Position { code: 0, next: 0 },
             context: 0,
@@ -3845,6 +3943,8 @@ mod tests {
             |_| None,
             &[],
             &[],
+            &[],
+            &[],
             &mut budget,
         )
         .unwrap();
@@ -3853,7 +3953,7 @@ mod tests {
             body: 0,
             effect: Request::effect(&effect, span, &mut budget).unwrap(),
         });
-        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
         assert!(analysis.data.is_some());
         assert!(matches!(
             analysis.check_payload(
@@ -4296,7 +4396,8 @@ mod tests {
             }],
         };
         let run = |budget: &mut TypeWorkBudget| {
-            let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+            let mut analysis =
+                Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
             // Keep replacement lookup constant-cost so it cannot conceal the
             // independent scan over already bound formal variables.
             let integer = analysis
@@ -4372,7 +4473,7 @@ mod tests {
                     }],
                 });
                 let run = |budget: &mut TypeWorkBudget| {
-                    Analysis::new(&graph, budget)?.check(&[root], budget)
+                    Analysis::new(&graph, None, budget)?.check(&[root], budget)
                 };
                 let mut measured = TypeWorkBudget::unbounded();
                 run(&mut measured).unwrap();
@@ -4469,7 +4570,7 @@ mod tests {
             ],
         };
         let run = |budget: &mut TypeWorkBudget| {
-            let mut analysis = Analysis::new(&graph, budget)?;
+            let mut analysis = Analysis::new(&graph, None, budget)?;
             let relay = analysis.call_context(1, 0, 0, budget)?;
             for (call, expected, unrelated) in [(2, 5, 6), (3, 6, 5)] {
                 let context = analysis.call_context(call, 1, relay, budget)?;
@@ -4554,7 +4655,7 @@ mod tests {
                 };
                 let run = |budget: &mut TypeWorkBudget| {
                     let mut analysis =
-                        Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+                        Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
                     let outcome = analysis.call_context(0, 0, 0, budget);
                     if outcome.is_err() {
                         assert!(
@@ -4639,7 +4740,7 @@ mod tests {
             }],
         };
         let run = |budget: &mut TypeWorkBudget| {
-            let mut analysis = Analysis::new(&graph, budget)?;
+            let mut analysis = Analysis::new(&graph, None, budget)?;
             let context = analysis.call_context(0, 0, 0, budget)?;
             let actual = TypeArguments(vec![analysis.substitute(&callback(), context, budget)?]);
             assert_eq!(actual.0[0], pure());
@@ -4687,7 +4788,7 @@ mod tests {
                     (Type::Int, Type::Int, false, false),
                     (Type::Int, Type::Int, true, true),
                 ] {
-                    let mut analysis = Analysis::new(&graph, budget)?;
+                    let mut analysis = Analysis::new(&graph, None, budget)?;
                     let row = EffectRow::open(
                         EffectRowVariable::rigid(TypeVariableId::new(2)),
                         Box::new([instance(excluded)]),
@@ -4750,19 +4851,28 @@ mod tests {
         for limit in [0, instances] {
             let mut budget = TypeWorkBudget::with_limit(limit);
             assert!(matches!(
-                Analysis::new(&graph, &mut budget),
+                Analysis::new(&graph, None, &mut budget),
                 Err(Failure::Resource)
             ));
             assert_eq!(budget.used(), usize::from(limit != 0));
         }
         let mut measured = TypeWorkBudget::unbounded();
-        Analysis::new(&graph, &mut measured).unwrap();
+        Analysis::new(&graph, None, &mut measured).unwrap();
         assert!(matches!(
-            Analysis::new(&graph, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Analysis::new(
+                &graph,
+                None,
+                &mut TypeWorkBudget::with_limit(measured.used() - 1)
+            ),
             Err(Failure::Resource)
         ));
         for _ in 0..2 {
-            Analysis::new(&graph, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+            Analysis::new(
+                &graph,
+                None,
+                &mut TypeWorkBudget::with_limit(measured.used()),
+            )
+            .unwrap();
         }
     }
 
@@ -4795,7 +4905,8 @@ mod tests {
                 )
             };
             let run = |early: bool, budget: &mut TypeWorkBudget| {
-                let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+                let mut analysis =
+                    Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
                 let outcome = analysis.row_binding(variable, &row, already_unproved, span, budget);
                 if early {
                     assert!(
@@ -4840,7 +4951,7 @@ mod tests {
             code: Vec::new(),
         };
         let run = |budget: &mut TypeWorkBudget| {
-            let mut analysis = Analysis::new(&graph, budget)?;
+            let mut analysis = Analysis::new(&graph, None, budget)?;
             let row = EffectRow::singleton(instance(Type::Int));
             let mut rows = Vec::new();
             for index in 0..WIDTH {
@@ -5009,7 +5120,7 @@ mod tests {
                 ],
             };
             let run = |budget: &mut TypeWorkBudget| {
-                let mut analysis = Analysis::new(&graph, budget)?;
+                let mut analysis = Analysis::new(&graph, None, budget)?;
                 let relay = analysis.call_context(0, 0, 0, budget)?;
                 if conflict {
                     assert!(analysis.contexts[relay].rows.iter().any(|row| row.unproved));
@@ -5093,7 +5204,7 @@ mod tests {
                 ),
             ],
         };
-        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
         let context = analysis.call_context(1, 0, 0, &mut budget).unwrap();
         let request = analysis.label(2, context, &mut budget).unwrap();
         let matching = analysis.label(3, 0, &mut budget).unwrap();
@@ -5139,7 +5250,7 @@ mod tests {
             types: TypeArguments(Vec::new()),
             code: Vec::new(),
         };
-        let mut analysis = Analysis::new(&graph, &mut budget).unwrap();
+        let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
         let generic = analysis
             .intern_label(
                 Request::effect(

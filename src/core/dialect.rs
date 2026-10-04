@@ -117,6 +117,7 @@ pub(crate) struct MethodEvidenceImplementationOwner {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceDomain {
+    pub(crate) source_parameters: Box<[(TypeVariableId, Kind)]>,
     pub(crate) owner: MethodEvidenceOwner,
     pub(crate) requirement: RequirementId,
     pub(crate) requirement_position: u32,
@@ -446,11 +447,189 @@ impl MethodEvidenceCatalog {
     }
 }
 
+/// Compare emitted rows with independently reconstructed imported facts. The
+/// selection plans are immutable staged inputs: exact plan/root identity is
+/// required in addition to every independently derived catalog row.
+pub(crate) fn same_imported_method_evidence_catalog(
+    left: &MethodEvidenceCatalog,
+    right: &MethodEvidenceCatalog,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    fn ids<T: PartialEq>(a: &[T], b: &[T], work: &mut TypeWorkBudget) -> Result<bool, ()> {
+        work.charge(a.len())?;
+        Ok(a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a == b))
+    }
+    fn types(a: &[Type], b: &[Type], work: &mut TypeWorkBudget) -> Result<bool, ()> {
+        work.charge(a.len())?;
+        if a.len() != b.len() {
+            return Ok(false);
+        }
+        for (a, b) in a.iter().zip(b) {
+            if !same_type_with_budget(a, b, work)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    fn parameters(
+        a: &[(TypeVariableId, Kind)],
+        b: &[(TypeVariableId, Kind)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        work.charge(a.len())?;
+        if a.len() != b.len() {
+            return Ok(false);
+        }
+        for ((a, ak), (b, bk)) in a.iter().zip(b) {
+            if a != b || !crate::types::same_kind_with_charge(ak, bk, || work.charge(1))? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    fn app(
+        a: &InterfaceApplication,
+        b: &InterfaceApplication,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        work.charge(1)?;
+        if a.interface() != b.interface() { return Ok(false); }
+        work.charge(a.arguments().len())?;
+        if a.arguments().len() != b.arguments().len() { return Ok(false); }
+        let type_work = work;
+        for (left, right) in a.arguments().iter().zip(b.arguments()) {
+            match (left, right) {
+            (crate::types::KindedArgument::TypeArg(left), crate::types::KindedArgument::TypeArg(right)) => {
+                if !same_type_with_budget(left, right, type_work)? { return Ok(false); }
+            }
+            _ => {
+                if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
+                    return Ok(false);
+                }
+            }
+        }
+        }
+        Ok(true)
+    }
+    work.charge(
+        left.lookup_work()
+            .ok_or(())?
+            .checked_add(right.lookup_work().ok_or(())?)
+            .ok_or(())?,
+    )?;
+    if !left.lexical_owners.is_empty()
+        || !right.lexical_owners.is_empty()
+        || left.methods.len() != right.methods.len()
+        || left.implementation_owners.len() != right.implementation_owners.len()
+        || left.domains.len() != right.domains.len()
+        || left.occurrences.len() != right.occurrences.len()
+        || left.adapters.len() != right.adapters.len()
+        || left.concrete_sources.len() != right.concrete_sources.len()
+        || left.expectations.len() != right.expectations.len()
+    {
+        return Ok(false);
+    }
+    for (a, b) in left.methods.iter().zip(&right.methods) {
+        if a.id != b.id
+            || !ids(&a.interface_parameters, &b.interface_parameters, work)?
+            || !parameters(&a.parameters, &b.parameters, work)?
+            || !same_type_with_budget(&a.value_type, &b.value_type, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (a, b) in left
+        .implementation_owners
+        .iter()
+        .zip(&right.implementation_owners)
+    {
+        if a.implementation != b.implementation
+            || a.binder != b.binder
+            || a.head_type_parameter_count != b.head_type_parameter_count
+            || !parameters(&a.source_parameters, &b.source_parameters, work)?
+            || !app(&a.application, &b.application, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (a, b) in left.domains.iter().zip(&right.domains) {
+        if !parameters(&a.source_parameters, &b.source_parameters, work)?
+            || a.owner != b.owner
+            || a.requirement != b.requirement
+            || a.requirement_position != b.requirement_position
+            || a.method != b.method
+            || a.method_position != b.method_position
+            || !app(&a.application, &b.application, work)?
+        {
+            return Ok(false);
+        }
+    }
+    for (a, b) in left.occurrences.iter().zip(&right.occurrences) {
+        if a.slot != b.slot
+            || a.scope != b.scope
+            || a.scope_binder != b.scope_binder
+            || a.target_owner != b.target_owner
+            || a.target_requirement != b.target_requirement
+            || a.checked_method != b.checked_method
+            || !app(&a.checked_application, &b.checked_application, work)?
+            || !types(&a.method_arguments, &b.method_arguments, work)?
+            || a.selection != b.selection
+        {
+            return Ok(false);
+        }
+        match (&a.checked_value_type, &b.checked_value_type) {
+            (None, None) => {}
+            (Some(a), Some(b)) if same_type_with_budget(a, b, work)? => {}
+            _ => return Ok(false),
+        }
+    }
+    for (a, b) in left.adapters.iter().zip(&right.adapters) {
+        if a.selection_node != b.selection_node
+            || a.implementation != b.implementation
+            || a.binder != b.binder
+            || !ids(&a.source_parameters, &b.source_parameters, work)?
+            || !types(&a.head_arguments, &b.head_arguments, work)?
+            || a.prerequisites.len() != b.prerequisites.len()
+        {
+            return Ok(false);
+        }
+        work.charge(a.prerequisites.len())?;
+        for (a, b) in a.prerequisites.iter().zip(&b.prerequisites) {
+            if a.owner != b.owner
+                || a.requirement != b.requirement
+                || a.method != b.method
+                || a.producer != b.producer
+                || !app(&a.application, &b.application, work)?
+                || !ids(&a.interface_parameters, &b.interface_parameters, work)?
+                || !parameters(&a.method_parameters, &b.method_parameters, work)?
+                || !same_type_with_budget(&a.value_type, &b.value_type, work)?
+            {
+                return Ok(false);
+            }
+        }
+    }
+    for (a, b) in left.concrete_sources.iter().zip(&right.concrete_sources) {
+        if a.occurrence != b.occurrence
+            || a.selection_node != b.selection_node
+            || a.implementation != b.implementation
+            || a.binder != b.binder
+            || !types(&a.head_arguments, &b.head_arguments, work)?
+            || !ids(&a.prerequisites, &b.prerequisites, work)?
+        {
+            return Ok(false);
+        }
+    }
+    ids(&left.expectations, &right.expectations, work)
+}
+
 #[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum MethodEvidenceCatalogMutationForTest {
     WrongRequirementPosition,
     WrongMethodPosition,
+    WrongDomainSourceParameter,
+    WrongDomainParameterKind,
+    WrongDomainParameterOrder,
     WrongMethodScheme,
     WrongCanonicalMethodParameter,
     WrongAdapterBinder,
@@ -505,6 +684,30 @@ impl MethodEvidenceCatalog {
                     true
                 })
             }
+            MethodEvidenceCatalogMutationForTest::WrongDomainSourceParameter => self
+                .domains
+                .iter_mut()
+                .find_map(|domain| domain.source_parameters.first_mut())
+                .is_some_and(|parameter| {
+                    parameter.0 = TypeVariableId::generated(u32::MAX);
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::WrongDomainParameterKind => self
+                .domains
+                .iter_mut()
+                .find_map(|domain| domain.source_parameters.first_mut())
+                .is_some_and(|parameter| {
+                    parameter.1 = Kind::EffectRow;
+                    true
+                }),
+            MethodEvidenceCatalogMutationForTest::WrongDomainParameterOrder => self
+                .domains
+                .iter_mut()
+                .find(|domain| domain.source_parameters.len() > 1)
+                .is_some_and(|domain| {
+                    domain.source_parameters.swap(0, 1);
+                    true
+                }),
             MethodEvidenceCatalogMutationForTest::WrongMethodPosition => {
                 self.domains.first_mut().is_some_and(|domain| {
                     domain.method_position = domain.method_position.saturating_add(1);
@@ -865,10 +1068,12 @@ pub(super) fn method_evidence_anchor_matches_expectation(
                 )?
                 && method_evidence_expected_producer_matches(
                     catalog,
+                    expected.occurrence,
                     edge.producer,
                     producer_selection_node,
                     producer,
-                ))
+                    type_work,
+                )?)
         }
         _ => Ok(false),
     }
@@ -929,13 +1134,24 @@ fn method_evidence_adapter_application_matches(
         return Ok(false);
     }
     for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
-        let expected = IterativeTypeOwner::new(substitute_type_variables_with(
-            expected,
-            &replacements.0,
-            |cells| type_work.charge(cells),
-            || (),
-        )?);
-        if !same_type_with_budget(&expected, actual, type_work)? {
+        if let (crate::types::KindedArgument::TypeArg(expected), crate::types::KindedArgument::TypeArg(actual)) = (expected, actual) {
+            let expected = IterativeTypeOwner::new(substitute_type_variables_with(
+                expected, &replacements.0, |cells| type_work.charge(cells), || (),
+            )?);
+            if !same_type_with_budget(&expected, actual, type_work)? { return Ok(false); }
+            continue;
+        }
+        let expected = crate::types::IterativeArgumentOwner::new(
+            crate::types::map_kinded_argument_types_with_budget(
+                expected,
+                &mut |ty, budget: &mut TypeWorkBudget| substitute_type_variables_with(
+                    ty, &replacements.0, |cells| budget.charge(cells), || (),
+                ),
+                type_work,
+                &mut |_| (),
+            )?,
+        );
+        if !crate::types::same_kinded_argument_with_budget(expected.as_ref(), actual, type_work)? {
             return Ok(false);
         }
     }
@@ -952,8 +1168,15 @@ fn same_interface_application_with_budget(
         return Ok(false);
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
-        if !same_type_with_budget(left, right, type_work)? {
-            return Ok(false);
+        match (left, right) {
+            (crate::types::KindedArgument::TypeArg(left), crate::types::KindedArgument::TypeArg(right)) => {
+                if !same_type_with_budget(left, right, type_work)? { return Ok(false); }
+            }
+            _ => {
+                if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
+                    return Ok(false);
+                }
+            }
         }
     }
     Ok(true)
@@ -961,20 +1184,64 @@ fn same_interface_application_with_budget(
 
 fn method_evidence_expected_producer_matches(
     catalog: &MethodEvidenceCatalog,
+    occurrence: Option<usize>,
     expected: MethodEvidenceExpectedProducer,
     actual_selection_node: EvidenceNodeId,
     actual: MethodEvidenceProducer,
-) -> bool {
-    match expected {
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    work.charge(1)?;
+    Ok(match expected {
         MethodEvidenceExpectedProducer::Authenticated(expectation) => {
-            method_evidence_producer_matches(catalog, expectation, actual)
+            let Some(expected) = catalog.expectations().get(expectation) else {
+                return Ok(false);
+            };
+            let exact_selection = match expected.role {
+                MethodEvidenceExpectedRole::Adapter { adapter } => catalog
+                    .adapters()
+                    .get(adapter)
+                    .is_some_and(|row| row.selection_node == actual_selection_node),
+                MethodEvidenceExpectedRole::Domain { domain } => {
+                    let selected = occurrence
+                        .and_then(|slot| catalog.occurrence(slot))
+                        .and_then(|row| row.selection.node(actual_selection_node));
+                    match selected {
+                        Some(EvidenceNode::Abstract {
+                            requirement,
+                            methods,
+                        }) => {
+                            work.charge(methods.len())?;
+                            catalog.domains().get(domain).is_some_and(|row| {
+                                row.requirement == requirement && methods.contains(&row.method)
+                            })
+                        }
+                        _ => false,
+                    }
+                }
+                MethodEvidenceExpectedRole::LexicalOwner { owner } => {
+                    let selected = occurrence
+                        .and_then(|slot| catalog.occurrence(slot))
+                        .and_then(|row| row.selection.node(actual_selection_node));
+                    match selected {
+                        Some(EvidenceNode::Lexical { source, methods }) => {
+                            work.charge(methods.len())?;
+                            catalog.lexical_owners().get(owner).is_some_and(|row| {
+                                row.source == source && methods.contains(&row.method)
+                            })
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            };
+            exact_selection && method_evidence_producer_matches(catalog, expectation, actual)
         }
         MethodEvidenceExpectedProducer::Monomorphic {
             selection_node,
             producer_scope_position: _,
             producer,
         } => selection_node == actual_selection_node && producer == actual,
-    }
+    })
 }
 
 pub(super) fn method_evidence_producer_matches(
@@ -1410,6 +1677,8 @@ pub enum PureOperation {}
 #[doc(hidden)]
 pub enum OperationTypeMetadata<'a> {
     Type(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
+    Row(&'a crate::types::EffectRow),
     Pattern(&'a CorePattern),
 }
 
@@ -2393,6 +2662,34 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Ok(())
     }
 
+    /// Reserve the unpublished draft's exact binders using its caller's work ledger.
+    pub(crate) fn reserve_provider_draft_binders(
+        &mut self,
+        ids: &[BinderId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), BuildError> {
+        if self.binder_phase_started {
+            return Err(BuildError::BinderReservationPhaseStarted);
+        }
+        budget
+            .charge(ids.len().saturating_mul(2))
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut pending = HashSet::new();
+        pending
+            .try_reserve(ids.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for id in ids {
+            if self.reserved_resolved.contains(id) || !pending.insert(*id) {
+                return Err(BuildError::DuplicateBinderReservation);
+            }
+        }
+        self.reserved_resolved
+            .try_reserve(pending.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.reserved_resolved.extend(pending);
+        Ok(())
+    }
+
     /// Creates a fresh typed binder for a definition payload.
     ///
     /// # Errors
@@ -2849,52 +3146,51 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
+    pub(super) fn admit_provider_state_access_arguments(
+        &mut self,
+        arguments: Box<[Type]>,
+    ) -> Result<Box<[Type]>, BuildError> {
+        let mut pending = IterativeTypeSequence(arguments.into_vec().into_iter());
+        self.type_work
+            .charge(pending.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut admitted = IterativeTypeBuffer(Vec::new());
+        admitted
+            .0
+            .try_reserve_exact(pending.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut requires_type_rewrite = false;
+        while let Some(argument) = pending.next() {
+            let (argument, contains_inference) = admit_type_with_status(
+                argument,
+                &mut self.type_work,
+                true,
+                F::ALLOWS_EFFECTFUL_TYPES,
+            )?;
+            requires_type_rewrite |= contains_inference;
+            admitted.0.push(argument);
+        }
+        self.requires_type_rewrite |= requires_type_rewrite;
+        Ok(admitted.into_boxed_slice())
+    }
+
     pub(super) fn admit_effect_instance(
         &mut self,
         instance: crate::types::EffectInstance,
     ) -> Result<crate::types::EffectInstance, BuildError> {
-        let argument_count = instance.arguments().len();
-        self.type_work
-            .charge(argument_count)
+        self.type_work.charge(instance.arguments().len())
             .map_err(|()| BuildError::TypeWorkExceeded)?;
-        let (effect, arguments) = instance.into_parts();
-        let mut admitted = Vec::new();
-        if admitted.try_reserve_exact(argument_count).is_err() {
-            for argument in arguments.into_vec() {
-                discard_type_iteratively(argument);
-            }
-            return Err(BuildError::TypeWorkExceeded);
+        let (contains_inference, normalize) = scan_type_admission(
+            TypeAdmissionTask::Owner(instance.arguments(), 0),
+            &mut self.type_work, false, F::ALLOWS_EFFECTFUL_TYPES,
+        )?;
+        if contains_inference { return Err(BuildError::InvalidPayload); }
+        if normalize {
+            crate::types::clone_effect_instance_with_budget(&instance, &mut self.type_work)
+                .map_err(|()| BuildError::TypeWorkExceeded)
+        } else {
+            Ok(instance)
         }
-        let mut remaining = arguments.into_vec().into_iter();
-        while let Some(argument) = remaining.next() {
-            match admit_type_with_status(
-                argument,
-                &mut self.type_work,
-                false,
-                F::ALLOWS_EFFECTFUL_TYPES,
-            ) {
-                Ok((argument, false)) => admitted.push(argument),
-                Ok((argument, true)) => {
-                    discard_type_iteratively(argument);
-                    discard_type_vector_iteratively(&mut admitted);
-                    for argument in remaining {
-                        discard_type_iteratively(argument);
-                    }
-                    return Err(BuildError::InvalidPayload);
-                }
-                Err(error) => {
-                    discard_type_vector_iteratively(&mut admitted);
-                    for argument in remaining {
-                        discard_type_iteratively(argument);
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        Ok(crate::types::EffectInstance::new(
-            effect,
-            admitted.into_boxed_slice(),
-        ))
     }
 
     pub(super) fn admit_effect_clause_arm(
@@ -3278,6 +3574,34 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.requires_type_rewrite || !self.deferred_cleanup_rows.is_empty()
     }
 
+    /// Charges the new retained-draft final consumption scan to its caller.
+    /// Prior builder work has already been discharged at each rebuild step.
+    pub(crate) fn finish_provider_draft(
+        mut self,
+        root: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<UnvalidatedCoreProgram<F>, BuildError> {
+        let finish_work = self.consumed_method_evidence.len();
+        work.charge(finish_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        self.type_work = TypeWorkBudget::with_limit(finish_work);
+        self.finish(root)
+    }
+
+    pub(crate) fn provider_node_at_ordinal(
+        &self,
+        root: NodeId,
+        ordinal: usize,
+    ) -> Result<NodeId, BuildError> {
+        if self.arena != Some(root.arena()) || ordinal >= self.nodes.len() {
+            return Err(BuildError::InvalidNodeId);
+        }
+        Ok(NodeId::new(
+            root.arena(),
+            u32::try_from(ordinal).map_err(|_| BuildError::InvalidNodeId)?,
+        ))
+    }
+
     /// Finishes unchecked construction at `root`.
     ///
     /// # Errors
@@ -3518,8 +3842,57 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         Ok(NodeId::new(arena, index))
     }
 
+    /// Recognizes an immediately selected constructor through type applications.
+    /// This query reports syntax identity; it grants no lifecycle authority.
+    pub(crate) fn direct_constructor(
+        &mut self,
+        mut node: NodeId,
+    ) -> Result<Option<crate::types::ConstructorId>, BuildError> {
+        loop {
+            self.type_work
+                .charge(1)
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            if self.arena != Some(node.arena()) {
+                return Err(BuildError::InvalidNodeId);
+            }
+            let stored = self
+                .nodes
+                .get(node.index().map_err(|_| BuildError::InvalidNodeId)?)
+                .ok_or(BuildError::InvalidNodeId)?;
+            match F::pure(&stored.kind) {
+                Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
+                    return Ok(Some(constructor.constructor()));
+                }
+                Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) => {
+                    node = application.function()
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
     pub(crate) const fn node_checkpoint(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Copies a constructed body's row for generated continuation arrows.
+    pub(crate) fn clone_node_effects_with_budget(
+        &self,
+        node: NodeId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<EffectRow, BuildError> {
+        budget
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if self.arena != Some(node.arena()) {
+            return Err(BuildError::InvalidNodeId);
+        }
+        let expression = self
+            .nodes
+            .get(node.index()?)
+            .ok_or(BuildError::InvalidNodeId)?;
+        clone_effect_row_with_budget(F::effect_row(&expression.effects), budget)
+            .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
     pub(super) fn infer_pure_effects_at(&mut self, index: usize) -> Result<EffectRow, BuildError> {
@@ -3610,6 +3983,54 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             }
             candidate = next;
         }
+    }
+}
+
+impl CoreBuilder<super::effect::EffectOperationFamily> {
+    /// Transfers the exact unfinished row owner with a private conditional forest.
+    /// Ordinary finish and ordinary independent validation retain their guards.
+    pub(crate) fn finish_provider_conditional_draft(
+        mut self,
+        root: NodeId,
+        pending: super::provider::HandlerPendingRows,
+        work: &mut TypeWorkBudget,
+    ) -> Result<
+        (
+            UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
+            super::provider::HandlerPendingRows,
+        ),
+        BuildError,
+    > {
+        let mut identities = HashSet::new();
+        work.charge(
+            pending
+                .equations
+                .len()
+                .checked_mul(2)
+                .and_then(|count| count.checked_add(self.deferred_cleanup_rows.len()))
+                .ok_or(BuildError::TypeWorkExceeded)?,
+        )
+        .map_err(|()| BuildError::TypeWorkExceeded)?;
+        identities
+            .try_reserve(pending.equations.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for identity in pending.identities() {
+            if !identities.insert(identity) || !self.deferred_cleanup_rows.contains(&identity) {
+                return Err(BuildError::InvalidPayload);
+            }
+        }
+        if identities.len() != self.deferred_cleanup_rows.len() {
+            return Err(BuildError::InvalidPayload);
+        }
+        pending.check_source_nodes(
+            &self.nodes,
+            root,
+            super::provider::row_effect_operation,
+            work,
+        )?;
+        self.deferred_cleanup_rows.clear();
+        let program = self.finish_provider_draft(root, work)?;
+        Ok((program, pending))
     }
 }
 
@@ -4038,28 +4459,10 @@ fn admit_payloads(
     }
 }
 
-enum TypeAdmissionTask {
-    Visit(Type, usize),
-    VisitSequence(std::vec::IntoIter<Type>, usize),
-    FinishFunction,
-    FinishEffectfulFunction(EffectRow),
-    FinishTuple(usize),
-    FinishApplication,
-    FinishForall(Box<[(TypeVariableId, Kind)]>),
-}
-
-enum TypeToken {
-    Int,
-    Bool,
-    Unit,
-    Nominal(crate::types::NominalTypeId),
-    Variable(crate::types::TypeVariableId),
-    Inference(crate::types::InferenceVariableId),
-    Application,
-    Tuple(usize),
-    Function,
-    EffectfulFunction(EffectRow),
-    Forall(Box<[(TypeVariableId, Kind)]>),
+enum TypeAdmissionTask<'a> {
+    Visit(&'a Type, usize),
+    VisitSequence(std::slice::Iter<'a, Type>, usize),
+    Owner(&'a [crate::types::KindedArgument], usize),
 }
 
 #[cfg(test)]
@@ -4114,224 +4517,136 @@ fn admit_structured_type_with_status(
     charge_structure: bool,
     allow_effectful: bool,
 ) -> Result<(Type, bool), BuildError> {
-    let mut work = vec![TypeAdmissionTask::Visit(ty, 0)];
-    let mut tokens = Vec::new();
+    let owned = IterativeTypeOwner::new(ty);
+    let (contains_inference, normalize) = scan_type_admission(
+        TypeAdmissionTask::Visit(&owned, 0), type_work, charge_structure, allow_effectful,
+    )?;
+    if normalize {
+        let normalized = clone_type_with_budget(&owned, type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        Ok((normalized, contains_inference))
+    } else {
+        Ok((owned.into_inner(), contains_inference))
+    }
+}
+
+fn scan_type_admission<'a>(
+    initial: TypeAdmissionTask<'a>,
+    type_work: &mut TypeWorkBudget,
+    charge_structure: bool,
+    allow_effectful: bool,
+) -> Result<(bool, bool), BuildError> {
+    let mut work = Vec::new();
+    // Keep ordinary Type structure admission optional. New owner-vector
+    // scheduling below has its own real retention charges in either mode.
+    if charge_structure && matches!(initial, TypeAdmissionTask::Visit(_, _)) {
+        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+    }
+    work.try_reserve_exact(1).map_err(|_| BuildError::TypeWorkExceeded)?;
+    work.push(initial);
     let mut exceeded = false;
     let mut contains_inference = false;
+    let mut normalize = false;
     #[cfg(test)]
     record_type_admission_pending(work.len());
     while let Some(task) = work.pop() {
-        if charge_structure
-            && matches!(&task, TypeAdmissionTask::Visit(_, _))
-            && type_work.charge(1).is_err()
-        {
-            work.push(task);
-            discard_type_admission_work(work);
-            return Err(BuildError::TypeWorkExceeded);
-        }
+        work.try_reserve(3).map_err(|_| BuildError::TypeWorkExceeded)?;
         match task {
-            TypeAdmissionTask::Visit(Type::Int, _) => tokens.push(TypeToken::Int),
-            TypeAdmissionTask::Visit(Type::Bool, _) => tokens.push(TypeToken::Bool),
-            TypeAdmissionTask::Visit(Type::Unit, _) => tokens.push(TypeToken::Unit),
-            TypeAdmissionTask::Visit(Type::Nominal(identity), _) => {
-                tokens.push(TypeToken::Nominal(identity));
-            }
-            TypeAdmissionTask::Visit(Type::Variable(identity), _) => {
-                tokens.push(TypeToken::Variable(identity));
-            }
-            TypeAdmissionTask::Visit(Type::Inference(identity), _) => {
-                contains_inference = true;
-                tokens.push(TypeToken::Inference(identity));
-            }
-            TypeAdmissionTask::Visit(Type::Application(function, argument), depth) => {
-                let child_depth = depth.saturating_add(1);
-                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                work.push(TypeAdmissionTask::FinishApplication);
-                work.push(TypeAdmissionTask::Visit(*argument, child_depth));
-                // A source-level simultaneous nominal application is encoded as
-                // a unary left spine. Its function links are representation
-                // width, not additional source structural depth.
-                work.push(TypeAdmissionTask::Visit(*function, depth));
-            }
-            TypeAdmissionTask::Visit(Type::Forall(parameters, body), depth) => {
-                let child_depth = depth.saturating_add(1);
-                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                if charge_kinded_type_parameters(&parameters, type_work).is_err() {
-                    work.push(TypeAdmissionTask::Visit(*body, child_depth));
-                    discard_type_admission_work(work);
-                    return Err(BuildError::TypeWorkExceeded);
+            TypeAdmissionTask::Visit(ty, depth) => match ty {
+                Type::Inference(_) => contains_inference = true,
+                Type::Application(function, argument) => {
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    if charge_structure {
+                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                    }
+                    work.push(TypeAdmissionTask::Visit(argument, child_depth));
+                    // The unary left spine records source application width.
+                    work.push(TypeAdmissionTask::Visit(function, depth));
                 }
-                work.push(TypeAdmissionTask::FinishForall(parameters));
-                work.push(TypeAdmissionTask::Visit(*body, child_depth));
-            }
-            TypeAdmissionTask::Visit(Type::Tuple(elements), depth) => {
-                let child_depth = depth.saturating_add(1);
-                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                let count = elements.len();
-                work.push(TypeAdmissionTask::FinishTuple(count));
-                work.push(TypeAdmissionTask::VisitSequence(
-                    elements.into_vec().into_iter(),
-                    child_depth,
-                ));
-            }
+                Type::Function(domain, codomain) => {
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    if charge_structure {
+                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                    }
+                    work.push(TypeAdmissionTask::Visit(codomain, child_depth));
+                    work.push(TypeAdmissionTask::Visit(domain, child_depth));
+                }
+                Type::Tuple(elements) => {
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    work.push(TypeAdmissionTask::VisitSequence(elements.iter(), child_depth));
+                }
+                Type::Forall(parameters, body) => {
+                    charge_kinded_type_parameters(parameters, type_work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?;
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    if charge_structure {
+                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                    }
+                    work.push(TypeAdmissionTask::Visit(body, child_depth));
+                }
+                Type::ResourceApply(_, arguments) => {
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    work.push(TypeAdmissionTask::Owner(arguments, child_depth));
+                }
+                Type::EffectfulFunction(domain, computation) => {
+                    if !allow_effectful { return Err(BuildError::InvalidPayload); }
+                    charge_effect_row_cells(computation.effects(), type_work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?;
+                    normalize |= computation.effects().is_empty();
+                    contains_inference |= matches!(computation.effects().tail().map(|tail| tail.variable()), Some(EffectRowVariable::Inference(_)));
+                    let child_depth = depth.saturating_add(1);
+                    exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
+                    // Row metadata does not add Type structural depth.
+                    for instance in computation.effects().known().iter()
+                        .chain(computation.effects().tail().into_iter().flat_map(|tail| tail.lacks())) {
+                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        work.try_reserve(1).map_err(|_| BuildError::TypeWorkExceeded)?;
+                        work.push(TypeAdmissionTask::Owner(instance.arguments(), child_depth));
+                    }
+                    if charge_structure {
+                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                    }
+                    work.try_reserve(2).map_err(|_| BuildError::TypeWorkExceeded)?;
+                    work.push(TypeAdmissionTask::Visit(computation.value(), child_depth));
+                    work.push(TypeAdmissionTask::Visit(domain, child_depth));
+                }
+                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+            },
             TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
                 if let Some(ty) = remaining.next() {
+                    if charge_structure {
+                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                    }
                     work.push(TypeAdmissionTask::VisitSequence(remaining, depth));
                     work.push(TypeAdmissionTask::Visit(ty, depth));
                 }
             }
-            TypeAdmissionTask::Visit(Type::Function(domain, codomain), depth) => {
-                let child_depth = depth.saturating_add(1);
-                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                work.push(TypeAdmissionTask::FinishFunction);
-                work.push(TypeAdmissionTask::Visit(*codomain, child_depth));
-                work.push(TypeAdmissionTask::Visit(*domain, child_depth));
-            }
-            TypeAdmissionTask::Visit(Type::EffectfulFunction(domain, codomain), depth) => {
-                if !allow_effectful {
-                    discard_type_iteratively(Type::EffectfulFunction(domain, codomain));
-                    discard_type_admission_work(work);
-                    return Err(BuildError::InvalidPayload);
-                }
-                let crate::types::ComputationType { value, effects } = *codomain;
-                if charge_effect_row_cells(&effects, type_work).is_err() {
-                    discard_type_iteratively(*domain);
-                    discard_type_iteratively(value);
-                    drop(effects);
-                    discard_type_admission_work(work);
-                    return Err(BuildError::TypeWorkExceeded);
-                }
-                contains_inference |= matches!(
-                    effects.tail().map(|tail| tail.variable()),
-                    Some(EffectRowVariable::Inference(_))
-                );
-                let child_depth = depth.saturating_add(1);
-                exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                work.push(TypeAdmissionTask::FinishEffectfulFunction(effects));
-                work.push(TypeAdmissionTask::Visit(value, child_depth));
-                work.push(TypeAdmissionTask::Visit(*domain, child_depth));
-            }
-            TypeAdmissionTask::FinishFunction => tokens.push(TypeToken::Function),
-            TypeAdmissionTask::FinishEffectfulFunction(effects) => {
-                tokens.push(TypeToken::EffectfulFunction(effects));
-            }
-            TypeAdmissionTask::FinishTuple(count) => tokens.push(TypeToken::Tuple(count)),
-            TypeAdmissionTask::FinishApplication => tokens.push(TypeToken::Application),
-            TypeAdmissionTask::FinishForall(parameters) => {
-                tokens.push(TypeToken::Forall(parameters));
+            TypeAdmissionTask::Owner(arguments, depth) => {
+                crate::types::visit_owner_components_with_charge(
+                    arguments.iter(), type_work,
+                    |ty, budget| {
+                        budget.charge(1)?;
+                        work.try_reserve(1).map_err(|_| ())?;
+                        work.push(TypeAdmissionTask::Visit(ty, depth));
+                        Ok(())
+                    },
+                    |tail, _| {
+                        contains_inference |= matches!(tail.variable(), EffectRowVariable::Inference(_));
+                        Ok(())
+                    },
+                ).map_err(|()| BuildError::TypeWorkExceeded)?;
             }
         }
         #[cfg(test)]
         record_type_admission_pending(work.len());
     }
-    if exceeded {
-        return Err(BuildError::TypeDepthExceeded);
-    }
-
-    let mut rebuilt = Vec::new();
-    for token in tokens {
-        match token {
-            TypeToken::Int => rebuilt.push(Type::Int),
-            TypeToken::Bool => rebuilt.push(Type::Bool),
-            TypeToken::Unit => rebuilt.push(Type::Unit),
-            TypeToken::Nominal(identity) => rebuilt.push(Type::Nominal(identity)),
-            TypeToken::Variable(identity) => rebuilt.push(Type::Variable(identity)),
-            TypeToken::Inference(identity) => rebuilt.push(Type::Inference(identity)),
-            TypeToken::Application => {
-                let argument = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
-                let function = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
-                rebuilt.push(Type::Application(Box::new(function), Box::new(argument)));
-            }
-            TypeToken::Tuple(count) => {
-                if rebuilt.len() < count {
-                    return Err(BuildError::InvalidPayload);
-                }
-                let elements = rebuilt.split_off(rebuilt.len() - count);
-                rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
-            }
-            TypeToken::Function => {
-                let Some(codomain) = rebuilt.pop() else {
-                    return Err(BuildError::InvalidPayload);
-                };
-                let Some(domain) = rebuilt.pop() else {
-                    return Err(BuildError::InvalidPayload);
-                };
-                rebuilt.push(Type::Function(Box::new(domain), Box::new(codomain)));
-            }
-            TypeToken::EffectfulFunction(effects) => {
-                let Some(codomain) = rebuilt.pop() else {
-                    return Err(BuildError::InvalidPayload);
-                };
-                let Some(domain) = rebuilt.pop() else {
-                    return Err(BuildError::InvalidPayload);
-                };
-                rebuilt.push(Type::function_computation(
-                    domain,
-                    crate::types::ComputationType::new(codomain, effects),
-                ));
-            }
-            TypeToken::Forall(parameters) => {
-                let body = rebuilt.pop().ok_or(BuildError::InvalidPayload)?;
-                rebuilt.push(Type::Forall(parameters, Box::new(body)));
-            }
-        }
-    }
-    let Some(result) = rebuilt.pop() else {
-        return Err(BuildError::InvalidPayload);
-    };
-    if !rebuilt.is_empty() {
-        return Err(BuildError::InvalidPayload);
-    }
-    Ok((result, contains_inference))
-}
-
-fn discard_type_admission_work(mut work: Vec<TypeAdmissionTask>) {
-    while let Some(task) = work.pop() {
-        match task {
-            TypeAdmissionTask::Visit(ty, depth) => match ty {
-                Type::Tuple(elements) => {
-                    work.push(TypeAdmissionTask::VisitSequence(
-                        elements.into_vec().into_iter(),
-                        depth,
-                    ));
-                }
-                Type::Application(function, argument) => {
-                    work.push(TypeAdmissionTask::Visit(*argument, depth));
-                    work.push(TypeAdmissionTask::Visit(*function, depth));
-                }
-                Type::Function(domain, codomain) => {
-                    work.push(TypeAdmissionTask::Visit(*codomain, depth));
-                    work.push(TypeAdmissionTask::Visit(*domain, depth));
-                }
-                Type::EffectfulFunction(domain, codomain) => {
-                    let crate::types::ComputationType { value, effects } = *codomain;
-                    drop(effects);
-                    work.push(TypeAdmissionTask::Visit(value, depth));
-                    work.push(TypeAdmissionTask::Visit(*domain, depth));
-                }
-                Type::Forall(_, body) => {
-                    work.push(TypeAdmissionTask::Visit(*body, depth));
-                }
-                Type::Int
-                | Type::Bool
-                | Type::Unit
-                | Type::Nominal(_)
-                | Type::Variable(_)
-                | Type::Inference(_) => {}
-            },
-            TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
-                if let Some(ty) = remaining.next() {
-                    work.push(TypeAdmissionTask::VisitSequence(remaining, depth));
-                    work.push(TypeAdmissionTask::Visit(ty, depth));
-                }
-            }
-            TypeAdmissionTask::FinishFunction
-            | TypeAdmissionTask::FinishTuple(_)
-            | TypeAdmissionTask::FinishApplication
-            | TypeAdmissionTask::FinishForall(_) => {}
-            TypeAdmissionTask::FinishEffectfulFunction(effects) => drop(effects),
-        }
-    }
+    if exceeded { return Err(BuildError::TypeDepthExceeded); }
+    Ok((contains_inference, normalize))
 }
 
 enum OriginAdmissionTask {

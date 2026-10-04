@@ -2442,6 +2442,9 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
+                    EffectOperation::ProviderStateAccess(_) => {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
@@ -3247,7 +3250,8 @@ mod tests {
                     .unwrap()
                 })
                 .collect::<Vec<_>>();
-            checked.push(check_module(resolve_module(module, &dependencies).unwrap()).unwrap());
+            let resolved = resolve_module(module, &dependencies).unwrap();
+            checked.push(check_module(resolved).unwrap());
         }
         let linked = link_modules(checked, graph.entry()).expect("fixture should link");
         let linked = validate_interface_evidence(linked).expect("evidence should authenticate");

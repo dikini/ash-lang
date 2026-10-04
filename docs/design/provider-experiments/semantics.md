@@ -33,7 +33,10 @@ insufficient to establish that relationship.
 
 This section selects candidate P-1 for implementation. The studies below explain
 its roles; a previously open choice is resolved only to the extent stated here.
-P-1 is experimental, and does not change `spec/`. It tests S-01 first, then the
+P-1 is experimental, and does not change `spec/`. The
+[selected complete owner row arguments](#selected-complete-owner-row-arguments)
+extend this experimental contract; their compiler evidence remains pending.
+P-1 tests S-01 first, then the
 remaining cases in [the execution record](execution.md). A successful scalar
 example alone does not establish success for DN-0036.
 
@@ -327,11 +330,14 @@ result field binds exactly one kind-`Type` answer parameter. The state binder is
 available to handler clauses and the distinct finish clause only; the
 initializer binder is available to acquire only. Types, expressions and handler
 clauses reuse current grammar. Declaration checking supplies hidden answer-type
-and continuation-row parameters to the clause templates. They are not source
+and row parameters to the clause templates. Their row-instantiation relation
+is defined below; the full client continuation row and its normalized residual
+are distinct. These parameters are not source
 handler values or rank-2 functions. Definition checking compiles each template
 once to typed generic Core under hidden rigid answer and row binders, identified
 by a `ProviderTemplateId`. An instance instantiates the admitted
-type/effect/dependency/control contracts with its actual answer type and row; it
+type/effect/dependency/control contracts with its actual answer type and checked
+continuation context using that relation; it
 does not recheck the provider's raw source or resolved body. Linked modules
 supply the already checked executable template Core by descriptor/template ID.
 Specialization substitutes checked arguments into that Core and independently
@@ -344,6 +350,199 @@ P-1 supplies sealed forwarding evidence for the declared provider relation. Its
 construction origin is the resource declaration identity. Public summaries
 preserve that defining origin; neither copied declarations nor a matching
 ordinary `impl` creates construction or completion authority.
+
+### Handler template answer and row instantiation
+
+Declaration checking allocates a fresh hidden answer binder A of kind Type and
+a distinct hidden row binder rho of kind EffectRow before checking the actual
+operation clauses. These identities belong to the defining ProviderTemplateId
+and cannot alias a source answer parameter, a formal resource parameter, or
+another template's hidden binders. The canonical associated operation
+op_i : P_i -> Q_i determines the pattern type P_i and resume input Q_i. Every
+clause produces A; its owned resume produces A with the shared handler output
+Omega. The declared resource operand type is not A.
+
+A template retains its checked direct clause-demand relation D(sigma,c) and
+its relation to the full client continuation row epsilon as separate facts.
+Here sigma is the authenticated kind-preserving substitution of formal
+arguments and selected evidence. The input c is independently reconstructed
+from the actual owned captures, their completion obligations and the surviving
+interpreter context, using current capture, discard and completion rules. A
+scalar epsilon and sigma alone do not determine discard's close demands. When
+c is not yet known, the template retains authenticated conditional equations
+for those demands; it does not assert a concrete close row. D_sigma is shorthand
+only for capture-independent cases.
+
+D(sigma,c) includes resume argument evaluation and all other direct clause work,
+including native requests, checked helper latent demands and admitted close
+execution. Its derivation suppresses shared outputs of the properly owned
+internal resumes within the relevant direct-demand analysis, preserves their
+argument demands, and applies ordinary exact nested-handler removals. It does
+not replace nested handlers' own output checks. The full epsilon is the actual
+handled body's outward remainder at the generated ordinary exact handler
+boundary, derived by current exact removal, not an arbitrary row supplied by
+the provider. The outer shared output must satisfy the least ordinary principal
+union Omega = D(sigma,c) union epsilon and agree with the independently
+reconstructed ordinary least-output equations of the actual handler graph.
+This equality is checked, not assumed to linearize every nested row equation.
+All known members, tail identities and lacks constraints follow current row
+algebra.
+
+The hidden rho may occur as an ordinary Core tail only in a recorded residual
+realization of that relation. Let K be the exact known-member set of D(sigma,c)
+after substitution and canonical coalescing. After deriving Omega, derive r by
+exact removal from Omega of every member of K; no removal searches an
+unconstrained tail. The instantiation relation is rho -> r, with
+r = Omega remove K and Omega = K union r. Thus rho denotes this normalized
+residual, not epsilon. An open r retains Omega's exact tail identity and every
+existing lacks fact, including the justified exclusions of K. For a closed r
+there is no tail constraint to retain. Recomposition uses ordinary row
+formation/substitution and must equal Omega, including tail identity and
+accumulated lacks facts. Replacing rho with epsilon without deriving and
+checking this relation is invalid; kind agreement alone is insufficient. If
+the authenticated relation establishes epsilon = r, the same row value is a
+valid replacement. This occurs, for example, when D is empty, or when D is
+closed and its known members are disjoint from epsilon. Replacement validity depends on the
+row equations and constraints, not on the row value's origin.
+
+The exclusions of K in the residual template's own tail describe this internal
+normalization relation; they assert nothing about absence of K from the full
+client continuation. Authority for D comes from checked actual clause Core,
+authenticated operation, helper and evidence facts, and independently
+reconstructed c where completion depends on capture. Authority for epsilon
+comes from the checked actual body and exact handler boundary. Authority for r
+and its lacks facts comes from the independently checked union and exact
+removals. Neither EffectRow construction, draft metadata, matching names, nor a
+public-summary assertion supplies those proofs. Ordinary instantiation must
+still check all additional retained template lacks constraints, occurs checks,
+kinds and scope identities.
+
+A single ordinary open row does not encode an unresolved equation between
+distinct direct-demand and continuation tails. Until the existing algebra can
+establish their relationship, the generic template retains the
+D(sigma,c)/epsilon/Omega relation and the actual clause row-replay inputs as an
+authenticated internal recipe. This recipe is conditional template validation, not a new source row
+syntax, a qualified ordinary type scheme, or proof that provisional Core already
+satisfies ordinary handler row equations. Specialization resolves that recipe
+with checked actual arguments and reconstructed c, computes the existing
+principal union and any residual realization, and solves and checks each
+handler's distinct shared-output equations through the retained typed graph.
+It instantiates admitted Core and its authenticated facts;
+it does not re-elaborate provider source or resolved bodies. Every resulting
+ordinary exact Handler then undergoes ordinary independent validation,
+including least output, resume argument/result/row, structural scope, capture
+and completion. If the current union is nonprincipal, specialization reports
+that ordinary ambiguity without adding lacks facts. A representation that
+cannot yet retain an otherwise principal recipe is an explicit implementation
+frontier, not a new language rejection or a global closed-row requirement.
+
+The authenticated body-free summary must preserve the defining template
+identity, formal kinds and hidden-binder roles/identities, exact operation and
+resume contracts, D(sigma,c) or its checked demand recipe, the
+full-continuation-to-output relation, residual normalization and any additional
+row constraints, and relevant evidence, owner, capture/control and origin
+facts. Conditional completion contracts must identify the actual capture and
+surviving-interpreter facts needed to establish c; scalar effect rows cannot
+stand in for them. Executable linkage separately supplies the corresponding
+checked template graph, per-handler output and owner/root relations, and
+row-replay inputs. Independent admission compares these contracts with the
+defining checked context; copies or invented summaries cannot create authority. Native
+demands in D remain present in Omega until the separately admitted
+interpretation discharges the exact native instance. This row normalization
+neither authorizes native interpretation nor removes capture/control obligations.
+
+#### Handler row recipe authentication
+
+The retained recipe is an equation graph reconstructed from the actual typed
+clause graph, not caller-authored equations or a D/Omega match claim. Each real
+HandlerId, including nested handlers, has a distinct internal shared-output
+unknown Omega_h. Its actual owned ResumeIds refer to that unknown only through
+their authenticated handler/owner and clause-root relation. Unknowns with equal
+row values remain distinct identities. Ordinary child equations preserve resume
+arguments, callable/request demands, exact handler removal and all other
+current row operations. Direct-demand analysis suppresses only resume outputs
+whose handlers belong to the relevant analysis root's owned-handler set, as
+current least-output reconstruction does. An enclosing resume occurring in a
+nested handler's body remains an input from its enclosing Omega_h when checking
+that nested handler; it is not globally suppressed or treated as that nested
+handler's resume.
+
+Independent template checking reconstructs those handler sets, actual clause
+roots and structural pattern/resume scopes. It checks canonical signatures,
+ordinary stored callable/request rows and authenticated imported selections,
+all non-row metadata, answer/input types, single consumption and phase
+authority. It reconstructs c-dependent demand equations and verifies that every
+deferred row position belongs to these actual equations. Builder ranges only
+delimit replay; they do not authorize deferred positions, handler identities
+or capture assumptions. Any row relation not independently derivable from the
+actual graph and canonical context rejects. D may therefore be a checked
+expression over formal row arguments and c, rather than an asserted literal.
+
+At specialization, substitute authenticated kinded formal/evidence facts into
+those reconstructed equations and independently reconstruct c from the actual
+capture/completion and surviving-interpreter facts. Derive epsilon from the
+real outer handler body, and compute the outer candidate Omega using existing
+union/removal. Evaluate and check every retained node equation and every
+Omega_h against that handler's ordinary least-output reconstruction, with each
+actual ResumeId receiving its own handler's solved output. Recompute all
+affected resumes and descendants, including nested handler clauses; an outer
+range replay that keeps other resumes unchanged is insufficient. Check the
+outer candidate against the reconstructed outer least output rather than
+assuming the D(sigma,c) union epsilon form replaces those equations. Unresolved
+c-dependent obligations remain conditional until the actual facts establish
+them; none may survive admission to ordinary Core. No unresolved recipe,
+unchecked row hole or added tail exclusion survives that boundary. Ordinary
+independent handler validation is final: every handler result row equals its
+reconstructed least output, and all resume, scope, capture/completion and
+metadata checks pass.
+
+Public summary retains authenticated conditional row contracts/known inputs
+for client checking; linked code carries the exact equation/root
+correspondence and must authenticate against that defining summary/context.
+An unpublished source draft may retain this information without Core
+admission. Independent generic template admission must prove this
+correspondence, not just construct the recipe. Closed D is an initial
+realization, not a P-1/source admission rule.
+
+#### Required handler row evidence
+
+- D={H}, epsilon={H,K}: Omega={H,K}, r={K}.
+- D={H}, epsilon={H,K|eta}, with existing eta lacks H,K: Omega is unchanged;
+  r={K|eta} retains both exclusions.
+- D={H}, epsilon={K|eta}, with an existing H exclusion: add H and preserve eta.
+  Without H in epsilon's known set or eta's established exclusions, this is
+  ordinary ambiguous union, not a new candidate rejection.
+- D={|delta}, epsilon={H}, with delta already lacking H: Omega={H|delta}.
+  Refusal merely because D is open remains an implementation frontier.
+- With D empty, authenticated epsilon = r is a valid rho replacement. Also
+  check a closed disjoint D/epsilon pair for which epsilon = r. Reject unchecked
+  epsilon-to-rho replacement when overlap makes epsilon differ from r; do not
+  reject an authenticated equal row value based on its origin.
+- A provider clause can contain the ordinary nested handler:
+
+  ```ash
+  handle({ let ignored = perform H.op (); resume () }) with H {
+    op x => resume ()
+  }
+  ```
+
+  The first resume belongs to the outer provider clause and the second to H's
+  clause. With outer epsilon={H,J} and D={}, outer output and its resume row are
+  {H,J}; the nested handler output and its own resume row are {J}. Check both
+  least-output equations and every node row. Keeping the nested resume's
+  provisional empty row during outer replay is stale, not evidence that the
+  nested handler has no outward demand.
+- Distinct actual owned captures or surviving interpreter contexts with the
+  same sigma and scalar epsilon must derive their own c and close rows under
+  existing rules. Reject forged c, erased close demands or asserted independent
+  discard rows; unknown c remains conditional until specialized facts settle it.
+- Reject distinct unsolved tails, unjustified or forged exclusions, wrong exact
+  effect arguments, hidden row identity collisions/occurs checks, mutated
+  D/r/Omega with coherent row
+  metadata, mismatched nested handler/resume/root identities, stale nested
+  resume or descendant rows, and dropped native demand.
+- Specialization must work without provider-body replay. Preserve caller work
+  and reject without publication on any failed relation.
 
 ### State and native authority
 
@@ -800,6 +999,505 @@ authenticated manifest. Template checking preserves the guard/capability on
 every branch, and the resource machine converts the authorized result into the
 declared `Scope`/`Completion` constructors. Constructing a native reply data
 constructor without the corresponding controlled operation is not authority.
+
+## Selected complete owner row arguments
+
+Status: selected amendment to DN-0036 experimental P-1. Independent contract
+and prose reviews approve bounded experimental selection. It remains informative
+and off `main`: selection is neither current Ash, product adoption nor executed
+source proof. The current module-publication implementation slice remains
+Type-only; row-aware compiler work requires a subsequent explicit slice.
+Revision-2 review approved the design for evidence work; the later attribution
+correction identifies associated EffectId uniqueness as a new bounded rule.
+The frozen amendment SHA-256 is
+`34d6302a773cee409e38a5cbc0db9fc4a380ccb7593e794417a31046365296c2`; review
+SHA-256 is `caa0392fb371dbac14d46b0079f25fc3547b6b4b799399bcf242f344212d0edc`.
+The [plan](plan.md#complete-owner-row-argument-follow-on) records review and
+follow-on evidence. These hashes identify external design evidence, not source
+or runtime results.
+
+Current [row and kind
+rules](../../../spec/static-semantics.md#computation-types-and-effect-rows)
+admit complete scheme rows and Type-only owner arguments. This candidate adds
+complete saturated row arguments to independent resource, effect and interface
+owner signatures. It tests whether actual synchronous Ash callback application
+can give owner-formal open direct demand without higher-rank ordinary values.
+Ordinary data, nominal and implementation owners, operation/method-local row
+quantification, partial mixed constructors and EffectRow kind arrows remain
+excluded. An owner may have several complete row slots.
+
+One owner specialization fixes the callback row across handle, operation,
+evidence and demand relation. Operation/method-local row quantification is a
+separate unselected alternative: it requires per-request instantiation,
+universal clause/evidence checking and aggregation absent from P-1. An unused
+relay or conventionally callable Type variable cannot establish outward demand.
+Owner kind eligibility depends on its declaration, not visible associations;
+association checking separately establishes sealed resource authority.
+
+The selected row-free P-1 declaration, initializer inference, native state and
+ABI contracts remain unchanged. The [handler
+recipe](#handler-template-answer-and-row-instantiation), including answer/resume
+ownership, conditional capture input c, principal union, residual normalization
+and independent final validation, remains authoritative within this design
+package. This amendment supplies a row-argument route only for its complete
+owner applications. Selection does not claim the current compiler admits them.
+
+### First source pressure case
+
+The following is a proposed complete source module against the already
+registered `@foreign.sqlite` and `provider` modules in P-1. Those imports
+declare every external name used here; their native data and manifest remain
+unchanged. `Rows` and `Delta` are source identifiers; lowercase delta elsewhere
+is a metavariable. This is a purpose-built diagnostic callback, not a claim that
+a useful SQL diagnostic API needs callbacks.
+
+```ash
+import @foreign.sqlite as Native
+import provider as Provider
+
+pub type Error = MissingRow
+pub effect H {
+op : Unit -> Unit
+}
+
+pub effect ConnectionOps<R : Type, Rows : EffectRow> {
+diagnostic : (Connection<R, {| Rows}>, Unit -> Unit ! {| Rows}) -> Error
+}
+pub interface ConnectionProvider<R : Type, Rows : EffectRow> {
+diagnostic : (Connection<R, {| Rows}>, Unit -> Unit ! {| Rows}) -> Error ! {ConnectionOps<R, {| Rows}>}
+}
+
+pub resource Connection<R : Type, Rows : EffectRow> {
+input Native.OpenConfig
+state Native.ConnectionState<R>
+result Provider.Scope<Native.OpenError, Native.CloseError, T> for <T : Type>
+provider ConnectionProvider<R, {| Rows}>
+effect ConnectionOps<R, {| Rows}>
+interpret Native.Connection<R>
+acquire config => perform Native.Connection<R>.open config
+finish state => perform Native.Connection<R>.close state
+handlers state {
+diagnostic (db, callback) => {
+let ignored = callback ()
+resume MissingRow
+}
+}
+}
+
+pub client<Delta : EffectRow> : (Unit -> Unit ! {| Delta}) -> Provider.Scope<Native.OpenError, Native.CloseError, Error> ! {H | Delta}
+client callback = resource Connection<C, {| Delta}> db = Native.InMemory {
+let ignored = perform H.op ()
+diagnostic (db, callback)
+}
+```
+
+The method `diagnostic` enters the ordinary term namespace; no type-qualified
+method lookup is invented. The source callback is a monomorphic function in the
+operation domain. It executes in the clause before resume. No native function
+invokes Ash, no callback is stored in resource state, and no callback escapes
+this operation. The enclosing lexical callback may live outside the resource;
+only an escaping value dependent on the fresh identity is forbidden. General
+effect operands' existing capture and dependency rules still apply.
+
+Native open and close execute under the sealed interpreter at the existing
+lifecycle points. The native state remains live throughout the operation and
+finishes after the body. The callback is Ash code running inside that lifetime.
+Its ordinary effects are not silently handled by the native interpreter.
+Existing lifecycle refusal, retention, exceptional completion and postcondition
+token rules are unchanged. This witness introduces no foreign callback ABI.
+
+### Concrete syntax delta
+
+Current `type_arguments ::= "<" type { "," type } ">"` changes to a context-free
+tagged argument list in every existing application position. The parser
+recognizes braces as RowArg without resolving the preceding name. It recognizes
+other type syntax as TypeArg. Resolution then classifies the resolved
+declaration and checks whether that category admits each tag. Ordinary Type-only
+constructors reject RowArg semantically and otherwise preserve their existing
+application and residual-kind rules. This is an explicit syntax delta; it is not
+lookup-dependent parsing.
+
+The following replacements use existing `type`, `effect_row`,
+`nominal_type_reference`, `effect_reference`, `interface_reference`,
+`identifier` and P-1 `resource_type_reference`. Those reference productions
+retain unqualified and qualified imported names. The resource expression
+production schematizes existing initializer/body delimiters; its block contents
+reuse existing block grammar.
+
+```ebnf
+application_argument ::= type | effect_row ;
+type_arguments ::= "<" application_argument { "," application_argument } ">" ;
+resource_type_application ::= resource_type_reference type_arguments ;
+provider_interface_application ::= interface_reference type_arguments ;
+effect_instance ::= effect_reference [ type_arguments ] ;
+operation_reference ::= effect_reference [ type_arguments ] "." identifier ;
+resource_instance_parameters ::= "<" upper_identifier { "," application_argument } ">" ;
+row_resource_expression ::=
+  "resource" resource_type_reference resource_instance_parameters identifier
+  "=" expression "{" expression "}" ;
+```
+
+Existing `atomic_type ::= ... | nominal_type_reference [type_arguments] | ...`
+now parses these tagged lists without adding RowArg as an atomic type.
+Resolution distinguishes ordinary TypeApply from saturated ResourceApply using
+the resolved owner identity. A bare `{|Rows}` cannot occupy an ordinary
+value-type position. Interface constraints use the same argument production,
+including qualified imported interfaces. Explicit operation references such as
+`perform Library.E<C,{|Delta}>.op operand` parse independently of whether
+Library.E exists; resolution checks the owner and operation, then kinds.
+Ordinary effects with no row slots still reject row tags. Parenthesized and
+higher-kinded ordinary Type arguments keep their existing meanings.
+
+Existing `type_parameter` already parses `Rows : EffectRow`; owner admission
+changes, not the binder grammar. A bare `Rows` argument parses as TypeArg and
+rejects in a row slot: write `{| Rows}`. No implicit Type-to-row coercion. `{}`,
+`{H}`, and `{H | Delta}` are complete RowArgs, subject to existing
+well-formed-row rules. Malformed braces fail parsing; a tagged row AST
+containing a Type payload fails validation.
+
+For row-bearing resources the instance list supplies the fresh identity binder
+followed by every remaining actual, in declaration order. No silent partial
+application or omitted mixed slot inference. Existing row-free P-1 instance
+forms, including remaining Type inference from an initializer, keep their
+contract; fully explicit row-free forms need no new meaning. Consequently
+`Connection<C>` rejects when Connection also declares Rows. `Connection<C,
+{|Delta}>` is not an ordinary explicit term type application.
+
+### Kinds, metadata and saturation
+
+A resource owner registry entry records defining identity, ordered parameter
+identities and fixed kinds, identity role at position zero, association origins
+and result category. Its complete application yields Type. Its associated effect
+yields an exact effect instance; its interface yields a constraint, neither an
+ordinary monotype kind. An owner with a row slot has no denotation as an
+unsaturated ordinary constructor and no residual kind. Never assign `Type ->
+EffectRow -> Type`.
+
+In these rules `J` abbreviates current type/row environments, `O` is the
+authenticated owner registry, and `arg_i` is tagged TypeArg or RowArg. Arity
+precedes positional checks. `k_i` is a fixed parameter kind. Ordinary TypeArg
+may use already admitted ordinary higher-kinded Type-only kinds where the
+existing owner position allows them; no new kinds are inferred. The row rule
+uses current well-formed-row checking.
+
+```sequent
+Arg-Type :=
+  J |- t => k
+  k is admitted ordinary kind
+  ===>
+  J |- TypeArg(t) argument : k
+
+Arg-Row :=
+  J |- e row ok
+  ===>
+  J |- RowArg(e) argument : EffectRow
+
+Resource-Saturated :=
+  O(F) = resource(parameters, origin)
+  length(args) = length(parameters)
+  for each i, J |- args_i argument : kind(parameters_i)
+  ===>
+  J; O |- ResourceApply(F, args) => Type
+
+Effect-Saturated :=
+  O(E) = effect(parameters, origin)
+  length(args) = length(parameters)
+  for each i, J |- args_i argument : kind(parameters_i)
+  ===>
+  J; O |- EffectApply(E, args) instance ok
+
+Interface-Saturated :=
+  O(I) = interface(parameters, origin)
+  length(args) = length(parameters)
+  for each i, J |- args_i argument : kind(parameters_i)
+  ===>
+  J; O |- InterfaceApply(I, args) constraint ok
+```
+
+Association admission checks the canonical positional substitution relating all
+three telescopes, rather than matching strings. It grants sealed authority; it
+does not determine any owner's kind eligibility. Type-only arguments reuse
+current resolution, kind synthesis, unification and provenance. Ordinary generic
+Type construction and unary Type application remain unchanged. Row-bearing
+families cannot be supplied to ordinary higher-kinded constructor parameters. If
+broader owner applications or partial row application become necessary, return
+to design.
+
+### Defining signatures and sealed associations
+
+Each defining effect/interface/resource declaration independently assigns one
+stable owner ID and an ordered parameter signature `(BinderId, fixed kind,
+parent-owner role)`. The record is fixed before body checking, independent of
+which resources or imports are visible. Global owner signature discovery can
+collect these declaration records without loading resource bodies. An owner with
+both Type and row parameters checks the same signature whether associated or
+unassociated.
+
+A resource association record is separate: defining ResourceId, exact provider
+InterfaceId and EffectId, positional formal substitution, operation/method
+correspondence, native interpret mapping and sealed construction origin. It is
+authenticated by the defining resource declaration. Preserve P-1's
+provider-interface sealing rule: a provider interface may be claimed by at most
+one distinct resource declaration, and a second resource association rejects.
+Separately, this candidate proposes the bounded restriction that an associated
+EffectId may be claimed by at most one distinct resource declaration, even when
+another claim would be type-compatible. EffectId uniqueness is a new candidate
+restriction, not existing P-1 truth. It bounds association and evidence
+validation for this experiment; shared-effect resource associations would need a
+separately reviewed rule. This candidate adds no shared-resource authority.
+Repeated imports of the same defining resource record are not new claims.
+Conflicting telescopes, argument tags, slot order or canonical operation types
+reject before any authority is published. A row-free owner can still be
+associated where all mapped argument types agree; every row-bearing position
+requires a row actual, with no inference of a new slot or implicit row
+parameter.
+
+The selected same-defining-module resource assembly remains the association
+boundary. Unassociated effect/interface imports may freely expose their
+independent signatures. This amendment does not add cross-module construction of
+a new sealed association to an imported owner; any such future extension
+requires a reviewed sealing rule. Thus generic owner applications across module
+boundaries are admitted, while association authority has the existing
+defining-module origin.
+
+Body-free public summaries export complete owner signatures and a closed
+dependency graph of every referenced owner, row member, type, binder role and
+association fact required to check exported uses. A public resource cannot
+expose an unavailable private effect/interface/type needed by that graph; reject
+rather than replacing it with a spelling or opaque missing entry. A private
+association still seals its exported owner against ordinary impl/with
+construction; the summary retains the sealed origin and required checking facts
+without exposing executable resource bodies. Imported clients need authenticated
+signatures and association contracts, not handler source. Targeted imports and
+reexports change lookup names only and preserve defining IDs, canonical
+signatures, sealing records and authenticated dependency closure. Diamond
+imports coalesce identical origins and reject inconsistent records claiming the
+same defining ID.
+
+### Inherited owner rows in generated evidence
+
+Owner row binders are rigid in effect operations, interface method declarations
+and resource-generated forwarding evidence. They are not operation-local or
+method-local forall binders. A generated method type is formed under its
+parent's complete rigid environment, including Rows and its lacks facts.
+Method-local explicit binders retain their present exclusion of EffectRow. An
+ordinary monomorphic field containing `Unit -> Unit ! {|Rows}` references the
+inherited row; it is not a nested scheme or polymorphic field.
+
+Registry method schemes must distinguish parent instantiation from independent
+method-local instantiation. At a method occurrence the parent owner vector is
+checked/instantiated as one complete vector, yielding substitution sigma for
+Type and row slots; sigma is then applied to the method type, constraints and
+field types. Any already admitted method-local binders instantiate afterward
+under their existing rules. Compiler-generated parent quantification in a
+body-free method scheme has role `InheritedOwner(owner-id, slot-index,
+binder-id)`, even if represented by an outer binder list; it must not be
+classified as a new source method-local row binder. Generated resource
+forwarding evidence uses the resource's checked parent substitution and sealed
+origin, not a fresh independent Rows.
+
+In this rule `Delta_O` is the rigid environment from the authenticated owner
+signature, `Delta_M` contains only existing admitted method-local binders, and
+`tau` is the method's ordinary value type. Its latent rows may mention Delta_O.
+The conclusion creates a registry fact, not a first-class source scheme.
+
+```sequent
+Method-Inherited-Owner :=
+  signature(O) authenticates Delta_O and inherited roles
+  Delta_M contains no method-local EffectRow binder
+  Delta_O, Delta_M; remaining environments |- tau => Type
+  constraints are well formed under Delta_O, Delta_M
+  ===>
+  registry-method(O, name, inherited Delta_O, local Delta_M, tau, constraints) ok
+```
+
+Imported evidence authenticates parent ID, slot kinds, role mapping, binder
+scope and simultaneous substitution. A summary that relabels inherited Rows as
+method-local forall, omits its argument, aliases hidden rho, or freshens it
+independently of the handle/effect identity rejects. Ordinary implementation
+owner row parameters are not introduced. Existing impl/with forms may consume
+fully saturated ordinary row-bearing interface obligations only where their
+already admitted binders and constraints can supply the actual row; they gain no
+implicit EffectRow binders and cannot implement sealed resource interfaces.
+
+### Scope and complete derivation
+
+At resource definition, all formal binders are rigid and distinct. The first is
+`R:Type`; `Rows:EffectRow` is a source owner formal. The lifecycle answer
+`T:Type`, hidden clause `A:Type`, and hidden residual `rho:EffectRow` have
+distinct allocation roles and identities. A reused spelling never aliases them.
+Operation pattern and resume input come from authenticated instantiated
+operation types.
+
+At instance checking, resolve and check remaining row actuals and the
+initializer in the preceding scope, before allocating fresh `C:Type`. Thus
+`{|Delta}` cannot mention C. Then allocate C, substitute position zero with C,
+and install the handle and sealed evidence only in the body. No `Delta lacks
+E<C,{|Delta}>` is added because C is fresh. Input/state/answer type agreement
+and identity escape checks remain mandatory.
+
+For the positive case, the global signature checks under rigid Delta with the
+existing written-row fact `Delta lacks H`. The actual substitution sigma maps R
+to C and Rows to `{|Delta}`. The callback operand has `Unit -> Unit ! {|Delta}`.
+The sealed diagnostic evidence method forwards a request with closed row `{E}`
+where `E=ConnectionOps<C,{|Delta}>`; it does not execute the callback. `perform
+H.op ()` has closed row `{H}`. Their body union is closed `{E,H}`. Exact removal
+of E gives real `epsilon={H}`. This is actual body typing, not a descriptor's
+claimed epsilon.
+
+In the generic provider clause, callback application contributes `{|Rows}`.
+`MissingRow` is pure Error and the owned resume consumes Error and produces
+hidden A with shared output Omega. Suppressing only that resume's shared output
+in direct-demand analysis leaves `D_sigma={|Delta}`. There is no native request
+in this diagnostic clause. Native lifecycle effects are still interpreted at
+their selected boundary, independently of this direct clause calculation. The
+hidden answer is obtained by resume, not manufactured by discard.
+
+Current principal union now gives `Omega = {|Delta} union {H} = {H|Delta}`
+because Delta already lacks H. Known D members `K` are empty. Exact removal of K
+leaves `r=Omega`. Specialize hidden `rho -> {H|Delta}`, not `rho -> {H}`. The
+resource result wrapper is independent of C, so the result does not leak C. At a
+global occurrence Delta is freshly instantiated with its preserved lack; global
+definition checking remains rigid, and ordinary eligible local generalization
+retains current rules.
+
+This derivation needs no open row `{E|Delta}`. Forming that row would require
+the additional fact `Delta lacks E<C,{|Delta}>`. That fact mentions Delta inside
+its own exact-instance argument. Fresh C supplies no such fact. Ordinary
+substitution/occurs checking must traverse it and may reject cyclic constraint
+dependency. This draft does not loosen occurs checks, assume a primitive effect
+has zero arguments, or create recursive lacks constraints. The positive case
+avoids the intermediate row entirely. If a lowering algorithm insists on it,
+that algorithm cannot implement this candidate by inventing the exclusion;
+redesign lowering or return to semantic review. The independent final ordinary
+exact-handler equations still must validate the proposed placement of the closed
+request row and substituted clause row.
+
+### Identity, substitution and dependency traversal
+
+Exact effect identity is defining EffectId plus the entire ordered kinded
+vector. Row slots use existing normalized row equality: known members, tail
+identity and accumulated lacks facts. Hence `E<C,{H}>` and `E<C,{J}>` differ
+when H and J differ; `{H,J}` and `{J,H}` compare equal after normalization. No
+covariance, subtyping, argument erasure or string matching. Tail aliasing must
+preserve shared identity; incompatible lacks facts cannot be discarded to make
+two instances equal.
+
+Simultaneous substitution maps every owner Type formal to a same-kind type and
+each row formal to a well-formed complete row. It traverses function
+domain/codomain, callback latent rows, tuple components, owner applications,
+effect arguments, constraints, state/result metadata, summaries, retained demand
+equations and nested lacks instances. Row-tail replacement applies existing
+union, exact removal, occurs and lacks rules. Dependency traversal includes Type
+variables buried inside row members' arguments and recursively nested RowArg
+members. A callback type or exported result containing `E<C,{}>` depends on C
+even if it mentions C only inside a row. An actual substituted row cannot
+contain a forbidden exact instance; a constraint containing its own binder
+through nested arguments must face the ordinary occurs check. Traversal requires
+cycle-safe implementation but no new recursive type feature.
+
+Row arguments are type metadata, not runtime states or codecs. State remains
+`Native.ConnectionState<R>`; native association remains `Native.Connection<R>`
+with Type argument R. Native position-zero ownership, native manifest guards and
+ABI vectors do not acquire Rows. Resource/source arguments and native arguments
+are related by the checked interpret mapping, not equal-length guessing.
+
+### Elaboration, retention and authentication
+
+Implementation requirements are consequences to review, not language authority.
+A minimal representation is `KindedArgument = TypeArg(Type) |
+RowArg(EffectRow)`, with a saturated ResourceApply form distinct from ordinary
+Type::Application. Equivalent representations are possible if they enforce the
+rules. Encoding rows as an arbitrary Type variant without an argument category
+invites rows into ordinary monotypes and must prove that cannot happen.
+Type-only EffectInstance argument arrays and ordinary unary Type::Application
+cannot be repaired by a Boolean admission flag.
+
+Resolution supplies canonical owner IDs, slot kinds and binder roles.
+Declaration checking compiles actual clauses once. A retained body-free contract
+records owner substitutions, associated operation/evidence correspondence,
+hidden template roles, actual callback-demand roots, conditional D equations and
+origins. Public import authentication checks complete vectors, normalization,
+kinds, scopes, binder freshness, sealed declaration origin and every exported
+nested dependency. A forged summary must fail even if its duplicated scalar
+fields agree. Code linkage remains separately authenticated by template ID.
+
+Specialization substitutes sigma into checked generic Core, independently
+reconstructs actual captures c and real epsilon, derives principal Omega and
+residual r, then solves all actual handlers, resumes and affected descendants.
+No source-body replay, unresolved recipes, row holes or erased callback work may
+reach final ordinary Core validation. The callback is an ordinary Core function
+application; no new runtime reduction is needed. Core types and exact
+request/handler descriptors must retain row-bearing identity. Closure capture,
+cleanup, completion, discard ownership and interpreter topology remain
+operationally unchanged.
+
+### Required negative evidence
+
+Each case must reject at the governing boundary, with no invented facts:
+
+- Union ambiguity: the same executed callback and H body with Delta lacking no
+  H. An annotation ending `{|Delta}` cannot justify adding H; union fails rather
+  than strengthening Delta.
+- Wrong slot kind: `Connection<C,Unit>` and `ConnectionOps<C,Unit>`; malformed
+  RowArg includes a Type payload or an invalid/nested unbound row tail.
+- Saturation: missing row actual, extra argument, unsaturated row family used as
+  an ordinary constructor, EffectRow beneath a kind arrow.
+- Scope: `Connection<C,{Native.Connection<C>}>` at an instance mentions C before
+  its binder. Returning db or a function whose latent row contains an exact
+  effect with C rejects identity escape.
+- Binder roles: source Rows aliases hidden rho, hidden A aliases T, reused
+  template binder, generalized fresh C, forged slot-zero identity kind.
+- Identity: change only a row actual in a request or summary; equal EffectId
+  does not preserve exact instance. Reject incompatible lacks, nested occurs
+  cycles and inconsistent shared tail substitution.
+- Demand integrity: erase actual callback demand, replace rho with epsilon,
+  retain an unused relay as alleged D, or forge a demand origin. Independent
+  reconstruction rejects.
+- Known native work: if a variant clause performs native diagnostic, retain its
+  known direct native demand before exact native interpretation removes it. No
+  manifest/string flag may silently erase that demand. Such a variant is
+  separate from the deliberately native-free open-D clause above.
+- Summary authority: copied association, conflicting association record,
+  ordinary impl of a sealed interface or fabricated evidence cannot create
+  sealed resource construction/completion authority.
+
+Also retain closed specialization cases and generic open cases, nested effect
+RowArgs, Type variables inside those arguments, eligible local generalization,
+callback captures and real linked execution under surviving interpreters. A
+closed-only witness cannot replace the generic formal witness.
+
+### Selected choices and remaining evidence
+
+This amendment selects explicit complete instance actuals for mixed resource
+owners, independent complete row signatures on resource/effect/interface owners,
+and inherited-parent row roles in generated evidence. Association authority
+retains original P-1 provider-interface sealing and adds the bounded
+single-resource EffectId association rule; no association-dependent kind
+admission remains. The row-aware
+representation is an implementation decision still open; the semantic
+tag/arity/saturation obligations are not open. The context-free tagged argument
+grammar above is the proposed syntax contract. Parser diagnostics and a concrete
+specification patch remain subsequent implementation preparation.
+
+The positive derivation is a source/type design witness, not a run or accepted
+test. Design and integration reviews found no contradiction in the ordinary
+handler equations. Implementation evidence must still validate every final
+handler-output equation for the closed-input/open-output topology without
+self-containing lacks. Failure is a semantic blocker, not permission to weaken
+row algebra.
+
+Actual capture-dependent close demand `D(sigma,c)` remains conditional until
+actual specialization proves c. No P-1-valid same-sigma/same-epsilon different-c
+source witness is established here. Hidden-answer typing, discard consumption
+and surviving interpreter topology make that a separate mandatory obligation.
+The candidate does not claim this callback witness satisfies it, and it does not
+allow unknown higher-order close demands to pass discard checks.
+
+Useful SQL behavior, foreign callbacks, arenas and owner transport, general
+higher-rank monotypes, partial mixed owners, row kind arrows and general
+row-bearing nominals remain outside this amendment. Selection retains all
+remaining evidence obligations and the later product adoption workflow.
 
 ## Selected arena contract A-0
 

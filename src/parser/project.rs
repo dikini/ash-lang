@@ -259,6 +259,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
             while shape.peek_node_is(NodeKind::TypeDeclaration)
                 || shape.peek_node_is(NodeKind::NewtypeDeclaration)
                 || shape.peek_node_is(NodeKind::InterfaceDeclaration)
+                || shape.peek_node_is(NodeKind::ResourceDefinition)
                 || shape.peek_node_is(NodeKind::EffectDeclaration)
                 || shape.peek_node_is(NodeKind::ImplementationDeclaration)
                 || shape.peek_node_is(NodeKind::EquationalGlobal)
@@ -668,6 +669,80 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
         NodeKind::ResumeExpression => {
             shape.token(&TokenKind::Resume)?;
             shape.expression()?;
+        }
+        NodeKind::ResourceDefinition => {
+            if shape.peek_token_is(&TokenKind::Pub) {
+                shape.token(&TokenKind::Pub)?;
+            }
+            shape.token(&TokenKind::Resource)?;
+            shape.token_matching(|kind| matches!(kind, TokenKind::UpperIdentifier(_)))?;
+            shape.node(NodeKind::TypeParameters)?;
+            shape.token(&TokenKind::LeftBrace)?;
+            shape.token(&TokenKind::LineEnd)?;
+            for index in 0..9 {
+                shape.node(NodeKind::ResourceField)?;
+                if index < 8 || shape.peek_token_is(&TokenKind::LineEnd) {
+                    shape.token(&TokenKind::LineEnd)?;
+                }
+            }
+            shape.token(&TokenKind::RightBrace)?;
+        }
+        NodeKind::ResourceField => {
+            let word = direct_tokens(node, tokens)
+                .next()
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?;
+            let TokenKind::Identifier(word) = &word.kind else {
+                shape.token(&TokenKind::Effect)?;
+                shape.node(NodeKind::EffectInstance)?;
+                return shape.finish();
+            };
+            shape.token_matching(|kind| matches!(kind, TokenKind::Identifier(_)))?;
+            match word.as_str() {
+                "input" | "state" => {
+                    shape.node(NodeKind::Type)?;
+                }
+                "result" => {
+                    shape.node(NodeKind::Type)?;
+                    shape.token_matching(
+                        |kind| matches!(kind, TokenKind::Identifier(word) if word == "for"),
+                    )?;
+                    shape.node(NodeKind::TypeParameters)?;
+                }
+                "provider" => {
+                    shape.node(NodeKind::InterfaceApplication)?;
+                }
+                "interpret" => {
+                    shape.node(NodeKind::EffectInstance)?;
+                }
+                "acquire" | "finish" => {
+                    shape.node(NodeKind::Binder)?;
+                    shape.token(&TokenKind::FatArrow)?;
+                    shape.expression()?;
+                }
+                "handlers" => {
+                    shape.node(NodeKind::Binder)?;
+                    shape.token(&TokenKind::LeftBrace)?;
+                    shape.token(&TokenKind::LineEnd)?;
+                    while shape.peek_node_is(NodeKind::HandlerClause) {
+                        shape.node(NodeKind::HandlerClause)?;
+                        if shape.peek_token_is(&TokenKind::LineEnd) {
+                            shape.token(&TokenKind::LineEnd)?;
+                        }
+                    }
+                    shape.token(&TokenKind::RightBrace)?;
+                }
+                _ => return malformed(InternalReason::UnexpectedShape),
+            }
+        }
+        NodeKind::ProviderResourceExpression => {
+            shape.token(&TokenKind::Resource)?;
+            shape.node(NodeKind::EffectInstance)?;
+            shape.node(NodeKind::Binder)?;
+            shape.token(&TokenKind::Equal)?;
+            shape.node(NodeKind::PrimaryExpression)?;
+            shape.node(NodeKind::Block)?;
         }
         NodeKind::ResourceExpression => {
             shape.token(&TokenKind::Resource)?;
@@ -1110,6 +1185,7 @@ fn project_surface_module(
     let mut interfaces = Vec::new();
     let mut effects = Vec::new();
     let mut implementations = Vec::new();
+    let mut resources = Vec::new();
     let mut definitions = Vec::new();
     for child in child_nodes(node) {
         match child.kind {
@@ -1125,6 +1201,10 @@ fn project_surface_module(
             NodeKind::InterfaceDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Interface(interfaces.len()));
                 interfaces.push(project_interface_declaration(source, child, tokens)?);
+            }
+            NodeKind::ResourceDefinition => {
+                declaration_order.push(SurfaceDeclarationIndex::Resource(resources.len()));
+                resources.push(project_resource_definition(source, child, tokens)?);
             }
             NodeKind::EffectDeclaration => {
                 declaration_order.push(SurfaceDeclarationIndex::Effect(effects.len()));
@@ -1151,6 +1231,7 @@ fn project_surface_module(
         effects,
         implementations,
         definitions,
+        resources,
         span: node_span(source, node, tokens)?,
     })
 }
@@ -1815,6 +1896,37 @@ fn project_expression(
                     )?));
                     tasks.push(ExpressionTask::Visit(value));
                 }
+                NodeKind::ProviderResourceExpression => {
+                    let family = project_effect_instance(
+                        source,
+                        only_child_of_kind(node, NodeKind::EffectInstance)?,
+                        tokens,
+                    )?;
+                    let [argument] = family.arguments.as_slice() else {
+                        return malformed(InternalReason::UnexpectedShape);
+                    };
+                    let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity)) =
+                        &argument.kind
+                    else {
+                        return malformed(InternalReason::UnexpectedShape);
+                    };
+                    let handle =
+                        project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
+                    tasks.push(ExpressionTask::FinishProviderResource {
+                        family: family.effect,
+                        identity: identity.clone(),
+                        handle: handle.name,
+                        span: node_span(source, node, tokens)?,
+                    });
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::Block,
+                    )?));
+                    tasks.push(ExpressionTask::Visit(only_child_of_kind(
+                        node,
+                        NodeKind::PrimaryExpression,
+                    )?));
+                }
                 NodeKind::ResourceExpression => {
                     let identity = direct_tokens(node, tokens)
                         .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
@@ -2076,6 +2188,29 @@ fn project_expression(
                     span,
                 });
             }
+            ExpressionTask::FinishProviderResource {
+                family,
+                identity,
+                handle,
+                span,
+            } => {
+                let (initializer, body) = take_expression_pair(&mut projected)?;
+                let SurfaceExprKind::Block(body) = body.kind else {
+                    return malformed(InternalReason::UnexpectedShape);
+                };
+                projected.push(SurfaceExpr {
+                    kind: SurfaceExprKind::ProviderResource(Box::new(
+                        crate::surface::SurfaceProviderResourceExpr {
+                            family,
+                            identity,
+                            handle,
+                            initializer,
+                            body,
+                        },
+                    )),
+                    span,
+                });
+            }
             ExpressionTask::FinishResource {
                 kind,
                 identity,
@@ -2316,6 +2451,12 @@ enum ExpressionTask<'a> {
     },
     FinishResume(Span),
     FinishCleanup(Span),
+    FinishProviderResource {
+        family: SurfaceReference,
+        identity: SurfaceName,
+        handle: SurfaceName,
+        span: Span,
+    },
     FinishResource {
         kind: crate::surface::SurfaceResourceKind,
         identity: SurfaceName,
@@ -3207,6 +3348,7 @@ const fn is_expression_kind(kind: NodeKind) -> bool {
             | NodeKind::MatchExpression
             | NodeKind::HandlerExpression
             | NodeKind::ResumeExpression
+            | NodeKind::ProviderResourceExpression
             | NodeKind::ResourceExpression
             | NodeKind::HookExpression
             | NodeKind::RegistrationExpression
@@ -3315,6 +3457,96 @@ fn require_kind(node: &ConcreteNode, kind: NodeKind) -> Result<(), ProjectionErr
 
 fn malformed<T>(reason: InternalReason) -> Result<T, ProjectionError> {
     Err(ProjectionError::MalformedTree(reason))
+}
+
+fn project_resource_definition(
+    source: &SourceFile,
+    node: &ConcreteNode,
+    tokens: &[Token],
+) -> Result<crate::surface::SurfaceResourceDefinition, ProjectionError> {
+    let fields = child_nodes(node)
+        .filter(|child| child.kind == NodeKind::ResourceField)
+        .collect::<Vec<_>>();
+    let [
+        input,
+        state,
+        result,
+        provider,
+        provided,
+        interpreted,
+        acquire,
+        finish,
+        handlers,
+    ] = fields.as_slice()
+    else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let answer_parameters = project_optional_type_parameters(source, result, tokens)?.ok_or(
+        ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+    )?;
+    let [answer] = answer_parameters.as_slice() else {
+        return malformed(InternalReason::UnexpectedShape);
+    };
+    let project_field_type =
+        |field| project_type(source, only_child_of_kind(field, NodeKind::Type)?, tokens);
+    let project_field_binder = |field| {
+        project_binder(only_child_of_kind(field, NodeKind::Binder)?, tokens)
+            .map(|binder| binder.name)
+    };
+    let clauses = child_nodes(handlers)
+        .filter(|child| child.kind == NodeKind::HandlerClause)
+        .map(|clause| {
+            Ok(SurfaceHandlerClause {
+                operation: project_field_binder(clause)?,
+                pattern: project_pattern(
+                    source,
+                    only_child_of_kind(clause, NodeKind::Pattern)?,
+                    tokens,
+                )?,
+                body: project_expression(source, expression_child(clause)?, tokens)?,
+                span: node_span(source, clause, tokens)?,
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectionError>>()?;
+    Ok(crate::surface::SurfaceResourceDefinition {
+        public: direct_tokens(node, tokens).any(|token| token.kind == TokenKind::Pub),
+        name: surface_name(
+            direct_tokens(node, tokens)
+                .find(|token| matches!(token.kind, TokenKind::UpperIdentifier(_)))
+                .ok_or(ProjectionError::MalformedTree(
+                    InternalReason::UnexpectedShape,
+                ))?,
+        )?,
+        parameters: project_optional_type_parameters(source, node, tokens)?.ok_or(
+            ProjectionError::MalformedTree(InternalReason::UnexpectedShape),
+        )?,
+        input: project_field_type(input)?,
+        state: project_field_type(state)?,
+        result: project_field_type(result)?,
+        answer: answer.clone(),
+        provider: project_interface_application(
+            source,
+            only_child_of_kind(provider, NodeKind::InterfaceApplication)?,
+            tokens,
+        )?,
+        provided: project_effect_instance(
+            source,
+            only_child_of_kind(provided, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        interpreted: project_effect_instance(
+            source,
+            only_child_of_kind(interpreted, NodeKind::EffectInstance)?,
+            tokens,
+        )?,
+        acquire_binder: project_field_binder(acquire)?,
+        acquire: project_expression(source, expression_child(acquire)?, tokens)?,
+        finish_binder: project_field_binder(finish)?,
+        finish: project_expression(source, expression_child(finish)?, tokens)?,
+        handlers_binder: project_field_binder(handlers)?,
+        handlers: clauses,
+        span: node_span(source, node, tokens)?,
+    })
 }
 
 #[cfg(test)]

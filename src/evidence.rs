@@ -540,19 +540,137 @@ impl Drop for SelectedOccurrence {
 }
 
 /// Fully zonked occurrence facts staged before checked-module publication.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct PendingEvidencePublication {
     occurrences: Vec<SelectedOccurrence>,
     slot_ids: HashMap<usize, Option<MethodId>>,
 }
 
+struct OwnedTypes(Vec<Type>);
+impl OwnedTypes {
+    fn into_boxed_slice(mut self) -> Box<[Type]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+impl Drop for OwnedTypes {
+    fn drop(&mut self) {
+        for ty in std::mem::take(&mut self.0) {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+/// Borrowed closed source facts; obtaining this view never fills a slot.
+pub(crate) struct PendingOccurrence<'a> {
+    pub(crate) application: &'a InterfaceApplication,
+    pub(crate) method: Option<MethodId>,
+    pub(crate) method_arguments: &'a [Type],
+    pub(crate) value_type: Option<&'a Type>,
+    pub(crate) selection: &'a EvidenceSelection,
+}
+
+#[cfg(test)]
+thread_local! {
+    static APPEND_RESERVATION_REFUSAL: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(crate) struct AppendReservationRefusalForTest;
+#[cfg(test)]
+impl Drop for AppendReservationRefusalForTest {
+    fn drop(&mut self) {
+        APPEND_RESERVATION_REFUSAL.with(|site| site.set(None));
+    }
+}
+#[cfg(test)]
+pub(crate) fn refuse_append_reservation_after_for_test(
+    successful_appends: usize,
+) -> AppendReservationRefusalForTest {
+    APPEND_RESERVATION_REFUSAL.with(|site| {
+        assert!(site.get().is_none());
+        site.set(Some(successful_appends));
+    });
+    AppendReservationRefusalForTest
+}
+#[cfg(test)]
+impl AppendReservationRefusalForTest {
+    pub(crate) fn was_consumed(&self) -> bool {
+        APPEND_RESERVATION_REFUSAL.with(|site| site.get().is_none())
+    }
+}
+
 impl PendingEvidencePublication {
-    pub(crate) fn capture_selection(
+    /// Joins independently checked batches without filling any source slot.
+    /// The receiver is unchanged on refusal; publication still preflights the
+    /// complete combined batch immediately before the sole commit.
+    pub(crate) fn append(
+        &mut self,
+        mut incoming: Self,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<(), SelectionFailure> {
+        let count = incoming.occurrences.len();
+        budget
+            .charge(
+                count
+                    .checked_mul(2)
+                    .ok_or(SelectionFailure::ConstraintResource)?,
+            )
+            .map_err(|()| SelectionFailure::ConstraintResource)?;
+        if count != incoming.slot_ids.len() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        for occurrence in &incoming.occurrences {
+            let slot = occurrence
+                .slot
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?;
+            if self.slot_ids.contains_key(&slot.storage_id())
+                || incoming.slot_ids.remove(&slot.storage_id()) != Some(occurrence.checked_method)
+            {
+                return Err(SelectionFailure::InvalidState);
+            }
+        }
+        // Test-only deterministic refusal at this recoverable reservation site;
+        // it is separate from work-limit failures and general allocator behavior.
+        #[cfg(test)]
+        if APPEND_RESERVATION_REFUSAL.with(|site| match site.get() {
+            Some(0) => {
+                site.set(None);
+                true
+            }
+            Some(remaining) => {
+                site.set(Some(remaining - 1));
+                false
+            }
+            None => false,
+        }) {
+            return Err(SelectionFailure::ConstraintResource);
+        }
+        self.occurrences
+            .try_reserve(count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        self.slot_ids
+            .try_reserve(count)
+            .map_err(|_| SelectionFailure::ConstraintResource)?;
+        for occurrence in &incoming.occurrences {
+            self.slot_ids.insert(
+                occurrence
+                    .slot
+                    .as_ref()
+                    .expect("append checks every slot")
+                    .storage_id(),
+                occurrence.checked_method,
+            );
+        }
+        self.occurrences.append(&mut incoming.occurrences);
+        Ok(())
+    }
+
+    pub(crate) fn occurrence(
         &self,
         slot: usize,
         method: Option<MethodId>,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(&EvidenceSelection, usize), SelectionFailure> {
+    ) -> Result<PendingOccurrence<'_>, SelectionFailure> {
         budget
             .charge(self.occurrences.len())
             .map_err(|()| SelectionFailure::TypeResource)?;
@@ -566,16 +684,204 @@ impl PendingEvidencePublication {
                     .is_some_and(|candidate| candidate.storage_id() == slot)
             })
             .ok_or(SelectionFailure::InvalidState)?;
-        if occurrence.checked_method != method {
+        if occurrence.checked_method != method
+            || self.slot_ids.get(&slot) != Some(&method)
+            || !occurrence
+                .slot
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?
+                .is_empty()
+        {
             return Err(SelectionFailure::InvalidState);
         }
-        Ok((
-            occurrence
+        Ok(PendingOccurrence {
+            application: &occurrence.checked_application,
+            method: occurrence.checked_method,
+            method_arguments: &occurrence.method_arguments,
+            value_type: occurrence.checked_value_type.as_ref(),
+            selection: occurrence
                 .selection
                 .as_ref()
                 .ok_or(SelectionFailure::InvalidState)?,
-            occurrence.method_arguments.len(),
-        ))
+        })
+    }
+
+    pub(crate) fn capture_selection(
+        &self,
+        slot: usize,
+        method: Option<MethodId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(&EvidenceSelection, usize), SelectionFailure> {
+        let occurrence = self.occurrence(slot, method, budget)?;
+        Ok((occurrence.selection, occurrence.method_arguments.len()))
+    }
+
+    /// Relocate private closed occurrence metadata without publishing any slots.
+    pub(crate) fn relocate_types<R>(
+        &mut self,
+        mut rewrite: R,
+        constraints: &mut InterfaceConstraintBudget,
+        types: &mut TypeWorkBudget,
+    ) -> Result<(), SelectionFailure>
+    where
+        R: FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+    {
+        fn application<R>(
+            source: &InterfaceApplication,
+            rewrite: &mut R,
+            types: &mut TypeWorkBudget,
+        ) -> Result<InterfaceApplication, SelectionFailure>
+        where
+            R: FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, SelectionFailure>,
+        {
+            types
+                .charge(source.arguments().len())
+                .map_err(|()| SelectionFailure::TypeResource)?;
+            let mut arguments = OwnedTypes(Vec::new());
+            arguments
+                .0
+                .try_reserve_exact(source.arguments().len())
+                .map_err(|_| SelectionFailure::TypeResource)?;
+            for argument in source.arguments() {
+                arguments.0.push(rewrite(argument, types)?);
+            }
+            Ok(InterfaceApplication::new(
+                source.interface(),
+                arguments.into_boxed_slice(),
+            ))
+        }
+        for occurrence in &mut self.occurrences {
+            types
+                .charge(1)
+                .map_err(|()| SelectionFailure::TypeResource)?;
+            occurrence.checked_application =
+                application(&occurrence.checked_application, &mut rewrite, types)?;
+            for argument in &mut occurrence.method_arguments {
+                let relocated = rewrite(argument, types)?;
+                discard_type_iteratively(std::mem::replace(argument, relocated));
+            }
+            if let Some(ty) = &mut occurrence.checked_value_type {
+                let relocated = rewrite(ty, types)?;
+                discard_type_iteratively(std::mem::replace(ty, relocated));
+            }
+            let source = occurrence
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?;
+            let mut builder = crate::interface::EvidenceSelectionBuilder::new();
+            constraints
+                .charge(
+                    source
+                        .node_count()
+                        .checked_mul(2)
+                        .ok_or(SelectionFailure::ConstraintResource)?,
+                )
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+            let mut pending = Vec::new();
+            pending
+                .try_reserve(source.node_count())
+                .map_err(|_| SelectionFailure::ConstraintResource)?;
+            pending.push((source.root(), false));
+            let mut remapped = HashMap::new();
+            remapped
+                .try_reserve(source.node_count())
+                .map_err(|_| SelectionFailure::ConstraintResource)?;
+            while let Some((node, exit)) = pending.pop() {
+                constraints
+                    .charge(1)
+                    .map_err(|()| SelectionFailure::ConstraintResource)?;
+                if remapped.contains_key(&node) {
+                    continue;
+                }
+                let selected = source.node(node).ok_or(SelectionFailure::InvalidState)?;
+                if !exit
+                    && let crate::interface::EvidenceNode::Implementation { prerequisites, .. } =
+                        selected
+                {
+                    constraints
+                        .charge(prerequisites.len() + 1)
+                        .map_err(|()| SelectionFailure::ConstraintResource)?;
+                    pending
+                        .try_reserve(prerequisites.len() + 1)
+                        .map_err(|_| SelectionFailure::ConstraintResource)?;
+                    pending.push((node, true));
+                    pending.extend(prerequisites.iter().rev().map(|child| (*child, false)));
+                    continue;
+                }
+                let relocated = match selected {
+                    crate::interface::EvidenceNode::Lexical { source, methods } => {
+                        builder.push_lexical(source, methods, constraints)
+                    }
+                    crate::interface::EvidenceNode::Abstract {
+                        requirement,
+                        methods,
+                    } => builder.push_abstract(requirement, methods, constraints),
+                    crate::interface::EvidenceNode::Implementation {
+                        implementation,
+                        substitution,
+                        prerequisites,
+                        methods,
+                    } => {
+                        types
+                            .charge(substitution.len())
+                            .map_err(|()| SelectionFailure::TypeResource)?;
+                        let mut substitutions = Vec::new();
+                        substitutions
+                            .try_reserve_exact(substitution.len())
+                            .map_err(|_| SelectionFailure::TypeResource)?;
+                        for replacement in substitution {
+                            substitutions.push(crate::interface::EvidenceSubstitution::new(
+                                replacement.parameter(),
+                                rewrite(replacement.argument(), types)?,
+                            ));
+                        }
+                        constraints
+                            .charge(prerequisites.len())
+                            .map_err(|()| SelectionFailure::ConstraintResource)?;
+                        let mut children = Vec::new();
+                        children
+                            .try_reserve_exact(prerequisites.len())
+                            .map_err(|_| SelectionFailure::ConstraintResource)?;
+                        for child in prerequisites {
+                            children
+                                .push(*remapped.get(child).ok_or(SelectionFailure::InvalidState)?);
+                        }
+                        builder.push_implementation(
+                            implementation,
+                            substitutions.into_boxed_slice(),
+                            &children,
+                            methods,
+                            constraints,
+                        )
+                    }
+                }
+                .map_err(|()| SelectionFailure::ConstraintResource)?;
+                remapped.insert(node, relocated);
+            }
+            let root = *remapped
+                .get(&source.root())
+                .ok_or(SelectionFailure::InvalidState)?;
+            let goal = InterfaceApplication::new(source.interface(), {
+                types
+                    .charge(source.arguments().len())
+                    .map_err(|()| SelectionFailure::TypeResource)?;
+                let mut arguments = OwnedTypes(Vec::new());
+                arguments
+                    .0
+                    .try_reserve_exact(source.arguments().len())
+                    .map_err(|_| SelectionFailure::TypeResource)?;
+                for argument in source.arguments() {
+                    arguments.0.push(rewrite(argument, types)?);
+                }
+                arguments.into_boxed_slice()
+            });
+            occurrence.selection = Some(
+                builder
+                    .finish(root, goal)
+                    .map_err(|()| SelectionFailure::InvalidState)?,
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn contains_expected(
@@ -954,6 +1260,21 @@ impl EvidenceSelector {
         )
     }
 
+    pub(crate) fn add_completed_provider_scheme(
+        &mut self,
+        fact: crate::resolved::ProviderGlobalFact<'_>,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(), SelectionFailure> {
+        self.add_scheme_parts(
+            fact.binder(),
+            fact.scheme(),
+            fact.origin().primary_span(),
+            constraint_work,
+            type_work,
+        )
+    }
+
     fn add_scheme_parts(
         &mut self,
         binder: BinderId,
@@ -1011,7 +1332,46 @@ impl EvidenceSelector {
         constraint_work: &mut InterfaceConstraintBudget,
         type_work: &mut TypeWorkBudget,
     ) -> Result<(), SelectionFailure> {
-        let fact = &imported.fact;
+        self.add_completed_implementation_parts(
+            registry,
+            &imported.fact,
+            imported.authorization().hops().len(),
+            imported
+                .authorization()
+                .hops()
+                .iter()
+                .map(|hop| hop.import_span),
+            constraint_work,
+            type_work,
+        )
+    }
+
+    pub(crate) fn add_completed_local_implementation_fact(
+        &mut self,
+        registry: &ResolvedRegistry,
+        fact: &crate::resolved::CheckedImplementationFact,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(), SelectionFailure> {
+        self.add_completed_implementation_parts(
+            registry,
+            fact,
+            0,
+            std::iter::empty(),
+            constraint_work,
+            type_work,
+        )
+    }
+
+    fn add_completed_implementation_parts(
+        &mut self,
+        registry: &ResolvedRegistry,
+        fact: &crate::resolved::CheckedImplementationFact,
+        import_span_count: usize,
+        route_spans: impl Iterator<Item = Span>,
+        constraint_work: &mut InterfaceConstraintBudget,
+        type_work: &mut TypeWorkBudget,
+    ) -> Result<(), SelectionFailure> {
         if fact.interface().module().is_builtin_resource() {
             return Err(SelectionFailure::InvalidState);
         }
@@ -1079,7 +1439,7 @@ impl EvidenceSelector {
                     .len()
                     .saturating_add(fact.prerequisites.len())
                     .saturating_add(fact.methods.len().saturating_mul(2))
-                    .saturating_add(imported.authorization().hops().len())
+                    .saturating_add(import_span_count)
                     .saturating_add(1),
             )
             .map_err(|()| SelectionFailure::ConstraintResource)?;
@@ -1102,7 +1462,7 @@ impl EvidenceSelector {
             .try_reserve(fact.methods.len())
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         import_spans
-            .try_reserve_exact(imported.authorization().hops().len())
+            .try_reserve_exact(import_span_count)
             .map_err(|_| SelectionFailure::ConstraintResource)?;
         let staged_candidate_bucket = self.reserve_implementation_publication(fact.interface())?;
         for prerequisite in &fact.prerequisites {
@@ -1122,13 +1482,7 @@ impl EvidenceSelector {
         }
         methods.extend(fact.methods.iter().map(|method| method.id));
         method_spans.extend(fact.methods.iter().map(|method| method.span));
-        import_spans.extend(
-            imported
-                .authorization()
-                .hops()
-                .iter()
-                .map(|hop| hop.import_span),
-        );
+        import_spans.extend(route_spans);
         let entry = ImplementationEntry {
             id: fact.id,
             application: fact
@@ -5400,6 +5754,93 @@ mod tests {
         assert!(first.selection().is_none());
         assert!(first.method_arguments().is_empty());
         assert!(second.selection().is_some());
+    }
+
+    #[test]
+    fn combined_publication_keeps_all_batches_unpublished_until_commit() {
+        let first = EvidenceSlot::empty();
+        let second = EvidenceSlot::empty();
+        let mut publication = publication_batch(&first);
+        publication
+            .append(
+                publication_batch(&second),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .unwrap();
+        assert!(first.selection().is_none());
+        assert!(second.selection().is_none());
+        publication.publish().unwrap();
+        assert!(first.selection().is_some());
+        assert!(second.selection().is_some());
+    }
+
+    fn publication_batch(slot: &EvidenceSlot) -> PendingEvidencePublication {
+        let (interface, _, requirement) = ids();
+        let mut builder = EvidenceSelectionBuilder::new();
+        let root = builder
+            .push_abstract(requirement, &[], &mut InterfaceConstraintBudget::default())
+            .unwrap();
+        let selection = builder
+            .finish(root, unary_application(interface, Type::Int))
+            .unwrap();
+        PendingEvidencePublication {
+            occurrences: vec![SelectedOccurrence {
+                checked_method: None,
+                checked_application: unary_application(interface, Type::Int),
+                method_arguments: Box::new([]),
+                checked_value_type: None,
+                selection: Some(selection),
+                slot: Some(slot.handle()),
+            }],
+            slot_ids: HashMap::from([(slot.storage_id(), None)]),
+        }
+    }
+
+    #[test]
+    fn combined_publication_duplicate_and_budget_failure_allow_fresh_retry() {
+        let first = EvidenceSlot::empty();
+        let second = EvidenceSlot::empty();
+        let mut publication = publication_batch(&first);
+        let mut short = InterfaceConstraintBudget::with_limit(1);
+        assert_eq!(
+            publication.append(publication_batch(&second), &mut short),
+            Err(SelectionFailure::ConstraintResource)
+        );
+        assert_eq!(publication.occurrences.len(), 1);
+        assert!(first.selection().is_none());
+        assert!(second.selection().is_none());
+        assert_eq!(
+            publication.append(
+                publication_batch(&first),
+                &mut InterfaceConstraintBudget::default()
+            ),
+            Err(SelectionFailure::InvalidState)
+        );
+        assert_eq!(publication.occurrences.len(), 1);
+        let mut exact = InterfaceConstraintBudget::with_limit(2);
+        publication
+            .append(publication_batch(&second), &mut exact)
+            .unwrap();
+        assert_eq!(exact.used(), 2);
+        publication.publish().unwrap();
+        assert!(first.selection().is_some());
+        assert!(second.selection().is_some());
+    }
+
+    #[test]
+    fn combined_publication_late_invalid_slot_rolls_back_every_batch() {
+        let first = EvidenceSlot::empty();
+        let second = EvidenceSlot::empty();
+        let mut publication = publication_batch(&first);
+        publication
+            .append(
+                publication_batch(&second),
+                &mut InterfaceConstraintBudget::default(),
+            )
+            .unwrap();
+        publication_batch(&second).publish().unwrap();
+        assert_eq!(publication.publish(), Err(SelectionFailure::InvalidState));
+        assert!(first.selection().is_none());
     }
 
     #[test]

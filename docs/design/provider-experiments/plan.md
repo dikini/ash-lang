@@ -18,8 +18,16 @@ the root Cargo workspace and lockfile. The [package](README.md) records the
 baseline and carried design inputs. Worktree isolation keeps candidate behavior
 off `main`; bounded scope does not require a disposable implementation.
 
+The user's 2026-10-03 direction prioritizes completed source capabilities over
+additional internal test granularity. The immediate integration target is S-01:
+an Ash library and client execute a real SQLite session through the public
+driver, with checked Core and observed completion. Continue the shared instance
+bridge needed for that target; judge each prerequisite by the execution boundary
+it removes. Later targets are the remaining SQLite, arena and borrowing cases,
+then the authoring blueprint and adoption evidence.
+
 The plan covers the copying SQLite bridge, a fixed-capacity scoped arena, and
-their first borrowing comparison. Arena owner transport, callbacks, concurrency,
+their first borrowing comparison. Arena owner transport, foreign callback ABI, concurrency,
 reference counting, tracing, and processes remain outside these slices. A
 semantic gap returns to the design documents before implementation continues.
 
@@ -72,8 +80,95 @@ Plan new integration suites under the root `tests/` directory:
 | `arena_resource_typing.rs`, `arena_resource_runtime.rs` | Layout, allocation, aliasing, non-escape, nested dependencies, and independent copies. |
 | `foreign_memory_interactions.rs`, `provider_control.rs` | Retained access, view invalidation, capture, resume, discard, and combined completion. |
 
-These suites do not exist yet. Native helper tests supplement them with ABI and
-storage observations. They cannot substitute for source-to-Core execution.
+These are planned suite names. Current preparation uses existing suites,
+including `resource_provider_syntax`, `resource_provider_resolution`,
+`foreign_module_admission` and `provider_sqlite_source`. Their passing
+declaration checks do not establish resource-instance execution. Native helper
+tests supplement source suites with ABI and storage observations; they cannot
+substitute for source-to-Core execution.
+
+## Complete owner row argument follow-on
+
+The [selected complete owner row arguments](semantics.md#selected-complete-owner-row-arguments)
+extend DN-0036 experimental P-1 after independent contract and prose approval.
+Selection remains informative and off `main`; it is not current Ash, product
+adoption or executed source proof. The reviewed module-publication baseline
+remains Type-only. The active M1 slice migrates compiler representation and
+consumers for complete arguments; mixed source instances, specialization and
+execution remain pending.
+The callback exclusion above means foreign callback ABI; this pressure case executes an ordinary synchronous Ash
+function application within a provider clause.
+
+Follow-on evidence must cover the complete tagged syntax and saturated
+resource/effect/interface applications, declaration-independent owner signatures,
+inherited owner binder roles, exact row-bearing identity and simultaneous
+substitution. Check preceding-scope actuals before fresh position-zero identity,
+nested row dependencies, occurs/lacks rules and identity escape. Preserve
+row-free initializer inference and the native state/ABI vector.
+
+The positive fixture must execute the clause callback, then resume pure
+MissingRow. Its client performs H and forwards the callback through the sealed
+method: actual body row is closed {E,H}, epsilon={H}, D={|Delta}, with existing
+Delta lacks H. Derive Omega={H|Delta}, K empty and rho=Omega without adding
+Delta lacks E<C,{|Delta}>. This source/type derivation is not executed evidence.
+Exercise generic open and closed specializations, eligible local generalization,
+actual captures, surviving interpreters and linked execution.
+
+Run the amendment's negative cases at parsing, resolution, static checking,
+summary authentication, specialization and independent ordinary Core validation.
+Include wrong tags/arity, unsaturated mixed owners, invalid binder roles,
+nested occurs cycles, incompatible lacks, fresh-identity escape, erased callback
+or native demand, forged origins and conflicting association records. Verify
+public dependency closure, targeted aliases/reexports and diamond imports with
+body-free client checking and separately authenticated executable template
+linkage. Specialization must derive real epsilon and c, solve every affected
+handler/resume/descendant, and retain no unresolved recipe in ordinary Core.
+No new runtime reduction rule follows from type metadata or ordinary application.
+
+The same-sigma/same-epsilon different-c source witness remains mandatory and
+unproved; the open-D callback case does not replace it. Do not weaken capture,
+discard, completion or principal-row rules to admit either case. A separate
+native-request clause variant must preserve its known direct native demand
+until exact admitted interpretation discharges it.
+
+Independent reviews approve bounded selection; implementation evidence remains
+pending. Later adoption follows
+[Step 7](#step-7-bring-successful-work-into-ash-and-its-standard-library): an
+accepted semantic proposal, any justified architectural decision and authorized
+tasks precede product implementation, tests and specification changes. Allocate
+those artifacts only at that later stage. Candidate representation choices and
+parser diagnostics remain implementation preparation, not adopted architecture.
+
+### Execution checkpoints for the common instance bridge
+
+These checkpoints refine Step 2; they do not replace Steps 3 through 7.
+The [current checkpoint](execution.md#current-checkpoint) records actual
+progress and evidence. Each row depends on acceptance of its predecessor.
+
+| Checkpoint | Boundary removed | Required exit evidence |
+| --- | --- | --- |
+| M1: structural migration | Type-only assumptions in complete owner arguments and their consumers. | Charged, fallible traversal and reconstruction; canonical signatures, kind and scope checks; unchanged deep-disposal regression; frozen contract then quality review. |
+| M2/B1: source preparation | Resource instances cannot yet check their preceding-scope actuals and initializer. | Typed initializer checked once, Statement connection inference, body-only fresh identity, complete mixed actuals and attributable refusals. |
+| M3/B2: publication and specialization | Complete parent arguments and inherited roles cannot yet cross body-free contracts and executable templates. | One simultaneous substitution, original defining authority, distinct copied occurrence identities, complete catalog relocation and independent linkage refusal. |
+| M4/B3: ordinary Core | Instance topology and request-specific continuation demand are not yet reconstructed. | Real body epsilon and per-request c; every handler/resume/descendant solved; independent final Core validation and transforms with no unresolved recipe. |
+| M5/B4: runtime | Authenticated declarations have no executable provider dispatch. | Reviewed binding and ownership handoff, public-driver S-01, native release observations, generic callback execution and the separate same-sigma/same-epsilon different-c witness. |
+
+The current M1 gate uses existing targets, after the connected migration is
+complete. A development-only compiler check may diagnose the incomplete batch;
+it does not close this gate.
+
+```bash
+cargo check -p ash --all-targets
+cargo test -p ash --lib --test effect_rows --test kinds --test kind_resources
+cargo test -p ash --lib eval::machine::tests::owned_deep_drain_success_and_partial_failure_use_the_predecessor_stack_bound -- --exact --nocapture
+cargo test -p ash --test provider_sqlite_source --test resource_provider_syntax --test resource_provider_resolution --test foreign_module_admission
+```
+
+Retain exact, one-short, cumulative refusal and partial-cleanup evidence. Do not
+increase the stack, reduce fixture depth or relax work ceilings. Compilation and
+these structural checks do not establish mixed source admission or runtime
+behavior. Later checkpoints retain their affected integration checks,
+independent reviews and the full verification gates below.
 
 ## Step 1: fix the first contract and native inputs
 
@@ -138,6 +233,11 @@ pipeline change map, and a reproducible version-matched native smoke build.
    instance, primitive signature, result relation, and origin separately.
 5. Implement the thin foreign boundary for the required initialize/open,
    prepare, integer bind, step, column access, finalize, and close operations.
+   Specify and review the executable registration and dispatch interface that
+   connects authenticated foreign operation identities to the safe adapter.
+   Existing foreign manifests authenticate passive declarations; they contain
+   no executable binding. Include missing or mismatched binding refusals and
+   the handoff of native state ownership before admitting runtime execution.
    Wire them into the existing Effect machine with guarded publication and
    statement-before-connection completion.
 6. Express the provider API and SQLite protocol in Ash library modules as far
@@ -235,7 +335,10 @@ Compare provider assembly styles against the same cases. Extract the library
 author's actual workflow: ABI and symbol inputs, foreign contracts, provider
 definitions, checked handlers and operations, initialization, linking, errors,
 tests, and packaging. Repeat the blueprint with the arena to distinguish general
-requirements from SQLite-specific policy.
+requirements from SQLite-specific policy. Follow DN-0036's transfer requirement
+with a walkthrough of one contrasting foreign API. Record which steps transfer
+and which contracts need author judgment; a second complete binding is not
+required.
 
 Try a small tool for an observed difficulty, such as a binding contract check,
 build-input report, or owner/access diagnostic. Compare its output with the
@@ -290,8 +393,24 @@ retention does not waive the successful-design and product-verification gates.
 
 ## Verification and pause conditions
 
-During implementation, run the suites affected by each slice from the root
-workspace. The following test targets are planned, not checks already run:
+Prefer end-to-end and integration tests through the public source pipeline.
+Every new test should cover a required experimental observation, a concrete
+integration behavior or an observed defect that existing coverage does not
+catch. Add a focused internal regression when needed to reproduce or isolate a
+bug, or to verify a required boundary that integration cannot observe. Do not
+add tests merely for each helper, field or implementation branch. Combine
+related scenarios when their observations remain attributable.
+
+Batch connected implementation changes and run the affected integration and
+regression suites at useful checkpoints. Broaden verification for a completed
+capability, a shared change with unresolved regression risk, or an observed
+failure that warrants it. Avoid repeating broad gates after small edits when
+affected checks suffice. Required contract evidence, independent validation,
+review and final verification still apply. Report completed behavior and the
+next blocking boundary first; test counts are supporting evidence.
+
+Run these suites from the root workspace. The following test targets are
+planned, not checks already run:
 
 ```bash
 cargo test --locked --test foreign_provider_syntax --test foreign_provider_typing --test foreign_provider_core
@@ -308,6 +427,18 @@ workspace verification:
 ```bash
 cargo xtask verify
 ```
+
+For applicable proof changes, follow the adopted
+[proof-tooling workflow](https://github.com/dikini/ash-lang/blob/a2ced870f491457a60e3131ac613f295ea77e441/docs/project/proof-tooling.md) and
+[proof-navigation guide](https://github.com/dikini/ash-lang/blob/a2ced870f491457a60e3131ac613f295ea77e441/docs/project/proof-lsp.md). Use validated module
+receipts with their compiler, source, import, option and report pins. Batch
+related changes, keep compiler jobs serial by default, and coordinate builds
+and language-server use with other tasks within the host's RAM and CPU limits.
+Use one Rust workspace and one open Lean file at a time; stop language servers
+before heavy builds. Record the tools actually exposed in the task. LSP feedback
+and cache receipts alone do not establish proof acceptance. Retain the reviewed
+frozen integration gate, including source, compiler, dependency, warning,
+report and axiom checks, alongside the Rust verification above.
 
 Documentation checks cover authority labels, case links, Markdown, and formal
 notation. Current baseline observations are in the package README. No

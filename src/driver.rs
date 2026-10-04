@@ -1539,10 +1539,10 @@ mod tests {
         // Omitting constructor control calls removes five capture-metadata
         // admission cells from each of the four importers.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_134, 1_692, 2_281, 2_839, 3_428, 3_978, 4_572, 5_552, 5_968, 6_117, 7_777,
+            0, 1, 1_134, 1_692, 2_281, 2_839, 3_428, 3_978, 4_572, 5_552, 5_968, 6_117, 7_779,
         ];
         const EXACT_CONSTRAINT_WORK: usize =
-            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12) - 4 * 5;
+            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12) - 4 * 5 + 2; // selected adapter-row key retention
         let source = relational_interface_graph_source();
         let directory = source
             .0

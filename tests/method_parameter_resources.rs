@@ -235,7 +235,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "hidden interface import type ledger",
             RESOLVE_SOURCE,
             "fn hidden_interface_import_route_uses_its_exact_constraint_budget()",
-            "const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 2 * (1 + 1) + (1 + 1);",
+            "const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 3 * (2 + 1);",
         ),
         (
             "summary private binder authority graph ledger",
@@ -247,7 +247,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "summary private binder authority",
             RESOLVED_SOURCE,
             "fn method_binder_authority_retention_has_exact_independent_ledgers()",
-            "const EXACT_TYPE_WORK: usize = 2 * (1 + 1);",
+            "const EXACT_TYPE_WORK: usize = 2 * (2 + 1);",
         ),
         (
             "selector method-scheme ingress",
@@ -349,7 +349,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog constraint ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(constraint_work, 107);",
+            "assert_eq!(constraint_work, 107 + 2);",
         ),
         (
             "generic implementation validation without discarded head buffer",
@@ -361,7 +361,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "linked catalog type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn linked_method_evidence_catalog_has_exact_independent_ledgers()",
-            "assert_eq!(type_work, 79);",
+            "assert_eq!(type_work, 79 + 4 + 6);",
         ),
         (
             "abstract producer catalog",
@@ -373,13 +373,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "abstract producer type ledger",
             EVIDENCE_VALIDATION_SOURCE,
             "fn widened_abstract_producer_lookup_has_an_exact_retry_boundary()",
-            "const TYPE_WORK: usize = 38;",
+            "const TYPE_WORK: usize = 38 + 2 * 2;",
         ),
         (
             "concrete source catalog",
             EVIDENCE_VALIDATION_SOURCE,
             "fn concrete_adapter_source_catalog_has_an_exact_retry_boundary()",
-            "const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4;",
+            "const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7;",
         ),
         (
             "concrete source type ledger",
@@ -403,7 +403,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "concrete Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_monomorphic_source_validation_has_an_exact_retry_boundary()",
-            "const EXACT_WORK: usize = 632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK;",
+            "632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK + 1 + 1 + SCOPED_OWNER_PARAMETER_WORK;",
         ),
         (
             "wide-prerequisite Core validation",
@@ -415,13 +415,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "monomorphic adapter producer validation",
             CORE_VALIDATE_SOURCE,
             "fn monomorphic_adapter_edge_identity_has_an_exact_validation_boundary()",
-            "const EXACT_WORK: usize = 705 + EXACT_SOURCE_ENVELOPE_WORK + CHECKED_STACK_CAPACITY_WORK;",
+            "const EXACT_WORK: usize = 705\n            + EXACT_SOURCE_ENVELOPE_WORK\n            + CHECKED_STACK_CAPACITY_WORK\n            + 1\n            + 1\n            + SCOPED_OWNER_PARAMETER_WORK;",
         ),
         (
             "independent Core validation",
             CORE_VALIDATE_SOURCE,
             "fn independent_method_evidence_authority_has_an_exact_retry_boundary()",
-            "2_284 + PRECHARGED_CARRIER_ROWS + EXACT_IDENTITY_WORK + CHECKED_STACK_CAPACITY_WORK;",
+            "const EXACT_WORK: usize = 2_284\n            + PRECHARGED_CARRIER_ROWS\n            + EXACT_IDENTITY_WORK\n            + CHECKED_STACK_CAPACITY_WORK\n            + 2\n            + 1\n            + 2\n            + 2 // matcher entries, abstract membership, prefix slots, domain visits\n            + SCOPED_OWNER_PARAMETER_WORK;",
         ),
         (
             "lowered requirement-row and replacement-entry owners",
@@ -491,7 +491,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(5 * 1_024 + 7, 5_127);
     assert_eq!(3 * 1_024 + 5, 3_077);
     assert_eq!(1 + 3 + 2 * 5 + 3 + 1 + 1, 19);
-    assert_eq!(3 + 2 * 5 + 2 * (1 + 1) + (1 + 1), 19);
+    assert_eq!(3 + 2 * 5 + 3 * (2 + 1), 22);
     assert_eq!(8 + 3 + 1, 12);
     assert_eq!(4 * 1_024 + 8, 4_104);
     assert_eq!(4 + 2, 6);
@@ -499,12 +499,12 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(1 + 1 + 1 + 1 + 1 + 1 + 2 + 1 + 1 + 1, 11);
     assert_eq!(7 - 1, 6);
     assert_eq!(85 + 2 * 2, 89);
-    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4, 156);
-    assert_eq!(632 + 1 + 1 + 1 + 1 + 45, 681);
-    assert_eq!(1_175 + 2 * 2 + 2 + 2, 1_183);
-    assert_eq!(705 + (49 + 5 + 1) + 45, 805);
-    assert_eq!(2_284 + 22 + 28 + 92, 2_426);
-    assert_eq!(673 + (4 + 4 + 3 + 5) + 8 + 4 + 4 + 1 + 4, 710);
+    assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7, 165);
+    assert_eq!(632 + 1 + 1 + 1 + 1 + 45 + 1 + 1 + 1, 684);
+    assert_eq!(1_175 + 2 * 2 + 2 + 2 + 1 + 1, 1_185);
+    assert_eq!(705 + (49 + 5 + 1) + 45 + 1 + 1 + 1, 808);
+    assert_eq!(2_284 + 22 + 28 + 92 + 2 + 1 + 2 + 2 + (1 + 1 + 2), 2_437);
+    assert_eq!(673 + (4 + 4 + 3 + 5) + 8 + 4 + 4 + 1 + 4 + 1, 711);
 }
 
 #[test]

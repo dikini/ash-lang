@@ -17,6 +17,7 @@ pub mod eval;
 mod evidence;
 mod evidence_audit;
 pub mod evidence_validation;
+pub mod foreign;
 #[cfg(test)]
 pub(crate) use evidence_validation::validate_interface_evidence as validate_linked_facts_for_test;
 pub mod diagnostic_options;

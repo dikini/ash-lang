@@ -1035,6 +1035,7 @@ messages! {
     compiler_constraint_resources => "compiler-constraint-resources" {},
     /// The compiler tried to lower effect syntax through its pure Core path.
     effect_core_unavailable => "effect-core-unavailable" {},
+    foreign_privilege_unavailable => "foreign-privilege-unavailable" {},
     /// Pattern coverage analysis reached the compiler's state limit.
     coverage_state_limit => "coverage-state-limit" {},
     /// The compiler could not complete pattern coverage analysis within its work resources.
@@ -1525,6 +1526,7 @@ messages! {
     module_unknown_root => "module-unknown-root" { root: &'a str = "std" },
     /// No compiler-owned module matches the selected builtin path.
     module_unknown_builtin => "module-unknown-builtin" {},
+    module_unknown_foreign => "module-unknown-foreign" {},
     /// Canonicalization reported that the imported file does not exist.
     module_not_found => "module-not-found" { path: &'a Path = Path::new("missing.ash") },
     /// An import reaches a module active in the current traversal.

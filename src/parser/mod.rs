@@ -100,6 +100,12 @@ pub enum NodeKind {
     ResumeExpression,
     /// One builtin cell acquisition with an identity binder and scoped body.
     ResourceExpression,
+    /// Experimental module-owned resource assembly.
+    ResourceDefinition,
+    /// Experimental assembly field or clause block.
+    ResourceField,
+    /// Source-defined resource family instance.
+    ProviderResourceExpression,
     /// An empty-chain hook scope with an exact effect target and block body.
     HookExpression,
     /// A registration with an exact target, primary transformer, and block body.

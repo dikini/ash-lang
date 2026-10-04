@@ -95,6 +95,117 @@ impl<'a> CaptureGraphVisits<'a> {
 }
 
 impl CaptureValueSummary {
+    /// A bounded provider bridge for an authenticated pure closed-data arrow.
+    /// The caller proves the actual operand independent. This query preserves
+    /// selected control and callable-result facts; it is not a resource-capture
+    /// proof for arbitrary values or internally handled provider helpers.
+    pub(crate) fn check_provider_independent_data_call(
+        &self,
+        metadata: &[TypeVariableId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let graph = self.graph.as_ref().ok_or(Failure::Invalid)?;
+        charge(budget, self.value.work_size() + 1)?;
+        if self.value.unknown || !self.value.parameters.is_empty() || self.value.targets.is_empty()
+        {
+            return Err(Failure::Invalid);
+        }
+        let mut pending = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for target in &self.value.targets {
+            let callable = graph.callables.get(*target).ok_or(Failure::Invalid)?;
+            graph
+                .data
+                .as_ref()
+                .ok_or(Failure::Invalid)?
+                .check_provider_selected_captures(*target, metadata, budget)?;
+            let result = callable
+                .result
+                .instantiate(*target, &Value::default(), budget)?;
+            charge(budget, result.work_size() + 1)?;
+            if result.unknown || !result.targets.is_empty() || !result.parameters.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, 1)?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push(callable.body);
+        }
+        while let Some(position) = pending.pop() {
+            charge(budget, 1)?;
+            if seen.contains(&position) {
+                continue;
+            }
+            charge(budget, 1)?;
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(position);
+            match graph.code.get(position).ok_or(Failure::Invalid)? {
+                Control::Return => {}
+                Control::Sequence(children) | Control::Choice(children) => {
+                    charge(budget, children.len())?;
+                    pending
+                        .try_reserve(children.len())
+                        .map_err(|_| Failure::Resource)?;
+                    pending.extend(children);
+                }
+                Control::Call { value, ty, .. } => {
+                    if graph.types.0.get(*ty).is_none() {
+                        return Err(Failure::Invalid);
+                    }
+                    charge(budget, value.work_size() + 1)?;
+                    if value.unknown || !value.parameters.is_empty() || value.targets.is_empty() {
+                        return Err(Failure::Invalid);
+                    }
+                    charge(budget, value.targets.len())?;
+                    pending
+                        .try_reserve(value.targets.len())
+                        .map_err(|_| Failure::Resource)?;
+                    for target in &value.targets {
+                        graph
+                            .data
+                            .as_ref()
+                            .ok_or(Failure::Invalid)?
+                            .check_provider_selected_captures(*target, metadata, budget)?;
+                        pending.push(graph.callables.get(*target).ok_or(Failure::Invalid)?.body);
+                    }
+                }
+                _ => return Err(Failure::Invalid),
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_provider_independent_typed_call(
+        &self,
+        actual: &Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let graph = self.graph.as_ref().ok_or(Failure::Invalid)?;
+        charge(budget, self.value.work_size() + 1)?;
+        if self.value.unknown || !self.value.parameters.is_empty() || self.value.targets.is_empty()
+        {
+            return Err(Failure::Invalid);
+        }
+        Analysis::provider_independent_call(graph, &self.value.targets, actual, false, budget)
+    }
+
+    /// Only independently rebuilt canonical source wrappers use this entry.
+    pub(crate) fn check_provider_source_wrapper_call(
+        proof: &super::provider::ProviderSourceRelation,
+        actual: &Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let summary = proof.summary();
+        let graph = summary.graph.as_ref().ok_or(Failure::Invalid)?;
+        charge(budget, summary.value.work_size() + 1)?;
+        if summary.value.unknown
+            || !summary.value.parameters.is_empty()
+            || summary.value.targets.is_empty()
+        {
+            return Err(Failure::Invalid);
+        }
+        Analysis::provider_independent_call(graph, &summary.value.targets, actual, true, budget)
+    }
+
     pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
         if self.graph.is_none() {
             return Ok(Self::default());
@@ -538,6 +649,163 @@ impl Drop for MethodAdapter {
     }
 }
 
+pub(crate) fn selection_targets<'a>(
+    selection: &crate::interface::EvidenceSelection,
+    requested: Option<crate::interface::MethodId>,
+    mut implementation: impl FnMut(
+        crate::interface::ImplId,
+        &mut TypeWorkBudget,
+    )
+        -> Result<&'a crate::resolved::CheckedImplementationFact, Failure>,
+    mut lexical: impl FnMut(
+        crate::interface::LexicalEvidenceId,
+        crate::interface::MethodId,
+        &mut TypeWorkBudget,
+    ) -> Result<BinderId, Failure>,
+    adapters: &mut Vec<MethodAdapter>,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<(crate::interface::MethodId, MethodTarget)>, Failure> {
+    use crate::interface::{EvidenceNode, MethodId};
+    let mut pending = Vec::new();
+    work.charge(selection.node_count())
+        .map_err(|()| Failure::Resource)?;
+    pending
+        .try_reserve(selection.node_count())
+        .map_err(|_| Failure::Resource)?;
+    pending.push((selection.root(), false));
+    let mut values: HashMap<crate::interface::EvidenceNodeId, Vec<(MethodId, MethodTarget)>> =
+        HashMap::new();
+    charge(work, selection.node_count())?;
+    values
+        .try_reserve(selection.node_count())
+        .map_err(|_| Failure::Resource)?;
+    while let Some((node, build)) = pending.pop() {
+        work.charge(1).map_err(|()| Failure::Resource)?;
+        if values.contains_key(&node) {
+            continue;
+        }
+        let selected = selection.node(node).ok_or(Failure::Invalid)?;
+        if !build && let EvidenceNode::Implementation { prerequisites, .. } = selected {
+            work.charge(prerequisites.len() + 1)
+                .map_err(|()| Failure::Resource)?;
+            pending
+                .try_reserve(prerequisites.len() + 1)
+                .map_err(|_| Failure::Resource)?;
+            pending.push((node, true));
+            pending.extend(prerequisites.iter().rev().map(|node| (*node, false)));
+            continue;
+        }
+        let mut targets = Vec::new();
+        let wanted = (node == selection.root()).then_some(requested).flatten();
+        match selected {
+            EvidenceNode::Lexical { methods, .. } | EvidenceNode::Abstract { methods, .. } => {
+                work.charge(methods.len()).map_err(|()| Failure::Resource)?;
+                targets
+                    .try_reserve(methods.len())
+                    .map_err(|_| Failure::Resource)?;
+                for &method in methods {
+                    if wanted.is_some_and(|wanted| wanted != method) {
+                        continue;
+                    }
+                    let target = match selected {
+                        EvidenceNode::Lexical { source, .. } => {
+                            MethodTarget::Binder(lexical(source, method, work)?)
+                        }
+                        EvidenceNode::Abstract { requirement, .. } => {
+                            MethodTarget::Abstract(requirement)
+                        }
+                        _ => return Err(Failure::Invalid),
+                    };
+                    targets.push((method, target));
+                }
+            }
+            EvidenceNode::Implementation {
+                implementation: implementation_id,
+                substitution,
+                prerequisites,
+                methods,
+            } => {
+                let owner = implementation(implementation_id, work)?;
+                if owner.prerequisites.len() != prerequisites.len() {
+                    return Err(Failure::Invalid);
+                }
+                work.charge(methods.len()).map_err(|()| Failure::Resource)?;
+                targets
+                    .try_reserve(methods.len())
+                    .map_err(|_| Failure::Resource)?;
+                for &method in methods {
+                    if wanted.is_some_and(|wanted| wanted != method.method()) {
+                        continue;
+                    }
+                    work.charge(owner.methods.len())
+                        .map_err(|()| Failure::Resource)?;
+                    let fact = owner
+                        .methods
+                        .iter()
+                        .find(|fact| fact.id == method)
+                        .ok_or(Failure::Invalid)?;
+                    if method.implementation() != implementation_id
+                        || fact.head_type_parameter_count != substitution.len()
+                        || fact.scheme.type_parameters.len() < substitution.len()
+                    {
+                        return Err(Failure::Invalid);
+                    }
+                    let mut adapter = MethodAdapter {
+                        binder: fact.binder,
+                        head_arguments: Vec::new(),
+                        method_parameters: fact.scheme.type_parameters.len() - substitution.len(),
+                        prerequisites: Vec::new(),
+                        source: fact.span,
+                    };
+                    work.charge(substitution.len())
+                        .map_err(|()| Failure::Resource)?;
+                    adapter
+                        .head_arguments
+                        .try_reserve(substitution.len())
+                        .map_err(|_| Failure::Resource)?;
+                    for ((parameter, _), actual) in
+                        fact.scheme.type_parameters.iter().zip(substitution)
+                    {
+                        if *parameter != actual.parameter() {
+                            return Err(Failure::Invalid);
+                        }
+                        adapter.head_arguments.push(
+                            clone_type_with_budget(actual.argument(), work)
+                                .map_err(|()| Failure::Resource)?,
+                        );
+                    }
+                    for (requirement, node) in owner.prerequisites.iter().zip(prerequisites) {
+                        let supplied = values.get(node).ok_or(Failure::Invalid)?;
+                        work.charge(supplied.len())
+                            .map_err(|()| Failure::Resource)?;
+                        adapter
+                            .prerequisites
+                            .try_reserve(supplied.len())
+                            .map_err(|_| Failure::Resource)?;
+                        adapter.prerequisites.extend(
+                            supplied
+                                .iter()
+                                .map(|(method, target)| (requirement.id, *method, *target)),
+                        );
+                    }
+                    work.charge(1).map_err(|()| Failure::Resource)?;
+                    adapters.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    let target = MethodTarget::Adapter {
+                        value: adapters.len(),
+                        binder: fact.binder,
+                    };
+                    adapters.push(adapter);
+                    targets.push((method.method(), target));
+                }
+            }
+        }
+        charge(work, 1)?;
+        values.try_reserve(1).map_err(|_| Failure::Resource)?;
+        values.insert(node, targets);
+    }
+    values.remove(&selection.root()).ok_or(Failure::Invalid)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
     Resource,
@@ -573,6 +841,7 @@ fn free_values_with_methods<F: CoreOperationFamily>(
     root: usize,
     parameters: &[BinderId],
     methods: &MethodUses<'_>,
+    capture_ports: &[usize],
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<BinderId>, Failure> {
     let mut pending = copy_slice(&[root], budget)?;
@@ -591,6 +860,12 @@ fn free_values_with_methods<F: CoreOperationFamily>(
             continue;
         }
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        if !capture_ports.is_empty() {
+            charge(budget, capture_ports.len())?;
+            if capture_ports.contains(&id) {
+                continue;
+            }
+        }
         for method in methods.at(id, budget)? {
             if method.requirement.is_none()
                 && let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
@@ -599,6 +874,16 @@ fn free_values_with_methods<F: CoreOperationFamily>(
                 references.try_reserve(1).map_err(|_| Failure::Resource)?;
                 references.push(binder);
             }
+        }
+        // A selected source method occurrence is replaced by its authenticated
+        // route in the value graph. Its obsolete placeholder children are not
+        // lexical dependencies of the selected callable.
+        if methods
+            .at(id, budget)?
+            .iter()
+            .any(|method| method.requirement.is_none())
+        {
+            continue;
         }
         let mut binders = Vec::new();
         let mut failed = false;
@@ -899,6 +1184,36 @@ fn compile<F: CoreOperationFamily>(
     imported: &ImportedCallables<'_>,
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
     data: &mut value::Graph,
+    provider_query: bool,
+    budget: &mut TypeWorkBudget,
+) -> Result<(SummaryGraph, Vec<usize>), Failure> {
+    compile_with_boundary(
+        nodes,
+        values,
+        imported,
+        operation,
+        data,
+        provider_query,
+        None,
+        budget,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "conditional completion edges accompany the same actual capture compilation inputs without an invented handler frame"
+)]
+fn compile_with_boundary<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    values: &[Value],
+    imported: &ImportedCallables<'_>,
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    data: &mut value::Graph,
+    provider_query: bool,
+    mut boundary: Option<(
+        &ConditionalCapturePorts,
+        &mut Vec<ConditionalCompletionEdge>,
+    )>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(SummaryGraph, Vec<usize>), Failure> {
     let mut graph = SummaryGraph {
@@ -1068,6 +1383,10 @@ fn compile<F: CoreOperationFamily>(
                 Control::Sequence(sequence)
             }
             _ => match operation(&node.kind) {
+                Some(EffectOperation::ProviderStateAccess(_)) if provider_query => {
+                    Control::Unavailable
+                }
+                Some(EffectOperation::ProviderStateAccess(_)) => return Err(Failure::Invalid),
                 Some(EffectOperation::Cleanup(scope)) => {
                     let row_type = graph.types.0.len();
                     charge(budget, 3)?;
@@ -1144,41 +1463,75 @@ fn compile<F: CoreOperationFamily>(
                         budget,
                     )?)
                 }
-                Some(EffectOperation::Resume(resume)) => Control::Resume {
-                    owner: *owners
-                        .get(&(resume.handler(), resume.owner()))
-                        .ok_or(Failure::Invalid)?,
-                    value: index(resume.value()) + 1,
-                },
-                Some(EffectOperation::Discard(discard)) => Control::Discard {
-                    owner: *owners
-                        .get(&(discard.handler(), discard.owner()))
-                        .ok_or(Failure::Invalid)?,
-                    node: id,
-                    local: true,
-                    row_type: {
-                        charge(budget, 3)?;
-                        graph
-                            .types
-                            .0
-                            .try_reserve(1)
-                            .map_err(|_| Failure::Resource)?;
-                        let row_type = graph.types.0.len();
-                        graph.types.0.push(Type::function_computation(
-                            Type::Unit,
-                            crate::types::ComputationType::new(
-                                Type::Unit,
-                                crate::types::clone_effect_row_with_budget(
-                                    F::effect_row(&node.effects),
-                                    budget,
-                                )
-                                .map_err(|_| Failure::Resource)?,
-                            ),
-                        ));
-                        row_type
-                    },
-                    source,
-                },
+                Some(EffectOperation::Resume(resume)) => {
+                    match owners.get(&(resume.handler(), resume.owner())) {
+                        Some(owner) => Control::Resume {
+                            owner: *owner,
+                            value: index(resume.value()) + 1,
+                        },
+                        // A body-free provider forest has no client handler
+                        // frame. Querying an unrelated callable grants no
+                        // authority to reach its contextual continuation.
+                        None if boundary.is_some() => {
+                            let (ports, edges) = boundary.as_mut().ok_or(Failure::Invalid)?;
+                            let port = ports.completion(id, resume.handler(), resume.owner())?;
+                            charge(budget, 1)?;
+                            edges.try_reserve(1).map_err(|_| Failure::Resource)?;
+                            edges.push(ConditionalCompletionEdge {
+                                port,
+                                node: id,
+                                operand: Some(index(resume.value()) + 1),
+                            });
+                            Control::Unavailable
+                        }
+                        None if provider_query => Control::Unavailable,
+                        None => return Err(Failure::Invalid),
+                    }
+                }
+                Some(EffectOperation::Discard(discard)) => {
+                    if !owners.contains_key(&(discard.handler(), discard.owner())) {
+                        let (ports, edges) = boundary.as_mut().ok_or(Failure::Invalid)?;
+                        let port = ports.completion(id, discard.handler(), discard.owner())?;
+                        charge(budget, 1)?;
+                        edges.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        edges.push(ConditionalCompletionEdge {
+                            port,
+                            node: id,
+                            operand: None,
+                        });
+                        Control::Unavailable
+                    } else {
+                        Control::Discard {
+                            owner: *owners
+                                .get(&(discard.handler(), discard.owner()))
+                                .ok_or(Failure::Invalid)?,
+                            node: id,
+                            local: true,
+                            row_type: {
+                                charge(budget, 3)?;
+                                graph
+                                    .types
+                                    .0
+                                    .try_reserve(1)
+                                    .map_err(|_| Failure::Resource)?;
+                                let row_type = graph.types.0.len();
+                                graph.types.0.push(Type::function_computation(
+                                    Type::Unit,
+                                    crate::types::ComputationType::new(
+                                        Type::Unit,
+                                        crate::types::clone_effect_row_with_budget(
+                                            F::effect_row(&node.effects),
+                                            budget,
+                                        )
+                                        .map_err(|_| Failure::Resource)?,
+                                    ),
+                                ));
+                                row_type
+                            },
+                            source,
+                        }
+                    }
+                }
                 Some(EffectOperation::Handler(handler)) => {
                     let mut clauses = Vec::new();
                     clauses
@@ -1275,7 +1628,33 @@ fn check_nodes_with_methods<F: CoreOperationFamily>(
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
     analyze_nodes_with_methods(
-        nodes, globals, imports, operation, methods, adapters, None, budget,
+        nodes, globals, imports, operation, methods, adapters, None, None, budget,
+    )
+}
+
+/// Query roots are actual nodes, not invented global definitions. Lexical
+/// bindings and callable groups are reconstructed from the checked graph.
+pub(super) fn check_provider_roots_with_methods(
+    nodes: &[StoredNode<super::effect::EffectOperationFamily>],
+    flow: &super::provider::ProviderLocalFlow<'_>,
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&super::EffectExprKind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<CaptureValueSummary>, Failure> {
+    let (root, lexical, data, instantiations, dictionary_variables) =
+        flow.inputs(nodes).ok_or(Failure::Invalid)?;
+    analyze_nodes_with_methods(
+        nodes,
+        &[],
+        imports,
+        operation,
+        methods,
+        adapters,
+        None,
+        Some((&[root], lexical, data, instantiations, dictionary_variables)),
+        budget,
     )
 }
 
@@ -1297,10 +1676,22 @@ pub(crate) fn infer_cleanup_rows<F: CoreOperationFamily>(
         methods,
         adapters,
         Some(&mut rows),
+        None,
         budget,
     )?;
     Ok(rows)
 }
+
+// Actual roots, lexical binders, independently proven data binders,
+// canonical source-instantiation ports, and unproved raw dictionary ports.
+// Only the opaque provider-flow entry supplies these borrowed inputs.
+type ProviderSummaryRoots<'a> = (
+    &'a [NodeId],
+    &'a [BinderId],
+    &'a [BinderId],
+    &'a [NodeId],
+    &'a [NodeId],
+);
 
 #[allow(
     clippy::too_many_arguments,
@@ -1314,8 +1705,508 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
     methods: &[MethodUse],
     adapters: &[MethodAdapter],
     rows: Option<&mut Vec<CleanupRequirement>>,
+    summary_roots: Option<ProviderSummaryRoots<'_>>,
     budget: &mut TypeWorkBudget,
 ) -> Result<Vec<CaptureValueSummary>, Failure> {
+    let Some(BuiltCaptureGraph {
+        graph,
+        roots,
+        values,
+        has_discard,
+    }) = build_capture_graph(
+        nodes,
+        globals,
+        imports,
+        operation,
+        methods,
+        adapters,
+        summary_roots,
+        None,
+        budget,
+    )?
+    else {
+        return Ok(Vec::new());
+    };
+    if let Some(rows) = rows {
+        *rows = cleanup_requirements(&graph, &roots, budget)?;
+    } else if summary_roots.is_none() {
+        if has_discard {
+            let requirements = cleanup_requirements(&graph, &roots, budget)?;
+            check_cleanup_rows(nodes, operation, &requirements, budget)?;
+        }
+        check_control_roots(&graph, roots, budget)?;
+    }
+    let graph = Arc::new(graph);
+    let mut summaries = Vec::new();
+    if let Some((roots, _, _, _, _)) = summary_roots {
+        charge(budget, roots.len())?;
+        summaries
+            .try_reserve_exact(roots.len())
+            .map_err(|_| Failure::Resource)?;
+        for root in roots {
+            summaries.push(CaptureValueSummary {
+                graph: Some(Arc::clone(&graph)),
+                value: values
+                    .get(index(*root))
+                    .ok_or(Failure::Invalid)?
+                    .copy(budget)?,
+            });
+        }
+    } else {
+        summaries
+            .try_reserve(globals.len())
+            .map_err(|_| Failure::Resource)?;
+        for (_, node) in globals {
+            summaries.push(CaptureValueSummary {
+                graph: Some(Arc::clone(&graph)),
+                value: values[index(*node)].copy(budget)?,
+            });
+        }
+    }
+    Ok(summaries)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConditionalContinuationInputId(usize);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConditionalOutputInputId(usize);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConditionalCaptureInputId(usize);
+
+struct ConditionalClausePort {
+    handler: super::effect::HandlerId,
+    resume: crate::resolved::ResumeId,
+    operation: crate::types::OperationId,
+    root: NodeId,
+    continuation: ConditionalContinuationInputId,
+    output: ConditionalOutputInputId,
+    capture: ConditionalCaptureInputId,
+    input: crate::types::IterativeTypeOwner,
+    answer: crate::types::TypeVariableId,
+    residual: crate::types::TypeVariableId,
+}
+struct ConditionalCapturePorts {
+    clauses: Vec<ConditionalClausePort>,
+    completions: HashMap<usize, usize>,
+}
+impl ConditionalCapturePorts {
+    fn completion(
+        &self,
+        node: usize,
+        handler: super::effect::HandlerId,
+        resume: crate::resolved::ResumeId,
+    ) -> Result<usize, Failure> {
+        let port = *self.completions.get(&node).ok_or(Failure::Invalid)?;
+        let clause = self.clauses.get(port).ok_or(Failure::Invalid)?;
+        if clause.handler != handler || clause.resume != resume {
+            return Err(Failure::Invalid);
+        }
+        Ok(port)
+    }
+}
+#[derive(Debug)]
+struct ConditionalCompletionEdge {
+    port: usize,
+    node: usize,
+    operand: Option<usize>,
+}
+struct ConditionalDiscardCaptureEdge {
+    input: super::provider::CaptureInputId,
+    source: NodeId,
+    projected: NodeId,
+    handler: super::effect::HandlerId,
+    resume: crate::resolved::ResumeId,
+    clause: NodeId,
+    owner: usize,
+}
+
+/// Owns unresolved graph-local continuation and capture inputs. No ordinary
+/// Analysis entry or callable value-summary conversion is provided.
+pub(in crate::core) struct ConditionalCaptureGraph {
+    template: crate::resolved::ProviderTemplateId,
+    graph: SummaryGraph,
+    roots: Vec<usize>,
+    ports: ConditionalCapturePorts,
+    edges: Vec<ConditionalCompletionEdge>,
+    discards: Vec<ConditionalDiscardCaptureEdge>,
+    source_arena: super::dialect::ArenaId,
+    projected_arena: super::dialect::ArenaId,
+    correspondence: Vec<Option<NodeId>>,
+}
+struct ConditionalTypeReplacements(HashMap<TypeVariableId, Type>);
+impl Drop for ConditionalTypeReplacements {
+    fn drop(&mut self) {
+        for (_, ty) in self.0.drain() {
+            discard_type_iteratively(ty);
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the sealed defining entry and authenticated projection supply actual graph, import, method and source occurrence facts"
+)]
+pub(in crate::core) fn reconstruct_conditional_handler_capture(
+    entry: &super::provider::HandlerFragmentEntry<'_>,
+    nodes: &[StoredNode<super::effect::EffectOperationFamily>],
+    projected_arena: super::dialect::ArenaId,
+    correspondence: &[Option<NodeId>],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    instantiations: &[NodeId],
+    dictionary_variables: &[NodeId],
+    budget: &mut TypeWorkBudget,
+) -> Result<ConditionalCaptureGraph, Failure> {
+    let mut ports = ConditionalCapturePorts {
+        clauses: Vec::new(),
+        completions: HashMap::new(),
+    };
+    let mut roots = Vec::new();
+    let mut lexical = Vec::new();
+    for stored in nodes {
+        charge(
+            budget,
+            stored
+                .kind
+                .child_count()
+                .checked_add(1)
+                .ok_or(Failure::Resource)?,
+        )?;
+        for ordinal in 0..stored.kind.child_count() {
+            let child = stored.kind.child_at(ordinal).ok_or(Failure::Invalid)?;
+            if child.arena() != projected_arena || index(child) >= nodes.len() {
+                return Err(Failure::Invalid);
+            }
+        }
+    }
+    let project = |node: NodeId| -> Result<NodeId, Failure> {
+        if node.arena() != entry.draft.program.arena {
+            return Err(Failure::Invalid);
+        }
+        let target = correspondence
+            .get(index(node))
+            .copied()
+            .flatten()
+            .ok_or(Failure::Invalid)?;
+        if target.arena() != projected_arena || index(target) >= nodes.len() {
+            return Err(Failure::Invalid);
+        }
+        Ok(target)
+    };
+    charge(
+        budget,
+        entry
+            .draft
+            .clauses
+            .len()
+            .checked_mul(3)
+            .and_then(|count| count.checked_add(entry.draft.program.nodes.len()))
+            .ok_or(Failure::Resource)?,
+    )?;
+    ports
+        .clauses
+        .try_reserve_exact(entry.draft.clauses.len())
+        .map_err(|_| Failure::Resource)?;
+    ports
+        .completions
+        .try_reserve(entry.draft.program.nodes.len())
+        .map_err(|_| Failure::Resource)?;
+    roots
+        .try_reserve_exact(entry.draft.clauses.len())
+        .map_err(|_| Failure::Resource)?;
+    lexical.try_reserve(1).map_err(|_| Failure::Resource)?;
+    lexical.push(entry.draft.state.id());
+    let instance = &entry.definition.provided.instance;
+    let effect = entry
+        .canonical
+        .effect(instance.effect())
+        .ok_or(Failure::Invalid)?;
+    let mut replacements = ConditionalTypeReplacements(HashMap::new());
+    charge(budget, effect.parameters.len())?;
+    replacements
+        .0
+        .try_reserve(effect.parameters.len())
+        .map_err(|_| Failure::Resource)?;
+    if effect.parameters.len() != instance.arguments().len() {
+        return Err(Failure::Invalid);
+    }
+    for (formal, argument) in effect.parameters.iter().zip(instance.arguments()) {
+        charge(budget, 1)?;
+        if replacements.0.contains_key(&formal.id) {
+            return Err(Failure::Invalid);
+        }
+        replacements.0.insert(
+            formal.id,
+            clone_type_with_budget(argument, budget).map_err(|()| Failure::Resource)?,
+        );
+    }
+    for (ordinal, clause) in entry.draft.clauses.iter().enumerate() {
+        let root = project(clause.body())?;
+        let operation = effect
+            .operations
+            .get(usize::try_from(clause.operation().operation()).map_err(|_| Failure::Invalid)?)
+            .filter(|operation| operation.id == clause.operation())
+            .ok_or(Failure::Invalid)?;
+        let signature =
+            crate::types::IterativeTypeOwner::new(crate::types::substitute_type_variables_with(
+                &operation.annotation.ty,
+                &replacements.0,
+                |cells| charge(budget, cells),
+                || Failure::Resource,
+            )?);
+        let input = signature.function_view().ok_or(Failure::Invalid)?.value();
+        ports.clauses.push(ConditionalClausePort {
+            handler: entry.draft.handler,
+            resume: clause.resume(),
+            operation: clause.operation(),
+            root,
+            continuation: ConditionalContinuationInputId(ordinal),
+            output: ConditionalOutputInputId(0),
+            capture: ConditionalCaptureInputId(ordinal),
+            input: crate::types::IterativeTypeOwner::new(
+                clone_type_with_budget(input, budget).map_err(|()| Failure::Resource)?,
+            ),
+            answer: entry.draft.hidden[0].0,
+            residual: entry.draft.hidden[1].0,
+        });
+        roots.push(root);
+        for binder in clause.pattern().binder_iter() {
+            charge(budget, 1)?;
+            lexical.try_reserve(1).map_err(|_| Failure::Resource)?;
+            lexical.push(binder.id());
+        }
+    }
+    for (ordinal, original) in entry.draft.program.nodes.iter().enumerate() {
+        charge(budget, 1)?;
+        let (handler, resume) = match &original.kind {
+            super::effect::EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                (resume.handler(), resume.owner())
+            }
+            super::effect::EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                (discard.handler(), discard.owner())
+            }
+            _ => continue,
+        };
+        if handler != entry.draft.handler {
+            continue;
+        }
+        let original_id = NodeId::new(
+            entry.draft.program.arena,
+            u32::try_from(ordinal).map_err(|_| Failure::Resource)?,
+        );
+        let target = project(original_id)?;
+        let mut selected = None;
+        for (port, clause) in ports.clauses.iter().enumerate() {
+            charge(budget, 1)?;
+            if clause.handler == handler && clause.resume == resume {
+                selected = Some(port);
+                break;
+            }
+        }
+        let selected = selected.ok_or(Failure::Invalid)?;
+        match &original.kind {
+            super::effect::EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                let operand = entry
+                    .draft
+                    .program
+                    .nodes
+                    .get(index(resume.value()))
+                    .ok_or(Failure::Invalid)?;
+                if !same_type_with_budget(&operand.ty, &ports.clauses[selected].input, budget)
+                    .map_err(|()| Failure::Resource)?
+                    || !same_type_with_budget(
+                        &original.ty,
+                        &Type::Variable(ports.clauses[selected].answer),
+                        budget,
+                    )
+                    .map_err(|()| Failure::Resource)?
+                {
+                    return Err(Failure::Invalid);
+                }
+            }
+            super::effect::EffectExprKind::Operation(EffectOperation::Discard(_)) => {
+                if !same_type_with_budget(&original.ty, &Type::Unit, budget)
+                    .map_err(|()| Failure::Resource)?
+                {
+                    return Err(Failure::Invalid);
+                }
+            }
+            _ => return Err(Failure::Invalid),
+        }
+        let target_node = nodes.get(index(target)).ok_or(Failure::Invalid)?;
+        let preserved = match (&original.kind, &target_node.kind) {
+            (
+                super::effect::EffectExprKind::Operation(EffectOperation::Resume(original)),
+                super::effect::EffectExprKind::Operation(EffectOperation::Resume(actual)),
+            ) => {
+                actual.handler() == handler
+                    && actual.owner() == resume
+                    && actual.value() == project(original.value())?
+            }
+            (
+                super::effect::EffectExprKind::Operation(EffectOperation::Discard(_)),
+                super::effect::EffectExprKind::Operation(EffectOperation::Discard(actual)),
+            ) => actual.handler() == handler && actual.owner() == resume,
+            _ => false,
+        };
+        if !preserved || ports.completions.insert(index(target), selected).is_some() {
+            return Err(Failure::Invalid);
+        }
+    }
+    let mut edges = Vec::new();
+    let built = build_capture_graph(
+        nodes,
+        &[],
+        imports,
+        |kind| match kind {
+            super::effect::EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        },
+        methods,
+        adapters,
+        Some((&roots, &lexical, &[], instantiations, dictionary_variables)),
+        Some((&ports, &mut edges)),
+        budget,
+    )?
+    .ok_or(Failure::Invalid)?;
+    if edges.len() != ports.completions.len() {
+        return Err(Failure::Invalid);
+    }
+    let mut discards = Vec::new();
+    if let Some(recipe) = entry.row_recipe {
+        charge(budget, recipe.discards().len())?;
+        discards
+            .try_reserve_exact(recipe.discards().len())
+            .map_err(|_| Failure::Resource)?;
+        for port in recipe.discards() {
+            charge(budget, 1)?;
+            let projected = project(port.node)?;
+            // Every current pending discard belongs to a real nested owner.
+            // Provider-entry discards, if source checking later admits them,
+            // need their own unresolved external completion edge.
+            let Control::Discard {
+                owner,
+                node: actual,
+                ..
+            } = built
+                .graph
+                .code
+                .get(index(projected) + 1)
+                .ok_or(Failure::Invalid)?
+            else {
+                return Err(Failure::Invalid);
+            };
+            if *actual != index(projected) {
+                return Err(Failure::Invalid);
+            }
+            let mut found = false;
+            for (ordinal, original) in entry.draft.program.nodes.iter().enumerate() {
+                charge(budget, 1)?;
+                let super::effect::EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+                    &original.kind
+                else {
+                    continue;
+                };
+                if handler.id() != port.handler {
+                    continue;
+                }
+                let handler_id = NodeId::new(
+                    entry.draft.program.arena,
+                    u32::try_from(ordinal).map_err(|_| Failure::Resource)?,
+                );
+                let actual = project(handler_id)?;
+                let Control::Handler { clauses, .. } = built
+                    .graph
+                    .code
+                    .get(index(actual) + 1)
+                    .ok_or(Failure::Invalid)?
+                else {
+                    return Err(Failure::Invalid);
+                };
+                charge(budget, handler.clauses().len())?;
+                if handler.clauses().len() != clauses.len() {
+                    return Err(Failure::Invalid);
+                }
+                for (source, actual) in handler.clauses().iter().zip(clauses) {
+                    if source.resume() == port.resume {
+                        if actual.owner != *owner
+                            || actual.operation != Some(source.operation())
+                            || source.body() != port.clause
+                            || actual.body != index(project(source.body())?) + 1
+                        {
+                            return Err(Failure::Invalid);
+                        }
+                        found = true;
+                    }
+                }
+            }
+            if !found {
+                return Err(Failure::Invalid);
+            }
+            discards.push(ConditionalDiscardCaptureEdge {
+                input: recipe
+                    .capture_input_for_discard(port.node)
+                    .ok_or(Failure::Invalid)?,
+                source: port.node,
+                projected,
+                handler: port.handler,
+                resume: port.resume,
+                clause: port.clause,
+                owner: *owner,
+            });
+        }
+    }
+    let mut codes = Vec::new();
+    charge(budget, roots.len())?;
+    codes
+        .try_reserve_exact(roots.len())
+        .map_err(|_| Failure::Resource)?;
+    codes.extend(roots.iter().map(|root| index(*root) + 1));
+    charge(budget, correspondence.len())?;
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(correspondence.len())
+        .map_err(|_| Failure::Resource)?;
+    retained.extend_from_slice(correspondence);
+    Ok(ConditionalCaptureGraph {
+        template: entry.draft.template,
+        graph: built.graph,
+        roots: codes,
+        ports,
+        edges,
+        discards,
+        source_arena: entry.draft.program.arena,
+        projected_arena,
+        correspondence: retained,
+    })
+}
+
+struct BuiltCaptureGraph {
+    graph: SummaryGraph,
+    roots: Vec<usize>,
+    values: Vec<Value>,
+    has_discard: bool,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capture graph construction retains exact code, import, method, root and work inputs before choosing an analysis"
+)]
+fn build_capture_graph<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    globals: &[(BinderId, NodeId)],
+    imports: &[(BinderId, &CaptureValueSummary)],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    methods: &[MethodUse],
+    adapters: &[MethodAdapter],
+    summary_roots: Option<ProviderSummaryRoots<'_>>,
+    boundary: Option<(
+        &ConditionalCapturePorts,
+        &mut Vec<ConditionalCompletionEdge>,
+    )>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<BuiltCaptureGraph>, Failure> {
     charge(budget, nodes.len() + globals.len())?;
     let mut bindings = HashMap::new();
     bindings
@@ -1370,10 +2261,83 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
 
     // Resume-only final Core needs no abandonment proof. Module publication
     // still requests roots, because a caller may install a discarding handler.
-    if !has_discard && resource_scope.is_none() && globals.is_empty() {
-        return Ok(Vec::new());
+    if !has_discard
+        && resource_scope.is_none()
+        && globals.is_empty()
+        && summary_roots.is_none_or(|(roots, _, _, _, _)| roots.is_empty())
+    {
+        return Ok(None);
     }
 
+    let values = solve_capture_values(nodes, &bindings, &parameters, &imported, operation, budget)?;
+
+    // Canonical source roots and unproved raw producer roots both retain
+    // their actual value ports. The latter are subsequently Unknown; neither
+    // may be replaced by a canonical binder capture from below the cut.
+    let mut capture_ports = Vec::new();
+    let ports: &[NodeId] = if let Some((_, _, _, instantiations, dictionary_variables)) =
+        summary_roots
+        && !dictionary_variables.is_empty()
+    {
+        let count = instantiations
+            .len()
+            .checked_add(dictionary_variables.len())
+            .ok_or(Failure::Resource)?;
+        charge(budget, count)?;
+        capture_ports
+            .try_reserve_exact(count)
+            .map_err(|_| Failure::Resource)?;
+        capture_ports.extend_from_slice(instantiations);
+        capture_ports.extend_from_slice(dictionary_variables);
+        &capture_ports[..]
+    } else {
+        summary_roots.map_or(&[][..], |(_, _, _, instantiations, _)| instantiations)
+    };
+    let mut data = value::Graph::build(
+        nodes,
+        globals,
+        imports,
+        &imported,
+        operation,
+        methods,
+        adapters,
+        summary_roots.map_or(&[], |(_, _, data, _, _)| data),
+        ports,
+        budget,
+    )?;
+    if let Some((_, lexical, _, _, dictionary_variables)) = summary_roots {
+        data.retain_provider_lexical(nodes, lexical, budget)?;
+        data.refuse_provider_dictionary_variables(nodes, dictionary_variables, budget)?;
+    }
+    let (mut graph, roots) = compile_with_boundary(
+        nodes,
+        &values,
+        &imported,
+        operation,
+        &mut data,
+        summary_roots.is_some(),
+        boundary,
+        budget,
+    )?;
+    graph.data = Some(Arc::new(data));
+    Ok(Some(BuiltCaptureGraph {
+        graph,
+        roots,
+        values,
+        has_discard,
+    }))
+}
+
+// The finite-value fixed point completes before typed graph construction, so
+// their temporary frames do not overlap on the bounded capture-checking stack.
+fn solve_capture_values<F: CoreOperationFamily>(
+    nodes: &[StoredNode<F>],
+    bindings: &HashMap<BinderId, usize>,
+    parameters: &HashMap<BinderId, usize>,
+    imported: &ImportedCallables,
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<Value>, Failure> {
     // First solve finite value references. No request conclusion is made from
     // an unfinished recursive dependency.
     let mut values = Vec::new();
@@ -1503,32 +2467,7 @@ fn analyze_nodes_with_methods<F: CoreOperationFamily>(
         }
     }
 
-    let mut data = value::Graph::build(
-        nodes, globals, imports, &imported, operation, methods, adapters, budget,
-    )?;
-    let (mut graph, roots) = compile(nodes, &values, &imported, operation, &mut data, budget)?;
-    graph.data = Some(Arc::new(data));
-    if let Some(rows) = rows {
-        *rows = cleanup_requirements(&graph, &roots, budget)?;
-    } else {
-        if has_discard {
-            let requirements = cleanup_requirements(&graph, &roots, budget)?;
-            check_cleanup_rows(nodes, operation, &requirements, budget)?;
-        }
-        check_control_roots(&graph, roots, budget)?;
-    }
-    let graph = Arc::new(graph);
-    let mut summaries = Vec::new();
-    summaries
-        .try_reserve(globals.len())
-        .map_err(|_| Failure::Resource)?;
-    for (_, node) in globals {
-        summaries.push(CaptureValueSummary {
-            graph: Some(Arc::clone(&graph)),
-            value: values[index(*node)].copy(budget)?,
-        });
-    }
-    Ok(summaries)
+    Ok(values)
 }
 
 // Keep solver storage out of the graph-construction caller's stack frame.
@@ -1548,7 +2487,7 @@ fn cleanup_requirements(
     {
         return Ok(Vec::new());
     }
-    let mut analysis = Analysis::new(graph, budget)?;
+    let mut analysis = Analysis::new(graph, None, budget)?;
     analysis.infer_cleanup_rows = true;
     analysis.check(roots, budget)?;
     Ok(std::mem::take(&mut analysis.cleanup_rows))
@@ -1647,7 +2586,7 @@ fn check_control_roots(
                 queries.push(root);
             }
         }
-        let mut analysis = Analysis::new(graph, budget)?;
+        let mut analysis = Analysis::new(graph, None, budget)?;
         analysis.check(&queries, budget)?;
     }
     Ok(())
@@ -2495,6 +3434,8 @@ mod tests {
                     operation,
                     &[],
                     &[],
+                    &[],
+                    &[],
                     &mut TypeWorkBudget::unbounded(),
                 )
                 .unwrap();
@@ -2511,6 +3452,7 @@ mod tests {
                         &imported,
                         operation,
                         &mut data,
+                        false,
                         &mut partial
                     ),
                     Err(Failure::Resource)
@@ -2523,6 +3465,7 @@ mod tests {
                         &imported,
                         operation,
                         &mut data,
+                        false,
                         &mut measured,
                     )
                     .unwrap(),
@@ -2535,6 +3478,7 @@ mod tests {
                         &imported,
                         operation,
                         &mut data,
+                        false,
                         &mut retry,
                     )
                     .unwrap(),
@@ -2635,5 +3579,459 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn actual_provider_query_keeps_contextual_resumes_unavailable() {
+        use super::super::{EffectExprKind, PureComputation, PureExprKind};
+        let (mut core, _source, good, bad) = checked_core_text(concat!(
+            "effect H {\nop : Unit -> Unit\n}\n",
+            "good : Unit -> Unit\ngood value = value\n",
+            "bad : Unit -> Unit\nbad value = handle (perform H.op value) with H {\nop value => resume value\n}\n",
+            "main : Unit -> Unit\nmain value = good value\n",
+        ));
+        let target = |binder| {
+            core.nodes
+                .iter()
+                .find_map(|node| match &node.kind {
+                    EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(
+                        binding,
+                    ))) if binding.binder().id() == binder => Some(binding.initializer()),
+                    EffectExprKind::Pure(PureExprKind::Computation(
+                        PureComputation::RecursiveBind(binding),
+                    )) => binding
+                        .members()
+                        .iter()
+                        .find(|member| member.binder().id() == binder)
+                        .map(|member| member.initializer()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let good_root = target(good);
+        let bad_root = target(bad);
+        let summarize = |nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+                         root: NodeId,
+                         provider: bool| {
+            analyze_nodes_with_methods(
+                nodes,
+                &[(good, good_root)],
+                &[],
+                |kind| match kind {
+                    EffectExprKind::Operation(op) => Some(op),
+                    _ => None,
+                },
+                &[],
+                &[],
+                None,
+                provider.then_some((&[root][..], &[][..], &[][..], &[][..], &[][..])),
+                &mut TypeWorkBudget::unbounded(),
+            )
+        };
+        let honest = summarize(&core.nodes, bad_root, true).unwrap();
+        let graph = honest[0].graph.as_ref().unwrap();
+        assert!(graph.code.iter().any(|code| matches!(code, Control::Resume { owner, .. } if graph.code.get(*owner).is_some_and(|code| matches!(code, Control::Return)))));
+        let resume = core
+            .nodes
+            .iter_mut()
+            .find_map(|node| match &mut node.kind {
+                EffectExprKind::Operation(EffectOperation::Resume(resume)) => Some(resume),
+                _ => None,
+            })
+            .unwrap();
+        resume.handler = super::super::effect::HandlerId::new(u32::MAX);
+        assert!(matches!(
+            summarize(&core.nodes, good_root, false),
+            Err(Failure::Invalid)
+        ));
+        let good_summary = summarize(&core.nodes, good_root, true).unwrap();
+        good_summary[0]
+            .check_provider_independent_typed_call(
+                &core.nodes[index(good_root)].ty,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let selected = summarize(&core.nodes, bad_root, true).unwrap();
+        assert!(
+            selected[0]
+                .graph
+                .as_ref()
+                .unwrap()
+                .code
+                .iter()
+                .any(|code| matches!(code, Control::Unavailable))
+        );
+        assert!(matches!(
+            selected[0].check_provider_independent_typed_call(
+                &core.nodes[index(bad_root)].ty,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod provider_capture_tests {
+    use super::*;
+    #[test]
+    fn provider_typed_query_checks_ignored_top_level_stored_dependencies() {
+        let actual = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        for (metadata, unknown, captured) in [
+            (None, true, true),
+            (Some(TypeVariableId::Generated(991)), false, true),
+            (None, false, true),
+            (None, false, false),
+        ] {
+            let summary = CaptureValueSummary {
+                graph: Some(Arc::new(SummaryGraph {
+                    effects: false,
+                    callables: vec![Callable {
+                        body: 0,
+                        ty: actual.clone(),
+                        result: Value::default(),
+                    }],
+                    code: vec![Control::Return],
+                    types: TypeArguments(Vec::new()),
+                    data: Some(Arc::new(value::provider_typed_capture_graph_for_test(
+                        metadata, unknown, captured,
+                    ))),
+                })),
+                value: Value {
+                    targets: vec![0],
+                    unknown: false,
+                    ..Value::default()
+                },
+            };
+            let checked = summary
+                .check_provider_independent_typed_call(&actual, &mut TypeWorkBudget::unbounded());
+            assert_eq!(
+                checked.is_ok(),
+                !captured,
+                "metadata={metadata:?} unknown={unknown}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_typed_query_rejects_actual_unavailable_control() {
+        let actual = Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
+        let summary = CaptureValueSummary {
+            graph: Some(Arc::new(SummaryGraph {
+                effects: true,
+                callables: vec![Callable {
+                    body: 0,
+                    ty: actual.clone(),
+                    result: Value::default(),
+                }],
+                code: vec![Control::Unavailable],
+                types: TypeArguments(Vec::new()),
+                data: Some(Arc::new(value::provider_typed_capture_graph_for_test(
+                    None, false, false,
+                ))),
+            })),
+            value: Value {
+                targets: vec![0],
+                unknown: false,
+                ..Value::default()
+            },
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(matches!(
+            summary.check_provider_independent_typed_call(&actual, &mut measured),
+            Err(Failure::Invalid)
+        ));
+        let cost = measured.used();
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                summary.check_provider_independent_typed_call(&actual, &mut short),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert!(matches!(
+                    summary.check_provider_independent_typed_call(&actual, &mut exact),
+                    Err(Failure::Invalid)
+                ));
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+    }
+
+    fn summary(metadata: Option<TypeVariableId>, unknown: bool) -> CaptureValueSummary {
+        CaptureValueSummary {
+            graph: Some(Arc::new(SummaryGraph {
+                effects: false,
+                callables: vec![Callable {
+                    body: 0,
+                    ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
+                    result: Value::default(),
+                }],
+                code: vec![Control::Return],
+                types: TypeArguments(Vec::new()),
+                data: Some(Arc::new(value::provider_capture_graph_for_test(
+                    metadata, unknown,
+                ))),
+            })),
+            value: Value {
+                targets: vec![0],
+                parameters: Vec::new(),
+                unknown: false,
+            },
+        }
+    }
+    #[test]
+    fn provider_capture_rejects_selected_unknown_and_unresolved_lexical_captures() {
+        for unknown in [false, true] {
+            assert!(matches!(
+                summary(None, unknown)
+                    .check_provider_independent_data_call(&[], &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+        }
+    }
+    #[test]
+    fn provider_capture_metadata_requires_actual_occurrence_instantiation() {
+        let formal = TypeVariableId::generated(19);
+        let summary = summary(Some(formal), false);
+        assert!(matches!(
+            summary.check_provider_independent_data_call(
+                &[TypeVariableId::generated(20)],
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+        let mut measured = TypeWorkBudget::unbounded();
+        summary
+            .check_provider_independent_data_call(&[formal], &mut measured)
+            .unwrap();
+        let cost = measured.used();
+        eprintln!("provider selected capture cumulative cost={cost}");
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                summary.check_provider_independent_data_call(&[formal], &mut short),
+                Err(Failure::Resource)
+            ));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                summary
+                    .check_provider_independent_data_call(&[formal], &mut exact)
+                    .unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn conditional_capture_inventory_for_test(
+    draft: &super::provider::HandlerFragmentDraft,
+    module: &crate::resolved::ResolvedModule,
+    work: &mut TypeWorkBudget,
+) -> Result<(usize, usize, usize), Failure> {
+    let entry = super::provider::HandlerFragmentEntry::reconstruct(draft, module, work).map_err(
+        |error| {
+            if error.reason() == super::ValidationReason::Resource {
+                Failure::Resource
+            } else {
+                Failure::Invalid
+            }
+        },
+    )?;
+    let correspondence = (0..draft.program.nodes.len())
+        .map(|ordinal| Some(NodeId::new(draft.program.arena, ordinal as u32)))
+        .collect::<Vec<_>>();
+    let graph = reconstruct_conditional_handler_capture(
+        &entry,
+        &draft.program.nodes,
+        draft.program.arena,
+        &correspondence,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        work,
+    )?;
+    assert_eq!(graph.template, draft.template);
+    assert_eq!(graph.roots.len(), draft.clauses.len());
+    for edge in &graph.edges {
+        let port = &graph.ports.clauses[edge.port];
+        assert_eq!(port.output, ConditionalOutputInputId(0));
+        assert_eq!(port.answer, draft.hidden[0].0);
+        assert_eq!(port.residual, draft.hidden[1].0);
+        assert!(matches!(
+            graph.graph.code[edge.node + 1],
+            Control::Unavailable
+        ));
+        if let Some(operand) = edge.operand {
+            assert!(operand < graph.graph.code.len());
+        }
+        assert!(graph.roots.contains(&(index(port.root) + 1)));
+    }
+    let nested = graph
+        .graph
+        .code
+        .iter()
+        .filter(|code| matches!(code, Control::Handler { .. }))
+        .count();
+    Ok((graph.ports.clauses.len(), graph.edges.len(), nested))
+}
+
+#[cfg(test)]
+pub(in crate::core) fn owned_conditional_capture_links_for_test(
+    graph: &ConditionalCaptureGraph,
+    draft: &super::provider::HandlerFragmentDraft,
+    recipe: &super::provider::HandlerRowRecipeDraft,
+) {
+    assert_eq!(graph.template, draft.template);
+    assert_eq!(graph.source_arena, draft.program.arena);
+    assert_eq!(graph.correspondence.len(), draft.program.nodes.len());
+    assert_eq!(graph.ports.clauses.len(), draft.clauses.len());
+    for (ordinal, (port, clause)) in graph
+        .ports
+        .clauses
+        .iter()
+        .zip(draft.clauses.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            (port.handler, port.resume, port.operation),
+            (draft.handler, clause.resume(), clause.operation())
+        );
+        assert_eq!(
+            port.root,
+            graph.correspondence[index(clause.body())].unwrap()
+        );
+        assert_eq!(port.root.arena(), graph.projected_arena);
+        assert_eq!(port.continuation, ConditionalContinuationInputId(ordinal));
+        assert_eq!(port.capture, ConditionalCaptureInputId(ordinal));
+        assert_eq!(graph.roots[ordinal], index(port.root) + 1);
+        assert_eq!(port.output, ConditionalOutputInputId(0));
+        assert_eq!(
+            (port.answer, port.residual),
+            (draft.hidden[0].0, draft.hidden[1].0)
+        );
+    }
+    assert_eq!(graph.discards.len(), recipe.discards().len());
+    for edge in &graph.discards {
+        assert_eq!(
+            recipe.capture_input_for_discard(edge.source),
+            Some(edge.input)
+        );
+        assert_eq!(
+            edge.projected,
+            graph.correspondence[index(edge.source)].unwrap()
+        );
+        let original = &draft.program.nodes[index(edge.source)];
+        let super::effect::EffectExprKind::Operation(EffectOperation::Discard(discard)) =
+            &original.kind
+        else {
+            panic!("retained actual discard")
+        };
+        assert_eq!(
+            (discard.handler(), discard.owner()),
+            (edge.handler, edge.resume)
+        );
+        assert_eq!(edge.clause.arena(), graph.source_arena);
+        let Control::Discard { owner, node, .. } = &graph.graph.code[index(edge.projected) + 1]
+        else {
+            panic!("actual capture discard")
+        };
+        assert_eq!((*owner, *node), (edge.owner, index(edge.projected)));
+    }
+    for (ordinal, original) in draft.program.nodes.iter().enumerate() {
+        let super::effect::EffectExprKind::Operation(EffectOperation::Cleanup(scope)) =
+            &original.kind
+        else {
+            continue;
+        };
+        let actual = graph.correspondence[ordinal].unwrap();
+        let Control::Cleanup {
+            body,
+            action,
+            source,
+            ..
+        } = &graph.graph.code[index(actual) + 1]
+        else {
+            panic!("actual armed cleanup")
+        };
+        assert_eq!(
+            *body,
+            index(graph.correspondence[index(scope.body)].unwrap()) + 1
+        );
+        assert_eq!(
+            *action,
+            index(graph.correspondence[index(scope.action)].unwrap()) + 1
+        );
+        assert_eq!(*source, scope.span);
+    }
+    for (ordinal, original) in draft.program.nodes.iter().enumerate() {
+        let super::effect::EffectExprKind::Operation(EffectOperation::Request(request)) =
+            &original.kind
+        else {
+            continue;
+        };
+        let projected = graph.correspondence[ordinal].unwrap();
+        let Control::Sequence(sequence) = &graph.graph.code[index(projected) + 1] else {
+            panic!("retained request evaluation")
+        };
+        assert_eq!(sequence.len(), 2);
+        assert_eq!(
+            sequence[0],
+            index(graph.correspondence[index(request.operand())].unwrap()) + 1
+        );
+        let Control::Request(actual) = &graph.graph.code[sequence[1]] else {
+            panic!("retained actual request")
+        };
+        assert_eq!(actual.operation, Some(request.operation()));
+        assert_eq!(actual.effect.as_deref(), Some(request.effect()));
+    }
+    for edge in &graph.edges {
+        let port = &graph.ports.clauses[edge.port];
+        let (ordinal, original) = draft
+            .program
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(ordinal, _)| {
+                graph.correspondence[*ordinal].is_some_and(|id| index(id) == edge.node)
+            })
+            .unwrap();
+        assert_eq!(graph.ports.completions.get(&edge.node), Some(&edge.port));
+        match &original.kind {
+            super::effect::EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                assert_eq!(
+                    (resume.handler(), resume.owner()),
+                    (port.handler, port.resume)
+                );
+                assert_eq!(
+                    edge.operand,
+                    Some(index(graph.correspondence[index(resume.value())].unwrap()) + 1)
+                );
+                assert_eq!(&*port.input, &draft.program.nodes[index(resume.value())].ty);
+                assert_eq!(original.ty, Type::Variable(port.answer));
+            }
+            super::effect::EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                assert_eq!(
+                    (discard.handler(), discard.owner()),
+                    (port.handler, port.resume)
+                );
+                assert_eq!(edge.operand, None);
+            }
+            _ => panic!("unresolved completion is tied to actual source completion at {ordinal}"),
+        }
+        assert!(edge.node < graph.graph.code.len().saturating_sub(1));
+        assert!(matches!(
+            graph.graph.code[edge.node + 1],
+            Control::Unavailable
+        ));
+        assert!(edge.port < graph.ports.clauses.len());
     }
 }

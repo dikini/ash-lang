@@ -375,6 +375,9 @@ fn checked_source_lowers_to_explicit_effect_core() {
                     panic!("resume-only fixture cannot contain registration")
                 }
                 EffectOperation::Cleanup(_) => panic!("resume-only fixture cannot contain cleanup"),
+                EffectOperation::ProviderStateAccess(_) => {
+                    panic!("resume-only fixture cannot contain provider state access")
+                }
             }
         }
         pending.extend((0..node.kind.child_count()).filter_map(|index| node.kind.child_at(index)));

@@ -260,6 +260,10 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 expressions.extend(handler.clauses.iter().map(|clause| &clause.body));
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
+            ResolvedExprKind::ProviderResource(resource) => {
+                expressions.push(&resource.initializer);
+                expressions.push(&resource.body);
+            }
             ResolvedExprKind::Resource(resource) => {
                 expressions.push(&resource.initializer);
                 expressions.push(&resource.body);

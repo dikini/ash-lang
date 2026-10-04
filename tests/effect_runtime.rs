@@ -77,6 +77,23 @@ fn run_effect_source(name: &str, source: &str) -> ash::eval::Evaluation {
 }
 
 #[test]
+fn newtype_pattern_branches_preserve_their_effectful_continuations() {
+    for (name, branches) in [
+        ("single", "Boxed((_, number)) => perform Ask.ask number\n"),
+        (
+            "fallback",
+            "Boxed((true, number)) => perform Ask.ask number\nBoxed((_, number)) => perform Ask.ask number\n",
+        ),
+    ] {
+        let source = format!(
+            "newtype Boxed = Boxed((Bool, Int))\neffect Ask {{\nask : Int -> Int\n}}\nread : Boxed -> Int ! {{Ask}}\nread value = match value {{\n{branches}}}\nmain : Unit -> Int\nmain () = handle (read (Boxed((false, 40)))) with Ask {{\nask number => resume (number + 2)\n}}\n"
+        );
+        let evaluation = run_effect_source(name, &source);
+        assert_eq!(evaluation.value.to_string(), "42");
+    }
+}
+
+#[test]
 fn generic_request_matches_its_concrete_caller_handler() {
     let evaluation = run_effect_source(
         "generic-helper",

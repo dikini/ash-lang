@@ -152,6 +152,15 @@ impl Default for UsefulnessBudget {
 
 impl UsefulnessBudget {
     #[cfg(test)]
+    pub(crate) const fn remaining_for_test(&self) -> usize {
+        self.remaining
+    }
+
+    #[cfg(test)]
+    pub(crate) fn charge_for_test(&mut self, amount: usize) -> Result<(), UsefulnessError> {
+        self.charge(amount)
+    }
+    #[cfg(test)]
     pub(crate) const fn with_limit(limit: usize) -> Self {
         Self { remaining: limit }
     }

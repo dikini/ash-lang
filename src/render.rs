@@ -383,6 +383,7 @@ fn module_failure(failure: &ModuleFailure) -> String {
 const fn module_primary_message(reason: ModuleReason) -> &'static str {
     match reason {
         ModuleReason::UnknownBuiltin => "this import names no compiler-owned module",
+        ModuleReason::UnknownForeign => "this import names no registered foreign module",
         ModuleReason::ReservedRoot => "the builtin module root is reserved",
         ModuleReason::UnknownRoot => "this import names an unknown module root",
         ModuleReason::NotFound => "this import target does not exist",

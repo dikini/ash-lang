@@ -1266,3 +1266,7 @@ resolve-work-state = Вътрешното състояние на компила
     [right-operand] десен операнд
     [left-operand] ляв операнд
     }.
+
+module-unknown-foreign = Този импорт не посочва регистриран чужд модул.
+
+foreign-privilege-unavailable = Контролираните чужди извиквания изискват проверка в контекста на доставчик.

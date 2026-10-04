@@ -1265,3 +1265,7 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
     [right-operand] a right operand
     [left-operand] a left operand
     }.
+
+module-unknown-foreign = This import names no registered foreign module.
+
+foreign-privilege-unavailable = Controlled foreign calls require provider-phase admission.

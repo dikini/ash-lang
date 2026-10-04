@@ -128,6 +128,86 @@ impl CleanupRows {
     pub(super) fn contains(&self, id: InferenceVariableId) -> bool {
         self.identities.contains(&id)
     }
+    pub(super) fn take_provider_pending<F: CoreLoweringFamily>(
+        &mut self,
+        builder: &crate::core::CoreBuilder<F>,
+        root: NodeId,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<crate::core::provider::HandlerPendingRows, TypeError> {
+        use crate::core::provider::{
+            HandlerPendingRows, PendingRowEquality, PendingRowEquation, PendingRowRecomputation,
+            PendingRowRecord,
+        };
+        let mut result = HandlerPendingRows::default();
+        work.charge(
+            self.equations
+                .len()
+                .checked_mul(2)
+                .and_then(|count| count.checked_add(self.equalities.len()))
+                .and_then(|count| count.checked_add(self.recomputations.len()))
+                .ok_or_else(type_resource)?,
+        )
+        .map_err(|()| type_resource())?;
+        result
+            .equations
+            .try_reserve_exact(self.equations.len())
+            .map_err(|_| type_resource())?;
+        result
+            .equalities
+            .try_reserve_exact(self.equalities.len())
+            .map_err(|_| type_resource())?;
+        result
+            .recomputations
+            .try_reserve_exact(self.recomputations.len())
+            .map_err(|_| type_resource())?;
+        for (identity, equation, source) in self.equations.drain(..) {
+            if !self.identities.remove(&identity) {
+                return Err(invalid_state());
+            }
+            let equation = match equation {
+                Equation::Discard(ordinal) => {
+                    PendingRowEquation::Discard(builder.provider_node_at_ordinal(root, ordinal)?)
+                }
+                Equation::Union(left, right) => PendingRowEquation::Union(left, right),
+                Equation::Remove(row, effect, absent) => {
+                    PendingRowEquation::Remove(row, effect, absent)
+                }
+            };
+            result.equations.push(PendingRowRecord {
+                identity,
+                equation,
+                source,
+            });
+        }
+        if !self.identities.is_empty() {
+            return Err(invalid_state());
+        }
+        for (left, right, source) in self.equalities.drain(..) {
+            result.equalities.push(PendingRowEquality {
+                left,
+                right,
+                source,
+            });
+        }
+        for (range, output, handler, resume) in self.recomputations.drain(..) {
+            work.charge(range.len()).map_err(|()| type_resource())?;
+            let mut nodes = Vec::new();
+            nodes
+                .try_reserve_exact(range.len())
+                .map_err(|_| type_resource())?;
+            for ordinal in range {
+                nodes.push(builder.provider_node_at_ordinal(root, ordinal)?);
+            }
+            result.recomputations.push(PendingRowRecomputation {
+                nodes,
+                output,
+                handler,
+                resume,
+            });
+        }
+        Ok(result)
+    }
+
     pub(super) fn checkpoint(&self) -> (usize, usize) {
         (self.equations.len(), self.equalities.len())
     }

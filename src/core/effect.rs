@@ -11,7 +11,8 @@ use super::{
     validate::{ValidationError, validate_effect_family, validate_effect_modules_family},
 };
 use crate::{
-    resolved::{ResolvedRegistry, ResumeId},
+    interface::MethodId,
+    resolved::{ResolvedRegistry, ResourceDefinitionId, ResumeId},
     source::{Origin, discard_origin_iteratively},
     types::{
         EffectInstance, EffectRow, OperationId, Type, TypeWorkBudget, clone_effect_row_with_budget,
@@ -326,11 +327,89 @@ impl ResourceScopeNode {
     }
 }
 
+/// A controlled unary state borrow. Retained identities and arguments carry
+/// no admission or lineage authority; independent descriptor validation is
+/// required before execution.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderStateAccessNode {
+    method: MethodId,
+    definition: ResourceDefinitionId,
+    arguments: Box<[Type]>,
+    operand: NodeId,
+}
+
+impl ProviderStateAccessNode {
+    pub(crate) fn new(
+        method: MethodId,
+        definition: ResourceDefinitionId,
+        arguments: Box<[Type]>,
+        operand: NodeId,
+    ) -> Self {
+        Self {
+            method,
+            definition,
+            arguments,
+            operand,
+        }
+    }
+
+    fn into_parts(mut self) -> (MethodId, ResourceDefinitionId, Box<[Type]>, NodeId) {
+        (
+            self.method,
+            self.definition,
+            std::mem::take(&mut self.arguments),
+            self.operand,
+        )
+    }
+
+    fn admit_arguments(
+        self,
+        builder: &mut CoreBuilder<EffectOperationFamily>,
+    ) -> Result<Self, super::BuildError> {
+        let (method, definition, arguments, operand) = self.into_parts();
+        let arguments = builder.admit_provider_state_access_arguments(arguments)?;
+        Ok(Self::new(method, definition, arguments, operand))
+    }
+
+    /// Returns the canonical sealed method identity.
+    #[must_use]
+    pub const fn method(&self) -> MethodId {
+        self.method
+    }
+
+    /// Returns the accessed resource definition.
+    #[must_use]
+    pub const fn definition(&self) -> ResourceDefinitionId {
+        self.definition
+    }
+
+    /// Returns resource arguments in defining parameter order.
+    #[must_use]
+    pub const fn arguments(&self) -> &[Type] {
+        &self.arguments
+    }
+
+    /// Returns the client-access operand evaluated by this borrow.
+    #[must_use]
+    pub const fn operand(&self) -> NodeId {
+        self.operand
+    }
+}
+
+impl Drop for ProviderStateAccessNode {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.arguments).into_vec() {
+            discard_type_iteratively(argument);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectOperation {
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    ProviderStateAccess(ProviderStateAccessNode),
     Request(RequestNode),
     Handler(HandlerNode),
     Resume(ResumeNode),
@@ -409,6 +488,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             return;
         };
         let instance = match operation {
+            EffectOperation::ProviderStateAccess(access) => {
+                for argument in access.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Type(argument));
+                }
+                None
+            }
             EffectOperation::Resource(resource) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
                     resource.handle.ty(),
@@ -419,12 +504,12 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectOperation::Handler(handler) => {
                 if let Some(registration) = &handler.hook_registration {
                     for argument in registration.target.arguments() {
-                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
                     }
                 }
                 if let Some(root) = &handler.hook_root {
                     for argument in root.target.arguments() {
-                        visit(super::dialect::OperationTypeMetadata::Type(argument));
+                        visit(super::dialect::OperationTypeMetadata::Argument(argument));
                     }
                 }
                 for clause in &handler.clauses {
@@ -441,7 +526,7 @@ impl CoreOperationFamily for EffectOperationFamily {
         };
         if let Some(instance) = instance {
             for argument in instance.arguments() {
-                visit(super::dialect::OperationTypeMetadata::Type(argument));
+                visit(super::dialect::OperationTypeMetadata::Argument(argument));
             }
         }
     }
@@ -456,6 +541,9 @@ impl CoreOperationFamily for EffectOperationFamily {
         charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
     ) -> Result<(), super::BuildError> {
         let instance = match kind {
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                return rewrite_type_arguments(&mut access.arguments, rewrite, charge);
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 charge(1)?;
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
@@ -497,9 +585,11 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
-            EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
-                1
-            }
+            EffectExprKind::Operation(
+                EffectOperation::Request(_)
+                | EffectOperation::Resume(_)
+                | EffectOperation::ProviderStateAccess(_),
+            ) => 1,
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len() + 1,
         }
     }
@@ -510,6 +600,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
             | EffectExprKind::Operation(EffectOperation::Resource(_))
+            | EffectExprKind::Operation(EffectOperation::ProviderStateAccess(_))
             | EffectExprKind::Operation(EffectOperation::Discard(_))
             | EffectExprKind::Operation(EffectOperation::Request(_) | EffectOperation::Resume(_)) => {
                 0
@@ -536,6 +627,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Request(node)) => {
                 (index == 0).then_some(node.operand)
             }
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                (index == 0).then_some(access.operand())
+            }
             EffectExprKind::Operation(EffectOperation::Resume(node)) => {
                 (index == 0).then_some(node.value)
             }
@@ -555,6 +649,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => drop(access),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
                 let (_, arguments) = std::mem::replace(&mut node.effect, placeholder).into_parts();
@@ -582,6 +677,30 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    pub(crate) fn provider_state_access(
+        &mut self,
+        access: ProviderStateAccessNode,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let access = match access.admit_arguments(self) {
+            Ok(access) => access,
+            Err(error) => {
+                discard_type_iteratively(ty);
+                drop(effects);
+                discard_origin_iteratively(origin);
+                return Err(error);
+            }
+        };
+        self.push_operation(
+            ty,
+            effects,
+            origin,
+            EffectOperation::ProviderStateAccess(access),
+        )
+    }
+
     pub(crate) fn resource_scope(
         &mut self,
         resource: Box<ResourceScopeNode>,
@@ -615,6 +734,7 @@ impl CoreBuilder<EffectOperationFamily> {
     ) -> Result<(), super::BuildError> {
         enum Equation {
             Registration(NodeId),
+            StateAccess(NodeId),
             Cleanup(NodeId, NodeId),
             Pure,
             Replace,
@@ -635,6 +755,9 @@ impl CoreBuilder<EffectOperationFamily> {
             for index in range {
                 self.charge_effect_metadata(1)?;
                 let equation = match &self.nodes[index].kind {
+                    EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
+                        Equation::StateAccess(access.operand())
+                    }
                     EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
                         Equation::Cleanup(scope.body, scope.action)
                     }
@@ -686,6 +809,15 @@ impl CoreBuilder<EffectOperationFamily> {
                     }
                 };
                 let effects = match equation {
+                    Equation::StateAccess(operand) => clone_effect_row_with_budget(
+                        &self
+                            .nodes
+                            .get(operand.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
                     Equation::Cleanup(body, action) => {
                         let body = clone_effect_row_with_budget(
                             &self
@@ -1148,8 +1280,15 @@ fn rewrite_effect_instance(
     staged
         .try_reserve(count)
         .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    let mut meter = |cells| charge(cells);
     for argument in instance.arguments() {
-        staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
+        let argument = crate::types::map_kinded_argument_types_with_budget(
+            argument,
+            &mut |ty, _| rewrite(ty),
+            &mut meter,
+            &mut |_| super::BuildError::TypeWorkExceeded,
+        )?;
+        staged.push(crate::types::IterativeArgumentOwner::new(argument));
     }
     let mut arguments = Vec::new();
     arguments
@@ -1158,9 +1297,43 @@ fn rewrite_effect_instance(
     arguments.extend(
         staged
             .into_iter()
+            .map(crate::types::IterativeArgumentOwner::into_inner),
+    );
+    let replacement = EffectInstance::new_kinded(instance.effect(), arguments.into_boxed_slice());
+    drop(std::mem::replace(instance, replacement));
+    Ok(())
+}
+
+fn rewrite_type_arguments(
+    arguments: &mut Box<[Type]>,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+) -> Result<(), super::BuildError> {
+    let count = arguments.len();
+    charge(
+        count
+            .checked_mul(2)
+            .ok_or(super::BuildError::TypeWorkExceeded)?,
+    )?;
+    let mut staged = Vec::new();
+    staged
+        .try_reserve_exact(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    for argument in arguments.iter() {
+        staged.push(crate::types::IterativeTypeOwner::new(rewrite(argument)?));
+    }
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(count)
+        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+    retained.extend(
+        staged
+            .into_iter()
             .map(crate::types::IterativeTypeOwner::into_inner),
     );
-    *instance = EffectInstance::new(instance.effect(), arguments.into_boxed_slice());
+    for argument in std::mem::replace(arguments, retained.into_boxed_slice()).into_vec() {
+        discard_type_iteratively(argument);
+    }
     Ok(())
 }
 
@@ -1168,23 +1341,13 @@ pub(crate) fn clone_effect_instance_with_budget(
     instance: &EffectInstance,
     budget: &mut TypeWorkBudget,
 ) -> Result<EffectInstance, super::BuildError> {
+    // The shared clone charges the instance root; retain the existing
+    // per-argument envelope charge for nonempty Type-only instances.
     budget
-        .charge(instance.arguments().len())
+        .charge(instance.arguments().len().saturating_sub(1))
         .map_err(|()| super::BuildError::TypeWorkExceeded)?;
-    let mut arguments = Vec::new();
-    arguments
-        .try_reserve_exact(instance.arguments().len())
-        .map_err(|_| super::BuildError::TypeWorkExceeded)?;
-    for argument in instance.arguments() {
-        arguments.push(
-            clone_type_with_budget(argument, budget)
-                .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-        );
-    }
-    Ok(EffectInstance::new(
-        instance.effect(),
-        arguments.into_boxed_slice(),
-    ))
+    crate::types::clone_effect_instance_with_budget(instance, budget)
+        .map_err(|()| super::BuildError::TypeWorkExceeded)
 }
 
 pub fn validate_effect(
@@ -1213,6 +1376,319 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::{EffectId, TYPE_WORK_LIMIT},
     };
+
+    #[test]
+    fn provider_state_access_retains_one_operand_and_ordered_type_metadata() {
+        use crate::{
+            interface::{InterfaceId, MethodId},
+            resolved::ResourceDefinitionId,
+            types::TypeVariableId,
+        };
+        let method = MethodId::new(InterfaceId::new(ModuleId::new(7), 3), 2);
+        let definition = ResourceDefinitionId::new(ModuleId::new(9), 4);
+        let operand = NodeId::new(super::super::dialect::ArenaId::new(0), 5);
+        let parameter = TypeVariableId::new(1);
+        let arguments = [
+            Type::Variable(parameter),
+            Type::Tuple(Box::new([Type::Bool, Type::Variable(parameter)])),
+        ];
+        let mut kind = EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+            ProviderStateAccessNode::new(method, definition, Box::new(arguments.clone()), operand),
+        ));
+        assert_eq!(kind.child_count(), 1);
+        assert_eq!(kind.child_at(0), Some(operand));
+        assert_eq!(kind.child_at(1), None);
+        assert_eq!(kind.child_at(usize::MAX), None);
+        assert_eq!(EffectOperationFamily::operation_extra_edge_count(&kind), 0);
+        let mut metadata = Vec::new();
+        EffectOperationFamily::visit_operation_type_metadata(&kind, &mut |item| match item {
+            super::super::dialect::OperationTypeMetadata::Type(ty) => metadata.push(ty.clone()),
+            super::super::dialect::OperationTypeMetadata::Pattern(_)
+            | super::super::dialect::OperationTypeMetadata::Argument(_)
+            | super::super::dialect::OperationTypeMetadata::Row(_) => {
+                panic!("state descriptor has ordinary Type payloads")
+            }
+        });
+        assert_eq!(metadata, arguments);
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind else {
+            unreachable!()
+        };
+        assert_eq!(access.method(), method);
+        assert_eq!(access.definition(), definition);
+        assert_eq!(access.arguments(), arguments);
+        assert_eq!(access.operand(), operand);
+        let replacements = std::collections::HashMap::from([(parameter, Type::Int)]);
+        let work = std::cell::RefCell::new(TypeWorkBudget::unbounded());
+        EffectOperationFamily::rewrite_operation_type_metadata(
+            &mut kind,
+            &mut |ty| {
+                crate::types::substitute_type_variables_with(
+                    ty,
+                    &replacements,
+                    |cells| work.borrow_mut().charge(cells),
+                    || (),
+                )
+                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+            },
+            &mut |cells| {
+                work.borrow_mut()
+                    .charge(cells)
+                    .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+            },
+        )
+        .unwrap();
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            access.arguments(),
+            [Type::Int, Type::Tuple(Box::new([Type::Bool, Type::Int]))]
+        );
+        assert_eq!(access.method(), method);
+        assert_eq!(access.definition(), definition);
+        assert_eq!(access.operand(), operand);
+    }
+
+    #[test]
+    fn provider_state_access_argument_rewrite_is_atomic_bounded_and_drop_safe() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    interface::{InterfaceId, MethodId},
+                    resolved::ResourceDefinitionId,
+                };
+                const DEPTH: usize = 32_000;
+                let deep = || {
+                    (0..DEPTH).fold(Type::Unit, |ty, _| {
+                        Type::Application(Box::new(ty), Box::new(Type::Unit))
+                    })
+                };
+                let method = MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0);
+                let definition = ResourceDefinitionId::new(ModuleId::new(2), 0);
+                let operand = NodeId::new(super::super::dialect::ArenaId::new(0), 0);
+                let mut kind = EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
+                    ProviderStateAccessNode::new(
+                        method,
+                        definition,
+                        Box::new([deep(), Type::Bool]),
+                        operand,
+                    ),
+                ));
+                let rewrite = |kind: &mut EffectExprKind, limit| {
+                    let budget = std::cell::RefCell::new(TypeWorkBudget::with_limit(limit));
+                    let result = EffectOperationFamily::rewrite_operation_type_metadata(
+                        kind,
+                        &mut |ty| {
+                            clone_type_with_budget(ty, &mut *budget.borrow_mut())
+                                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+                        },
+                        &mut |count| {
+                            budget
+                                .borrow_mut()
+                                .charge(count)
+                                .map_err(|()| super::super::BuildError::TypeWorkExceeded)
+                        },
+                    );
+                    (result, budget.into_inner().used())
+                };
+                let exact = 2 * DEPTH + 6;
+                assert_eq!(
+                    rewrite(&mut kind, exact - 1).0,
+                    Err(super::super::BuildError::TypeWorkExceeded)
+                );
+                let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind
+                else {
+                    unreachable!()
+                };
+                let original = crate::types::IterativeTypeOwner::new(deep());
+                assert_eq!(access.arguments()[0], *original);
+                assert_eq!(access.arguments()[1], Type::Bool);
+                for _ in 0..2 {
+                    assert_eq!(rewrite(&mut kind, exact), (Ok(()), exact));
+                }
+                let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &kind
+                else {
+                    unreachable!()
+                };
+                assert_eq!(access.method(), method);
+                assert_eq!(access.definition(), definition);
+                assert_eq!(access.operand(), operand);
+                EffectOperationFamily::discard_metadata(kind);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn provider_state_access_builder_tracks_argument_inference_and_operand_effects() {
+        use crate::{
+            interface::{InterfaceId, MethodId},
+            resolved::ResourceDefinitionId,
+            types::InferenceVariableId,
+        };
+        let source = SourceFile::new("state-access-substrate", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder =
+            EffectCoreBuilder::with_effect_registry(Arc::new(ResolvedRegistry::default()));
+        let value = builder.unit(Type::Unit, origin.clone()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let row = EffectRow::singleton(effect.clone());
+        let operand = builder
+            .request(
+                effect.clone(),
+                OperationId::new(effect.effect(), 0),
+                value,
+                Type::Unit,
+                row.clone(),
+                origin.clone(),
+            )
+            .unwrap();
+        let root = builder
+            .provider_state_access(
+                ProviderStateAccessNode::new(
+                    MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                    ResourceDefinitionId::new(ModuleId::new(2), 0),
+                    Box::new([Type::Inference(InferenceVariableId::new(0)), Type::Bool]),
+                    operand,
+                ),
+                Type::Unit,
+                row.clone(),
+                origin,
+            )
+            .unwrap();
+        assert!(builder.requires_type_rewrite());
+        builder
+            .rewrite_types(|ty| {
+                Ok(if matches!(ty, Type::Inference(_)) {
+                    Type::Int
+                } else {
+                    ty.clone()
+                })
+            })
+            .unwrap();
+        assert!(!builder.requires_type_rewrite());
+        let start = root.index().unwrap();
+        builder
+            .recompute_effect_rows_in_range(
+                start..start + 1,
+                &EffectRow::empty(),
+                HandlerId::new(0),
+                ResumeId::new(0),
+            )
+            .unwrap();
+        let node = &builder.nodes[start];
+        assert_eq!(node.effects, row);
+        let EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) = &node.kind
+        else {
+            unreachable!()
+        };
+        assert_eq!(access.arguments(), [Type::Int, Type::Bool]);
+        assert_eq!(access.operand(), operand);
+    }
+
+    #[test]
+    fn provider_state_access_admission_has_exact_budget_and_disposes_rejected_payloads() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                use crate::{
+                    interface::{InterfaceId, MethodId},
+                    resolved::ResourceDefinitionId,
+                };
+                let source = SourceFile::new("state-access-admission", "()").unwrap();
+                let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+                let deep = |depth| {
+                    (0..depth).fold(Type::Unit, |ty, _| {
+                        Type::Application(Box::new(ty), Box::new(Type::Unit))
+                    })
+                };
+                let prepare = || {
+                    let mut builder = EffectCoreBuilder::with_effect_registry(Arc::new(
+                        ResolvedRegistry::default(),
+                    ));
+                    let operand = builder.unit(Type::Unit, origin.clone()).unwrap();
+                    (builder, operand)
+                };
+                let payload = |operand, second| {
+                    ProviderStateAccessNode::new(
+                        MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                        ResourceDefinitionId::new(ModuleId::new(2), 0),
+                        Box::new([deep(120), second]),
+                        operand,
+                    )
+                };
+                let (mut measured, operand) = prepare();
+                let prefix = measured.type_work.used();
+                measured
+                    .provider_state_access(
+                        payload(operand, Type::Bool),
+                        Type::Unit,
+                        EffectRow::empty(),
+                        origin.clone(),
+                    )
+                    .unwrap();
+                let cost = measured.type_work.used() - prefix;
+                let (mut short, operand) = prepare();
+                short.type_work = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.type_work.charge(prefix).unwrap();
+                assert_eq!(
+                    short.provider_state_access(
+                        payload(operand, Type::Bool),
+                        Type::Unit,
+                        EffectRow::empty(),
+                        origin.clone()
+                    ),
+                    Err(super::super::BuildError::TypeWorkExceeded)
+                );
+                assert_eq!(short.nodes.len(), 1);
+                for _ in 0..2 {
+                    let (mut retry, operand) = prepare();
+                    retry.type_work = TypeWorkBudget::with_limit(prefix + cost);
+                    retry.type_work.charge(prefix).unwrap();
+                    retry
+                        .provider_state_access(
+                            payload(operand, Type::Bool),
+                            Type::Unit,
+                            EffectRow::empty(),
+                            origin.clone(),
+                        )
+                        .unwrap();
+                    assert_eq!(retry.type_work.used(), prefix + cost);
+                }
+                let (mut rejected, operand) = prepare();
+                let too_deep = || {
+                    (0..32_000).fold(Type::Unit, |ty, _| {
+                        Type::Function(Box::new(Type::Unit), Box::new(ty))
+                    })
+                };
+                let rejected_payload = ProviderStateAccessNode::new(
+                    MethodId::new(InterfaceId::new(ModuleId::new(1), 0), 0),
+                    ResourceDefinitionId::new(ModuleId::new(2), 0),
+                    Box::new([
+                        Type::Inference(crate::types::InferenceVariableId::new(0)),
+                        deep(120),
+                        too_deep(),
+                    ]),
+                    operand,
+                );
+                assert_eq!(
+                    rejected.provider_state_access(
+                        rejected_payload,
+                        too_deep(),
+                        EffectRow::empty(),
+                        origin
+                    ),
+                    Err(super::super::BuildError::TypeDepthExceeded)
+                );
+                assert_eq!(rejected.nodes.len(), 1);
+                assert!(!rejected.requires_type_rewrite());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn discard_has_no_children_and_keeps_its_empty_row_during_recomputation() {

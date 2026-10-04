@@ -238,18 +238,60 @@ impl Expr {
     }
 }
 
+#[derive(Debug, Default)]
+struct ProviderQueryBindings {
+    lexical: Vec<(usize, usize)>,
+    parameters: Vec<usize>,
+    capture_ports: Vec<usize>,
+}
+
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
     globals: Vec<(usize, usize)>,
+    // Empty for ordinary analysis. The single fallible private carrier avoids
+    // enlarging every ordinary graph/result stack frame by three vectors.
+    provider: Vec<ProviderQueryBindings>,
     sources: Vec<Span>,
     exports: Vec<(BinderId, usize)>,
     positions: HashMap<usize, usize>,
     targets: HashMap<usize, usize>,
+    metadata: HashMap<usize, crate::types::TypeVariableId>,
     evidence: Vec<(
         (crate::interface::RequirementId, crate::interface::MethodId),
         usize,
     )>,
+}
+
+#[cfg(test)]
+pub(super) fn provider_capture_graph_for_test(
+    metadata: Option<crate::types::TypeVariableId>,
+    unknown: bool,
+) -> Graph {
+    let source = crate::source::SourceFile::new("provider-capture.ash", "x").unwrap();
+    let span = source
+        .span(crate::source::ByteRange::new(0, 1).unwrap())
+        .unwrap();
+    Graph {
+        expressions: vec![
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 0,
+                captures: vec![1],
+            },
+            if unknown { Expr::Unknown } else { Expr::Slot },
+        ],
+        globals: Vec::new(),
+        provider: Vec::new(),
+        sources: vec![span; 2],
+        exports: Vec::new(),
+        positions: HashMap::new(),
+        targets: HashMap::from([(0, 0)]),
+        metadata: metadata
+            .map(|variable| HashMap::from([(1, variable)]))
+            .unwrap_or_default(),
+        evidence: Vec::new(),
+    }
 }
 
 pub(super) struct CallSuccessors {
@@ -258,7 +300,256 @@ pub(super) struct CallSuccessors {
     pub(super) returns: bool,
 }
 
+#[cfg(test)]
+pub(super) fn provider_typed_capture_graph_for_test(
+    metadata: Option<crate::types::TypeVariableId>,
+    unknown: bool,
+    capture: bool,
+) -> Graph {
+    let mut graph = provider_capture_graph_for_test(metadata, unknown);
+    graph.expressions[0] = Expr::Function {
+        parameters: vec![2],
+        body: 3,
+        captures: if capture { vec![1] } else { Vec::new() },
+    };
+    graph.expressions.push(Expr::Slot);
+    graph.expressions.push(Expr::Scalar);
+    graph.sources.resize(4, graph.sources[0]);
+    graph.positions.insert(0, 3);
+    graph
+}
+
 impl Graph {
+    fn provider_bindings<'a>(
+        storage: &'a mut Vec<ProviderQueryBindings>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<&'a mut ProviderQueryBindings, Failure> {
+        if storage.is_empty() {
+            charge(budget, 1)?;
+            storage
+                .try_reserve_exact(1)
+                .map_err(|_| Failure::Resource)?;
+            storage.push(ProviderQueryBindings::default());
+        }
+        storage.first_mut().ok_or(Failure::Invalid)
+    }
+
+    fn capture_ports(&self) -> &[usize] {
+        self.provider
+            .first()
+            .map_or(&[], |provider| &provider.capture_ports[..])
+    }
+
+    fn install_provider_ports(
+        &mut self,
+        ports: &[crate::core::NodeId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if ports.is_empty() {
+            return Ok(());
+        }
+        charge(budget, ports.len())?;
+        let provider = Self::provider_bindings(&mut self.provider, budget)?;
+        provider
+            .capture_ports
+            .try_reserve_exact(ports.len())
+            .map_err(|_| Failure::Resource)?;
+        provider
+            .capture_ports
+            .extend(ports.iter().map(|node| index(*node)));
+        Ok(())
+    }
+
+    fn install_provider_parameters(
+        &mut self,
+        parameters: &[BinderId],
+        symbols: &HashMap<BinderId, usize>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if parameters.is_empty() {
+            return Ok(());
+        }
+        charge(budget, parameters.len())?;
+        let provider = Self::provider_bindings(&mut self.provider, budget)?;
+        provider
+            .parameters
+            .try_reserve_exact(parameters.len())
+            .map_err(|_| Failure::Resource)?;
+        for binder in parameters {
+            charge(budget, 1)?;
+            if let Some(slot) = symbols.get(binder) {
+                provider.parameters.push(*slot);
+            }
+        }
+        Ok(())
+    }
+
+    /// Retain actual lexical initializers available at this checked flow call.
+    /// These are local slots, never imported/global source definitions.
+    pub(super) fn retain_provider_lexical<F: CoreOperationFamily>(
+        &mut self,
+        nodes: &[StoredNode<F>],
+        environment: &[BinderId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, nodes.len())?;
+        for (id, node) in nodes.iter().enumerate() {
+            let mut retain =
+                |binder: BinderId, slot: usize, initializer: usize, budget: &mut TypeWorkBudget| {
+                    charge(budget, environment.len())?;
+                    if environment.contains(&binder) {
+                        charge(budget, 1)?;
+                        let provider = Self::provider_bindings(&mut self.provider, budget)?;
+                        provider
+                            .lexical
+                            .try_reserve(1)
+                            .map_err(|_| Failure::Resource)?;
+                        provider.lexical.push((slot, initializer));
+                    }
+                    Ok(())
+                };
+            match (F::pure(&node.kind), &self.expressions[id]) {
+                (
+                    Some(PureExprKind::Computation(PureComputation::Bind(binding))),
+                    Expr::Bind {
+                        binder,
+                        initializer,
+                        ..
+                    },
+                ) => {
+                    retain(binding.binder().id(), *binder, *initializer, budget)?;
+                }
+                (
+                    Some(PureExprKind::Computation(PureComputation::RecursiveBind(binding))),
+                    Expr::Recursive { bindings, .. },
+                ) => {
+                    charge(budget, binding.members().len())?;
+                    if binding.members().len() != bindings.len() {
+                        return Err(Failure::Invalid);
+                    }
+                    for (member, (slot, initializer)) in binding.members().iter().zip(bindings) {
+                        retain(member.binder().id(), *slot, *initializer, budget)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Inspect only the selected closure's retained dependencies. Metadata
+    /// slots require an authenticated concrete instantiation from the caller;
+    /// unresolved lexical slots and privileged values never become scalars.
+    pub(super) fn check_provider_selected_captures(
+        &self,
+        target: usize,
+        metadata: &[crate::types::TypeVariableId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.targets.len())?;
+        let expression = self
+            .targets
+            .iter()
+            .find_map(|(expression, candidate)| (*candidate == target).then_some(*expression))
+            .ok_or(Failure::Invalid)?;
+        let Expr::Function { captures, .. } =
+            self.expressions.get(expression).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        let mut pending = copy_slice(captures, budget)?;
+        let mut visited = HashSet::new();
+        while let Some(id) = pending.pop() {
+            charge(budget, 1)?;
+            if visited.contains(&id) {
+                continue;
+            }
+            charge(budget, 1)?;
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            visited.insert(id);
+            if let Some(variable) = self.metadata.get(&id) {
+                charge(budget, metadata.len())?;
+                if !metadata.contains(variable) {
+                    return Err(Failure::Invalid);
+                }
+                continue;
+            }
+            let children: &[usize] = match self.expressions.get(id).ok_or(Failure::Invalid)? {
+                Expr::Scalar | Expr::Constructor(_) => &[],
+                Expr::Alias(value) | Expr::Project { value, .. } => std::slice::from_ref(value),
+                Expr::Merge(values) | Expr::Tuple(values) => values,
+                Expr::Function { captures, .. } => captures,
+                Expr::Slot => {
+                    charge(budget, self.globals.len())?;
+                    let value = self
+                        .globals
+                        .iter()
+                        .find_map(|(binder, value)| (*binder == id).then_some(value))
+                        .ok_or(Failure::Invalid)?;
+                    std::slice::from_ref(value)
+                }
+                _ => return Err(Failure::Invalid),
+            };
+            charge(budget, children.len())?;
+            pending
+                .try_reserve(children.len())
+                .map_err(|_| Failure::Resource)?;
+            pending.extend(children);
+        }
+        Ok(())
+    }
+
+    pub(super) fn provider_source(
+        &self,
+        target: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Span, Failure> {
+        charge(budget, self.targets.len())?;
+        let expression = self
+            .targets
+            .iter()
+            .find_map(|(expression, candidate)| (*candidate == target).then_some(*expression))
+            .ok_or(Failure::Invalid)?;
+        self.sources
+            .get(expression)
+            .copied()
+            .ok_or(Failure::Invalid)
+    }
+
+    pub(super) fn start_provider(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Analysis<'_>, Failure> {
+        let mut analysis = Analysis::new(self, budget)?;
+        analysis.provider_closed_data = true;
+        for &(binder, value) in &self.globals {
+            let initializer = analysis.slot(value, 0, budget)?;
+            let binder = analysis.slot(binder, 0, budget)?;
+            analysis.edge(binder, initializer, budget)?;
+        }
+        for &(binder, value) in self
+            .provider
+            .first()
+            .map_or(&[][..], |provider| &provider.lexical)
+        {
+            charge(budget, 1)?;
+            let initializer = analysis.slot(value, 0, budget)?;
+            let binder = analysis.slot(binder, 0, budget)?;
+            analysis.edge(binder, initializer, budget)?;
+        }
+        for &parameter in self
+            .provider
+            .first()
+            .map_or(&[][..], |provider| &provider.parameters)
+        {
+            charge(budget, 1)?;
+            let slot = analysis.slot(parameter, 0, budget)?;
+            analysis.atom(slot, Atom::Free, budget)?;
+        }
+        analysis.close(budget)?;
+        Ok(analysis)
+    }
+
     // A cut freezes lexical inputs, not the initializers or local binders that
     // execution has yet to produce. Functions contribute their actual captures.
     fn free_inputs(&self, root: usize, budget: &mut TypeWorkBudget) -> Result<Vec<usize>, Failure> {
@@ -463,6 +754,17 @@ impl Graph {
             if !visited.insert(id) {
                 continue;
             }
+            if !self.capture_ports().is_empty() {
+                charge(budget, self.capture_ports().len())?;
+                if self.capture_ports().contains(&id) {
+                    charge(budget, captures.len())?;
+                    if !captures.contains(&id) {
+                        captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        captures.push(id);
+                    }
+                    continue;
+                }
+            }
             for method in methods.at(id, budget)? {
                 if index(method.node) == id {
                     if let super::MethodTarget::Adapter { value, .. } = method.target {
@@ -614,6 +916,29 @@ impl Graph {
         Ok(bindings)
     }
 
+    /// Raw selected-producer occurrences outside authenticated source cuts
+    /// retain no ordinary source-call authority. Adapter construction uses
+    /// its separate canonical import relation, never these raw occurrences.
+    pub(super) fn refuse_provider_dictionary_variables<F: CoreOperationFamily>(
+        &mut self,
+        nodes: &[StoredNode<F>],
+        variables: &[crate::core::NodeId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, variables.len())?;
+        for variable in variables {
+            let id = index(*variable);
+            if !matches!(
+                F::pure(&nodes.get(id).ok_or(Failure::Invalid)?.kind),
+                Some(PureExprKind::Variable(_))
+            ) {
+                return Err(Failure::Invalid);
+            }
+            *self.expressions.get_mut(id).ok_or(Failure::Invalid)? = Expr::Unknown;
+        }
+        Ok(())
+    }
+
     fn build_adapters(
         &mut self,
         adapters: &[super::MethodAdapter],
@@ -748,6 +1073,7 @@ impl Graph {
                     index(function.body()),
                     &[function.parameter().id()],
                     methods,
+                    self.capture_ports(),
                     budget,
                 )? {
                     let slot = self.symbol(symbols, binder, source, budget)?;
@@ -878,6 +1204,7 @@ impl Graph {
                     index(abstraction.body()),
                     &[],
                     methods,
+                    self.capture_ports(),
                     budget,
                 )? {
                     let slot = self.symbol(symbols, binder, source, budget)?;
@@ -1003,6 +1330,7 @@ impl Graph {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
         Ok(match operation(&node.kind) {
+            Some(EffectOperation::ProviderStateAccess(_)) => Expr::Unknown,
             Some(EffectOperation::Cleanup(scope)) => Expr::Cleanup {
                 body: index(scope.body),
                 action: index(scope.action),
@@ -1036,6 +1364,7 @@ impl Graph {
                         index(clause.body()),
                         &[],
                         methods,
+                        self.capture_ports(),
                         budget,
                     )? {
                         let slot = self.symbol(symbols, binder, source, budget)?;
@@ -1099,16 +1428,20 @@ impl Graph {
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &[super::MethodUse],
         adapters: &[super::MethodAdapter],
+        independent_parameters: &[BinderId],
+        capture_ports: &[crate::core::NodeId],
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         let methods = super::MethodUses::new(methods, budget)?;
         let mut graph = Self {
             expressions: Vec::new(),
             globals: Vec::new(),
+            provider: Vec::new(),
             sources: Vec::new(),
             exports: Vec::new(),
             positions: HashMap::new(),
             targets: HashMap::new(),
+            metadata: HashMap::new(),
             evidence: Vec::new(),
         };
         charge(budget, nodes.len())?;
@@ -1128,6 +1461,7 @@ impl Graph {
         }
         let mut symbols = HashMap::new();
         let mut types = HashMap::new();
+        graph.install_provider_ports(capture_ports, budget)?;
         let adapter_values = graph.build_adapters(adapters, &mut symbols, &mut types, budget)?;
         for (binder, node) in globals {
             let slot = graph.symbol(&mut symbols, *binder, graph.sources[index(*node)], budget)?;
@@ -1217,6 +1551,14 @@ impl Graph {
                 };
             }
         }
+        charge(budget, types.len())?;
+        graph
+            .metadata
+            .try_reserve(types.len())
+            .map_err(|_| Failure::Resource)?;
+        graph
+            .metadata
+            .extend(types.iter().map(|(variable, slot)| (*slot, *variable)));
         let mut retained = Vec::new();
         for (binder, summary) in imports {
             charge(budget, retained.len() + 1)?;
@@ -1272,6 +1614,17 @@ impl Graph {
                 for (&code, &expression) in &imported.positions {
                     graph.position(code + code_offset, expression + offset, budget)?;
                 }
+                charge(budget, imported.metadata.len())?;
+                graph
+                    .metadata
+                    .try_reserve(imported.metadata.len())
+                    .map_err(|_| Failure::Resource)?;
+                graph.metadata.extend(
+                    imported
+                        .metadata
+                        .iter()
+                        .map(|(slot, variable)| (slot + offset, *variable)),
+                );
                 charge(budget, imported.targets.len())?;
                 graph
                     .targets
@@ -1313,6 +1666,7 @@ impl Graph {
                 graph.globals.push((*local, value + offset));
             }
         }
+        graph.install_provider_parameters(independent_parameters, &symbols, budget)?;
         // A declared symbolic parameter can still be unresolved during closure.
         // A body-free external binder is instead explicitly opaque from entry.
         let mut defined = HashSet::new();
@@ -1496,6 +1850,7 @@ pub(super) struct Analysis<'a> {
     frozen_contexts: usize,
     focus: Option<(usize, usize)>,
     cuts: HashMap<(usize, usize, usize), PreparedCut>,
+    provider_closed_data: bool,
 }
 
 impl<'a> Analysis<'a> {
@@ -1711,6 +2066,134 @@ impl<'a> Analysis<'a> {
         self.slots[target].terminal = true;
         for atom in copy_slice(&self.slots[source].atoms, budget)? {
             self.atom(target, atom, budget)?;
+        }
+        Ok(())
+    }
+
+    /// Seed a real source callable with an independently checked closed-data input.
+    pub(super) fn provider_invoke(
+        &mut self,
+        target: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        charge(budget, self.graph.targets.len())?;
+        let target = self
+            .graph
+            .targets
+            .iter()
+            .find_map(|(expression, candidate)| (*candidate == target).then_some(*expression))
+            .ok_or(Failure::Invalid)?;
+        let Expr::Function {
+            parameters,
+            body,
+            captures,
+        } = &self.graph.expressions[target]
+        else {
+            return Err(Failure::Invalid);
+        };
+        if parameters.len() != 1 {
+            return Err(Failure::Invalid);
+        }
+        let context = self.context(0, Transition::Invoke(usize::MAX, target), budget)?;
+        let parameter = self.slot(parameters[0], context, budget)?;
+        self.atom(parameter, Atom::Free, budget)?;
+        for capture in captures {
+            let source = self.slot(*capture, 0, budget)?;
+            let destination = self.slot(*capture, context, budget)?;
+            self.edge(destination, source, budget)?;
+        }
+        self.slot(*body, context, budget)?;
+        self.close(budget)?;
+        Ok(context)
+    }
+
+    pub(super) fn provider_captures(
+        &mut self,
+        target: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.graph.targets.len())?;
+        let expression = self
+            .graph
+            .targets
+            .iter()
+            .find_map(|(expression, candidate)| (*candidate == target).then_some(*expression))
+            .ok_or(Failure::Invalid)?;
+        let Expr::Function { captures, .. } = &self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        for capture in captures {
+            let slot = *self
+                .indices
+                .get(&(*capture, context))
+                .ok_or(Failure::Invalid)?;
+            self.provider_independent_slot(slot, true, budget)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn provider_result(
+        &mut self,
+        code: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let slot = self.port(code, context, budget)?;
+        self.close(budget)?;
+        self.provider_independent_slot(slot, false, budget)
+    }
+
+    fn provider_independent_slot(
+        &self,
+        root: usize,
+        allow_callable: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[root], budget)?;
+        let mut visited = HashSet::new();
+        while let Some(slot) = pending.pop() {
+            charge(budget, 1)?;
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            if !visited.insert(slot) {
+                continue;
+            }
+            let atoms = &self.slots.get(slot).ok_or(Failure::Invalid)?.atoms;
+            if atoms.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            for atom in atoms {
+                let fields = match *atom {
+                    Atom::Free | Atom::Constructor(_) => None,
+                    Atom::Closure(target, context) if allow_callable => {
+                        let Expr::Function { captures, .. } = &self.graph.expressions[target]
+                        else {
+                            return Err(Failure::Invalid);
+                        };
+                        Some((captures.as_slice(), context))
+                    }
+                    Atom::Aggregate(target, context) => match &self.graph.expressions[target] {
+                        Expr::Tuple(fields) => Some((fields.as_slice(), context)),
+                        Expr::Call { arguments, .. } => Some((arguments.as_slice(), context)),
+                        _ => return Err(Failure::Invalid),
+                    },
+                    _ => return Err(Failure::Invalid),
+                };
+                if let Some((fields, context)) = fields {
+                    charge(budget, fields.len())?;
+                    pending
+                        .try_reserve(fields.len())
+                        .map_err(|_| Failure::Resource)?;
+                    for field in fields {
+                        pending.push(
+                            *self
+                                .indices
+                                .get(&(*field, context))
+                                .ok_or(Failure::Invalid)?,
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -2015,6 +2498,7 @@ impl<'a> Analysis<'a> {
             frozen_contexts: 0,
             focus: None,
             cuts: HashMap::new(),
+            provider_closed_data: false,
         })
     }
 
@@ -2351,6 +2835,9 @@ impl<'a> Analysis<'a> {
                                 _ => {}
                             }
                         }
+                        Atom::Free if self.provider_closed_data => {
+                            self.atom(slot, Atom::Free, budget)?;
+                        }
                         Atom::Unknown => {
                             self.atom(slot, Atom::Unknown, budget)?;
                             for dependency in self.dependencies(value, budget)? {
@@ -2645,11 +3132,44 @@ mod tests {
             sources: vec![span; expressions.len()],
             expressions,
             globals: Vec::new(),
+            provider: Vec::new(),
             exports: Vec::new(),
             positions: HashMap::new(),
             targets: HashMap::new(),
+            metadata: HashMap::new(),
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn provider_invocation_charges_wide_target_lookup() {
+        let invocation_cost = |width| {
+            let mut graph = provider_typed_capture_graph_for_test(None, false, false);
+            for target in 1..width {
+                let expression = graph.expressions.len();
+                graph.expressions.push(Expr::Function {
+                    parameters: vec![2],
+                    body: 3,
+                    captures: Vec::new(),
+                });
+                graph.sources.push(graph.sources[0]);
+                graph.targets.insert(expression, target);
+            }
+            let mut source_work = TypeWorkBudget::unbounded();
+            graph.provider_source(0, &mut source_work).unwrap();
+            assert_eq!(source_work.used(), width);
+            assert!(matches!(
+                graph.provider_source(0, &mut TypeWorkBudget::with_limit(width - 1)),
+                Err(Failure::Resource)
+            ));
+            let mut analysis = graph
+                .start_provider(&mut TypeWorkBudget::unbounded())
+                .unwrap();
+            let mut work = TypeWorkBudget::unbounded();
+            analysis.provider_invoke(0, &mut work).unwrap();
+            work.used()
+        };
+        assert_eq!(invocation_cost(65) - invocation_cost(1), 64);
     }
 
     #[test]

@@ -1,0 +1,1534 @@
+//! Immutable host registration and identity-bound foreign declaration metadata.
+//!
+//! Registrations generate passive declarations for the ordinary frontend. They
+//! carry no dynamic symbol names and do not initialize or execute an adapter.
+use crate::{
+    interface::{InterfaceId, MethodId},
+    module::{ForeignModuleAdmission, ForeignOperationRole, ForeignRegistrationId},
+    resolved::{ResolvedEffectDeclaration, ResolvedInterfaceDeclaration, ResolvedRegistry},
+    source::Origin,
+    types::{ConstructorId, EffectId, NominalTypeId, OperationId, Type},
+};
+use std::{
+    collections::{BTreeMap, HashSet},
+    error::Error,
+    fmt,
+    sync::Arc,
+};
+
+/// One ordinary native data family, or an opaque native state family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignTypeDeclaration {
+    /// Defining nominal spelling.
+    pub name: String,
+    /// Ordered kind-Type parameters.
+    pub parameters: Vec<String>,
+    /// Opaque states expose no constructors to source imports.
+    pub opaque_state: bool,
+    /// Ordinary constructors, in codec field order. Opaque states require none.
+    pub constructors: Vec<ForeignConstructorDeclaration>,
+}
+/// A constructor and its optional ordinary Ash payload type.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignConstructorDeclaration {
+    /// Defining constructor spelling.
+    pub name: String,
+    /// Current Ash value type syntax; parsed by the existing frontend.
+    pub payload: Option<String>,
+}
+/// One parameterized native effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignEffectDeclaration {
+    /// Defining effect spelling.
+    pub name: String,
+    /// Ordered kind-Type parameters.
+    pub parameters: Vec<String>,
+    /// Exact native operations in defining order.
+    pub operations: Vec<ForeignOperationDeclaration>,
+}
+/// State/result relationship authenticated independently of operation spelling.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ForeignResultRelation {
+    /// Copied ordinary results have no native state dependency.
+    Independent,
+    /// Acquired state retains the selected effect parameter identities.
+    Acquire {
+        /// State nominal spelling.
+        state: String,
+        /// Error nominal spelling.
+        error: String,
+        /// Lifecycle report nominal spelling.
+        report: String,
+        /// Parameter positions retained by the successful state.
+        retained_parameters: Vec<usize>,
+    },
+    /// Completion reports consume or retain exactly the owned state.
+    Finish {
+        /// State nominal spelling.
+        state: String,
+        /// Error nominal spelling.
+        error: String,
+        /// Lifecycle report nominal spelling.
+        report: String,
+    },
+}
+/// A registered operation scheme and its controlled role.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignOperationDeclaration {
+    /// Defining operation spelling.
+    pub name: String,
+    /// Exact pure arrow in current Ash syntax.
+    pub signature: String,
+    /// Provider-phase authority required by the operation.
+    pub role: ForeignOperationRole,
+    /// Effect parameter that identifies the newly acquired or completed owner.
+    pub owned_identity_position: usize,
+    /// Tuple paths to borrowed states in the operation domain; an empty path is the whole domain.
+    pub state_operands: Vec<Vec<usize>>,
+    /// Whole domain argument positions retained after the operation.
+    pub retained_arguments: Vec<usize>,
+    /// State and independent-result contract.
+    pub result: ForeignResultRelation,
+}
+/// Host-selected names for the sealed generic state-access primitive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignStateAccessDeclaration {
+    /// Interface spelling; authority follows the bound InterfaceId.
+    pub interface: String,
+    /// Primitive method spelling; authority follows the bound MethodId.
+    pub method: String,
+}
+/// Bridge-authored declarations. This is not an Ash source ABI declaration.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForeignManifestSchema {
+    /// Canonical native state and ordinary data families.
+    pub types: Vec<ForeignTypeDeclaration>,
+    /// Canonical native effects and controlled operations.
+    pub effects: Vec<ForeignEffectDeclaration>,
+    /// Optional sealed generic provider primitive.
+    pub state_access: Option<ForeignStateAccessDeclaration>,
+}
+/// A rejected host registration; no entry is published on failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignRegistrationError {
+    message: String,
+    resource: bool,
+}
+impl ForeignRegistrationError {
+    pub(crate) const fn is_resource_exhaustion(&self) -> bool {
+        self.resource
+    }
+}
+impl fmt::Display for ForeignRegistrationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl Error for ForeignRegistrationError {}
+fn invalid(message: &str) -> ForeignRegistrationError {
+    ForeignRegistrationError {
+        message: message.to_owned(),
+        resource: false,
+    }
+}
+fn charge(
+    work: &mut crate::types::TypeWorkBudget,
+    amount: usize,
+) -> Result<(), ForeignRegistrationError> {
+    work.charge(amount).map_err(|()| ForeignRegistrationError {
+        message: "foreign registration type-work budget exhausted".into(),
+        resource: true,
+    })
+}
+fn identifier(name: &str, upper: bool) -> bool {
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|first| {
+        if upper {
+            first.is_ascii_uppercase()
+        } else {
+            first.is_ascii_lowercase()
+        }
+    }) && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+fn type_fragment(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 4096
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_ <>,()-".contains(&byte))
+}
+
+/// Immutable validated declaration source and manifest identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignManifest {
+    path: String,
+    id: ForeignRegistrationId,
+    source: String,
+    schema: ForeignManifestSchema,
+    digest: [u8; 32],
+}
+impl ForeignManifest {
+    /// Validates structural metadata and generates declarations for normal parsing.
+    ///
+    /// # Errors
+    /// Rejects invalid reserved paths, names, roles, budgets, or declaration fragments.
+    pub fn new(
+        path: impl Into<String>,
+        id: ForeignRegistrationId,
+        schema: ForeignManifestSchema,
+    ) -> Result<Self, ForeignRegistrationError> {
+        let path = path.into();
+        if !path
+            .strip_prefix("@foreign.")
+            .is_some_and(|tail| tail.split('.').all(|part| identifier(part, false)))
+        {
+            return Err(invalid(
+                "foreign registration requires a full @foreign module path",
+            ));
+        }
+        if schema.types.len() + schema.effects.len() > 256 {
+            return Err(invalid("foreign manifest declaration budget exceeded"));
+        }
+        let mut source = String::new();
+        let mut names = HashSet::new();
+        let mut constructor_names = HashSet::new();
+        for ty in &schema.types {
+            if !identifier(&ty.name, true)
+                || !names.insert(ty.name.clone())
+                || ty.parameters.len() > 32
+                || ty
+                    .parameters
+                    .iter()
+                    .any(|parameter| !identifier(parameter, true))
+                || ty.constructors.len() > 256
+            {
+                return Err(invalid("invalid foreign nominal declaration"));
+            }
+            if ty.opaque_state && ty.parameters.is_empty() {
+                return Err(invalid("native state requires an owner identity parameter"));
+            }
+            if ty.opaque_state != ty.constructors.is_empty() {
+                return Err(invalid(
+                    "opaque native states require no source constructors; ordinary data requires constructors",
+                ));
+            }
+            source.push_str(if ty.opaque_state {
+                "pub opaque type "
+            } else {
+                "pub type "
+            });
+            source.push_str(&ty.name);
+            append_parameters(&mut source, &ty.parameters);
+            source.push_str(" = ");
+            if ty.opaque_state {
+                source.push_str(&format!("HiddenNative{}\n", ty.name));
+            } else {
+                for (index, constructor) in ty.constructors.iter().enumerate() {
+                    if !identifier(&constructor.name, true)
+                        || !constructor_names.insert(constructor.name.clone())
+                        || constructor
+                            .payload
+                            .as_ref()
+                            .is_some_and(|payload| !type_fragment(payload))
+                    {
+                        return Err(invalid("invalid foreign codec constructor"));
+                    }
+                    if index > 0 {
+                        source.push_str("| ");
+                    }
+                    source.push_str(&constructor.name);
+                    if let Some(payload) = &constructor.payload {
+                        source.push('(');
+                        source.push_str(payload);
+                        source.push(')');
+                    }
+                    source.push('\n');
+                }
+            }
+        }
+        for effect in &schema.effects {
+            if !identifier(&effect.name, true)
+                || !names.insert(effect.name.clone())
+                || effect.parameters.is_empty()
+                || effect.parameters.len() > 32
+                || effect
+                    .parameters
+                    .iter()
+                    .any(|parameter| !identifier(parameter, true))
+                || effect.operations.is_empty()
+                || effect.operations.len() > 256
+            {
+                return Err(invalid("invalid foreign effect declaration"));
+            }
+            source.push_str("pub effect ");
+            source.push_str(&effect.name);
+            append_parameters(&mut source, &effect.parameters);
+            source.push_str(" {\n");
+            let mut operations = HashSet::new();
+            for operation in &effect.operations {
+                if !identifier(&operation.name, false)
+                    || !operations.insert(&operation.name)
+                    || !type_fragment(&operation.signature)
+                    || operation.owned_identity_position >= effect.parameters.len()
+                    || operation.state_operands.len() > 32
+                    || operation.state_operands.iter().any(|path| path.len() > 32)
+                    || operation.retained_arguments.len() > 32
+                {
+                    return Err(invalid("invalid foreign operation metadata"));
+                }
+                if !matches!(
+                    (&operation.role, &operation.result),
+                    (
+                        ForeignOperationRole::Acquire,
+                        ForeignResultRelation::Acquire { .. }
+                    ) | (
+                        ForeignOperationRole::Borrow,
+                        ForeignResultRelation::Independent
+                    ) | (
+                        ForeignOperationRole::Finish,
+                        ForeignResultRelation::Finish { .. }
+                    )
+                ) {
+                    return Err(invalid(
+                        "foreign operation role disagrees with result relation",
+                    ));
+                }
+                source.push_str(&operation.name);
+                source.push_str(" : ");
+                source.push_str(&operation.signature);
+                source.push('\n');
+            }
+            source.push_str("}\n");
+        }
+        if let Some(access) = &schema.state_access {
+            if !identifier(&access.interface, true)
+                || !identifier(&access.method, false)
+                || !names.insert(access.interface.clone())
+            {
+                return Err(invalid("invalid foreign state-access declaration"));
+            }
+            source.push_str(&format!(
+                "pub interface {}<Q, State> where Q -> State {{\n{} : Q -> State\n}}\n",
+                access.interface, access.method
+            ));
+        }
+        if source.len() > 1_048_576 {
+            return Err(invalid("foreign manifest source budget exceeded"));
+        }
+        let digest = manifest_digest(&path, id, &source, &schema);
+        Ok(Self {
+            path,
+            id,
+            source,
+            schema,
+            digest,
+        })
+    }
+    /// Returns the full reserved import path.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+    /// Returns the host registration identity.
+    #[must_use]
+    pub const fn id(&self) -> ForeignRegistrationId {
+        self.id
+    }
+    /// Returns generated passive declaration source.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    /// Returns a digest covering declaration source and relational metadata.
+    #[must_use]
+    pub const fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
+}
+fn append_parameters(source: &mut String, parameters: &[String]) {
+    if !parameters.is_empty() {
+        source.push('<');
+        source.push_str(&parameters.join(", "));
+        source.push('>');
+    }
+}
+fn manifest_digest(
+    path: &str,
+    id: ForeignRegistrationId,
+    source: &str,
+    schema: &ForeignManifestSchema,
+) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    // Frame path, registration identity, generated declarations, and schema.
+    // Schema fields contain only ordered vectors and fixed enum/field order;
+    // declaration order also determines canonical operation/constructor IDs.
+    for component in [
+        path.to_owned(),
+        id.value().to_string(),
+        source.to_owned(),
+        format!("{schema:?}"),
+    ] {
+        hasher.update((component.len() as u64).to_le_bytes());
+        hasher.update(component.as_bytes());
+    }
+    hasher.finalize().into()
+}
+/// An immutable map keyed by full absolute foreign module path.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ForeignRegistrations {
+    entries: BTreeMap<String, Arc<ForeignManifest>>,
+}
+impl ForeignRegistrations {
+    /// Admits a complete table atomically, rejecting repeated paths or registration IDs.
+    /// # Errors
+    /// Returns an error on duplicate path or host identity.
+    pub fn new(
+        manifests: impl IntoIterator<Item = ForeignManifest>,
+    ) -> Result<Self, ForeignRegistrationError> {
+        let mut entries = BTreeMap::new();
+        let mut ids = HashSet::new();
+        for manifest in manifests {
+            if entries.len() >= 256
+                || entries.contains_key(manifest.path())
+                || !ids.insert(manifest.id())
+            {
+                return Err(invalid(
+                    "duplicate foreign path/identity or registration table budget exceeded",
+                ));
+            }
+            entries.insert(manifest.path.clone(), Arc::new(manifest));
+        }
+        Ok(Self { entries })
+    }
+    /// Looks up an exact path, with no spelling or filesystem fallback.
+    #[must_use]
+    pub fn get(&self, path: &str) -> Option<&Arc<ForeignManifest>> {
+        self.entries.get(path)
+    }
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ForeignModuleSource {
+    pub admission: ForeignModuleAdmission,
+    pub manifest: Arc<ForeignManifest>,
+}
+/// Canonical identity and provenance of one native state family.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignStateFact {
+    /// Opaque defining nominal.
+    pub id: NominalTypeId,
+    /// Ordered lineage positions.
+    pub parameter_count: usize,
+    /// State parameter that identifies its owner.
+    pub owned_identity_position: usize,
+    /// Defining provenance.
+    pub origin: Origin,
+}
+/// Canonical lifecycle/result relation, with no source-name authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ForeignResultFact {
+    /// Copied independent data.
+    Independent,
+    /// Guarded acquired state and distinct error/report families.
+    Acquire {
+        /// Native state identity.
+        state: NominalTypeId,
+        /// Error identity.
+        error: NominalTypeId,
+        /// Lifecycle report identity.
+        report: NominalTypeId,
+        /// Acquired/refused codec alternatives in order.
+        constructors: Vec<ConstructorId>,
+        /// Dependency parameters retained by acquired state.
+        retained_parameters: Vec<usize>,
+    },
+    /// Consumed/retained owned-state postcondition.
+    Finish {
+        /// Native state identity.
+        state: NominalTypeId,
+        /// Error identity.
+        error: NominalTypeId,
+        /// Lifecycle report identity.
+        report: NominalTypeId,
+        /// Consumed/consumed-failure/retained alternatives in order.
+        constructors: Vec<ConstructorId>,
+    },
+}
+/// A state operand's defining type and mapping to effect parameter lineage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignStateOperandFact {
+    /// Tuple path within the operation domain.
+    pub path: Vec<usize>,
+    /// Native state nominal.
+    pub state: NominalTypeId,
+    /// Effect coordinates for each state type argument.
+    pub lineage: Vec<usize>,
+}
+/// Canonical registered operation and its exact resolved scheme.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignOperationFact {
+    /// Defining operation identity.
+    pub id: OperationId,
+    /// Exact controlled role.
+    pub role: ForeignOperationRole,
+    /// Owned effect identity coordinate.
+    pub owned_identity_position: usize,
+    /// Borrowed state domain paths.
+    pub state_operands: Vec<Vec<usize>>,
+    /// Bound current/enclosing state lineage.
+    pub state_lineage: Vec<ForeignStateOperandFact>,
+    /// Retained whole domain arguments.
+    pub retained_arguments: Vec<usize>,
+    /// Result relationship schema.
+    pub result: ForeignResultFact,
+    /// Exact resolved value type.
+    pub signature: Type,
+    /// Defining provenance.
+    pub origin: Origin,
+}
+/// Authenticated provider primitive identities.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignStateAccessFact {
+    /// Sealed defining interface.
+    pub interface: InterfaceId,
+    /// Controlled method.
+    pub method: MethodId,
+    /// Defining provenance.
+    pub origin: Origin,
+}
+/// Body-free foreign authority retained through checking, imports and linking.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignModuleFact {
+    canonical_registry: Arc<ResolvedRegistry>,
+    canonical_interfaces: Vec<ResolvedInterfaceDeclaration>,
+    canonical_admission: ForeignModuleAdmission,
+    manifest: Arc<ForeignManifest>,
+
+    /// Loader-authenticated admission.
+    pub admission: ForeignModuleAdmission,
+    /// Opaque state identities.
+    pub states: Vec<ForeignStateFact>,
+    /// Canonical data families by codec role spelling.
+    pub data_types: BTreeMap<String, NominalTypeId>,
+    /// Canonical codec constructors.
+    pub constructors: BTreeMap<String, ConstructorId>,
+    /// Registered effect identities.
+    pub effects: Vec<EffectId>,
+    /// Controlled operations.
+    pub operations: Vec<ForeignOperationFact>,
+    /// Optional provider primitive.
+    pub state_access: Option<ForeignStateAccessFact>,
+}
+
+impl Drop for ForeignModuleFact {
+    fn drop(&mut self) {
+        for interface in self.canonical_interfaces.drain(..) {
+            crate::resolved::discard_resolved_interface_iteratively(interface);
+        }
+        for operation in self.operations.drain(..) {
+            crate::types::discard_type_iteratively(operation.signature);
+            crate::source::discard_origin_iteratively(operation.origin);
+        }
+        for state in self.states.drain(..) {
+            crate::source::discard_origin_iteratively(state.origin);
+        }
+        if let Some(access) = self.state_access.take() {
+            crate::source::discard_origin_iteratively(access.origin);
+        }
+        for admission in [&mut self.admission, &mut self.canonical_admission] {
+            let placeholder = Origin::Source(admission.origin.primary_span());
+            crate::source::discard_origin_iteratively(std::mem::replace(
+                &mut admission.origin,
+                placeholder,
+            ));
+        }
+    }
+}
+
+impl ForeignModuleFact {
+    fn set_state_access(&mut self, access: ForeignStateAccessFact) {
+        if let Some(displaced) = self.state_access.replace(access) {
+            crate::source::discard_origin_iteratively(displaced.origin);
+        }
+    }
+
+    pub(crate) fn authenticate(
+        &self,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<(), ForeignRegistrationError> {
+        if self.admission != self.canonical_admission {
+            return Err(invalid("foreign admission certificate changed"));
+        }
+        let source = ForeignModuleSource {
+            admission: self.admission.clone(),
+            manifest: Arc::clone(&self.manifest),
+        };
+        let expected = source.bind(
+            &self.canonical_registry,
+            self.canonical_registry.effects(),
+            &self.canonical_interfaces,
+            work,
+        )?;
+        charge(work, self.operations.len())?;
+        for operation in &self.operations {
+            crate::types::charge_type_cells(&operation.signature, work).map_err(|()| {
+                ForeignRegistrationError {
+                    message: "foreign registration type work exhausted".into(),
+                    resource: true,
+                }
+            })?;
+        }
+        if expected.as_ref() != self {
+            return Err(invalid(
+                "foreign registration certificate disagrees with admitted declarations",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn canonical_registry(&self) -> &ResolvedRegistry {
+        &self.canonical_registry
+    }
+    pub(crate) fn canonical_interfaces(&self) -> &[ResolvedInterfaceDeclaration] {
+        &self.canonical_interfaces
+    }
+}
+impl ForeignModuleSource {
+    pub(crate) fn bind(
+        &self,
+        registry: &Arc<ResolvedRegistry>,
+        effects: &[ResolvedEffectDeclaration],
+        interfaces: &[ResolvedInterfaceDeclaration],
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<Arc<ForeignModuleFact>, ForeignRegistrationError> {
+        if self.admission.registration_id != self.manifest.id()
+            || self.admission.manifest_digest != self.manifest.digest()
+        {
+            return Err(invalid("foreign manifest admission identity differs"));
+        }
+        charge(
+            work,
+            registry
+                .nominals()
+                .len()
+                .saturating_add(effects.len())
+                .saturating_add(interfaces.len()),
+        )?;
+        for interface in interfaces {
+            charge(
+                work,
+                interface
+                    .parameters
+                    .len()
+                    .saturating_add(interface.methods.len()),
+            )?;
+            for method in &interface.methods {
+                crate::types::charge_type_cells(&method.annotation.ty, work).map_err(|()| {
+                    ForeignRegistrationError {
+                        message: "foreign registration type-work budget exhausted".into(),
+                        resource: true,
+                    }
+                })?;
+            }
+        }
+        let mut fact = ForeignModuleFact {
+            canonical_registry: Arc::clone(registry),
+            canonical_interfaces: interfaces.to_vec(),
+            canonical_admission: self.admission.clone(),
+            manifest: Arc::clone(&self.manifest),
+            admission: self.admission.clone(),
+            states: Vec::new(),
+            data_types: BTreeMap::new(),
+            constructors: BTreeMap::new(),
+            effects: Vec::new(),
+            operations: Vec::new(),
+            state_access: None,
+        };
+        if registry.nominals().len() != self.manifest.schema.types.len()
+            || effects.len() != self.manifest.schema.effects.len()
+            || interfaces.len() != usize::from(self.manifest.schema.state_access.is_some())
+        {
+            return Err(invalid("foreign declarations disagree with manifest"));
+        }
+        for declaration in &self.manifest.schema.types {
+            charge(
+                work,
+                declaration
+                    .parameters
+                    .len()
+                    .saturating_add(declaration.constructors.len())
+                    .saturating_add(1),
+            )?;
+            let nominal = registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == declaration.name)
+                .ok_or_else(|| invalid("foreign type missing"))?;
+            let parameters = registry
+                .nominal_parameters(nominal.id)
+                .ok_or_else(|| invalid("foreign type parameters missing"))?;
+            if parameters.len() != declaration.parameters.len()
+                || nominal.id.module() != fact.admission.module_id
+            {
+                return Err(invalid("foreign type identity or arity differs"));
+            }
+            if declaration.opaque_state {
+                fact.states.push(ForeignStateFact {
+                    id: nominal.id,
+                    parameter_count: parameters.len(),
+                    owned_identity_position: 0,
+                    origin: nominal.origin.clone(),
+                });
+            } else {
+                fact.data_types.insert(declaration.name.clone(), nominal.id);
+                if nominal.constructors.len() != declaration.constructors.len() {
+                    return Err(invalid("foreign constructor count differs"));
+                }
+                for (id, constructor) in nominal.constructors.iter().zip(&declaration.constructors)
+                {
+                    let actual = registry
+                        .constructor(*id)
+                        .ok_or_else(|| invalid("foreign constructor missing"))?;
+                    if actual.spelling != constructor.name || actual.owner != nominal.id {
+                        return Err(invalid("foreign constructor identity differs"));
+                    }
+                    fact.constructors.insert(constructor.name.clone(), *id);
+                }
+            }
+        }
+        for declaration in &self.manifest.schema.effects {
+            let effect = effects
+                .iter()
+                .find(|effect| effect.spelling == declaration.name)
+                .ok_or_else(|| invalid("foreign effect missing"))?;
+            if effect.operations.len() != declaration.operations.len()
+                || effect.parameters.len() != declaration.parameters.len()
+                || effect.id.module() != fact.admission.module_id
+            {
+                return Err(invalid("foreign effect identity or arity differs"));
+            }
+            fact.effects.push(effect.id);
+            for (operation, metadata) in effect.operations.iter().zip(&declaration.operations) {
+                if operation.spelling != metadata.name {
+                    return Err(invalid("foreign operation identity differs"));
+                }
+                charge(
+                    work,
+                    metadata
+                        .state_operands
+                        .iter()
+                        .map(Vec::len)
+                        .sum::<usize>()
+                        .saturating_add(metadata.retained_arguments.len())
+                        .saturating_add(effect.parameters.len())
+                        .saturating_add(1),
+                )?;
+                validate_operation(
+                    registry,
+                    &fact,
+                    effect,
+                    &operation.annotation.ty,
+                    metadata,
+                    work,
+                )?;
+                fact.operations.push(ForeignOperationFact {
+                    id: operation.id,
+                    role: metadata.role,
+                    owned_identity_position: metadata.owned_identity_position,
+                    state_operands: metadata.state_operands.clone(),
+                    state_lineage: bind_state_lineage(&operation.annotation.ty, metadata, effect),
+                    retained_arguments: metadata.retained_arguments.clone(),
+                    result: bind_result(&metadata.result, registry, &fact),
+                    signature: crate::types::clone_type_with_budget(&operation.annotation.ty, work)
+                        .map_err(|()| ForeignRegistrationError {
+                            message: "foreign registration type-work budget exhausted".into(),
+                            resource: true,
+                        })?,
+                    origin: operation.origin.clone(),
+                });
+            }
+        }
+        if let Some(declaration) = &self.manifest.schema.state_access {
+            let interface = interfaces
+                .iter()
+                .find(|interface| interface.spelling == declaration.interface)
+                .ok_or_else(|| invalid("foreign state-access interface missing"))?;
+            let [method] = interface.methods.as_ref() else {
+                return Err(invalid("foreign state-access method count differs"));
+            };
+            let [q, state] = interface.parameters.as_ref() else {
+                return Err(invalid("foreign state-access arity differs"));
+            };
+            let determination = interface
+                .determination
+                .as_ref()
+                .ok_or_else(|| invalid("foreign state-access determination missing"))?;
+            if method.spelling != declaration.method
+                || method.annotation.ty
+                    != Type::function(Type::Variable(q.id), Type::Variable(state.id))
+                || determination.determinant.parameters.len() != 1
+                || determination.dependent.parameters.len() != 1
+                || determination.determinant.parameters[0].id != q.id
+                || determination.dependent.parameters[0].id != state.id
+            {
+                return Err(invalid("foreign state-access scheme differs"));
+            }
+            fact.set_state_access(ForeignStateAccessFact {
+                interface: interface.id,
+                method: method.id,
+                origin: interface.origin.clone(),
+            });
+        }
+        Ok(Arc::new(fact))
+    }
+}
+fn nominal_application(id: NominalTypeId, arguments: impl IntoIterator<Item = Type>) -> Type {
+    arguments
+        .into_iter()
+        .fold(Type::Nominal(id), |function, argument| {
+            Type::Application(Box::new(function), Box::new(argument))
+        })
+}
+fn application(ty: &Type) -> (&Type, Vec<&Type>) {
+    let mut head = ty;
+    let mut arguments = Vec::new();
+    while let Type::Application(function, argument) = head {
+        arguments.push(argument.as_ref());
+        head = function;
+    }
+    arguments.reverse();
+    (head, arguments)
+}
+fn at_path<'a>(mut ty: &'a Type, path: &[usize]) -> Option<&'a Type> {
+    for &index in path {
+        let Type::Tuple(fields) = ty else { return None };
+        ty = fields.get(index)?;
+    }
+    Some(ty)
+}
+fn validate_operation(
+    registry: &ResolvedRegistry,
+    fact: &ForeignModuleFact,
+    effect: &ResolvedEffectDeclaration,
+    signature: &Type,
+    metadata: &ForeignOperationDeclaration,
+    work: &mut crate::types::TypeWorkBudget,
+) -> Result<(), ForeignRegistrationError> {
+    let Type::Function(domain, result) = signature else {
+        return Err(invalid("foreign operation requires one pure arrow"));
+    };
+    let mut actual_state_paths = Vec::new();
+    let mut domains = vec![(domain.as_ref(), Vec::<usize>::new())];
+    while let Some((ty, path)) = domains.pop() {
+        charge(work, path.len().saturating_add(1))?;
+        let (head, _) = application(ty);
+        if matches!(head,Type::Nominal(id) if fact.states.iter().any(|state|state.id==*id)) {
+            actual_state_paths.push(path);
+        } else if let Type::Tuple(fields) = ty {
+            for (index, field) in fields.iter().enumerate() {
+                let mut child = path.clone();
+                child.push(index);
+                domains.push((field, child));
+            }
+        } else {
+            validate_independent_data(registry, fact, effect, ty, work)?;
+        }
+    }
+    if actual_state_paths.len() != metadata.state_operands.len()
+        || actual_state_paths
+            .iter()
+            .any(|path| !metadata.state_operands.contains(path))
+    {
+        return Err(invalid(
+            "foreign domain has undeclared native state operands",
+        ));
+    }
+    let mut seen_paths = HashSet::new();
+    for path in &metadata.state_operands {
+        if !seen_paths.insert(path) {
+            return Err(invalid("duplicate foreign state operand"));
+        }
+        let state = at_path(domain, path)
+            .ok_or_else(|| invalid("foreign state operand path is invalid"))?;
+        let (head, arguments) = application(state);
+        let Type::Nominal(id) = head else {
+            return Err(invalid("foreign state operand is not a native nominal"));
+        };
+        let state_fact = fact
+            .states
+            .iter()
+            .find(|state| state.id == *id)
+            .ok_or_else(|| invalid("foreign state operand is not registered"))?;
+        if arguments.len()!=state_fact.parameter_count || arguments.iter().any(|argument| !matches!(argument,Type::Variable(id) if effect.parameters.iter().any(|parameter|parameter.id==*id))) {return Err(invalid("foreign state operand lineage differs"));}
+    }
+    let domain_count = match domain.as_ref() {
+        Type::Tuple(fields) => fields.len(),
+        _ => 1,
+    };
+    let mut retained = HashSet::new();
+    for &position in &metadata.retained_arguments {
+        if position >= domain_count || !retained.insert(position) {
+            return Err(invalid("foreign retained argument position is invalid"));
+        }
+    }
+    match &metadata.result {
+        ForeignResultRelation::Independent => {
+            if metadata.state_operands.is_empty() {
+                return Err(invalid("borrow operation requires registered state"));
+            }
+            validate_independent_data(registry, fact, effect, result, work)?;
+        }
+        ForeignResultRelation::Acquire {
+            state,
+            error,
+            report,
+            ..
+        }
+        | ForeignResultRelation::Finish {
+            state,
+            error,
+            report,
+        } => {
+            let nominal = registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == *state)
+                .ok_or_else(|| invalid("foreign result state missing"))?;
+            let state_fact = fact
+                .states
+                .iter()
+                .find(|state| state.id == nominal.id)
+                .ok_or_else(|| invalid("foreign result state is not opaque native state"))?;
+            if state_fact.parameter_count != effect.parameters.len()
+                || metadata.owned_identity_position != 0
+            {
+                return Err(invalid("foreign owner identity or state lineage differs"));
+            }
+            let state_type = nominal_application(
+                nominal.id,
+                effect
+                    .parameters
+                    .iter()
+                    .map(|parameter| Type::Variable(parameter.id)),
+            );
+            let error_id = *fact
+                .data_types
+                .get(error)
+                .ok_or_else(|| invalid("foreign lifecycle error missing"))?;
+            let report_id = *fact
+                .data_types
+                .get(report)
+                .ok_or_else(|| invalid("foreign lifecycle report missing"))?;
+            let expected =
+                nominal_application(report_id, [state_type.clone(), Type::Nominal(error_id)]);
+            if result.as_ref() != &expected {
+                return Err(invalid(
+                    "foreign lifecycle signature differs from report relation",
+                ));
+            }
+            validate_independent_data(registry, fact, effect, &Type::Nominal(error_id), work)?;
+            validate_report(registry, report_id, metadata.role)?;
+            if metadata.role == ForeignOperationRole::Finish
+                && (metadata.state_operands != [Vec::<usize>::new()]
+                    || domain.as_ref() != &state_type)
+            {
+                return Err(invalid("foreign finisher does not own its exact state"));
+            }
+            if let ForeignResultRelation::Acquire {
+                retained_parameters,
+                ..
+            } = &metadata.result
+            {
+                let mut retained = HashSet::new();
+                for &position in retained_parameters {
+                    if position >= effect.parameters.len()
+                        || position == metadata.owned_identity_position
+                        || !retained.insert(position)
+                    {
+                        return Err(invalid(
+                            "foreign acquired state dependency position is invalid",
+                        ));
+                    }
+                }
+                // P-1 native state parameters are owner lineage coordinates.
+                // Every coordinate after the owned identity remains a dependency.
+                if retained.len() != effect.parameters.len().saturating_sub(1) {
+                    return Err(invalid(
+                        "foreign acquired state omits retained owner lineage",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_independent_data(
+    registry: &ResolvedRegistry,
+    fact: &ForeignModuleFact,
+    effect: &ResolvedEffectDeclaration,
+    root: &Type,
+    budget: &mut crate::types::TypeWorkBudget,
+) -> Result<(), ForeignRegistrationError> {
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    let mut work = 0;
+    while let Some(ty) = pending.pop() {
+        charge(budget, 1)?;
+        work += 1;
+        if work > 8192 {
+            return Err(invalid("foreign result relation budget exceeded"));
+        }
+        match ty {
+            Type::Nominal(id) => {
+                if fact.states.iter().any(|state| state.id == *id) {
+                    return Err(invalid("independent foreign result contains native state"));
+                }
+                if visited.insert(*id) {
+                    let nominal = registry
+                        .nominal(*id)
+                        .ok_or_else(|| invalid("independent foreign result is not local data"))?;
+                    for id in nominal.constructors.iter() {
+                        if let Some(payload) = registry
+                            .constructor(*id)
+                            .and_then(|constructor| constructor.payload.as_ref())
+                        {
+                            pending.push(payload);
+                        }
+                    }
+                }
+            }
+            Type::Variable(id)
+                if effect
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.id == *id) =>
+            {
+                return Err(invalid(
+                    "independent foreign result contains owner identity",
+                ));
+            }
+            Type::Application(function, argument) => {
+                pending.push(function);
+                pending.push(argument)
+            }
+            Type::Tuple(fields) => pending.extend(fields.iter()),
+            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) => {}
+            _ => return Err(invalid("independent foreign result is not ordinary data")),
+        }
+    }
+    Ok(())
+}
+fn validate_report(
+    registry: &ResolvedRegistry,
+    id: NominalTypeId,
+    role: ForeignOperationRole,
+) -> Result<(), ForeignRegistrationError> {
+    let parameters = registry
+        .nominal_parameters(id)
+        .ok_or_else(|| invalid("lifecycle report parameters missing"))?;
+    let [state, error] = parameters else {
+        return Err(invalid("lifecycle report must bind state and error"));
+    };
+    let state = Type::Variable(state.id);
+    let error = Type::Variable(error.id);
+    let expected = match role {
+        ForeignOperationRole::Acquire => vec![Some(state), Some(error)],
+        ForeignOperationRole::Finish => vec![
+            None,
+            Some(error.clone()),
+            Some(Type::Tuple(vec![state, error].into_boxed_slice())),
+        ],
+        ForeignOperationRole::Borrow => return Err(invalid("borrow has no lifecycle report")),
+    };
+    let nominal = registry
+        .nominal(id)
+        .ok_or_else(|| invalid("lifecycle report nominal missing"))?;
+    if nominal.constructors.len() != expected.len() {
+        return Err(invalid("lifecycle report constructor count differs"));
+    }
+    for (id, payload) in nominal.constructors.iter().zip(expected) {
+        if registry
+            .constructor(*id)
+            .and_then(|constructor| constructor.payload.as_ref())
+            != payload.as_ref()
+        {
+            return Err(invalid("lifecycle report constructor shape differs"));
+        }
+    }
+    Ok(())
+}
+
+fn bind_state_lineage(
+    signature: &Type,
+    metadata: &ForeignOperationDeclaration,
+    effect: &ResolvedEffectDeclaration,
+) -> Vec<ForeignStateOperandFact> {
+    let Type::Function(domain, _) = signature else {
+        unreachable!("validated foreign pure arrow")
+    };
+    metadata
+        .state_operands
+        .iter()
+        .map(|path| {
+            let (head, arguments) =
+                application(at_path(domain, path).expect("validated operand path"));
+            let Type::Nominal(state) = head else {
+                unreachable!("validated native state")
+            };
+            ForeignStateOperandFact {
+                path: path.clone(),
+                state: *state,
+                lineage: arguments
+                    .iter()
+                    .map(|argument| {
+                        effect
+                            .parameters
+                            .iter()
+                            .position(|parameter| **argument == Type::Variable(parameter.id))
+                            .expect("validated state lineage")
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+fn bind_result(
+    relation: &ForeignResultRelation,
+    registry: &ResolvedRegistry,
+    fact: &ForeignModuleFact,
+) -> ForeignResultFact {
+    match relation {
+        ForeignResultRelation::Independent => ForeignResultFact::Independent,
+        ForeignResultRelation::Acquire {
+            state,
+            error,
+            report,
+            retained_parameters,
+        } => {
+            let state = registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == *state)
+                .expect("validated state")
+                .id;
+            let report = fact.data_types[report];
+            ForeignResultFact::Acquire {
+                state,
+                error: fact.data_types[error],
+                report,
+                constructors: registry
+                    .nominal(report)
+                    .expect("validated report")
+                    .constructors
+                    .to_vec(),
+                retained_parameters: retained_parameters.clone(),
+            }
+        }
+        ForeignResultRelation::Finish {
+            state,
+            error,
+            report,
+        } => {
+            let state = registry
+                .nominals()
+                .iter()
+                .find(|nominal| nominal.spelling == *state)
+                .expect("validated state")
+                .id;
+            let report = fact.data_types[report];
+            ForeignResultFact::Finish {
+                state,
+                error: fact.data_types[error],
+                report,
+                constructors: registry
+                    .nominal(report)
+                    .expect("validated report")
+                    .constructors
+                    .to_vec(),
+            }
+        }
+    }
+}
+fn data(
+    name: &str,
+    parameters: &[&str],
+    constructors: &[(&str, Option<&str>)],
+) -> ForeignTypeDeclaration {
+    ForeignTypeDeclaration {
+        name: name.into(),
+        parameters: parameters
+            .iter()
+            .map(|parameter| (*parameter).into())
+            .collect(),
+        opaque_state: false,
+        constructors: constructors
+            .iter()
+            .map(|(name, payload)| ForeignConstructorDeclaration {
+                name: (*name).into(),
+                payload: payload.map(str::to_owned),
+            })
+            .collect(),
+    }
+}
+fn state(name: &str, parameters: &[&str]) -> ForeignTypeDeclaration {
+    ForeignTypeDeclaration {
+        name: name.into(),
+        parameters: parameters
+            .iter()
+            .map(|parameter| (*parameter).into())
+            .collect(),
+        opaque_state: true,
+        constructors: Vec::new(),
+    }
+}
+fn operation(
+    name: &str,
+    signature: &str,
+    role: ForeignOperationRole,
+    state_operands: Vec<Vec<usize>>,
+    result: ForeignResultRelation,
+) -> ForeignOperationDeclaration {
+    ForeignOperationDeclaration {
+        name: name.into(),
+        signature: signature.into(),
+        role,
+        owned_identity_position: 0,
+        state_operands,
+        retained_arguments: Vec::new(),
+        result,
+    }
+}
+/// Builds the selected synchronous copying SQLite manifest, without initializing SQLite.
+/// # Errors
+/// Returns a manifest error if its authored declaration schema is invalid.
+pub fn sqlite_manifest(
+    id: ForeignRegistrationId,
+) -> Result<ForeignManifest, ForeignRegistrationError> {
+    use ForeignOperationRole::{Acquire, Borrow, Finish};
+    let types = vec![
+        state("ConnectionState", &["R"]),
+        state("StatementState", &["S", "C"]),
+        data(
+            "Bytes",
+            &[],
+            &[("EmptyBytes", None), ("MoreBytes", Some("Int, Bytes"))],
+        ),
+        data(
+            "OpenConfig",
+            &[],
+            &[("InMemory", None), ("File", Some("Bytes"))],
+        ),
+        data(
+            "InputFault",
+            &[],
+            &[
+                ("BadIndex", None),
+                ("BadInteger", None),
+                ("BadBytes", None),
+                ("BadColumn", None),
+                ("ColumnTypeMismatch", None),
+                ("BadSql", None),
+                ("MultipleStatements", None),
+                ("BadPath", None),
+            ],
+        ),
+        data(
+            "ProtocolFault",
+            &[],
+            &[
+                ("NotPrepared", None),
+                ("NotRow", None),
+                ("AfterDone", None),
+                ("ClosedOwner", None),
+            ],
+        ),
+        data(
+            "Error",
+            &[],
+            &[
+                ("NativeFailure", Some("Int, Bytes")),
+                ("InputFailure", Some("InputFault")),
+                ("ProtocolFailure", Some("ProtocolFault")),
+                ("ConversionFailure", None),
+                ("AllocationFailure", None),
+            ],
+        ),
+        data("OpenError", &[], &[("OpenFailure", Some("Error"))]),
+        data("CloseError", &[], &[("CloseFailure", Some("Error"))]),
+        data(
+            "PrepareError",
+            &[],
+            &[("PrepareFailure", Some("Error")), ("EmptySql", None)],
+        ),
+        data("FinalizeError", &[], &[("FinalizeFailure", Some("Error"))]),
+        data(
+            "Result",
+            &["T"],
+            &[("Ok", Some("T")), ("Err", Some("Error"))],
+        ),
+        data(
+            "StepResult",
+            &[],
+            &[("Row", None), ("Done", None), ("StepError", Some("Error"))],
+        ),
+        data(
+            "BytesOrNull",
+            &[],
+            &[("NullBytes", None), ("BlobBytes", Some("Bytes"))],
+        ),
+        data(
+            "Acquire",
+            &["State", "E"],
+            &[("Acquired", Some("State")), ("Refused", Some("E"))],
+        ),
+        data(
+            "Finish",
+            &["State", "E"],
+            &[
+                ("Consumed", None),
+                ("ConsumedFailure", Some("E")),
+                ("Retained", Some("State, E")),
+            ],
+        ),
+    ];
+    let acquire = |state: &str, error: &str, retained_parameters| ForeignResultRelation::Acquire {
+        state: state.into(),
+        error: error.into(),
+        report: "Acquire".into(),
+        retained_parameters,
+    };
+    let finish = |state: &str, error: &str| ForeignResultRelation::Finish {
+        state: state.into(),
+        error: error.into(),
+        report: "Finish".into(),
+    };
+    let connection = ForeignEffectDeclaration {
+        name: "Connection".into(),
+        parameters: vec!["R".into()],
+        operations: vec![
+            operation(
+                "open",
+                "OpenConfig -> Acquire<ConnectionState<R>, OpenError>",
+                Acquire,
+                vec![],
+                acquire("ConnectionState", "OpenError", vec![]),
+            ),
+            operation(
+                "diagnostic",
+                "ConnectionState<R> -> Error",
+                Borrow,
+                vec![vec![]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "close",
+                "ConnectionState<R> -> Finish<ConnectionState<R>, CloseError>",
+                Finish,
+                vec![vec![]],
+                finish("ConnectionState", "CloseError"),
+            ),
+        ],
+    };
+    let statement = ForeignEffectDeclaration {
+        name: "Statement".into(),
+        parameters: vec!["S".into(), "C".into()],
+        operations: vec![
+            operation(
+                "prepare",
+                "(ConnectionState<C>, Bytes) -> Acquire<StatementState<S, C>, PrepareError>",
+                Acquire,
+                vec![vec![0]],
+                acquire("StatementState", "PrepareError", vec![1]),
+            ),
+            operation(
+                "bind_int",
+                "(StatementState<S, C>, Int, Int) -> Result<Unit>",
+                Borrow,
+                vec![vec![0]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "step",
+                "StatementState<S, C> -> StepResult",
+                Borrow,
+                vec![vec![]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "column_int",
+                "(StatementState<S, C>, Int) -> Result<Int>",
+                Borrow,
+                vec![vec![0]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "finalize",
+                "StatementState<S, C> -> Finish<StatementState<S, C>, FinalizeError>",
+                Finish,
+                vec![vec![]],
+                finish("StatementState", "FinalizeError"),
+            ),
+            operation(
+                "bind_bytes",
+                "(StatementState<S, C>, Int, BytesOrNull) -> Result<Unit>",
+                Borrow,
+                vec![vec![0]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "column_bytes",
+                "(StatementState<S, C>, Int) -> Result<BytesOrNull>",
+                Borrow,
+                vec![vec![0]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "reset",
+                "StatementState<S, C> -> Result<Unit>",
+                Borrow,
+                vec![vec![]],
+                ForeignResultRelation::Independent,
+            ),
+            operation(
+                "clear_bindings",
+                "StatementState<S, C> -> Result<Unit>",
+                Borrow,
+                vec![vec![]],
+                ForeignResultRelation::Independent,
+            ),
+        ],
+    };
+    ForeignManifest::new(
+        "@foreign.sqlite",
+        id,
+        ForeignManifestSchema {
+            types,
+            effects: vec![connection, statement],
+            state_access: None,
+        },
+    )
+}
+/// Builds the registered sealed generic state-access primitive manifest.
+/// # Errors
+/// Returns a manifest error if its authored declaration schema is invalid.
+pub fn provider_manifest(
+    id: ForeignRegistrationId,
+) -> Result<ForeignManifest, ForeignRegistrationError> {
+    ForeignManifest::new(
+        "@foreign.provider",
+        id,
+        ForeignManifestSchema {
+            state_access: Some(ForeignStateAccessDeclaration {
+                interface: "StateAccess".into(),
+                method: "state_of".into(),
+            }),
+            ..ForeignManifestSchema::default()
+        },
+    )
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use crate::{
+        module::ModuleId,
+        source::{ByteRange, SourceFile},
+        types::{reset_type_discard_observation, type_discard_visits},
+    };
+
+    #[test]
+    fn final_shared_foreign_fact_disposes_recursive_metadata_iteratively() {
+        const DEPTH: usize = 32_768;
+        let source = SourceFile::new("foreign-storage", "()").unwrap();
+        let span = source.span(ByteRange::new(0, 2).unwrap()).unwrap();
+        let deep_origin = || {
+            (0..DEPTH).fold(Origin::Source(span), |primary, _| Origin::Related {
+                primary: Box::new(primary),
+                related: Vec::new(),
+            })
+        };
+        let signature = (0..DEPTH).fold(Type::Unit, |ty, _| {
+            Type::Application(Box::new(ty), Box::new(Type::Unit))
+        });
+        let module = ModuleId::new(0);
+        let interface = InterfaceId::new(module, 0);
+        let admission = || ForeignModuleAdmission {
+            module_id: module,
+            registration_id: ForeignRegistrationId::new(0),
+            manifest_digest: [0; 32],
+            origin: deep_origin(),
+        };
+        // This fixture exercises storage disposal only; it is never admitted.
+        let fact = Arc::new(ForeignModuleFact {
+            canonical_registry: Arc::new(ResolvedRegistry::default()),
+            canonical_interfaces: vec![ResolvedInterfaceDeclaration {
+                id: interface,
+                public: false,
+                spelling: "storage".into(),
+                parameters: Box::new([]),
+                determination: None,
+                methods: Box::new([]),
+                origin: deep_origin(),
+                span,
+            }],
+            canonical_admission: admission(),
+            manifest: Arc::new(sqlite_manifest(ForeignRegistrationId::new(0)).unwrap()),
+            admission: admission(),
+            states: vec![ForeignStateFact {
+                id: NominalTypeId::new(source.id(), 0),
+                parameter_count: 0,
+                owned_identity_position: 0,
+                origin: deep_origin(),
+            }],
+            data_types: BTreeMap::new(),
+            constructors: BTreeMap::new(),
+            effects: Vec::new(),
+            operations: vec![ForeignOperationFact {
+                id: OperationId::new(EffectId::new(module, 0), 0),
+                role: ForeignOperationRole::Borrow,
+                owned_identity_position: 0,
+                state_operands: Vec::new(),
+                state_lineage: Vec::new(),
+                retained_arguments: Vec::new(),
+                result: ForeignResultFact::Independent,
+                signature,
+                origin: deep_origin(),
+            }],
+            state_access: Some(ForeignStateAccessFact {
+                interface,
+                method: MethodId::new(interface, 0),
+                origin: deep_origin(),
+            }),
+        });
+        let retained = Arc::clone(&fact);
+        let replacement_access = ForeignStateAccessFact {
+            interface,
+            method: MethodId::new(interface, 0),
+            origin: deep_origin(),
+        };
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut retained = retained;
+                reset_type_discard_observation();
+                drop(fact);
+                assert_eq!(type_discard_visits(), 0);
+                assert_eq!(Arc::strong_count(&retained), 1);
+                assert_eq!(retained.operations.len(), 1);
+                assert!(matches!(
+                    retained.operations[0].signature,
+                    Type::Application(..)
+                ));
+                assert_eq!(retained.states.len(), 1);
+                assert!(matches!(retained.admission.origin, Origin::Related { .. }));
+                Arc::get_mut(&mut retained)
+                    .unwrap()
+                    .set_state_access(replacement_access);
+                assert_eq!(type_discard_visits(), 0);
+                drop(retained);
+                assert_eq!(type_discard_visits(), 2 * DEPTH + 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+}
