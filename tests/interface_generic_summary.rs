@@ -177,7 +177,7 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
         panic!("the generic implementation should bind one head parameter");
     };
     let parameter = head_parameter.id;
-    let [imported_argument] = imported.arguments() else {
+    let [ash::types::KindedArgument::TypeArg(imported_argument)] = imported.arguments() else {
         panic!("the unary implementation should retain one head argument");
     };
     assert_option_of_parameter(imported_argument, expected_option, parameter);
@@ -191,7 +191,12 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     );
     assert_eq!(prerequisite.id.declaration(), 0);
     assert_eq!(prerequisite.interface(), expected_interface);
-    assert_eq!(prerequisite.arguments(), &[Type::Variable(parameter)]);
+    assert_eq!(
+        prerequisite.arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Variable(
+            parameter
+        ))]
+    );
 
     let [method] = imported.methods.as_ref() else {
         panic!("the implementation should retain one checked method scheme");
@@ -210,7 +215,12 @@ fn generic_checked_summary_binds_every_retained_parameter_occurrence() {
     };
     assert_eq!(method_requirement.id, prerequisite.id);
     assert_eq!(method_requirement.interface(), prerequisite.interface());
-    assert_eq!(method_requirement.arguments(), &[Type::Variable(parameter)]);
+    assert_eq!(
+        method_requirement.arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Variable(
+            parameter
+        ))]
+    );
 
     let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the retained implementation method should have a function type");

@@ -5,8 +5,7 @@ use super::{
     IterativeTypeOwner, LifecycleDraftCheckError, LifecycleTemplateDraft, OwnedTypeBuffer,
     PendingEvidencePublication, Phase, ResolvedExpr, ResolvedExprKind, ResolvedResourceDefinition,
     TypeError, TypeWorkBudget, TypedNodeOwner, clone_effect_row_with_budget, constraint_resource,
-    discard_type_iteratively, invalid_state, provider, selection_failure,
-    substitute_type_variables_with, type_resource,
+    discard_type_iteratively, invalid_state, provider, selection_failure, type_resource,
 };
 use crate::core::{NodeId, TypedBinder};
 use crate::elaborate::CorePatternBuffer;
@@ -472,7 +471,7 @@ impl CoreElaborator<EffectOperationFamily> {
         body: &mut NodeId,
         imported: &crate::resolved::ImportedFacts,
         publication: PendingEvidencePublication,
-        substitutions: &provider::ProviderSubstitutions,
+        substitutions: &super::super::OwnerReplacementBuffer,
     ) -> Result<
         (
             crate::core::UnvalidatedEffectProgram,
@@ -502,7 +501,7 @@ impl CoreElaborator<EffectOperationFamily> {
         roots: &[NodeId],
         imported: &crate::resolved::ImportedFacts,
         publication: PendingEvidencePublication,
-        substitutions: &provider::ProviderSubstitutions,
+        substitutions: &super::super::OwnerReplacementBuffer,
         states: &[&TypedBinder],
         patterns: &[&CorePattern],
     ) -> Result<LoweredProviderForest, TypeError> {
@@ -526,22 +525,23 @@ impl CoreElaborator<EffectOperationFamily> {
         roots: &[NodeId],
         imported: &crate::resolved::ImportedFacts,
         mut publication: PendingEvidencePublication,
-        substitutions: &provider::ProviderSubstitutions,
+        substitutions: &super::super::OwnerReplacementBuffer,
         states: &[&TypedBinder],
         patterns: &[&CorePattern],
         pending_rows: crate::core::provider::HandlerPendingRows,
     ) -> Result<LoweredProviderForest, TypeError> {
         let root = *roots.first().ok_or_else(invalid_state)?;
         publication
-            .relocate_types(
+            .relocate_types_and_rows(
                 |ty, work| {
-                    substitute_type_variables_with(
-                        ty,
-                        substitutions,
-                        |cells| work.charge(cells),
-                        || (),
-                    )
-                    .map_err(|()| crate::evidence::SelectionFailure::TypeResource)
+                    substitutions
+                        .substitute(ty, work)
+                        .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
+                },
+                |row, work| {
+                    substitutions
+                        .substitute_row(row, work)
+                        .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
                 },
                 &mut self.constraint_work,
                 &mut self.type_work,
@@ -573,31 +573,16 @@ impl CoreElaborator<EffectOperationFamily> {
                 return Err(invalid_state());
             }
             let zonked = IterativeTypeOwner::new(self.zonk(&occurrence.value_type)?);
-            occurrence.value_type = IterativeTypeOwner::new(
-                substitute_type_variables_with(
-                    &zonked,
-                    substitutions,
-                    |cells| self.type_work.charge(cells),
-                    || (),
-                )
-                .map_err(|()| type_resource())?,
-            );
+            occurrence.value_type =
+                IterativeTypeOwner::new(substitutions.substitute(&zonked, &mut self.type_work)?);
             for argument in occurrence.arguments.0.iter_mut() {
                 let zonked = IterativeTypeOwner::new(self.zonk(argument)?);
-                let rewritten = substitute_type_variables_with(
-                    &zonked,
-                    substitutions,
-                    |cells| self.type_work.charge(cells),
-                    || (),
-                )
-                .map_err(|()| type_resource())?;
+                let rewritten = substitutions.substitute(&zonked, &mut self.type_work)?;
                 discard_type_iteratively(std::mem::replace(argument, rewritten));
             }
             for row in &mut occurrence.row_arguments {
                 let zonked = self.zonk_effect_row(row)?;
-                *row = zonked
-                    .substitute_type_variables_with_budget(substitutions, &mut self.type_work)
-                    .map_err(|()| type_resource())?;
+                *row = substitutions.substitute_row(&zonked, &mut self.type_work)?;
             }
         }
         let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(

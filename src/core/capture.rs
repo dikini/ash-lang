@@ -242,31 +242,37 @@ impl CaptureValueSummary {
             budget.charge(graph.types.0.len())?;
             budget.charge(graph.code.len())?;
         }
-        Ok(self.graph.iter().flat_map(|graph| {
-            graph
+        let mut types = Vec::new();
+        if let Some(graph) = &self.graph {
+            let count = graph
                 .callables
-                .iter()
-                .map(|callable| &callable.ty)
-                .chain(graph.types.0.iter())
-                .chain(
-                    graph
-                        .code
-                        .iter()
-                        .filter_map(|code| match code {
-                            Control::Request(request)
-                            | Control::Handler {
-                                effect: request, ..
-                            }
-                            | Control::Resource {
-                                effect: request, ..
-                            } => Some(request),
-                            _ => None,
-                        })
-                        .flat_map(|request| {
-                            request.effect.iter().flat_map(|effect| effect.arguments())
-                        }),
-                )
-        }))
+                .len()
+                .checked_add(graph.types.0.len())
+                .ok_or(())?;
+            budget.charge(count)?;
+            types.try_reserve(count).map_err(|_| ())?;
+            types.extend(graph.callables.iter().map(|callable| &callable.ty));
+            types.extend(graph.types.0.iter());
+            for request in graph.code.iter().filter_map(|code| match code {
+                Control::Request(request)
+                | Control::Handler {
+                    effect: request, ..
+                }
+                | Control::Resource {
+                    effect: request, ..
+                } => Some(request),
+                _ => None,
+            }) {
+                if let Some(effect) = &request.effect {
+                    crate::types::extend_owner_type_children_with_charge(
+                        effect.arguments(),
+                        &mut types,
+                        budget,
+                    )?;
+                }
+            }
+        }
+        Ok(types.into_iter())
     }
 
     // Charge each explicit scan, including repeated scans of a shared graph.
@@ -277,20 +283,52 @@ impl CaptureValueSummary {
         if let Some(graph) = &self.graph {
             budget.charge(graph.code.len())?;
         }
-        Ok(self
-            .graph
-            .iter()
-            .flat_map(|graph| graph.code.iter())
-            .filter_map(|code| match code {
+        let mut identities = Vec::new();
+        let mut pending = Vec::new();
+        if let Some(graph) = &self.graph {
+            for request in graph.code.iter().filter_map(|code| match code {
                 Control::Request(request)
                 | Control::Handler {
                     effect: request, ..
                 }
                 | Control::Resource {
                     effect: request, ..
-                } => request.effect.as_ref().map(|effect| effect.effect()),
+                } => Some(request),
                 _ => None,
-            }))
+            }) {
+                if let Some(effect) = &request.effect {
+                    budget.charge(1 + effect.arguments().len())?;
+                    identities.try_reserve(1).map_err(|_| ())?;
+                    identities.push(effect.effect());
+                    pending
+                        .try_reserve(effect.arguments().len())
+                        .map_err(|_| ())?;
+                    pending.extend(effect.arguments());
+                }
+                while let Some(argument) = pending.pop() {
+                    budget.charge(1)?;
+                    if let crate::types::KindedArgument::RowArg(row) = argument {
+                        if row.tail().is_some() {
+                            budget.charge(1)?;
+                        }
+                        for instance in row
+                            .known()
+                            .iter()
+                            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                        {
+                            budget.charge(1 + instance.arguments().len())?;
+                            identities.try_reserve(1).map_err(|_| ())?;
+                            identities.push(instance.effect());
+                            pending
+                                .try_reserve(instance.arguments().len())
+                                .map_err(|_| ())?;
+                            pending.extend(instance.arguments());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(identities.into_iter())
     }
 }
 
@@ -866,7 +904,8 @@ fn free_values_with_methods<F: CoreOperationFamily>(
                 continue;
             }
         }
-        for method in methods.at(id, budget)? {
+        let node_methods = methods.at(id, budget)?;
+        for method in node_methods {
             if method.requirement.is_none()
                 && let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
                     method.target
@@ -878,8 +917,7 @@ fn free_values_with_methods<F: CoreOperationFamily>(
         // A selected source method occurrence is replaced by its authenticated
         // route in the value graph. Its obsolete placeholder children are not
         // lexical dependencies of the selected callable.
-        if methods
-            .at(id, budget)?
+        if node_methods
             .iter()
             .any(|method| method.requirement.is_none())
         {
@@ -953,6 +991,7 @@ fn free_values_with_methods<F: CoreOperationFamily>(
 #[derive(Default)]
 struct MetadataVariables {
     variables: Vec<TypeVariableId>,
+    identities: std::collections::HashSet<TypeVariableId>,
 }
 
 impl MetadataVariables {
@@ -961,11 +1000,17 @@ impl MetadataVariables {
         identity: TypeVariableId,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.variables.len() + 1)?;
-        if !self.variables.contains(&identity) {
+        // Lookup is indexed; retain first-discovery order in the output vector.
+        charge(budget, 1)?;
+        if !self.identities.contains(&identity) {
+            charge(budget, 2)?;
+            self.identities
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
             self.variables
                 .try_reserve(1)
                 .map_err(|_| Failure::Resource)?;
+            self.identities.insert(identity);
             self.variables.push(identity);
         }
         Ok(())
@@ -983,6 +1028,7 @@ fn retain_type_variables(
 #[derive(Clone, Copy)]
 enum Metadata<'a> {
     Type(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
     Row(&'a crate::types::EffectRow),
 }
 
@@ -1001,10 +1047,25 @@ fn retain_metadata_variables(
 ) -> Result<(), Failure> {
     let mut pending = copy_slice(&[root], budget)?;
     let mut discovered = MetadataVariables::default();
-    let mut bound = Vec::new();
+    let mut bound = std::collections::HashSet::new();
     while let Some(metadata) = pending.pop() {
         charge(budget, 1)?;
         match metadata {
+            Metadata::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push(Metadata::Type(ty));
+            }
+            Metadata::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push(Metadata::Row(row));
+            }
+            Metadata::Type(Type::ResourceApply(_, arguments)) => {
+                charge(budget, arguments.len())?;
+                pending
+                    .try_reserve(arguments.len())
+                    .map_err(|_| Failure::Resource)?;
+                pending.extend(arguments.iter().map(Metadata::Argument));
+            }
             Metadata::Type(Type::Variable(variable)) => discovered.retain(*variable, budget)?,
             Metadata::Type(Type::Application(left, right) | Type::Function(left, right)) => {
                 pending.try_reserve(2).map_err(|_| Failure::Resource)?;
@@ -1018,6 +1079,7 @@ fn retain_metadata_variables(
                 pending.extend(elements.iter().map(Metadata::Type));
             }
             Metadata::Type(Type::Forall(parameters, body)) => {
+                charge(budget, parameters.len())?;
                 charge(budget, parameters.len())?;
                 bound
                     .try_reserve(parameters.len())
@@ -1045,17 +1107,18 @@ fn retain_metadata_variables(
                 };
                 for effect in row.known().iter().chain(lacks) {
                     charge(budget, 1)?;
+                    charge(budget, effect.arguments().len())?;
                     pending
                         .try_reserve(effect.arguments().len())
                         .map_err(|_| Failure::Resource)?;
-                    pending.extend(effect.arguments().iter().map(Metadata::Type));
+                    pending.extend(effect.arguments().iter().map(Metadata::Argument));
                 }
             }
             _ => {}
         }
     }
     for variable in discovered.variables {
-        charge(budget, bound.len())?;
+        charge(budget, 1)?;
         if !bound.contains(&variable) {
             value.retain(variable, budget)?;
         }
@@ -1089,7 +1152,7 @@ fn retain_function_metadata<F: CoreOperationFamily>(
             }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
-                    retain_type_variables(value, argument, budget)?;
+                    retain_metadata_variables(value, Metadata::Argument(argument), budget)?;
                 }
             }
             _ => {}
@@ -1130,9 +1193,17 @@ fn retain_function_metadata<F: CoreOperationFamily>(
     }
     charge(
         budget,
-        value.variables.len().saturating_mul(bound.len() + 1),
+        value.variables.len().saturating_mul(bound.len() + 2),
     )?;
-    value.variables.retain(|variable| !bound.contains(variable));
+    let identities = &mut value.identities;
+    value.variables.retain(|variable| {
+        if bound.contains(variable) {
+            identities.remove(variable);
+            false
+        } else {
+            true
+        }
+    });
     Ok(())
 }
 
@@ -1149,7 +1220,9 @@ fn same_effect(
                 return Ok(false);
             }
             for (a, b) in a.arguments().iter().zip(b.arguments()) {
-                if !same_type_with_budget(a, b, budget).map_err(|()| Failure::Resource)? {
+                if !crate::types::same_kinded_argument_with_budget(a, b, budget)
+                    .map_err(|()| Failure::Resource)?
+                {
                     return Ok(false);
                 }
             }
@@ -1834,6 +1907,14 @@ pub(in crate::core) struct ConditionalCaptureGraph {
     correspondence: Vec<Option<NodeId>>,
 }
 struct ConditionalTypeReplacements(HashMap<TypeVariableId, Type>);
+impl ConditionalTypeReplacements {
+    /// Transfers an already charged clone into the reserved substitution table.
+    fn insert_reserved(&mut self, variable: TypeVariableId, ty: Type) {
+        if let Some(displaced) = self.0.insert(variable, ty) {
+            discard_type_iteratively(displaced);
+        }
+    }
+}
 impl Drop for ConditionalTypeReplacements {
     fn drop(&mut self) {
         for (_, ty) in self.0.drain() {
@@ -1931,15 +2012,38 @@ pub(in crate::core) fn reconstruct_conditional_handler_capture(
     if effect.parameters.len() != instance.arguments().len() {
         return Err(Failure::Invalid);
     }
+    let mut row_replacements = HashMap::new();
+    row_replacements
+        .try_reserve(effect.parameters.len())
+        .map_err(|_| Failure::Resource)?;
     for (formal, argument) in effect.parameters.iter().zip(instance.arguments()) {
         charge(budget, 1)?;
-        if replacements.0.contains_key(&formal.id) {
-            return Err(Failure::Invalid);
+        match (&formal.kind, argument) {
+            (crate::types::Kind::EffectRow, crate::types::KindedArgument::RowArg(row)) => {
+                if row_replacements
+                    .insert(
+                        formal.id,
+                        crate::types::clone_effect_row_with_budget(row, budget)
+                            .map_err(|()| Failure::Resource)?,
+                    )
+                    .is_some()
+                {
+                    return Err(Failure::Invalid);
+                }
+            }
+            (kind, crate::types::KindedArgument::TypeArg(ty))
+                if *kind != crate::types::Kind::EffectRow =>
+            {
+                if replacements.0.contains_key(&formal.id) {
+                    return Err(Failure::Invalid);
+                }
+                replacements.insert_reserved(
+                    formal.id,
+                    clone_type_with_budget(ty, budget).map_err(|()| Failure::Resource)?,
+                );
+            }
+            _ => return Err(Failure::Invalid),
         }
-        replacements.0.insert(
-            formal.id,
-            clone_type_with_budget(argument, budget).map_err(|()| Failure::Resource)?,
-        );
     }
     for (ordinal, clause) in entry.draft.clauses.iter().enumerate() {
         let root = project(clause.body())?;
@@ -1948,13 +2052,16 @@ pub(in crate::core) fn reconstruct_conditional_handler_capture(
             .get(usize::try_from(clause.operation().operation()).map_err(|_| Failure::Invalid)?)
             .filter(|operation| operation.id == clause.operation())
             .ok_or(Failure::Invalid)?;
-        let signature =
-            crate::types::IterativeTypeOwner::new(crate::types::substitute_type_variables_with(
+        let signature = crate::types::IterativeTypeOwner::new(
+            crate::types::substitute_type_and_row_variables_with(
                 &operation.annotation.ty,
                 &replacements.0,
+                &row_replacements,
                 |cells| charge(budget, cells),
                 || Failure::Resource,
-            )?);
+            )?
+            .map_err(|_| Failure::Invalid)?,
+        );
         let input = signature.function_view().ok_or(Failure::Invalid)?.value();
         ports.clauses.push(ConditionalClausePort {
             handler: entry.draft.handler,
@@ -2627,6 +2734,42 @@ mod tests {
         assert!(!value.variables.contains(&bound));
     }
 
+    #[test]
+    fn wide_row_metadata_charges_pending_slots_before_reservation() {
+        const WIDTH: usize = 256;
+        let row_identity = TypeVariableId::generated(803);
+        let effect = crate::types::EffectId::new(crate::module::ModuleId::new(0), 0);
+        let row = EffectRow::open(
+            crate::types::EffectRowVariable::Rigid(row_identity),
+            Box::new([EffectInstance::new(
+                effect,
+                vec![Type::Unit; WIDTH].into_boxed_slice(),
+            )]),
+        );
+        // The root copy, row visit, retained tail identity and effect visit use
+        // seven cells. Admit all pending argument slots before reserving them.
+        let mut value = MetadataVariables::default();
+        let mut short = TypeWorkBudget::with_limit(7 + WIDTH - 1);
+        assert!(matches!(
+            retain_row_variables(&mut value, &row, &mut short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(short.used(), 7);
+        assert!(value.variables.is_empty());
+        assert!(value.identities.is_empty());
+
+        // Each argument has one admitted slot, a tag visit and a Unit visit;
+        // the final free tail identity costs another four cells to retain.
+        for _ in 0..2 {
+            let mut value = MetadataVariables::default();
+            let mut exact = TypeWorkBudget::with_limit(3 * WIDTH + 11);
+            retain_row_variables(&mut value, &row, &mut exact).unwrap();
+            assert_eq!(exact.used(), 3 * WIDTH + 11);
+            assert_eq!(value.variables, vec![row_identity]);
+            assert_eq!(value.identities.len(), 1);
+        }
+    }
+
     fn checked_core() -> (
         super::super::UnvalidatedEffectProgram,
         SourceFile,
@@ -3290,8 +3433,8 @@ mod tests {
             Ok::<_, ()>(count)
         };
         // Each distinct graph: lookup + retained key + 17 carrier positions
-        // + one yielded type. The alias adds only one lookup.
-        const EXACT: usize = 2 * (2 + 17 + 1) + 1;
+        // + one fallible retained type slot + one yielded type. The alias adds only one lookup.
+        const EXACT: usize = 2 * (2 + 17 + 1 + 1) + 1;
         assert!(scan(&mut TypeWorkBudget::with_limit(EXACT - 1)).is_err());
         for _ in 0..2 {
             let mut budget = TypeWorkBudget::with_limit(EXACT);
@@ -3341,7 +3484,9 @@ mod tests {
             }
             Ok::<(), ()>(())
         };
-        let expected = 2 * (2 * entries + 2);
+        // Each graph additionally charges the tagged argument scan, exact effect
+        // identity/argument slots, and the argument dispatch.
+        let expected = 2 * (2 * entries + 6);
         assert!(
             scan(&mut TypeWorkBudget::with_limit(expected - 1)).is_err(),
             "aliases must account for every filtered control position"
@@ -3809,7 +3954,6 @@ mod provider_capture_tests {
             .check_provider_independent_data_call(&[formal], &mut measured)
             .unwrap();
         let cost = measured.used();
-        eprintln!("provider selected capture cumulative cost={cost}");
         for prefix in [0, 13] {
             let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
             short.charge(prefix).unwrap();
@@ -4033,5 +4177,19 @@ pub(in crate::core) fn owned_conditional_capture_links_for_test(
             Control::Unavailable
         ));
         assert!(edge.port < graph.ports.clauses.len());
+    }
+}
+
+struct KindedArguments(Vec<crate::types::KindedArgument>);
+impl KindedArguments {
+    fn into_boxed_slice(mut self) -> Box<[crate::types::KindedArgument]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+impl Drop for KindedArguments {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
     }
 }

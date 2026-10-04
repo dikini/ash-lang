@@ -279,7 +279,7 @@ impl ResourceApi {
             if row.tail().is_some()
                 || !matches!(row.known(), [instance]
                 if instance.effect() == self.ops()
-                    && matches!(instance.arguments(), [Type::Variable(id)] if *id == parameter))
+                    && matches!(instance.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(id))] if *id == parameter))
             {
                 return false;
             }
@@ -372,8 +372,30 @@ impl ResourceApi {
 use crate::interface::EvidenceSelection;
 
 #[cfg(test)]
-fn replace_unary_interface_application(application: &mut InterfaceApplication, argument: Type) {
-    let replacement = InterfaceApplication::new(application.interface(), Box::new([argument]));
+trait TestOwnerArgument {
+    fn into_owner_argument(self) -> crate::types::KindedArgument;
+}
+#[cfg(test)]
+impl TestOwnerArgument for Type {
+    fn into_owner_argument(self) -> crate::types::KindedArgument {
+        crate::types::KindedArgument::TypeArg(self)
+    }
+}
+#[cfg(test)]
+impl TestOwnerArgument for crate::types::KindedArgument {
+    fn into_owner_argument(self) -> crate::types::KindedArgument {
+        self
+    }
+}
+#[cfg(test)]
+fn replace_unary_interface_application(
+    application: &mut InterfaceApplication,
+    argument: impl TestOwnerArgument,
+) {
+    let replacement = InterfaceApplication::new_kinded(
+        application.interface(),
+        Box::new([argument.into_owner_argument()]),
+    );
     drop(std::mem::replace(application, replacement));
 }
 
@@ -387,13 +409,13 @@ fn replace_interface_application_identity(
         InterfaceApplication::new(interface, Box::new([])),
     );
     let (_, arguments) = previous.into_parts();
-    *application = InterfaceApplication::new(interface, arguments);
+    *application = InterfaceApplication::new_kinded(interface, arguments);
 }
 
 #[cfg(test)]
 fn mutate_interface_application_arguments(
     application: &mut InterfaceApplication,
-    mutate: impl FnOnce(&mut Vec<Type>) -> bool,
+    mutate: impl FnOnce(&mut Vec<crate::types::KindedArgument>) -> bool,
 ) -> bool {
     let arguments = application.arguments_mut_for_summary_test();
     let mut arguments = std::mem::take(arguments).into_vec();
@@ -592,19 +614,49 @@ pub(crate) struct ResolvedModuleParts {
 }
 
 impl ResolvedModule {
-    pub(crate) fn authenticate_owner_definitions(&self, budget: &mut TypeWorkBudget) -> Result<(), ResolvedBuildFailure> {
+    pub(crate) fn authenticate_owner_definitions(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
         self.registry.authenticate_owner_signature_coverage(
-            self.effects.iter().map(|effect| OwnerId::Effect(effect.id))
-                .chain(self.interfaces.iter().map(|interface| OwnerId::Interface(interface.id)))
-                .chain(self.resources.iter().map(|resource| OwnerId::Resource(resource.id))), budget)?;
+            self.effects
+                .iter()
+                .map(|effect| OwnerId::Effect(effect.id))
+                .chain(
+                    self.interfaces
+                        .iter()
+                        .map(|interface| OwnerId::Interface(interface.id)),
+                )
+                .chain(
+                    self.resources
+                        .iter()
+                        .map(|resource| OwnerId::Resource(resource.id)),
+                ),
+            budget,
+        )?;
         for effect in &self.effects {
-            self.registry.authenticate_owner_signature(OwnerId::Effect(effect.id), None, &effect.parameters, budget)?;
+            self.registry.authenticate_owner_signature(
+                OwnerId::Effect(effect.id),
+                None,
+                &effect.parameters,
+                budget,
+            )?;
         }
         for interface in &self.interfaces {
-            self.registry.authenticate_owner_signature(OwnerId::Interface(interface.id), None, &interface.parameters, budget)?;
+            self.registry.authenticate_owner_signature(
+                OwnerId::Interface(interface.id),
+                None,
+                &interface.parameters,
+                budget,
+            )?;
         }
         for resource in &self.resources {
-            self.registry.authenticate_owner_signature(OwnerId::Resource(resource.id), Some(resource.family), &resource.parameters, budget)?;
+            self.registry.authenticate_owner_signature(
+                OwnerId::Resource(resource.id),
+                Some(resource.family),
+                &resource.parameters,
+                budget,
+            )?;
         }
         Ok(())
     }
@@ -1386,7 +1438,7 @@ pub struct CheckedModule {
     schemes: Vec<CheckedGlobalScheme>,
     checked_interfaces: Box<[CheckedInterface]>,
     checked_implementations: Box<[CheckedImplementation]>,
-    interface_facts: Box<[CheckedInterfaceFact]>,
+    interface_facts: Box<[SharedCheckedInterfaceFact]>,
     implementation_facts: Box<[CheckedImplementationFact]>,
     exports: ExportSummary,
     providers: Option<Arc<crate::elaborate::provider::CheckedProviderGroup>>,
@@ -1400,7 +1452,7 @@ pub(crate) struct CheckedModuleParts {
     pub schemes: Vec<CheckedGlobalScheme>,
     pub checked_interfaces: Box<[CheckedInterface]>,
     pub checked_implementations: Box<[CheckedImplementation]>,
-    pub interface_facts: Box<[CheckedInterfaceFact]>,
+    pub interface_facts: Box<[SharedCheckedInterfaceFact]>,
     pub implementation_facts: Box<[CheckedImplementationFact]>,
     pub exports: ExportSummary,
     pub providers: Option<Arc<crate::elaborate::provider::CheckedProviderGroup>>,
@@ -1527,7 +1579,7 @@ impl CheckedModule {
 
     /// Returns checked local interface semantic facts in declaration order.
     #[must_use]
-    pub const fn interface_facts(&self) -> &[CheckedInterfaceFact] {
+    pub const fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
         &self.interface_facts
     }
 
@@ -1616,7 +1668,7 @@ pub struct ResolvedModuleGroup {
     schemes: Box<[CheckedGlobalScheme]>,
     checked_interfaces: Box<[CheckedInterface]>,
     checked_implementations: Box<[CheckedImplementation]>,
-    interface_facts: Box<[CheckedInterfaceFact]>,
+    interface_facts: Box<[SharedCheckedInterfaceFact]>,
     implementation_facts: Box<[CheckedImplementationFact]>,
     span: Span,
 }
@@ -1698,7 +1750,7 @@ impl ResolvedModuleGroup {
 
     /// Returns checked local interface semantic facts in declaration order.
     #[must_use]
-    pub const fn interface_facts(&self) -> &[CheckedInterfaceFact] {
+    pub const fn interface_facts(&self) -> &[SharedCheckedInterfaceFact] {
         &self.interface_facts
     }
 
@@ -1916,7 +1968,7 @@ impl ResolvedModuleProgram {
                     .abstract_nominal_kinds
                     .get_mut(&family)
                     .unwrap()
-                    .kind = Kind::Type;
+                    .kind = NonMaterializedNominalKind::Ordinary(Kind::Type);
             }
             2 => {
                 registry
@@ -1984,7 +2036,8 @@ impl ResolvedModuleProgram {
                     spelling: "surplus".to_owned(),
                     kind: Kind::Type,
                     origin: Origin::Source(span),
-                },
+                }
+                .into(),
             )
             .is_none()
     }
@@ -2563,7 +2616,8 @@ impl ResolvedModuleProgram {
         else {
             return false;
         };
-        let Some(Type::Variable(dependent)) = requirement.arguments().get(dependent_position)
+        let Some(crate::types::KindedArgument::TypeArg(Type::Variable(dependent))) =
+            requirement.arguments().get(dependent_position)
         else {
             return false;
         };
@@ -2646,7 +2700,7 @@ impl ResolvedModuleProgram {
                         source.id = crate::interface::LexicalEvidenceId::new(module, u32::MAX),
                     LinkedCarrierMutationForTest::LexicalApplicationArgument => {
                         let Some(argument) = source.application.arguments.first_mut() else { return false; };
-                        discard_type_iteratively(std::mem::replace(&mut argument.ty, Type::Int));
+                        crate::types::discard_kinded_argument_iteratively(std::mem::replace(&mut argument.ty, crate::types::KindedArgument::TypeArg(Type::Int)));
                     }
                     LinkedCarrierMutationForTest::LexicalMethodOrder => {
                         if source.method_groups.len() < 2 { return false; }
@@ -2870,7 +2924,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        discard_resolved_type_variables(std::mem::take(&mut interface.parameters));
+                        drop(std::mem::take(&mut interface.parameters));
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceParametersExtra => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
@@ -2882,7 +2936,7 @@ impl ResolvedModuleProgram {
                         };
                         let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
                         parameters.push(parameter);
-                        interface.parameters = parameters.into_boxed_slice();
+                        interface.parameters = parameters.into_boxed_slice().into();
                     }
                     LinkedCarrierMutationForTest::InterfaceSourceDetermination => {
                         let Some(interface) = self.groups[group_index].interfaces.first_mut()
@@ -2914,7 +2968,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        let Some(parameter) = interface.parameters.first_mut() else {
+                        let Some(parameter) = interface.parameters.make_mut_for_test().first_mut() else {
                             return false;
                         };
                         parameter.id = TypeVariableId::resolved(module, u32::MAX);
@@ -2924,7 +2978,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        let Some(parameter) = interface.parameters.first_mut() else {
+                        let Some(parameter) = interface.parameters.make_mut_for_test().first_mut() else {
                             return false;
                         };
                         parameter.spelling.push_str("-forged");
@@ -2973,7 +3027,7 @@ impl ResolvedModuleProgram {
                             spelling: "Forged".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(method.span),
-                        }]);
+                        }]).into();
                     }
                     LinkedCarrierMutationForTest::InterfaceRegistryKind => {
                         let Some(parameter) = self.groups[group_index]
@@ -2999,21 +3053,21 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameters[0].id = TypeVariableId::resolved(module, u32::MAX);
+                        fact.parameters.make_mut_for_test()[0].id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterSpelling => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameters[0].spelling.push_str("-forged");
+                        fact.parameters.make_mut_for_test()[0].spelling.push_str("-forged");
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterKind => {
                         let Some(fact) = self.groups[group_index].interface_facts.first_mut()
                         else {
                             return false;
                         };
-                        fact.parameters[0].kind =
+                        fact.parameters.make_mut_for_test()[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceHiddenFactParameterKind => {
@@ -3024,7 +3078,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        fact.parameters[0].kind =
+                        fact.parameters.make_mut_for_test()[0].kind =
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
                     }
                     LinkedCarrierMutationForTest::InterfaceFactParameterOrigin => {
@@ -3032,7 +3086,7 @@ impl ResolvedModuleProgram {
                         else {
                             return false;
                         };
-                        wrap_origin(&mut fact.parameters[0].origin);
+                        wrap_origin(&mut fact.parameters.make_mut_for_test()[0].origin);
                     }
                     LinkedCarrierMutationForTest::InterfaceMethodType => {
                         let Some(method) = self.groups[group_index]
@@ -3080,7 +3134,7 @@ impl ResolvedModuleProgram {
                             return false;
                         };
                         discard_resolved_type_variable(removed);
-                        fact.parameters = parameters.into_boxed_slice();
+                        fact.parameters = parameters.into_boxed_slice().into();
                     }
                     LinkedCarrierMutationForTest::RelationalInterfaceParameterExtra => {
                         let Some(mut extra) = fact.parameters.last().cloned() else {
@@ -3090,19 +3144,19 @@ impl ResolvedModuleProgram {
                         extra.spelling = "Extra".to_owned();
                         let mut parameters = std::mem::take(&mut fact.parameters).into_vec();
                         parameters.push(extra);
-                        fact.parameters = parameters.into_boxed_slice();
+                        fact.parameters = parameters.into_boxed_slice().into();
                     }
                     LinkedCarrierMutationForTest::RelationalInterfaceParameterReordered => {
-                        fact.parameters.swap(0, 1);
+                        fact.parameters.make_mut_for_test().swap(0, 1);
                     }
                     LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongKind => {
                         drop(std::mem::replace(
-                            &mut fact.parameters[1].kind,
+                            &mut fact.parameters.make_mut_for_test()[1].kind,
                             Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
                         ));
                     }
                     LinkedCarrierMutationForTest::RelationalInterfaceParameterWrongIdentity => {
-                        fact.parameters[1].id = TypeVariableId::resolved(module, u32::MAX);
+                        fact.parameters.make_mut_for_test()[1].id = TypeVariableId::resolved(module, u32::MAX);
                     }
                     _ => unreachable!(),
                 }
@@ -3152,11 +3206,11 @@ impl ResolvedModuleProgram {
                             let Some(removed) = arguments.pop() else {
                                 return false;
                             };
-                            discard_type_iteratively(removed);
+                            crate::types::discard_kinded_argument_iteratively(removed);
                             true
                         }
                         LinkedCarrierMutationForTest::RelationalApplicationArgumentExtra => {
-                            arguments.push(Type::Unit);
+                            arguments.push(crate::types::KindedArgument::TypeArg(Type::Unit));
                             true
                         }
                         LinkedCarrierMutationForTest::RelationalApplicationArgumentReordered => {
@@ -3167,30 +3221,30 @@ impl ResolvedModuleProgram {
                             let Some(higher_kinded) = higher_kinded else {
                                 return false;
                             };
-                            discard_type_iteratively(std::mem::replace(
+                            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                                 &mut arguments[1],
-                                Type::Nominal(higher_kinded),
+                                crate::types::KindedArgument::TypeArg(Type::Nominal(higher_kinded)),
                             ));
                             true
                         }
                         LinkedCarrierMutationForTest::RelationalApplicationArgumentWrongIdentity => {
-                            discard_type_iteratively(std::mem::replace(
+                            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                                 &mut arguments[1],
-                                Type::Nominal(NominalTypeId::new(module, u32::MAX)),
+                                crate::types::KindedArgument::TypeArg(Type::Nominal(NominalTypeId::new(module, u32::MAX))),
                             ));
                             true
                         }
                         LinkedCarrierMutationForTest::RelationalApplicationKeyMismatch => {
-                            discard_type_iteratively(std::mem::replace(
+                            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                                 &mut arguments[1],
-                                Type::Bool,
+                                crate::types::KindedArgument::TypeArg(Type::Bool),
                             ));
                             true
                         }
                         LinkedCarrierMutationForTest::RelationalApplicationDependentMismatch => {
-                            discard_type_iteratively(std::mem::replace(
+                            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                                 &mut arguments[2],
-                                Type::Int,
+                                crate::types::KindedArgument::TypeArg(Type::Int),
                             ));
                             true
                         }
@@ -3304,7 +3358,7 @@ impl ResolvedModuleProgram {
                     LinkedCarrierMutationForTest::ImplementationTokenInterface => {
                         let token = &mut self.groups[group_index].checked_implementations
                             [implementation_index];
-                        let application = InterfaceApplication::new(
+                        let application = InterfaceApplication::new_kinded(
                             InterfaceId::new(module, u32::MAX),
                             token.application().clone().into_parts().1,
                         );
@@ -3334,7 +3388,7 @@ impl ResolvedModuleProgram {
                             return false;
                         };
                         for argument in std::mem::take(&mut source.head.arguments) {
-                            discard_resolved_type(argument);
+                            argument.discard_iteratively();
                         }
                     }
                     LinkedCarrierMutationForTest::ImplementationSourceArgumentsExtra => {
@@ -4193,7 +4247,7 @@ impl ResolvedModuleProgram {
             return false;
         }
 
-        discard_type_iteratively(std::mem::replace(
+        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
             &mut source_prerequisite.application.arguments[0].ty,
             argument.clone(),
         ));
@@ -4206,7 +4260,7 @@ impl ResolvedModuleProgram {
                 .expect("the complete implementation method scheme was checked above");
             replace_unary_interface_application(&mut requirement.application, argument.clone());
         }
-        discard_type_iteratively(argument);
+        crate::types::discard_kinded_argument_iteratively(argument);
         true
     }
 
@@ -4262,7 +4316,7 @@ impl ResolvedModuleProgram {
                         .is_some()
                 });
         if !can_mutate {
-            discard_type_iteratively(argument);
+            crate::types::discard_kinded_argument_iteratively(argument);
             return false;
         }
 
@@ -4275,19 +4329,28 @@ impl ResolvedModuleProgram {
             .application
             .arguments[argument_index]
             .ty;
-        discard_type_iteratively(std::mem::replace(source_argument, argument.clone()));
+        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+            source_argument,
+            argument.clone(),
+        ));
         let fact = &mut group.implementation_facts[implementation_index];
         let fact_argument = &mut fact.prerequisites[prerequisite_index]
             .application
             .arguments_mut_for_summary_test()[argument_index];
-        discard_type_iteratively(std::mem::replace(fact_argument, argument.clone()));
+        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+            fact_argument,
+            argument.clone(),
+        ));
         for method in &mut fact.methods {
             let method_argument = &mut method.scheme.requirements[prerequisite_index]
                 .application
                 .arguments_mut_for_summary_test()[argument_index];
-            discard_type_iteratively(std::mem::replace(method_argument, argument.clone()));
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                method_argument,
+                argument.clone(),
+            ));
         }
-        discard_type_iteratively(argument);
+        crate::types::discard_kinded_argument_iteratively(argument);
         true
     }
 
@@ -4684,6 +4747,12 @@ impl ImportedFacts {
                 .get(*self.interface_positions.get(&id)?)?
                 .fact,
         )
+    }
+
+    pub(crate) fn shared_interface(&self, id: InterfaceId) -> Option<&SharedCheckedInterfaceFact> {
+        self.interfaces
+            .get(*self.interface_positions.get(&id)?)
+            .map(|imported| &imported.fact)
     }
 
     /// Looks up one imported canonical effect fact by identity.
@@ -5276,12 +5345,13 @@ impl ImportedFacts {
 
     pub(crate) fn insert_interface_with_authority_indices(
         &mut self,
-        fact: CheckedInterfaceFact,
+        fact: impl Into<SharedCheckedInterfaceFact>,
         authority_method_indices: Box<[usize]>,
         direct_dependency: ModuleId,
         available_at: Span,
         publicly_available: bool,
     ) {
+        let fact = fact.into();
         let position = self.interfaces.len();
         self.interface_positions.insert(fact.id, position);
         self.interfaces.push(ImportedInterfaceFact {
@@ -5467,6 +5537,322 @@ fn discard_imported_nominal(fact: ImportedNominalFact) {
     discard_origin_iteratively(fact.origin);
 }
 
+/// Immutable defining owner parameters shared without duplicating their kinds or provenance.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SharedOwnerParameters(Option<Arc<OwnerParameterRecords>>);
+
+#[derive(Debug, Eq, PartialEq)]
+struct OwnerParameterRecords {
+    parameters: Box<[ResolvedTypeVariable]>,
+}
+
+impl Drop for OwnerParameterRecords {
+    fn drop(&mut self) {
+        for parameter in std::mem::take(&mut self.parameters).into_vec() {
+            discard_resolved_type_variable(parameter);
+        }
+    }
+}
+
+impl SharedOwnerParameters {
+    pub(crate) fn from_boxed_with_budget(
+        parameters: Box<[ResolvedTypeVariable]>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let records = OwnerParameterRecords { parameters };
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(Self(Some(Arc::new(records))))
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        if self.0.is_none() {
+            return Ok(Self::default());
+        }
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(self.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_boxed_for_test(parameters: Box<[ResolvedTypeVariable]>) -> Self {
+        Self::from_boxed_with_budget(parameters, &mut TypeWorkBudget::unbounded())
+            .expect("an in-memory shared owner fixture fits its work bound")
+    }
+    #[cfg(test)]
+    fn into_vec(self) -> Vec<ResolvedTypeVariable> {
+        match self.0 {
+            None => Vec::new(),
+            Some(records) => match Arc::try_unwrap(records) {
+                Ok(mut records) => std::mem::take(&mut records.parameters).into_vec(),
+                Err(records) => {
+                    let mut parameters = ResolvedTypeVariableBuffer(Vec::new());
+                    parameters
+                        .try_reserve(records.parameters.len())
+                        .expect("fixture parameter storage");
+                    for parameter in records.parameters.iter() {
+                        parameters.push(
+                            clone_resolved_type_variable_with_budget(
+                                parameter,
+                                &mut TypeWorkBudget::unbounded(),
+                            )
+                            .expect("fixture parameter copy"),
+                        );
+                    }
+                    parameters.into_vec()
+                }
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn make_mut_for_test(&mut self) -> &mut [ResolvedTypeVariable] {
+        if self.0.as_mut().and_then(Arc::get_mut).is_none() {
+            let mut parameters = ResolvedTypeVariableBuffer(Vec::new());
+            parameters
+                .try_reserve(self.len())
+                .expect("fixture parameter storage");
+            for parameter in self.iter() {
+                parameters.push(
+                    clone_resolved_type_variable_with_budget(
+                        parameter,
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .expect("fixture parameter copy"),
+                );
+            }
+            *self = Self::from_boxed_for_test(parameters.into_vec().into_boxed_slice());
+        }
+        self.0
+            .as_mut()
+            .and_then(Arc::get_mut)
+            .expect("a detached fixture owns its parameters")
+            .parameters
+            .as_mut()
+    }
+}
+
+#[cfg(test)]
+impl From<Box<[ResolvedTypeVariable]>> for SharedOwnerParameters {
+    fn from(parameters: Box<[ResolvedTypeVariable]>) -> Self {
+        Self::from_boxed_for_test(parameters)
+    }
+}
+#[cfg(test)]
+impl<const N: usize> From<Box<[ResolvedTypeVariable; N]>> for SharedOwnerParameters {
+    fn from(parameters: Box<[ResolvedTypeVariable; N]>) -> Self {
+        Self::from_boxed_for_test(parameters)
+    }
+}
+
+impl std::ops::Deref for SharedOwnerParameters {
+    type Target = [ResolvedTypeVariable];
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .map_or(&[], |records| records.parameters.as_ref())
+    }
+}
+impl AsRef<[ResolvedTypeVariable]> for SharedOwnerParameters {
+    fn as_ref(&self) -> &[ResolvedTypeVariable] {
+        self
+    }
+}
+impl<'parameters> IntoIterator for &'parameters SharedOwnerParameters {
+    type Item = &'parameters ResolvedTypeVariable;
+    type IntoIter = std::slice::Iter<'parameters, ResolvedTypeVariable>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+// A canonical binder either owns its record or borrows one validated slot
+// from immutable defining records. The guard owns iterative disposal on every
+// failed publication and registry teardown path.
+#[derive(Debug)]
+struct CanonicalTypeVariable(Option<CanonicalTypeVariableValue>);
+#[derive(Debug, Eq, PartialEq)]
+enum CanonicalTypeVariableValue {
+    Owned(ResolvedTypeVariable),
+    SharedOriginal {
+        parameters: SharedOwnerParameters,
+        slot: usize,
+    },
+}
+impl CanonicalTypeVariable {
+    fn shared_original(
+        parameters: &SharedOwnerParameters,
+        slot: usize,
+        identity: TypeVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        if parameters.get(slot).map(|parameter| parameter.id) != Some(identity) {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(Self(Some(CanonicalTypeVariableValue::SharedOriginal {
+            parameters: parameters.clone_with_budget(budget)?,
+            slot,
+        })))
+    }
+    fn clone_shared_with_budget(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Self>, ResolvedBuildFailure> {
+        match self.0.as_ref() {
+            Some(CanonicalTypeVariableValue::SharedOriginal { parameters, slot }) => {
+                Self::shared_original(parameters, *slot, self.id, budget).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+}
+impl Clone for CanonicalTypeVariable {
+    fn clone(&self) -> Self {
+        match self
+            .0
+            .as_ref()
+            .expect("a canonical binder retains its record")
+        {
+            CanonicalTypeVariableValue::Owned(parameter) => {
+                clone_resolved_type_variable_with_budget(
+                    parameter,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("a canonical binder compatibility clone retains its complete record")
+                .into()
+            }
+            CanonicalTypeVariableValue::SharedOriginal { parameters, slot } => {
+                Self(Some(CanonicalTypeVariableValue::SharedOriginal {
+                    parameters: parameters.clone(),
+                    slot: *slot,
+                }))
+            }
+        }
+    }
+}
+
+impl PartialEq for CanonicalTypeVariable {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+impl Eq for CanonicalTypeVariable {}
+
+impl From<ResolvedTypeVariable> for CanonicalTypeVariable {
+    fn from(parameter: ResolvedTypeVariable) -> Self {
+        Self(Some(CanonicalTypeVariableValue::Owned(parameter)))
+    }
+}
+impl std::ops::Deref for CanonicalTypeVariable {
+    type Target = ResolvedTypeVariable;
+    fn deref(&self) -> &ResolvedTypeVariable {
+        match self
+            .0
+            .as_ref()
+            .expect("a canonical binder retains its record")
+        {
+            CanonicalTypeVariableValue::Owned(parameter) => parameter,
+            CanonicalTypeVariableValue::SharedOriginal { parameters, slot } => &parameters[*slot], // The sole constructor validates an immutable slot.
+        }
+    }
+}
+impl AsRef<ResolvedTypeVariable> for CanonicalTypeVariable {
+    fn as_ref(&self) -> &ResolvedTypeVariable {
+        self
+    }
+}
+#[cfg(test)]
+impl std::ops::DerefMut for CanonicalTypeVariable {
+    fn deref_mut(&mut self) -> &mut ResolvedTypeVariable {
+        if matches!(
+            self.0.as_ref(),
+            Some(CanonicalTypeVariableValue::SharedOriginal { .. })
+        ) {
+            let parameter =
+                clone_resolved_type_variable_with_budget(self, &mut TypeWorkBudget::unbounded())
+                    .expect("an immutable canonical fixture binder can detach");
+            self.0 = Some(CanonicalTypeVariableValue::Owned(parameter));
+        }
+        match self.0.as_mut().expect("fixture canonical binder record") {
+            CanonicalTypeVariableValue::Owned(parameter) => parameter,
+            CanonicalTypeVariableValue::SharedOriginal { .. } => {
+                unreachable!("fixture detached above")
+            }
+        }
+    }
+}
+impl Drop for CanonicalTypeVariable {
+    fn drop(&mut self) {
+        if let Some(CanonicalTypeVariableValue::Owned(parameter)) = self.0.take() {
+            discard_resolved_type_variable(parameter);
+        }
+    }
+}
+
+/// One immutable admitted interface fact shared across checked, export, and
+/// import views. Availability routes remain separate from defining authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SharedCheckedInterfaceFact(Arc<CheckedInterfaceFact>);
+
+impl SharedCheckedInterfaceFact {
+    pub(crate) fn from_owned_with_budget(
+        fact: CheckedInterfaceFact,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        // The fact already owns iterative disposal before any fallible charge.
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(Self(Arc::new(fact)))
+    }
+
+    pub(crate) fn clone_with_budget(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        Ok(self.clone())
+    }
+}
+impl std::ops::Deref for SharedCheckedInterfaceFact {
+    type Target = CheckedInterfaceFact;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl AsRef<CheckedInterfaceFact> for SharedCheckedInterfaceFact {
+    fn as_ref(&self) -> &CheckedInterfaceFact {
+        self
+    }
+}
+#[cfg(test)]
+impl From<CheckedInterfaceFact> for SharedCheckedInterfaceFact {
+    fn from(fact: CheckedInterfaceFact) -> Self {
+        Self(Arc::new(fact))
+    }
+}
+#[cfg(test)]
+impl std::ops::DerefMut for SharedCheckedInterfaceFact {
+    fn deref_mut(&mut self) -> &mut CheckedInterfaceFact {
+        if Arc::get_mut(&mut self.0).is_none() {
+            let mut types = TypeWorkBudget::unbounded();
+            let mut constraints =
+                crate::interface::InterfaceConstraintBudget::with_limit(usize::MAX);
+            let detached = clone_checked_interface_fact(self, None, &mut types, &mut constraints)
+                .expect("an admitted fixture fact can detach before tampering");
+            self.0 = Arc::new(detached);
+        }
+        Arc::get_mut(&mut self.0).expect("fixture fact detachment is exclusive")
+    }
+}
+
 /// One body-free checked interface fact keyed by stable semantic identity.
 #[derive(Debug, Eq, PartialEq)]
 pub struct CheckedInterfaceFact {
@@ -5475,7 +5861,7 @@ pub struct CheckedInterfaceFact {
     /// Exact defining source spelling.
     pub spelling: String,
     /// Ordered interface parameters with their defining identities.
-    pub parameters: Box<[ResolvedTypeVariable]>,
+    pub parameters: SharedOwnerParameters,
     /// Optional total determinant key in interface declaration coordinates.
     determination: Option<DeterminationKey>,
     /// Checked methods in semantic declaration order.
@@ -5488,7 +5874,7 @@ pub struct CheckedInterfaceFact {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ImportedInterfaceFact {
-    pub(crate) fact: CheckedInterfaceFact,
+    pub(crate) fact: SharedCheckedInterfaceFact,
     // Only polymorphic methods have entries. Monomorphic checker views can
     // therefore skip authority discovery without another all-method pass.
     authority_method_indices: Box<[usize]>,
@@ -5509,7 +5895,7 @@ impl CheckedInterfaceFact {
     pub(crate) fn new(
         id: InterfaceId,
         spelling: String,
-        parameters: Box<[ResolvedTypeVariable]>,
+        parameters: impl Into<SharedOwnerParameters>,
         determination: Option<DeterminationKey>,
         methods: Box<[CheckedInterfaceMethodFact]>,
         origin: Origin,
@@ -5518,7 +5904,7 @@ impl CheckedInterfaceFact {
         Self {
             id,
             spelling,
-            parameters,
+            parameters: parameters.into(),
             determination,
             methods,
             origin,
@@ -5553,7 +5939,7 @@ impl CheckedInterfaceFact {
         Self {
             id,
             spelling,
-            parameters,
+            parameters: SharedOwnerParameters::from_boxed_for_test(parameters),
             determination: None,
             methods: Box::new([]),
             origin,
@@ -5564,9 +5950,7 @@ impl CheckedInterfaceFact {
 
 impl Drop for CheckedInterfaceFact {
     fn drop(&mut self) {
-        for parameter in std::mem::take(&mut self.parameters).into_vec() {
-            discard_resolved_type_variable(parameter);
-        }
+        drop(std::mem::take(&mut self.parameters));
         for method in std::mem::take(&mut self.methods).into_vec() {
             drop(method);
         }
@@ -5585,9 +5969,11 @@ pub struct CheckedInterfaceMethodFact {
     /// Exact defining source spelling.
     pub spelling: String,
     /// Ordered canonical method-local type binders retained separately from the value type.
-    pub(crate) type_parameters: Box<[ResolvedTypeVariable]>,
+    pub(crate) type_parameters: SharedOwnerParameters,
+    /// Parent slots inherited by generated registry schemes; never method-local binders.
+    pub(crate) inherited_parameters: Box<[InheritedOwnerParameter]>,
     /// Source-authenticated binder payload attached structurally to this method.
-    method_binder_authority: Option<Box<[ResolvedTypeVariable]>>,
+    method_binder_authority: Option<SharedOwnerParameters>,
     /// Checked source value type before evidence lowering.
     pub(crate) value_type: Type,
     /// Causal method provenance.
@@ -5600,14 +5986,8 @@ pub struct CheckedInterfaceMethodFact {
 
 impl Drop for CheckedInterfaceMethodFact {
     fn drop(&mut self) {
-        for parameter in std::mem::take(&mut self.type_parameters).into_vec() {
-            discard_resolved_type_variable(parameter);
-        }
-        if let Some(parameters) = self.method_binder_authority.take() {
-            for parameter in parameters.into_vec() {
-                discard_resolved_type_variable(parameter);
-            }
-        }
+        drop(std::mem::take(&mut self.type_parameters));
+        drop(self.method_binder_authority.take());
         discard_type_iteratively(std::mem::replace(&mut self.value_type, Type::Unit));
         discard_origin_iteratively(std::mem::replace(
             &mut self.origin,
@@ -5622,18 +6002,20 @@ impl CheckedInterfaceMethodFact {
     pub(crate) fn with_mirrored_binder_authority_for_test(
         id: MethodId,
         spelling: String,
-        type_parameters: Box<[ResolvedTypeVariable]>,
+        type_parameters: impl Into<SharedOwnerParameters>,
         value_type: Type,
         origin: Origin,
         annotation_span: Span,
         span: Span,
     ) -> Self {
+        let type_parameters = type_parameters.into();
         let method_binder_authority = if type_parameters.is_empty() {
             None
         } else {
-            Some(type_parameters.to_vec().into_boxed_slice())
+            Some(type_parameters.clone())
         };
         Self {
+            inherited_parameters: Box::new([]),
             id,
             spelling,
             type_parameters,
@@ -5647,12 +6029,11 @@ impl CheckedInterfaceMethodFact {
 
     pub(crate) fn with_resolved_binder_authority(
         source: &ResolvedInterfaceMethod,
-        type_parameters: Box<[ResolvedTypeVariable]>,
+        type_parameters: SharedOwnerParameters,
         value_type: Type,
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
-        let type_parameters = ResolvedTypeVariableBuffer(type_parameters.into_vec());
         let value_type = IterativeTypeOwner::new(value_type);
         let method_binder_authority = clone_method_binder_authority_payload(
             &source.type_parameters,
@@ -5660,9 +6041,10 @@ impl CheckedInterfaceMethodFact {
             constraint_work,
         )?;
         Ok(Self {
+            inherited_parameters: Box::new([]),
             id: source.id,
             spelling: source.spelling.clone(),
-            type_parameters: type_parameters.into_vec().into_boxed_slice(),
+            type_parameters,
             method_binder_authority,
             value_type: value_type.into_inner(),
             origin: source.origin.clone(),
@@ -5678,17 +6060,30 @@ impl CheckedInterfaceMethodFact {
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<Self, ResolvedBuildFailure> {
-        let type_parameters = ResolvedTypeVariableBuffer(type_parameters.into_vec());
         let value_type = IterativeTypeOwner::new(value_type);
+        let type_parameters =
+            SharedOwnerParameters::from_boxed_with_budget(type_parameters, type_work)?;
         let method_binder_authority = clone_method_binder_authority_payload(
-            source.authoritative_type_parameters(),
+            source
+                .method_binder_authority
+                .as_ref()
+                .unwrap_or(&source.type_parameters),
             type_work,
             constraint_work,
         )?;
+        type_work
+            .charge(source.inherited_parameters.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut inherited_parameters = Vec::new();
+        inherited_parameters
+            .try_reserve_exact(source.inherited_parameters.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        inherited_parameters.extend(source.inherited_parameters.iter().copied());
         Ok(Self {
+            inherited_parameters: inherited_parameters.into_boxed_slice(),
             id: source.id,
             spelling: source.spelling.clone(),
-            type_parameters: type_parameters.into_vec().into_boxed_slice(),
+            type_parameters,
             method_binder_authority,
             value_type: value_type.into_inner(),
             origin: source.origin.clone(),
@@ -5697,15 +6092,69 @@ impl CheckedInterfaceMethodFact {
         })
     }
 
+    pub(crate) fn authenticate_shared_original(
+        &self,
+        constraints: &mut crate::interface::InterfaceConstraintBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        authenticate_method_binder_authority(self, constraints)
+    }
+
+    pub(crate) fn with_inherited_parameters(
+        mut self,
+        owner: OwnerId,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        let mut roles = Vec::new();
+        budget
+            .charge(parameters.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        roles
+            .try_reserve_exact(parameters.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (slot, parameter) in parameters.iter().enumerate() {
+            roles.push(
+                InheritedOwnerParameter::at_slot(owner, slot, parameter.id, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+        }
+        self.inherited_parameters = roles.into_boxed_slice();
+        Ok(self)
+    }
+    pub(crate) fn authenticate_inherited_parameters(
+        &self,
+        owner: OwnerId,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        if self.inherited_parameters.len() != parameters.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        for (slot, (role, parameter)) in
+            self.inherited_parameters.iter().zip(parameters).enumerate()
+        {
+            budget
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if role.owner != owner
+                || usize::try_from(role.slot) != Ok(slot)
+                || role.binder != parameter.id
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        }
+        Ok(())
+    }
+
     /// Borrows the ordered canonical method-local binder records.
     #[must_use]
-    pub const fn type_parameters(&self) -> &[ResolvedTypeVariable] {
+    pub fn type_parameters(&self) -> &[ResolvedTypeVariable] {
         &self.type_parameters
     }
 
     /// Borrows the private source-authenticated method-local binder payload.
     #[must_use]
-    pub(crate) const fn authoritative_type_parameters(&self) -> &[ResolvedTypeVariable] {
+    pub(crate) fn authoritative_type_parameters(&self) -> &[ResolvedTypeVariable] {
         match &self.method_binder_authority {
             Some(parameters) => parameters,
             None => &[],
@@ -5762,7 +6211,7 @@ impl CheckedImplementationFact {
 
     /// Borrows the checked implementation head arguments in declaration order.
     #[must_use]
-    pub const fn arguments(&self) -> &[Type] {
+    pub const fn arguments(&self) -> &[crate::types::KindedArgument] {
         self.application.arguments()
     }
 
@@ -5858,7 +6307,7 @@ fn clone_checked_requirement(
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     for argument in requirement.arguments() {
         constraint_work
-            .charge_type(argument)
+            .charge_argument(argument)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     }
     Ok(CheckedRequirement {
@@ -5870,6 +6319,74 @@ fn clone_checked_requirement(
         origin: requirement.origin.clone(),
         span: requirement.span,
     })
+}
+
+fn share_checked_interface_fact(
+    fact: &SharedCheckedInterfaceFact,
+    source: Option<&ResolvedInterfaceDeclaration>,
+    type_work: &mut TypeWorkBudget,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<SharedCheckedInterfaceFact, ResolvedBuildFailure> {
+    if source.is_some_and(|source| {
+        source.id != fact.id
+            || source.spelling != fact.spelling
+            || source.methods.len() != fact.methods.len()
+    }) {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    if let Some(source) = source
+        && !resolved_determination_positions_match(
+            &source.parameters,
+            source.determination.as_ref(),
+            &[fact.determinant_positions()],
+            |work| constraint_work.charge(work),
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+    {
+        return Err(ResolvedBuildFailure::InvalidState);
+    }
+    // Each method slot reserves the retained method relation. For a local
+    // source, that same scalar authenticates the first source-origin node;
+    // deeper origin nodes charge below.
+    constraint_work
+        .charge(fact.methods.len().saturating_add(1))
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    for (method_index, method) in fact.methods.iter().enumerate() {
+        method.authenticate_inherited_parameters(
+            OwnerId::Interface(fact.id),
+            &fact.parameters,
+            type_work,
+        )?;
+        let source_method = source.and_then(|source| source.methods.get(method_index));
+        if let Some(source_method) = source_method {
+            authenticate_method_binder_authority(method, constraint_work)?;
+            if source_method.id != method.id
+                || source_method.spelling != method.spelling
+                || source_method.span != method.span
+                || source_method.annotation.span != method.annotation_span
+                || !same_origin_after_base_charge(
+                    &source_method.origin,
+                    &method.origin,
+                    constraint_work,
+                )?
+                || !constraint_work
+                    .charge_equal_types(&source_method.annotation.ty, &method.value_type)
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+                || !same_summary_resolved_type_variables_with_constraint_budget(
+                    &source_method.type_parameters,
+                    method.authoritative_type_parameters(),
+                    constraint_work,
+                )?
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+        } else {
+            constraint_work
+                .charge_type(&method.value_type)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        }
+    }
+    fact.clone_with_budget(type_work)
 }
 
 pub(crate) fn clone_checked_interface_fact(
@@ -5907,6 +6424,11 @@ pub(crate) fn clone_checked_interface_fact(
         .try_reserve(fact.methods.len())
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
     for (method_index, method) in fact.methods.iter().enumerate() {
+        method.authenticate_inherited_parameters(
+            OwnerId::Interface(fact.id),
+            &fact.parameters,
+            type_work,
+        )?;
         let source_method = source.and_then(|source| source.methods.get(method_index));
         if let Some(source_method) = source_method {
             authenticate_method_binder_authority(method, constraint_work)?;
@@ -5950,8 +6472,7 @@ pub(crate) fn clone_checked_interface_fact(
             constraint_work,
         )?);
     }
-    let parameters = clone_resolved_type_variable_buffer_with_budget(&fact.parameters, type_work)
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    let parameters = fact.parameters.clone_with_budget(type_work)?;
     let determination = fact
         .determination
         .as_ref()
@@ -5961,7 +6482,7 @@ pub(crate) fn clone_checked_interface_fact(
     Ok(CheckedInterfaceFact {
         id: fact.id,
         spelling: fact.spelling.clone(),
-        parameters: parameters.into_vec().into_boxed_slice(),
+        parameters,
         determination,
         methods: methods.into_boxed_slice(),
         origin: fact.origin.clone(),
@@ -5988,7 +6509,7 @@ pub(crate) fn clone_checked_implementation_fact(
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     for argument in fact.arguments() {
         constraint_work
-            .charge_type(argument)
+            .charge_argument(argument)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     }
 
@@ -6039,7 +6560,7 @@ pub(crate) fn clone_checked_implementation_fact(
                 .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
             for argument in requirement.arguments() {
                 constraint_work
-                    .charge_type(argument)
+                    .charge_argument(argument)
                     .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
             }
         }
@@ -7033,9 +7554,9 @@ pub struct ExportSummary {
     effect_positions: HashMap<EffectId, usize>,
     method_names: HashMap<String, MethodId>,
     method_name_order: Vec<String>,
-    interfaces: Vec<CheckedInterfaceFact>,
+    interfaces: Vec<SharedCheckedInterfaceFact>,
     interface_positions: HashMap<InterfaceId, usize>,
-    hidden_interfaces: Vec<CheckedInterfaceFact>,
+    hidden_interfaces: Vec<SharedCheckedInterfaceFact>,
     implementations: Vec<AuthorizedImplementationFact>,
     implementation_positions: HashMap<ImplId, usize>,
     hidden_nominals: HashMap<NominalTypeId, ExportedHiddenType>,
@@ -7239,6 +7760,12 @@ pub(crate) enum ResolvedBuildFailure {
     ConstraintResource,
 }
 
+impl ResolvedBuildFailure {
+    pub(crate) fn is_resource_exhaustion(self) -> bool {
+        matches!(self, Self::TypeResource | Self::ConstraintResource)
+    }
+}
+
 fn reserve_summary_implementation_storage(
     implementations: &mut Vec<AuthorizedImplementationFact>,
     positions: &mut HashMap<ImplId, usize>,
@@ -7330,7 +7857,7 @@ fn map_summary_kind_failure(failure: KindFailure) -> ResolvedBuildFailure {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SummaryBinderOwner {
+pub(crate) enum SummaryBinderOwner {
     Nominal(NominalTypeId),
     Interface(InterfaceId),
     Effect(EffectId),
@@ -7344,13 +7871,9 @@ fn register_summary_parameter<'a>(
     kind: &'a Kind,
     owner: SummaryBinderOwner,
     origin: Span,
-    canonical: &mut HashMap<TypeVariableId, (&'a Kind, Span, SummaryBinderOwner)>,
     environments: &mut KindEnvironments<'a>,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), ResolvedBuildFailure> {
-    type_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
     let expected_module = match owner {
         SummaryBinderOwner::Nominal(identity) => identity.module(),
         SummaryBinderOwner::Interface(identity) => identity.module(),
@@ -7364,8 +7887,11 @@ fn register_summary_parameter<'a>(
     if identity.module() != Some(expected_module) {
         return Err(ResolvedBuildFailure::InvalidState);
     }
-    if let Some((existing, _, existing_owner)) = canonical.get(&identity) {
-        if *existing_owner != owner
+    if let Some((existing, _, existing_owner)) = environments.summary_declared(identity) {
+        type_work
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if existing_owner != Some(owner)
             || !same_kind_with_charge(existing, kind, || type_work.charge(1))
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?
         {
@@ -7373,20 +7899,15 @@ fn register_summary_parameter<'a>(
         }
         return Ok(());
     }
-    canonical
-        .try_reserve(1)
-        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
     environments
-        .insert_declared(identity, kind, origin, type_work)
+        .insert_summary_declared(identity, kind, origin, owner, type_work)
         .map_err(map_summary_kind_failure)?;
-    canonical.insert(identity, (kind, origin, owner));
     Ok(())
 }
 
 fn register_summary_parameters<'a>(
     parameters: &'a [ResolvedTypeVariable],
     owner: SummaryBinderOwner,
-    canonical: &mut HashMap<TypeVariableId, (&'a Kind, Span, SummaryBinderOwner)>,
     environments: &mut KindEnvironments<'a>,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), ResolvedBuildFailure> {
@@ -7401,7 +7922,6 @@ fn register_summary_parameters<'a>(
             &parameter.kind,
             owner,
             parameter.origin.primary_span(),
-            canonical,
             environments,
             type_work,
         )?;
@@ -7413,7 +7933,6 @@ fn register_summary_scheme_parameters<'a>(
     parameters: &'a [(TypeVariableId, Kind)],
     owner: SummaryBinderOwner,
     origin: Span,
-    canonical: &mut HashMap<TypeVariableId, (&'a Kind, Span, SummaryBinderOwner)>,
     environments: &mut KindEnvironments<'a>,
     type_work: &mut TypeWorkBudget,
 ) -> Result<(), ResolvedBuildFailure> {
@@ -7423,172 +7942,176 @@ fn register_summary_scheme_parameters<'a>(
             return Err(ResolvedBuildFailure::InvalidState);
         }
         previous = Some(identity.local());
-        register_summary_parameter(
-            *identity,
-            kind,
-            owner,
-            origin,
-            canonical,
-            environments,
-            type_work,
-        )?;
+        register_summary_parameter(*identity, kind, owner, origin, environments, type_work)?;
     }
     Ok(())
 }
 
-fn authenticate_summary_type_variables(
-    root: &Type,
-    parameters: impl ExactSizeIterator<Item = TypeVariableId>,
-    type_work: &mut TypeWorkBudget,
-) -> Result<(), ResolvedBuildFailure> {
-    let parameter_count = parameters.len();
-    type_work
-        .charge(parameter_count)
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-    let mut allowed = HashSet::new();
-    allowed
-        .try_reserve(parameter_count)
-        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-    allowed.extend(parameters);
-
-    type_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-    let mut pending = Vec::new();
-    pending
-        .try_reserve(1)
-        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-    pending.push(root);
-    while let Some(ty) = pending.pop() {
-        type_work
-            .charge(1)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        match ty {
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
-            Type::Variable(identity) if allowed.contains(identity) => {}
-            Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            Type::Tuple(elements) => {
-                type_work
-                    .charge(elements.len())
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                pending
-                    .try_reserve(elements.len())
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                pending.extend(elements.iter().rev());
-            }
-            Type::Application(function, argument) | Type::Function(function, argument) => {
-                type_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                pending.push(argument);
-                pending.push(function);
-            }
-            Type::EffectfulFunction(domain, codomain) => {
-                if let Some(variable) = codomain.tail_variable() {
-                    match variable {
-                        EffectRowVariable::Rigid(variable) if allowed.contains(&variable) => {}
-                        EffectRowVariable::Rigid(_) | EffectRowVariable::Inference(_) => {
-                            return Err(ResolvedBuildFailure::InvalidState);
-                        }
-                    }
-                }
-                let children = codomain.effect_argument_count().saturating_add(2);
-                type_work
-                    .charge(children)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                pending
-                    .try_reserve(children)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                codomain.extend_effect_arguments(&mut pending);
-                pending.push(codomain.value());
-                pending.push(domain);
-            }
-        }
+#[derive(Clone, Copy)]
+enum SummaryRoot<'a> {
+    Type(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
+    Row(&'a EffectRow),
+}
+impl<'a> From<&'a Type> for SummaryRoot<'a> {
+    fn from(ty: &'a Type) -> Self {
+        Self::Type(ty)
     }
-    Ok(())
+}
+impl<'a> From<&'a crate::types::KindedArgument> for SummaryRoot<'a> {
+    fn from(arg: &'a crate::types::KindedArgument) -> Self {
+        Self::Argument(arg)
+    }
+}
+impl<'a> From<&&'a Type> for SummaryRoot<'a> {
+    fn from(ty: &&'a Type) -> Self {
+        Self::Type(ty)
+    }
+}
+impl<'a> From<&&'a crate::types::KindedArgument> for SummaryRoot<'a> {
+    fn from(arg: &&'a crate::types::KindedArgument) -> Self {
+        Self::Argument(arg)
+    }
 }
 
-fn collect_summary_constraint_variables(
-    root: &Type,
-    output: &mut HashSet<TypeVariableId>,
-    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+fn visit_summary_variables<'a>(
+    root: impl Into<SummaryRoot<'a>>,
+    mut charge: impl FnMut(usize) -> Result<(), ResolvedBuildFailure>,
+    mut visit: impl FnMut(TypeVariableId) -> Result<(), ResolvedBuildFailure>,
 ) -> Result<(), ResolvedBuildFailure> {
-    constraint_work
-        .charge(1)
-        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
     let mut pending = Vec::new();
+    charge(1)?;
     pending
         .try_reserve(1)
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    pending.push(root);
-    while let Some(ty) = pending.pop() {
-        constraint_work
-            .charge(1)
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        match ty {
-            Type::Variable(identity) => {
-                constraint_work
-                    .charge(1)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                output
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                output.insert(*identity);
+    pending.push(root.into());
+    while let Some(task) = pending.pop() {
+        charge(1)?;
+        match task {
+            SummaryRoot::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+                pending.push(SummaryRoot::Type(ty))
             }
-            Type::Tuple(elements) => {
-                constraint_work
-                    .charge(elements.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            SummaryRoot::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                pending.push(SummaryRoot::Row(row))
+            }
+            SummaryRoot::Row(row) => {
+                if let Some(tail) = row.tail() {
+                    let EffectRowVariable::Rigid(identity) = tail.variable() else {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    };
+                    visit(identity)?;
+                }
+                for instance in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    charge(1 + instance.arguments().len())?;
+                    pending
+                        .try_reserve(instance.arguments().len())
+                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                    pending.extend(instance.arguments().iter().map(SummaryRoot::Argument));
+                }
+            }
+            SummaryRoot::Type(Type::Variable(identity)) => visit(*identity)?,
+            SummaryRoot::Type(Type::Inference(_) | Type::Forall(_, _)) => {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            SummaryRoot::Type(Type::ResourceApply(_, arguments)) => {
+                charge(arguments.len())?;
+                pending
+                    .try_reserve(arguments.len())
+                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+                pending.extend(arguments.iter().map(SummaryRoot::Argument));
+            }
+            SummaryRoot::Type(Type::Tuple(elements)) => {
+                charge(elements.len())?;
                 pending
                     .try_reserve(elements.len())
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.extend(elements.iter().rev());
+                pending.extend(elements.iter().map(SummaryRoot::Type));
             }
-            Type::Application(function, argument) | Type::Function(function, argument) => {
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            SummaryRoot::Type(Type::Application(left, right) | Type::Function(left, right)) => {
+                charge(2)?;
                 pending
                     .try_reserve(2)
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.push(argument);
-                pending.push(function);
+                pending.push(SummaryRoot::Type(left));
+                pending.push(SummaryRoot::Type(right));
             }
-            Type::EffectfulFunction(domain, codomain) => {
-                if let Some(variable) = codomain.tail_variable() {
-                    let EffectRowVariable::Rigid(variable) = variable else {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    };
-                    constraint_work
-                        .charge(1)
-                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                    output
-                        .try_reserve(1)
-                        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                    output.insert(variable);
-                }
-                let children = codomain.effect_argument_count().saturating_add(2);
-                constraint_work
-                    .charge(children)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+            SummaryRoot::Type(Type::EffectfulFunction(domain, computation)) => {
+                charge(3)?;
                 pending
-                    .try_reserve(children)
+                    .try_reserve(3)
                     .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                codomain.extend_effect_arguments(&mut pending);
-                pending.push(codomain.value());
-                pending.push(domain);
+                pending.push(SummaryRoot::Type(domain));
+                pending.push(SummaryRoot::Type(computation.value()));
+                pending.push(SummaryRoot::Row(computation.effects()));
             }
-            Type::Forall(_, _) | Type::Inference(_) => {
-                return Err(ResolvedBuildFailure::InvalidState);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            SummaryRoot::Type(Type::Int | Type::Bool | Type::Unit | Type::Nominal(_)) => {}
         }
     }
+    Ok(())
+}
+
+fn authenticate_summary_type_variables<'a>(
+    root: impl Into<SummaryRoot<'a>>,
+    parameters: impl ExactSizeIterator<Item = TypeVariableId>,
+    type_work: &mut TypeWorkBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    type_work
+        .charge(parameters.len())
+        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    let mut allowed = HashSet::new();
+    allowed
+        .try_reserve(parameters.len())
+        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+    allowed.extend(parameters);
+    visit_summary_variables(
+        root,
+        |cells| {
+            type_work
+                .charge(cells)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)
+        },
+        |identity| {
+            if allowed.contains(&identity) {
+                Ok(())
+            } else {
+                Err(ResolvedBuildFailure::InvalidState)
+            }
+        },
+    )
+}
+
+fn collect_summary_constraint_variables<'a>(
+    root: impl Into<SummaryRoot<'a>>,
+    output: &mut HashSet<TypeVariableId>,
+    constraint_work: &mut crate::interface::InterfaceConstraintBudget,
+) -> Result<(), ResolvedBuildFailure> {
+    let mut found = Vec::new();
+    visit_summary_variables(
+        root,
+        |cells| {
+            constraint_work
+                .charge(cells)
+                .map_err(|()| ResolvedBuildFailure::ConstraintResource)
+        },
+        |identity| {
+            found
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+            found.push(identity);
+            Ok(())
+        },
+    )?;
+    constraint_work
+        .charge(found.len())
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+    output
+        .try_reserve(found.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    output.extend(found);
     Ok(())
 }
 
@@ -7613,9 +8136,9 @@ fn summary_parameter_id_set(
 }
 
 fn type_references_with_constraint_budget<'a>(
-    types: &'a [Type],
+    types: &'a [crate::types::KindedArgument],
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<Vec<&'a Type>, ResolvedBuildFailure> {
+) -> Result<Vec<&'a crate::types::KindedArgument>, ResolvedBuildFailure> {
     constraint_work
         .charge(types.len())
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -7629,9 +8152,9 @@ fn type_references_with_constraint_budget<'a>(
 
 fn summary_selection_key_types<'a>(
     interface: &CheckedInterfaceFact,
-    arguments: &'a [Type],
+    arguments: &'a [crate::types::KindedArgument],
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<Vec<&'a Type>, ResolvedBuildFailure> {
+) -> Result<Vec<&'a crate::types::KindedArgument>, ResolvedBuildFailure> {
     if arguments.len() != interface.parameters.len() {
         return Err(ResolvedBuildFailure::InvalidState);
     }
@@ -7682,13 +8205,13 @@ fn summary_selection_key_types<'a>(
 }
 
 struct SummaryDeterminedApplicationSlices<'a> {
-    key: Vec<&'a Type>,
-    dependents: Vec<&'a Type>,
+    key: Vec<&'a crate::types::KindedArgument>,
+    dependents: Vec<&'a crate::types::KindedArgument>,
 }
 
 fn summary_determined_application_slices<'a>(
     interface: &CheckedInterfaceFact,
-    arguments: &'a [Type],
+    arguments: &'a [crate::types::KindedArgument],
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<Option<SummaryDeterminedApplicationSlices<'a>>, ResolvedBuildFailure> {
     if arguments.len() != interface.parameters.len() {
@@ -7749,14 +8272,14 @@ fn summary_determined_application_slices<'a>(
 }
 
 fn summary_types_are_all_bare_variables(
-    types: &[&Type],
+    types: &[&crate::types::KindedArgument],
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
     for ty in types {
         constraint_work
             .charge(1)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if !matches!(ty, Type::Variable(_)) {
+        if !matches!(ty, crate::types::KindedArgument::TypeArg(Type::Variable(_))) {
             return Ok(false);
         }
     }
@@ -7764,8 +8287,8 @@ fn summary_types_are_all_bare_variables(
 }
 
 fn summary_dependents_are_covered_by_key(
-    key: &[&Type],
-    dependents: &[&Type],
+    key: &[&crate::types::KindedArgument],
+    dependents: &[&crate::types::KindedArgument],
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
     let mut key_variables = HashSet::new();
@@ -7785,7 +8308,7 @@ fn summary_dependents_are_covered_by_key(
 }
 
 fn summary_key_has_local_outer_nominal(
-    key: &[&Type],
+    key: &[&crate::types::KindedArgument],
     module: ModuleId,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
@@ -7793,9 +8316,11 @@ fn summary_key_has_local_outer_nominal(
         constraint_work
             .charge(2)
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if ty
-            .outer_nominal()
-            .is_some_and(|nominal| nominal.module() == module)
+        if (match ty {
+            crate::types::KindedArgument::TypeArg(ty) => ty.outer_nominal(),
+            crate::types::KindedArgument::RowArg(_) => None,
+        })
+        .is_some_and(|nominal| nominal.module() == module)
         {
             return Ok(true);
         }
@@ -7913,7 +8438,7 @@ fn authenticate_exact_implementation_head_binders(
 
 fn authenticate_implementation_prerequisite_binders(
     fact: &CheckedImplementationFact,
-    canonical_variables: &HashMap<TypeVariableId, (&Kind, Span, SummaryBinderOwner)>,
+    environments: &KindEnvironments<'_>,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<(), ResolvedBuildFailure> {
     for prerequisite in &fact.prerequisites {
@@ -7930,8 +8455,8 @@ fn authenticate_implementation_prerequisite_binders(
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
         for identity in &prerequisite_variables {
             if !matches!(
-                canonical_variables.get(identity),
-                Some((_, _, SummaryBinderOwner::Implementation(owner))) if *owner == fact.id
+                environments.summary_declared(*identity),
+                Some((_, _, Some(SummaryBinderOwner::Implementation(owner)))) if owner == fact.id
             ) {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
@@ -8220,6 +8745,45 @@ fn same_resolved_type_provenance_with_constraint_budget(
                     return Ok(false);
                 }
             }
+            (
+                ResolvedTypeProvenanceNode::Resource {
+                    span: left_span,
+                    resource: left_resource,
+                    arguments: left_arguments,
+                },
+                ResolvedTypeProvenanceNode::Resource {
+                    span: right_span,
+                    resource: right_resource,
+                    arguments: right_arguments,
+                },
+            ) => {
+                constraint_work
+                    .charge(left_arguments.len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if left_span != right_span
+                    || left_resource != right_resource
+                    || left_arguments != right_arguments
+                {
+                    return Ok(false);
+                }
+            }
+            (
+                ResolvedTypeProvenanceNode::Row {
+                    span: left_span,
+                    argument_roots: left_arguments,
+                },
+                ResolvedTypeProvenanceNode::Row {
+                    span: right_span,
+                    argument_roots: right_arguments,
+                },
+            ) => {
+                constraint_work
+                    .charge(left_arguments.len())
+                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+                if left_span != right_span || left_arguments != right_arguments {
+                    return Ok(false);
+                }
+            }
             _ => return Ok(false),
         }
     }
@@ -8320,8 +8884,12 @@ fn same_interface_application_with_constraint_budget(
         return Ok(false);
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
-        if !same_type_with_constraint_budget(left, right, constraint_work)
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+        if !crate::interface::same_kinded_argument_with_constraint_budget(
+            left,
+            right,
+            constraint_work,
+        )
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
         {
             return Ok(false);
         }
@@ -8339,7 +8907,7 @@ fn same_interface_application_with_constraint_budget_observing_nominals(
         return Ok(false);
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
-        if !same_type_with_constraint_budget_observing_nominals(
+        if !crate::interface::same_kinded_argument_with_constraint_budget_observing_nominals(
             left,
             right,
             constraint_work,
@@ -8710,6 +9278,7 @@ fn same_checked_interface_fact_with_optional_nominal_observer(
         authenticate_method_binder_authority(right, constraint_work)?;
         if left.id != right.id
             || left.spelling != right.spelling
+            || left.inherited_parameters != right.inherited_parameters
             || left.span != right.span
             || left.annotation_span != right.annotation_span
             || !same_summary_resolved_type_variables_with_constraint_budget(
@@ -8806,13 +9375,13 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
                 return Ok(false);
             }
             match nominal_identities.as_deref_mut() {
-                Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
+                Some(nominal_identities) => crate::interface::same_kinded_argument_with_constraint_budget_observing_nominals(
                     left,
                     right,
                     constraint_work,
                     nominal_identities,
                 ),
-                None => same_type_with_constraint_budget(left, right, constraint_work),
+                None => crate::interface::same_kinded_argument_with_constraint_budget(left, right, constraint_work),
             }
         })
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
@@ -8836,13 +9405,13 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
         }
         for (left, right) in left.arguments().iter().zip(right.arguments()) {
             let same = match nominal_identities.as_deref_mut() {
-                Some(nominal_identities) => same_type_with_constraint_budget_observing_nominals(
+                Some(nominal_identities) => crate::interface::same_kinded_argument_with_constraint_budget_observing_nominals(
                     left,
                     right,
                     constraint_work,
                     nominal_identities,
                 ),
-                None => same_type_with_constraint_budget(left, right, constraint_work),
+                None => crate::interface::same_kinded_argument_with_constraint_budget(left, right, constraint_work),
             }
             .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
             if !same {
@@ -8885,152 +9454,89 @@ fn same_checked_implementation_fact_with_optional_nominal_observer(
 fn same_summary_type_after_substitutions(
     source: &Type,
     parameters: &[ResolvedTypeVariable],
-    arguments: &[Type],
+    arguments: &[crate::types::KindedArgument],
     actual: &Type,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
 ) -> Result<bool, ResolvedBuildFailure> {
+    struct OwnedSubstitutions {
+        types: HashMap<TypeVariableId, Type>,
+        rows: HashMap<TypeVariableId, EffectRow>,
+    }
+    impl OwnedSubstitutions {
+        fn insert_reserved_type(&mut self, identity: TypeVariableId, ty: Type) {
+            if let Some(displaced) = self.types.insert(identity, ty) {
+                discard_type_iteratively(displaced);
+            }
+        }
+
+        fn insert_reserved_row(&mut self, identity: TypeVariableId, row: EffectRow) {
+            if let Some(displaced) = self.rows.insert(identity, row) {
+                crate::types::discard_kinded_argument_iteratively(
+                    crate::types::KindedArgument::RowArg(displaced),
+                );
+            }
+        }
+    }
+    impl Drop for OwnedSubstitutions {
+        fn drop(&mut self) {
+            for (_, ty) in self.types.drain() {
+                discard_type_iteratively(ty);
+            }
+            for (_, row) in self.rows.drain() {
+                crate::types::discard_kinded_argument_iteratively(
+                    crate::types::KindedArgument::RowArg(row),
+                );
+            }
+        }
+    }
     if parameters.len() != arguments.len() {
         return Err(ResolvedBuildFailure::InvalidState);
     }
     constraint_work
-        .charge(1)
+        .charge(parameters.len().saturating_mul(2))
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-    let mut pending = Vec::new();
-    pending
-        .try_reserve(1)
+    let mut replacements = OwnedSubstitutions {
+        types: HashMap::new(),
+        rows: HashMap::new(),
+    };
+    replacements
+        .types
+        .try_reserve(parameters.len())
         .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-    pending.push((source, actual));
-    while let Some((source, actual)) = pending.pop() {
-        constraint_work
-            .charge(1)
-            .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-        if let Type::Variable(identity) = source {
-            let mut replacement = None;
-            if let ([parameter], [argument]) = (parameters, arguments) {
-                if parameter.id == *identity {
-                    replacement = Some(argument);
-                }
-            } else {
-                for (parameter, argument) in parameters.iter().zip(arguments) {
-                    constraint_work
-                        .charge(1)
-                        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                    if parameter.id == *identity {
-                        replacement = Some(argument);
-                        break;
-                    }
-                }
+    replacements
+        .rows
+        .try_reserve(parameters.len())
+        .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
+    for (parameter, argument) in parameters.iter().zip(arguments) {
+        let cloned = crate::types::clone_kinded_argument_with_budget(argument, &mut |units| {
+            constraint_work.charge(units)
+        })
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
+        match cloned {
+            crate::types::KindedArgument::TypeArg(ty) if parameter.kind != Kind::EffectRow => {
+                replacements.insert_reserved_type(parameter.id, ty);
             }
-            if let Some(argument) = replacement {
-                if !same_type_with_constraint_budget(argument, actual, constraint_work)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
-                {
-                    return Ok(false);
-                }
-                continue;
+            crate::types::KindedArgument::RowArg(row) if parameter.kind == Kind::EffectRow => {
+                replacements.insert_reserved_row(parameter.id, row);
             }
-        }
-        match (source.function_view(), actual.function_view()) {
-            (Some(source_function), Some(actual_function)) => {
-                let effect_argument_count =
-                    match (source_function.effects(), actual_function.effects()) {
-                        (None, None) => 0,
-                        (Some(source_effects), Some(actual_effects))
-                            if source_effects.tail().is_none()
-                                && actual_effects.tail().is_none()
-                                && source_effects.known().len() == actual_effects.known().len() =>
-                        {
-                            let mut arguments = 0usize;
-                            for (source_instance, actual_instance) in
-                                source_effects.known().iter().zip(actual_effects.known())
-                            {
-                                constraint_work
-                                    .charge(1)
-                                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                                if source_instance.effect() != actual_instance.effect()
-                                    || source_instance.arguments().len()
-                                        != actual_instance.arguments().len()
-                                {
-                                    return Ok(false);
-                                }
-                                arguments = arguments
-                                    .checked_add(source_instance.arguments().len())
-                                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-                            }
-                            arguments
-                        }
-                        _ => return Ok(false),
-                    };
-                let children = effect_argument_count
-                    .checked_add(2)
-                    .ok_or(ResolvedBuildFailure::ConstraintResource)?;
-                constraint_work
-                    .charge(children)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(children)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                if let (Some(source_effects), Some(actual_effects)) =
-                    (source_function.effects(), actual_function.effects())
-                {
-                    for (source_instance, actual_instance) in source_effects
-                        .known()
-                        .iter()
-                        .zip(actual_effects.known())
-                        .rev()
-                    {
-                        pending.extend(
-                            source_instance
-                                .arguments()
-                                .iter()
-                                .zip(actual_instance.arguments())
-                                .rev(),
-                        );
-                    }
-                }
-                pending.push((source_function.value(), actual_function.value()));
-                pending.push((source_function.domain(), actual_function.domain()));
-                continue;
+            wrong => {
+                crate::types::discard_kinded_argument_iteratively(wrong);
+                return Err(ResolvedBuildFailure::InvalidState);
             }
-            (Some(_), None) | (None, Some(_)) => return Ok(false),
-            (None, None) => {}
-        }
-        match (source, actual) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
-            (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
-            (Type::Variable(left), Type::Variable(right)) if left == right => {}
-            (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => {
-                constraint_work
-                    .charge(left.len())
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(left.len())
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.extend(left.iter().zip(right.iter()).rev());
-            }
-            (
-                Type::Application(left_function, left_argument),
-                Type::Application(right_function, right_argument),
-            ) => {
-                constraint_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-                pending
-                    .try_reserve(2)
-                    .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
-                pending.push((left_argument, right_argument));
-                pending.push((left_function, right_function));
-            }
-            (Type::Function(_, _), Type::Function(_, _))
-            | (Type::EffectfulFunction(_, _), Type::EffectfulFunction(_, _)) => unreachable!(),
-            (Type::Inference(_), _)
-            | (_, Type::Inference(_))
-            | (Type::Forall(_, _), _)
-            | (_, Type::Forall(_, _)) => return Err(ResolvedBuildFailure::InvalidState),
-            _ => return Ok(false),
         }
     }
-    Ok(true)
+    let substituted = crate::types::substitute_type_and_row_variables_with(
+        source,
+        &replacements.types,
+        &replacements.rows,
+        |units| constraint_work.charge(units),
+        || (),
+    )
+    .map_err(|()| ResolvedBuildFailure::ConstraintResource)?
+    .map_err(|_| ResolvedBuildFailure::InvalidState)?;
+    let owned = IterativeTypeOwner::new(substituted);
+    same_type_with_constraint_budget(&owned, actual, constraint_work)
+        .map_err(|()| ResolvedBuildFailure::ConstraintResource)
 }
 
 fn authenticate_method_requirement_mirror(
@@ -9174,7 +9680,7 @@ fn same_summary_requirement_key(
             return Err(ResolvedBuildFailure::InvalidState);
         }
         previous = Some(position);
-        if !same_type_with_constraint_budget(
+        if !crate::interface::same_kinded_argument_with_constraint_budget(
             &left.arguments()[position],
             &right.arguments()[position],
             constraint_work,
@@ -9392,19 +9898,17 @@ fn retain_hidden_interface_reference(
 }
 
 fn clone_method_binder_authority_payload(
-    parameters: &[ResolvedTypeVariable],
+    parameters: &SharedOwnerParameters,
     type_work: &mut TypeWorkBudget,
     constraint_work: &mut crate::interface::InterfaceConstraintBudget,
-) -> Result<Option<Box<[ResolvedTypeVariable]>>, ResolvedBuildFailure> {
+) -> Result<Option<SharedOwnerParameters>, ResolvedBuildFailure> {
     if parameters.is_empty() {
         return Ok(None);
     }
     constraint_work
         .charge(1)
         .map_err(|()| ResolvedBuildFailure::ConstraintResource)?;
-    clone_resolved_type_variable_buffer_with_budget(parameters, type_work)
-        .map(|parameters| Some(parameters.into_boxed_slice()))
-        .map_err(|()| ResolvedBuildFailure::TypeResource)
+    parameters.clone_with_budget(type_work).map(Some)
 }
 
 fn authenticate_method_binder_authority(
@@ -9469,6 +9973,15 @@ pub(crate) enum BuiltinCellSummaryMutationForTest {
 }
 
 impl ExportSummary {
+    pub(crate) fn resource_family_by_id(&self, id: ResourceDefinitionId) -> Option<NominalTypeId> {
+        self.provider_groups.get(&id.module()).and_then(|group| {
+            group
+                .resource_contracts()
+                .find(|(_, _, fact)| fact.id == id)
+                .map(|(_, _, fact)| fact.family)
+        })
+    }
+
     pub(crate) fn resource_by_family(
         &self,
         family: NominalTypeId,
@@ -9822,20 +10335,40 @@ impl ExportSummary {
         }
 
         let mut environments = KindEnvironments::new();
-        let mut canonical_variables = HashMap::new();
+        if let Some(effect) = self.effects.first() {
+            environments
+                .install_retained_effects(&self.effects, type_work, effect.span)
+                .map_err(map_summary_kind_failure)?;
+        }
         for contracts in self.provider_groups.values() {
             type_work
                 .charge(contracts.resource_count())
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             for (_, _, fact) in contracts.resource_contracts() {
-                environments
-                    .insert_nominal(
-                        fact.family,
-                        &fact.parameters,
-                        fact.origin.primary_span(),
-                        type_work,
-                    )
-                    .map_err(map_summary_kind_failure)?;
+                if fact
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.kind == Kind::EffectRow)
+                {
+                    environments
+                        .insert_row_resource_family(
+                            fact.family,
+                            fact.id,
+                            &fact.parameters,
+                            fact.origin.primary_span(),
+                            type_work,
+                        )
+                        .map_err(map_summary_kind_failure)?;
+                } else {
+                    environments
+                        .insert_nominal(
+                            fact.family,
+                            &fact.parameters,
+                            fact.origin.primary_span(),
+                            type_work,
+                        )
+                        .map_err(map_summary_kind_failure)?;
+                }
             }
         }
         let mut named_effects = HashSet::new();
@@ -9880,7 +10413,6 @@ impl ExportSummary {
             register_summary_parameters(
                 &effect.parameters,
                 SummaryBinderOwner::Effect(effect.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
@@ -10048,7 +10580,6 @@ impl ExportSummary {
             register_summary_parameters(
                 &nominal.parameters,
                 SummaryBinderOwner::Nominal(nominal.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
@@ -10151,7 +10682,6 @@ impl ExportSummary {
             register_summary_parameters(
                 &nominal.parameters,
                 SummaryBinderOwner::Nominal(nominal.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
@@ -10316,7 +10846,9 @@ impl ExportSummary {
             .map_err(|_| ResolvedBuildFailure::ConstraintResource)?;
         for (position, interface) in self.interfaces.iter().enumerate() {
             if self.interface_positions.get(&interface.id) != Some(&position)
-                || interface_facts.insert(interface.id, interface).is_some()
+                || interface_facts
+                    .insert(interface.id, interface.as_ref())
+                    .is_some()
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -10325,16 +10857,19 @@ impl ExportSummary {
             register_summary_parameters(
                 &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
             for method in &interface.methods {
+                method.authenticate_inherited_parameters(
+                    OwnerId::Interface(interface.id),
+                    &interface.parameters,
+                    type_work,
+                )?;
                 authenticate_method_binder_authority(method, constraint_work)?;
                 register_summary_parameters(
                     method.authoritative_type_parameters(),
                     SummaryBinderOwner::Method(method.id),
-                    &mut canonical_variables,
                     &mut environments,
                     type_work,
                 )?;
@@ -10350,7 +10885,9 @@ impl ExportSummary {
         }
         for interface in &self.hidden_interfaces {
             if interface.id.module() == self.module
-                || interface_facts.insert(interface.id, interface).is_some()
+                || interface_facts
+                    .insert(interface.id, interface.as_ref())
+                    .is_some()
             {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -10359,16 +10896,19 @@ impl ExportSummary {
             register_summary_parameters(
                 &interface.parameters,
                 SummaryBinderOwner::Interface(interface.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
             for method in &interface.methods {
+                method.authenticate_inherited_parameters(
+                    OwnerId::Interface(interface.id),
+                    &interface.parameters,
+                    type_work,
+                )?;
                 authenticate_method_binder_authority(method, constraint_work)?;
                 register_summary_parameters(
                     method.authoritative_type_parameters(),
                     SummaryBinderOwner::Method(method.id),
-                    &mut canonical_variables,
                     &mut environments,
                     type_work,
                 )?;
@@ -10482,7 +11022,6 @@ impl ExportSummary {
                 &global.scheme.type_parameters,
                 SummaryBinderOwner::Global(global.binder),
                 global.origin.primary_span(),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
@@ -10516,7 +11055,6 @@ impl ExportSummary {
             register_summary_parameters(
                 &fact.head_parameters,
                 SummaryBinderOwner::Implementation(fact.id),
-                &mut canonical_variables,
                 &mut environments,
                 type_work,
             )?;
@@ -10955,20 +11493,19 @@ impl ExportSummary {
             let selection_key_is_all_bare = if let Some(determined) = &determined {
                 summary_types_are_all_bare_variables(&determined.key, constraint_work)?
             } else {
-                fact.arguments()
-                    .iter()
-                    .all(|argument| matches!(argument, Type::Variable(_)))
+                fact.arguments().iter().all(|argument| {
+                    matches!(
+                        argument,
+                        crate::types::KindedArgument::TypeArg(Type::Variable(_))
+                    )
+                })
             };
             if selection_key_is_all_bare || fact.methods.is_empty() {
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
             }
-            authenticate_implementation_prerequisite_binders(
-                fact,
-                &canonical_variables,
-                constraint_work,
-            )?;
+            authenticate_implementation_prerequisite_binders(fact, &environments, constraint_work)?;
             if let Some(determined) = &determined
                 && !summary_dependents_are_covered_by_key(
                     &determined.key,
@@ -10989,9 +11526,11 @@ impl ExportSummary {
                     )?
                 } else {
                     fact.arguments().iter().any(|argument| {
-                        argument
-                            .outer_nominal()
-                            .is_some_and(|nominal| nominal.module() == fact.id.module())
+                        (match argument {
+                            crate::types::KindedArgument::TypeArg(ty) => ty.outer_nominal(),
+                            crate::types::KindedArgument::RowArg(_) => None,
+                        })
+                        .is_some_and(|nominal| nominal.module() == fact.id.module())
                     })
                 };
                 if !has_local_outer_nominal {
@@ -11214,7 +11753,7 @@ impl ExportSummary {
     pub(crate) fn freeze(
         resolved: &ResolvedModule,
         checked_globals: &[CheckedGlobalScheme],
-        checked_interfaces: &[CheckedInterfaceFact],
+        checked_interfaces: &[SharedCheckedInterfaceFact],
         admitted_implementations: &[CheckedImplementation],
         checked_implementations: &[CheckedImplementationFact],
         type_work: &mut TypeWorkBudget,
@@ -11236,7 +11775,7 @@ impl ExportSummary {
     pub(crate) fn freeze_with_providers(
         resolved: &ResolvedModule,
         checked_globals: &[CheckedGlobalScheme],
-        checked_interfaces: &[CheckedInterfaceFact],
+        checked_interfaces: &[SharedCheckedInterfaceFact],
         admitted_implementations: &[CheckedImplementation],
         checked_implementations: &[CheckedImplementationFact],
         providers: Option<&Arc<crate::elaborate::provider::CheckedProviderGroup>>,
@@ -11634,7 +12173,7 @@ impl ExportSummary {
                     .map(|(source, checked)| (Some(*source), *checked)),
                 CandidateFactSource::Imported => resolved
                     .imported
-                    .interface(candidate.id)
+                    .shared_interface(candidate.id)
                     .map(|checked| (None, checked)),
             }
             .ok_or(ResolvedBuildFailure::InvalidState)?;
@@ -11655,7 +12194,7 @@ impl ExportSummary {
                 continue;
             }
             let position = summary.interfaces.len();
-            summary.interfaces.push(clone_checked_interface_fact(
+            summary.interfaces.push(share_checked_interface_fact(
                 checked,
                 source,
                 type_work,
@@ -11739,7 +12278,7 @@ impl ExportSummary {
             let interface = match candidate.source {
                 CandidateFactSource::Local => checked_interfaces_by_id
                     .get(&candidate.id.interface())
-                    .map(|(_, checked)| *checked),
+                    .map(|(_, checked)| checked.as_ref()),
                 CandidateFactSource::Imported => {
                     resolved.imported.interface(candidate.id.interface())
                 }
@@ -11959,14 +12498,14 @@ impl ExportSummary {
             for interface in referenced_interface_order {
                 let fact = resolved
                     .imported
-                    .interface(interface)
+                    .shared_interface(interface)
                     .ok_or(ResolvedBuildFailure::InvalidState)?;
                 if fact.id.module() == resolved.module {
                     {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
                 }
-                summary.hidden_interfaces.push(clone_checked_interface_fact(
+                summary.hidden_interfaces.push(share_checked_interface_fact(
                     fact,
                     None,
                     type_work,
@@ -12527,13 +13066,17 @@ impl ExportSummary {
         }
         for implementation in &summary.implementations {
             for argument in implementation.fact.arguments() {
-                collect_nominal_identities(argument, &mut referenced_nominals, type_work)
+                collect_argument_nominal_identities(argument, &mut referenced_nominals, type_work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             }
             for prerequisite in &implementation.fact.prerequisites {
                 for argument in prerequisite.arguments() {
-                    collect_nominal_identities(argument, &mut referenced_nominals, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    collect_argument_nominal_identities(
+                        argument,
+                        &mut referenced_nominals,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 }
             }
             for method in &implementation.fact.methods {
@@ -12748,6 +13291,16 @@ impl ExportSummary {
                     type_work,
                 )
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for requirement in &exported.scheme.requirements {
+                    for argument in requirement.arguments() {
+                        collect_argument_effect_identities(
+                            argument,
+                            &mut referenced_effects,
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
             }
             for exported in summary.constructors.values() {
                 if let Some(payload) = &exported.payload {
@@ -12783,13 +13336,21 @@ impl ExportSummary {
             }
             for implementation in &summary.implementations {
                 for argument in implementation.fact.arguments() {
-                    collect_effect_identities(argument, &mut referenced_effects, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    collect_argument_effect_identities(
+                        argument,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 }
                 for prerequisite in &implementation.fact.prerequisites {
                     for argument in prerequisite.arguments() {
-                        collect_effect_identities(argument, &mut referenced_effects, type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        collect_argument_effect_identities(
+                            argument,
+                            &mut referenced_effects,
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     }
                 }
                 for method in &implementation.fact.methods {
@@ -13080,7 +13641,38 @@ impl ExportSummary {
 
     pub(crate) fn interface(&self, spelling: &str) -> Option<&CheckedInterfaceFact> {
         let id = self.interface_names.get(spelling)?;
-        self.interfaces.get(*self.interface_positions.get(id)?)
+        self.interfaces
+            .get(*self.interface_positions.get(id)?)
+            .map(AsRef::as_ref)
+    }
+
+    pub(crate) fn retain_interface_original(
+        &self,
+        original: &CheckedInterfaceFact,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<SharedCheckedInterfaceFact, ResolvedBuildFailure> {
+        if let Some(position) = self.interface_positions.get(&original.id) {
+            let retained = self
+                .interfaces
+                .get(*position)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if !std::ptr::eq(retained.as_ref(), original) {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            return retained.clone_with_budget(budget);
+        }
+        for retained in &self.hidden_interfaces {
+            budget
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            if retained.id == original.id {
+                if !std::ptr::eq(retained.as_ref(), original) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                return retained.clone_with_budget(budget);
+            }
+        }
+        Err(ResolvedBuildFailure::InvalidState)
     }
 
     /// Looks up one public canonical effect fact by exported spelling.
@@ -13105,11 +13697,11 @@ impl ExportSummary {
     }
 
     pub(crate) fn interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
-        self.interfaces.iter()
+        self.interfaces.iter().map(AsRef::as_ref)
     }
 
     pub(crate) fn hidden_interfaces(&self) -> impl Iterator<Item = &CheckedInterfaceFact> {
-        self.hidden_interfaces.iter()
+        self.hidden_interfaces.iter().map(AsRef::as_ref)
     }
 
     pub(crate) fn implementations(&self) -> impl Iterator<Item = &AuthorizedImplementationFact> {
@@ -13757,7 +14349,7 @@ impl ExportSummary {
                 let Some(interface) = self.interfaces.first_mut() else {
                     return false;
                 };
-                wrap_origin(&mut interface.parameters[0].origin);
+                wrap_origin(&mut interface.parameters.make_mut_for_test()[0].origin);
             }
             SummaryDuplicateFactForTest::InterfaceMethodSpan => {
                 let Some(interface) = self.interfaces.first_mut() else {
@@ -13828,10 +14420,12 @@ impl ExportSummary {
             }
             SummaryDuplicateFactForTest::ImplementationHeadArgument => {
                 let Some(implementation) = self.implementations.iter_mut().find(|implementation| {
-                    matches!(implementation.fact.arguments()[0], Type::Application(_, _))
-                        && implementation.fact.methods.first().is_some_and(|method| {
-                            matches!(method.scheme.value_type, Type::Function(_, _))
-                        })
+                    matches!(
+                        implementation.fact.arguments()[0],
+                        crate::types::KindedArgument::TypeArg(Type::Application(_, _))
+                    ) && implementation.fact.methods.first().is_some_and(|method| {
+                        matches!(method.scheme.value_type, Type::Function(_, _))
+                    })
                 }) else {
                     return false;
                 };
@@ -13843,7 +14437,9 @@ impl ExportSummary {
                 );
                 let (_, arguments) = original.into_parts();
                 let arguments = arguments.into_vec();
-                let [Type::Application(head, _)] = arguments.as_slice() else {
+                let [crate::types::KindedArgument::TypeArg(Type::Application(head, _))] =
+                    arguments.as_slice()
+                else {
                     return false;
                 };
                 *application = InterfaceApplication::new(
@@ -14485,19 +15081,19 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::PublicInterfaceKind => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameters[0]);
+                    replace_parameter_kind(&mut interface.parameters.make_mut_for_test()[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterIdentity => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameters[0].id = TypeVariableId::resolved(self.module, u32::MAX);
+                    interface.parameters.make_mut_for_test()[0].id = TypeVariableId::resolved(self.module, u32::MAX);
                     true
                 })
             }
             SummaryCarrierMutationForTest::PublicInterfaceParameterOwner => {
                 self.interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameters[0].id = TypeVariableId::resolved(
+                    interface.parameters.make_mut_for_test()[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
                         interface.parameters[0].id.local(),
                     );
@@ -14514,7 +15110,7 @@ impl ExportSummary {
                         return false;
                     };
                     discard_resolved_type_variable(removed);
-                    interface.parameters = parameters.into_boxed_slice();
+                    interface.parameters = parameters.into_boxed_slice().into();
                     true
                 }),
             SummaryCarrierMutationForTest::RelationalInterfaceParameterExtra => self
@@ -14529,7 +15125,7 @@ impl ExportSummary {
                     extra.spelling = "Extra".to_owned();
                     let mut parameters = std::mem::take(&mut interface.parameters).into_vec();
                     parameters.push(extra);
-                    interface.parameters = parameters.into_boxed_slice();
+                    interface.parameters = parameters.into_boxed_slice().into();
                     true
                 }),
             SummaryCarrierMutationForTest::RelationalInterfaceParameterReordered => self
@@ -14537,7 +15133,7 @@ impl ExportSummary {
                 .iter_mut()
                 .find(|interface| interface.parameters.len() >= 2)
                 .is_some_and(|interface| {
-                    interface.parameters.swap(0, 1);
+                    interface.parameters.make_mut_for_test().swap(0, 1);
                     true
                 }),
             SummaryCarrierMutationForTest::RelationalInterfaceParameterIdentity => self
@@ -14545,7 +15141,7 @@ impl ExportSummary {
                 .iter_mut()
                 .find(|interface| interface.parameters.len() >= 2)
                 .is_some_and(|interface| {
-                    let Some(parameter) = interface.parameters.last_mut() else {
+                    let Some(parameter) = interface.parameters.make_mut_for_test().last_mut() else {
                         return false;
                     };
                     parameter.id = TypeVariableId::resolved(self.module, u32::MAX);
@@ -14556,7 +15152,7 @@ impl ExportSummary {
                 .iter_mut()
                 .find(|interface| interface.parameters.len() >= 2)
                 .is_some_and(|interface| {
-                    let Some(parameter) = interface.parameters.get_mut(1) else {
+                    let Some(parameter) = interface.parameters.make_mut_for_test().get_mut(1) else {
                         return false;
                     };
                     replace_parameter_kind(parameter);
@@ -14614,13 +15210,13 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenInterfaceKind => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    replace_parameter_kind(&mut interface.parameters[0]);
+                    replace_parameter_kind(&mut interface.parameters.make_mut_for_test()[0]);
                     true
                 })
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterIdentity => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameters[0].id = TypeVariableId::resolved(
+                    interface.parameters.make_mut_for_test()[0].id = TypeVariableId::resolved(
                         interface.parameters[0].id.module().unwrap_or(self.module),
                         u32::MAX,
                     );
@@ -14629,7 +15225,7 @@ impl ExportSummary {
             }
             SummaryCarrierMutationForTest::HiddenInterfaceParameterOwner => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    interface.parameters[0].id = TypeVariableId::resolved(
+                    interface.parameters.make_mut_for_test()[0].id = TypeVariableId::resolved(
                         ModuleId::new(u32::MAX - 1),
                         interface.parameters[0].id.local(),
                     );
@@ -15070,7 +15666,7 @@ impl ExportSummary {
                             let Some(removed) = arguments.pop() else {
                                 return false;
                             };
-                            discard_type_iteratively(removed);
+                            crate::types::discard_kinded_argument_iteratively(removed);
                             true
                         },
                     )
@@ -15086,7 +15682,7 @@ impl ExportSummary {
                             if arguments.try_reserve(1).is_err() {
                                 return false;
                             }
-                            arguments.push(Type::Unit);
+                            arguments.push(crate::types::KindedArgument::TypeArg(Type::Unit));
                             true
                         },
                     )
@@ -15134,12 +15730,12 @@ impl ExportSummary {
                         let Some(argument) = arguments.last_mut() else {
                             return false;
                         };
-                        discard_type_iteratively(std::mem::replace(
+                        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                             argument,
-                            Type::Nominal(higher_kinded),
+                            crate::types::KindedArgument::TypeArg(Type::Nominal(higher_kinded)),
                         ));
                         if add_extra {
-                            arguments.push(Type::Unit);
+                            arguments.push(crate::types::KindedArgument::TypeArg(Type::Unit));
                         }
                         true
                     },
@@ -15197,7 +15793,7 @@ impl ExportSummary {
                 replace_interface_application_identity(&mut second.application, first.interface());
                 let mut type_work = TypeWorkBudget::unbounded();
                 let replacement =
-                    clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                    crate::types::clone_kinded_argument_with_budget(&first.arguments()[0], &mut type_work).unwrap();
                 replace_unary_interface_application(&mut second.application, replacement);
                 for method in &mut implementation.fact.methods {
                     let (first, rest) = method.scheme.requirements.split_first_mut().unwrap();
@@ -15207,7 +15803,7 @@ impl ExportSummary {
                         first.interface(),
                     );
                     let replacement =
-                        clone_type_with_budget(&first.arguments()[0], &mut type_work).unwrap();
+                        crate::types::clone_kinded_argument_with_budget(&first.arguments()[0], &mut type_work).unwrap();
                     replace_unary_interface_application(&mut second.application, replacement);
                 }
                 true
@@ -15220,7 +15816,7 @@ impl ExportSummary {
                 else {
                     return false;
                 };
-                let Type::Application(partial_head, _) = &implementation.fact.arguments()[0] else {
+                let crate::types::KindedArgument::TypeArg(Type::Application(partial_head, _)) = &implementation.fact.arguments()[0] else {
                     return false;
                 };
                 let mut type_work = TypeWorkBudget::unbounded();
@@ -15613,7 +16209,7 @@ impl ExportSummary {
             }
             SummaryHiddenDiamondMutationForTest::InterfaceParameterOrigin => {
                 self.hidden_interfaces.first_mut().is_some_and(|interface| {
-                    wrap_origin(&mut interface.parameters[0].origin);
+                    wrap_origin(&mut interface.parameters.make_mut_for_test()[0].origin);
                     true
                 })
             }
@@ -15834,7 +16430,7 @@ impl ExportSummary {
         let Some(interface) = self.interfaces.first_mut() else {
             return false;
         };
-        interface.parameters[0].id = identity;
+        interface.parameters.make_mut_for_test()[0].id = identity;
         true
     }
 
@@ -15962,15 +16558,19 @@ impl ExportSummary {
             return false;
         };
         let mut type_work = TypeWorkBudget::unbounded();
-        let Ok(argument) =
-            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
-        else {
+        let Ok(argument) = crate::types::clone_kinded_argument_with_budget(
+            &implementation.fact.arguments()[0],
+            &mut type_work,
+        ) else {
             return false;
         };
-        let argument = IterativeTypeOwner::new(argument);
-        let method_argument = IterativeTypeOwner::new(
-            clone_type_with_budget(&implementation.fact.arguments()[0], &mut type_work)
-                .expect("an in-memory test prerequisite clone should fit"),
+        let argument = crate::types::IterativeArgumentOwner::new(argument);
+        let method_argument = crate::types::IterativeArgumentOwner::new(
+            crate::types::clone_kinded_argument_with_budget(
+                &implementation.fact.arguments()[0],
+                &mut type_work,
+            )
+            .expect("an in-memory test prerequisite clone should fit"),
         );
         replace_unary_interface_application(
             &mut implementation.fact.prerequisites[0].application,
@@ -15980,8 +16580,9 @@ impl ExportSummary {
             let Some(requirement) = method.scheme.requirements.first_mut() else {
                 return false;
             };
-            let replacement = clone_type_with_budget(&method_argument, &mut type_work)
-                .expect("an in-memory test prerequisite clone should fit");
+            let replacement =
+                crate::types::clone_kinded_argument_with_budget(&method_argument, &mut type_work)
+                    .expect("an in-memory test prerequisite clone should fit");
             replace_unary_interface_application(&mut requirement.application, replacement);
         }
         true
@@ -16109,6 +16710,74 @@ pub(crate) fn collect_nominal_identities(
     collect_nominal_identities_with(root, output, budget, false)
 }
 
+pub(crate) fn collect_argument_nominal_identities(
+    root: &crate::types::KindedArgument,
+    output: &mut HashSet<NominalTypeId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    visit_argument_identity_references(root, budget, |identity, budget| {
+        if let TypeIdentityReference::Nominal(identity) = identity {
+            retain_nominal_identity(identity, output, budget)?;
+        }
+        Ok(())
+    })
+}
+fn collect_argument_effect_identities(
+    root: &crate::types::KindedArgument,
+    output: &mut HashSet<EffectId>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), ()> {
+    visit_argument_identity_references(root, budget, |identity, budget| {
+        if let TypeIdentityReference::Effect(identity) = identity {
+            budget.charge(1)?;
+            output.try_reserve(1).map_err(|_| ())?;
+            output.insert(identity);
+        }
+        Ok(())
+    })
+}
+fn visit_argument_identity_references(
+    root: &crate::types::KindedArgument,
+    budget: &mut TypeWorkBudget,
+    mut visit: impl FnMut(TypeIdentityReference, &mut TypeWorkBudget) -> Result<(), ()>,
+) -> Result<(), ()> {
+    match root {
+        crate::types::KindedArgument::TypeArg(ty) => {
+            visit_type_identity_references(ty, budget, visit)
+        }
+        crate::types::KindedArgument::RowArg(row) => {
+            let mut pending = Vec::new();
+            budget.charge(1)?;
+            pending.try_reserve(1).map_err(|_| ())?;
+            pending.push(row);
+            while let Some(row) = pending.pop() {
+                budget.charge(1 + usize::from(row.tail().is_some()))?;
+                for member in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    budget.charge(1)?;
+                    visit(TypeIdentityReference::Effect(member.effect()), budget)?;
+                    for argument in member.arguments() {
+                        match argument {
+                            crate::types::KindedArgument::TypeArg(ty) => {
+                                visit_type_identity_references(ty, budget, &mut visit)?
+                            }
+                            crate::types::KindedArgument::RowArg(row) => {
+                                budget.charge(1)?;
+                                pending.try_reserve(1).map_err(|_| ())?;
+                                pending.push(row);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn collect_capture_external_nominals(
     root: &Type,
     output: &mut HashSet<NominalTypeId>,
@@ -16134,7 +16803,11 @@ fn visit_type_identity_references(
         Argument(&'a crate::types::KindedArgument),
         Row(&'a EffectRow),
     }
-    fn schedule<'a>(work: &mut Vec<Task<'a>>, task: Task<'a>, budget: &mut TypeWorkBudget) -> Result<(), ()> {
+    fn schedule<'a>(
+        work: &mut Vec<Task<'a>>,
+        task: Task<'a>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ()> {
         let task = match task {
             Task::Argument(crate::types::KindedArgument::TypeArg(ty)) => Task::Type(ty),
             Task::Argument(crate::types::KindedArgument::RowArg(row)) => Task::Row(row),
@@ -16149,17 +16822,25 @@ fn visit_type_identity_references(
     schedule(&mut work, Task::Type(root), budget)?;
     while let Some(task) = work.pop() {
         match task {
-            Task::Type(Type::Nominal(identity)) => visit(TypeIdentityReference::Nominal(*identity), budget)?,
+            Task::Type(Type::Nominal(identity)) => {
+                visit(TypeIdentityReference::Nominal(*identity), budget)?
+            }
             Task::Type(Type::ResourceApply(identity, arguments)) => {
                 visit(TypeIdentityReference::Resource(*identity), budget)?;
-                for argument in arguments { schedule(&mut work, Task::Argument(argument), budget)?; }
+                for argument in arguments {
+                    schedule(&mut work, Task::Argument(argument), budget)?;
+                }
             }
-            Task::Type(Type::Application(function, argument) | Type::Function(function, argument)) => {
+            Task::Type(
+                Type::Application(function, argument) | Type::Function(function, argument),
+            ) => {
                 schedule(&mut work, Task::Type(argument), budget)?;
                 schedule(&mut work, Task::Type(function), budget)?;
             }
             Task::Type(Type::Tuple(elements)) => {
-                for element in elements { schedule(&mut work, Task::Type(element), budget)?; }
+                for element in elements {
+                    schedule(&mut work, Task::Type(element), budget)?;
+                }
             }
             Task::Type(Type::EffectfulFunction(domain, computation)) => {
                 schedule(&mut work, Task::Row(computation.effects()), budget)?;
@@ -16167,15 +16848,25 @@ fn visit_type_identity_references(
                 schedule(&mut work, Task::Type(domain), budget)?;
             }
             Task::Row(row) => {
-                if row.tail().is_some() { budget.charge(1)?; }
-                for instance in row.known().iter().chain(row.tail().into_iter().flat_map(|tail| tail.lacks().iter())) {
+                if row.tail().is_some() {
+                    budget.charge(1)?;
+                }
+                for instance in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks().iter()))
+                {
                     budget.charge(1)?;
                     visit(TypeIdentityReference::Effect(instance.effect()), budget)?;
-                    for argument in instance.arguments() { schedule(&mut work, Task::Argument(argument), budget)?; }
+                    for argument in instance.arguments() {
+                        schedule(&mut work, Task::Argument(argument), budget)?;
+                    }
                 }
             }
             Task::Type(Type::Forall(_, body)) => schedule(&mut work, Task::Type(body), budget)?,
-            Task::Type(Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_)) => {}
+            Task::Type(
+                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_),
+            ) => {}
             Task::Argument(_) => unreachable!("argument tasks normalize before retention"),
         }
     }
@@ -16256,7 +16947,7 @@ fn collect_scheme_nominal_identities(
     collect_nominal_identities(&scheme.value_type, output, budget)?;
     for requirement in &scheme.requirements {
         for argument in requirement.arguments() {
-            collect_nominal_identities(argument, output, budget)?;
+            collect_argument_nominal_identities(argument, output, budget)?;
         }
     }
     Ok(())
@@ -16542,9 +17233,11 @@ pub struct ResolvedRegistry {
     lexical_constructor_positions: HashMap<ConstructorId, usize>,
     effects: Box<[ResolvedEffectDeclaration]>,
     owner_signatures: OwnerSignatures,
+    owner_definitions: Vec<OwnerDefinition>,
+    owner_definition_positions: HashMap<OwnerId, usize>,
     effect_positions: HashMap<EffectId, usize>,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
-    type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
+    type_variables: HashMap<TypeVariableId, CanonicalTypeVariable>,
     global_parameter_rows: Box<[ResolvedGlobalParameterRow]>,
     global_parameter_positions: HashMap<BinderId, usize>,
     abstract_nominal_names: HashMap<NominalTypeId, String>,
@@ -16564,6 +17257,14 @@ pub(crate) enum OwnerId {
     Resource(ResourceDefinitionId),
 }
 
+/// Defining declaration records retained independently of the signature lookup table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnerDefinition {
+    owner: OwnerId,
+    family: Option<NominalTypeId>,
+    parameters: SharedOwnerParameters,
+}
+
 /// Ordered canonical binder identities; kinds remain authoritative in the
 /// independently retained defining declaration and canonical variable records.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16573,12 +17274,21 @@ pub(crate) struct OwnerSignature {
 }
 
 impl OwnerSignature {
-    fn from_parameters_with_budget(owner: OwnerId, parameters: &[ResolvedTypeVariable], budget: &mut TypeWorkBudget) -> Result<Self, ()> {
+    fn from_parameters_with_budget(
+        owner: OwnerId,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
         budget.charge(parameters.len().checked_add(1).ok_or(())?)?;
         let mut identities = Vec::new();
-        identities.try_reserve_exact(parameters.len()).map_err(|_| ())?;
+        identities
+            .try_reserve_exact(parameters.len())
+            .map_err(|_| ())?;
         identities.extend(parameters.iter().map(|parameter| parameter.id));
-        Ok(Self { owner, parameters: identities.into_boxed_slice() })
+        Ok(Self {
+            owner,
+            parameters: identities.into_boxed_slice(),
+        })
     }
 }
 
@@ -16593,28 +17303,53 @@ struct OwnerSignatures {
 }
 
 impl OwnerSignatures {
-    fn insert(&mut self, signature: OwnerSignature, family: Option<NominalTypeId>, budget: &mut TypeWorkBudget) -> Result<(), ResolvedBuildFailure> {
-        budget.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+    fn insert(
+        &mut self,
+        signature: OwnerSignature,
+        family: Option<NominalTypeId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         match signature.owner {
             OwnerId::Effect(id) => {
-                if family.is_some() || self.effect_positions.contains_key(&id) { return Err(ResolvedBuildFailure::InvalidState); }
-                self.effects.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                self.effect_positions.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                if family.is_some() || self.effect_positions.contains_key(&id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                self.effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                self.effect_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
                 self.effect_positions.insert(id, self.effects.len());
                 self.effects.push(signature);
             }
             OwnerId::Interface(id) => {
-                if family.is_some() || self.interface_positions.contains_key(&id) { return Err(ResolvedBuildFailure::InvalidState); }
-                self.interfaces.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                self.interface_positions.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                if family.is_some() || self.interface_positions.contains_key(&id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                self.interfaces
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                self.interface_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
                 self.interface_positions.insert(id, self.interfaces.len());
                 self.interfaces.push(signature);
             }
             OwnerId::Resource(id) => {
                 let family = family.ok_or(ResolvedBuildFailure::InvalidState)?;
-                if self.resource_positions.contains_key(&id) { return Err(ResolvedBuildFailure::InvalidState); }
-                self.resources.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                self.resource_positions.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                if self.resource_positions.contains_key(&id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                self.resources
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                self.resource_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
                 self.resource_positions.insert(id, self.resources.len());
                 self.resources.push((family, signature));
             }
@@ -16624,10 +17359,21 @@ impl OwnerSignatures {
 
     fn get(&self, owner: OwnerId) -> Option<&OwnerSignature> {
         match owner {
-            OwnerId::Effect(id) => self.effect_positions.get(&id).and_then(|position| self.effects.get(*position)),
-            OwnerId::Interface(id) => self.interface_positions.get(&id).and_then(|position| self.interfaces.get(*position)),
-            OwnerId::Resource(id) => self.resource_positions.get(&id).and_then(|position| self.resources.get(*position)).map(|(_, signature)| signature),
-        }.filter(|signature| signature.owner == owner)
+            OwnerId::Effect(id) => self
+                .effect_positions
+                .get(&id)
+                .and_then(|position| self.effects.get(*position)),
+            OwnerId::Interface(id) => self
+                .interface_positions
+                .get(&id)
+                .and_then(|position| self.interfaces.get(*position)),
+            OwnerId::Resource(id) => self
+                .resource_positions
+                .get(&id)
+                .and_then(|position| self.resources.get(*position))
+                .map(|(_, signature)| signature),
+        }
+        .filter(|signature| signature.owner == owner)
     }
 }
 
@@ -16640,10 +17386,19 @@ pub(crate) struct InheritedOwnerParameter {
 }
 
 impl InheritedOwnerParameter {
-    pub(crate) fn at_slot(owner: OwnerId, slot: usize, binder: TypeVariableId, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
+    pub(crate) fn at_slot(
+        owner: OwnerId,
+        slot: usize,
+        binder: TypeVariableId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
         budget.charge(1)?;
         let slot = u32::try_from(slot).map_err(|_| ())?;
-        Ok(Self { owner, slot, binder })
+        Ok(Self {
+            owner,
+            slot,
+            binder,
+        })
     }
 }
 
@@ -16655,28 +17410,50 @@ pub(crate) enum NonMaterializedNominalKind {
 }
 
 impl NonMaterializedNominalKind {
-    fn for_resource(id: ResourceDefinitionId, parameters: &[ResolvedTypeVariable], budget: &mut TypeWorkBudget) -> Result<Self, ()> {
+    fn for_resource(
+        id: ResourceDefinitionId,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
         budget.charge(parameters.len())?;
-        if parameters.iter().any(|parameter| parameter.kind == Kind::EffectRow) {
+        if parameters
+            .iter()
+            .any(|parameter| parameter.kind == Kind::EffectRow)
+        {
             Ok(Self::RowBearingResource(id))
         } else {
-            clone_arrows_with_budget(parameters.iter().map(|parameter| &parameter.kind), Kind::Type, budget)
-                .map(Self::Ordinary)
+            clone_arrows_with_budget(
+                parameters.iter().map(|parameter| &parameter.kind),
+                Kind::Type,
+                budget,
+            )
+            .map(Self::Ordinary)
         }
     }
 
     fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
         match self {
             Self::Ordinary(kind) => clone_kind_with_budget(kind, budget).map(Self::Ordinary),
-            Self::RowBearingResource(id) => { budget.charge(1)?; Ok(Self::RowBearingResource(*id)) }
+            Self::RowBearingResource(id) => {
+                budget.charge(1)?;
+                Ok(Self::RowBearingResource(*id))
+            }
         }
     }
 
     fn same_with_budget(&self, other: &Self, budget: &mut TypeWorkBudget) -> Result<bool, ()> {
         match (self, other) {
-            (Self::Ordinary(left), Self::Ordinary(right)) => same_kind_with_charge(left, right, || budget.charge(1)),
-            (Self::RowBearingResource(left), Self::RowBearingResource(right)) => { budget.charge(1)?; Ok(left == right) }
-            _ => { budget.charge(1)?; Ok(false) }
+            (Self::Ordinary(left), Self::Ordinary(right)) => {
+                same_kind_with_charge(left, right, || budget.charge(1))
+            }
+            (Self::RowBearingResource(left), Self::RowBearingResource(right)) => {
+                budget.charge(1)?;
+                Ok(left == right)
+            }
+            _ => {
+                budget.charge(1)?;
+                Ok(false)
+            }
         }
     }
 }
@@ -16688,7 +17465,10 @@ struct NonMaterializedNominalKindFact {
 }
 
 pub(crate) enum CanonicalNominalKind<'a> {
-    RowBearingResource { resource: ResourceDefinitionId, origin: Span },
+    RowBearingResource {
+        resource: ResourceDefinitionId,
+        origin: Span,
+    },
     Parameters {
         parameters: &'a [ResolvedTypeVariable],
         origin: Span,
@@ -16826,7 +17606,7 @@ struct CombinedRegistryBuilder {
     parameter_rows: ResolvedNominalParameterBuffer,
     canonical_variables: ResolvedTypeVariableBuffer,
     nominal_parameters: HashMap<NominalTypeId, Box<[ResolvedTypeVariable]>>,
-    type_variables: HashMap<TypeVariableId, ResolvedTypeVariable>,
+    type_variables: HashMap<TypeVariableId, CanonicalTypeVariable>,
     global_parameter_rows: Vec<ResolvedGlobalParameterRow>,
     global_parameter_positions: HashMap<BinderId, usize>,
 }
@@ -16970,8 +17750,8 @@ impl CombinedRegistryBuilder {
     }
 
     fn install_canonical_variable(&mut self, parameter: ResolvedTypeVariable) {
-        if let Some(displaced) = self.type_variables.insert(parameter.id, parameter) {
-            discard_resolved_type_variable(displaced);
+        if let Some(displaced) = self.type_variables.insert(parameter.id, parameter.into()) {
+            drop(displaced);
         }
     }
 
@@ -17018,6 +17798,8 @@ impl CombinedRegistryBuilder {
             lexical_constructor_positions: std::mem::take(&mut self.lexical_constructor_positions),
             effects: std::mem::take(&mut self.effects).into_boxed_slice(),
             owner_signatures: OwnerSignatures::default(),
+            owner_definitions: Vec::new(),
+            owner_definition_positions: HashMap::new(),
             effect_positions: std::mem::take(&mut self.effect_positions),
             nominal_parameters: std::mem::take(&mut self.nominal_parameters),
             type_variables: std::mem::take(&mut self.type_variables),
@@ -17042,7 +17824,7 @@ impl Drop for CombinedRegistryBuilder {
             discard_resolved_type_variables(parameters);
         }
         for parameter in self.type_variables.drain().map(|(_, parameter)| parameter) {
-            discard_resolved_type_variable(parameter);
+            drop(parameter);
         }
         for effect in self.effects.drain(..) {
             discard_resolved_effect_iteratively(effect);
@@ -17945,27 +18727,321 @@ impl ResolvedRegistry {
         self.owner_signatures.get(owner)
     }
 
-    pub(crate) fn resource_signature_family(&self, id: ResourceDefinitionId) -> Option<NominalTypeId> {
-        self.owner_signatures.resource_positions.get(&id)
+    pub(crate) fn resource_signature_family(
+        &self,
+        id: ResourceDefinitionId,
+    ) -> Option<NominalTypeId> {
+        self.owner_signatures
+            .resource_positions
+            .get(&id)
             .and_then(|position| self.owner_signatures.resources.get(*position))
             .filter(|(_, signature)| signature.owner == OwnerId::Resource(id))
             .map(|(family, _)| *family)
     }
 
-    fn retain_owner_signature(&mut self, owner: OwnerId, family: Option<NominalTypeId>, parameters: &[ResolvedTypeVariable], budget: &mut TypeWorkBudget) -> Result<(), ResolvedBuildFailure> {
+    pub(crate) fn defining_owner_parameters(
+        &self,
+        owner: OwnerId,
+    ) -> Option<&[ResolvedTypeVariable]> {
+        let position = *self.owner_definition_positions.get(&owner)?;
+        let definition = self.owner_definitions.get(position)?;
+        (definition.owner == owner).then_some(definition.parameters.as_ref())
+    }
+
+    fn retain_owner_definition(
+        &mut self,
+        owner: OwnerId,
+        family: Option<NominalTypeId>,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if let Some(position) = self.owner_definition_positions.get(&owner) {
+            let existing = self
+                .owner_definitions
+                .get(*position)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if existing.owner != owner
+                || existing.family != family
+                || existing.parameters.len() != parameters.len()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (left, right) in existing.parameters.iter().zip(parameters) {
+                if !same_checker_type_variable_with_budget(left, right, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            return Ok(());
+        }
+        budget
+            .charge(parameters.len().saturating_add(1))
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let mut retained = ResolvedTypeVariableBuffer(Vec::new());
+        retained
+            .try_reserve(parameters.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for parameter in parameters {
+            retained.push(
+                clone_resolved_type_variable_with_budget(parameter, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+            );
+        }
+        self.owner_definitions
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        self.owner_definition_positions
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let parameters = SharedOwnerParameters::from_boxed_with_budget(
+            retained.into_vec().into_boxed_slice(),
+            budget,
+        )?;
+        let position = self.owner_definitions.len();
+        self.owner_definition_positions.insert(owner, position);
+        self.owner_definitions.push(OwnerDefinition {
+            owner,
+            family,
+            parameters,
+        });
+        Ok(())
+    }
+
+    fn retain_shared_owner_definition(
+        &mut self,
+        owner: OwnerId,
+        family: Option<NominalTypeId>,
+        parameters: &SharedOwnerParameters,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        budget
+            .charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if let Some(position) = self.owner_definition_positions.get(&owner) {
+            let existing = self
+                .owner_definitions
+                .get(*position)
+                .ok_or(ResolvedBuildFailure::InvalidState)?;
+            if existing.owner != owner
+                || existing.family != family
+                || existing.parameters.len() != parameters.len()
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            for (left, right) in existing.parameters.iter().zip(parameters.iter()) {
+                if !same_checker_type_variable_with_budget(left, right, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+            }
+            return Ok(());
+        }
+        budget
+            .charge(2)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        self.owner_definitions
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        self.owner_definition_positions
+            .try_reserve(1)
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        let parameters = parameters.clone_with_budget(budget)?;
+        let position = self.owner_definitions.len();
+        self.owner_definition_positions.insert(owner, position);
+        self.owner_definitions.push(OwnerDefinition {
+            owner,
+            family,
+            parameters,
+        });
+        Ok(())
+    }
+
+    /// Reconstructs exact owner coverage and kinds from defining declaration records.
+    pub(crate) fn authenticate_owner_definitions(
+        &self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        self.authenticate_owner_signature_coverage(
+            self.owner_definitions
+                .iter()
+                .map(|definition| definition.owner),
+            budget,
+        )?;
+        if self.owner_definitions.len() != self.owner_definition_positions.len() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        let mut seen = HashSet::new();
+        budget
+            .charge(
+                self.owner_definitions
+                    .len()
+                    .checked_mul(2)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        seen.try_reserve(self.owner_definitions.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        for (position, definition) in self.owner_definitions.iter().enumerate() {
+            if self.owner_definition_positions.get(&definition.owner) != Some(&position)
+                || !seen.insert(definition.owner)
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            self.authenticate_owner_signature(
+                definition.owner,
+                definition.family,
+                &definition.parameters,
+                budget,
+            )?;
+            match definition.owner {
+                OwnerId::Effect(id) => {
+                    let effect = self.effect(id).ok_or(ResolvedBuildFailure::InvalidState)?;
+                    self.authenticate_owner_signature(
+                        definition.owner,
+                        None,
+                        &effect.parameters,
+                        budget,
+                    )?;
+                }
+                OwnerId::Resource(id) => {
+                    if let Some(contracts) = self.provider_contracts.get(&id.module()) {
+                        let resource = contracts
+                            .resource_contracts()
+                            .find(|(_, _, fact)| fact.id == id)
+                            .ok_or(ResolvedBuildFailure::InvalidState)?
+                            .2;
+                        self.authenticate_owner_signature(
+                            definition.owner,
+                            Some(resource.family),
+                            &resource.parameters,
+                            budget,
+                        )?;
+                    }
+                }
+                OwnerId::Interface(_) => {}
+            }
+        }
+        if self.effects.len()
+            != self
+                .owner_definitions
+                .iter()
+                .filter(|definition| matches!(definition.owner, OwnerId::Effect(_)))
+                .count()
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(())
+    }
+
+    fn retain_owner_signature(
+        &mut self,
+        owner: OwnerId,
+        family: Option<NominalTypeId>,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        self.retain_owner_definition(owner, family, parameters, budget)?;
+        self.retain_owner_signature_after_definition(owner, family, parameters, budget)
+    }
+
+    fn retain_shared_owner_signature(
+        &mut self,
+        owner: OwnerId,
+        family: Option<NominalTypeId>,
+        parameters: &SharedOwnerParameters,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        self.retain_shared_owner_definition(owner, family, parameters, budget)?;
+        self.retain_owner_signature_after_definition(owner, family, parameters, budget)
+    }
+
+    fn retain_owner_signature_after_definition(
+        &mut self,
+        owner: OwnerId,
+        family: Option<NominalTypeId>,
+        parameters: &[ResolvedTypeVariable],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
         if let Some(existing) = self.owner_signature(owner) {
-            budget.charge(parameters.len().checked_add(1).ok_or(ResolvedBuildFailure::TypeResource)?).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            budget
+                .charge(
+                    parameters
+                        .len()
+                        .checked_add(1)
+                        .ok_or(ResolvedBuildFailure::TypeResource)?,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             if existing.parameters.len() != parameters.len()
-                || !existing.parameters.iter().zip(parameters).all(|(identity, parameter)| *identity == parameter.id)
+                || !existing
+                    .parameters
+                    .iter()
+                    .zip(parameters)
+                    .all(|(identity, parameter)| *identity == parameter.id)
                 || match owner {
                     OwnerId::Resource(id) => family != self.resource_signature_family(id),
                     _ => family.is_some(),
                 }
-            { return Err(ResolvedBuildFailure::InvalidState); }
+            {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
             return Ok(());
         }
-        let signature = OwnerSignature::from_parameters_with_budget(owner, parameters, budget).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        let signature = OwnerSignature::from_parameters_with_budget(owner, parameters, budget)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         self.owner_signatures.insert(signature, family, budget)
+    }
+
+    pub(crate) fn owner_signature_shape_matches(
+        &self,
+        effects: usize,
+        interfaces: usize,
+        resources: usize,
+    ) -> bool {
+        let tables = &self.owner_signatures;
+        tables.effects.len() == effects
+            && tables.effect_positions.len() == effects
+            && tables.interfaces.len() == interfaces
+            && tables.interface_positions.len() == interfaces
+            && tables.resources.len() == resources
+            && tables.resource_positions.len() == resources
+    }
+
+    // The result is a coordinate in the three signature tables, independent
+    // of source declaration order. Its map entry must identify the exact row.
+    pub(crate) fn owner_signature_storage_position(&self, owner: OwnerId) -> Option<usize> {
+        let tables = &self.owner_signatures;
+        match owner {
+            OwnerId::Effect(id) => {
+                let position = *tables.effect_positions.get(&id)?;
+                (tables.effects.get(position)?.owner == owner).then_some(position)
+            }
+            OwnerId::Interface(id) => {
+                let position = *tables.interface_positions.get(&id)?;
+                (tables.interfaces.get(position)?.owner == owner)
+                    .then(|| tables.effects.len().checked_add(position))
+                    .flatten()
+            }
+            OwnerId::Resource(id) => {
+                let position = *tables.resource_positions.get(&id)?;
+                (tables.resources.get(position)?.1.owner == owner)
+                    .then(|| {
+                        tables
+                            .effects
+                            .len()
+                            .checked_add(tables.interfaces.len())?
+                            .checked_add(position)
+                    })
+                    .flatten()
+            }
+        }
     }
 
     /// Checks exact table/index coverage against defining owners for the
@@ -17978,39 +19054,64 @@ impl ResolvedRegistry {
     ) -> Result<(), ResolvedBuildFailure> {
         let mut expected = HashSet::new();
         for owner in defining_owners {
-            budget.charge(1).map_err(|()| ResolvedBuildFailure::TypeResource)?;
-            expected.try_reserve(1).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            budget
+                .charge(1)
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            expected
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
             expected.insert(owner);
         }
         let tables = &self.owner_signatures;
-        let count = tables.effects.len().checked_add(tables.interfaces.len())
+        let count = tables
+            .effects
+            .len()
+            .checked_add(tables.interfaces.len())
             .and_then(|count| count.checked_add(tables.resources.len()))
             .ok_or(ResolvedBuildFailure::TypeResource)?;
-        budget.charge(count).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        budget
+            .charge(count)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         if count != expected.len()
             || tables.effects.len() != tables.effect_positions.len()
             || tables.interfaces.len() != tables.interface_positions.len()
             || tables.resources.len() != tables.resource_positions.len()
-        { return Err(ResolvedBuildFailure::InvalidState); }
+        {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
         for (position, signature) in tables.effects.iter().enumerate() {
-            let OwnerId::Effect(id) = signature.owner else { return Err(ResolvedBuildFailure::InvalidState) };
-            if tables.effect_positions.get(&id) != Some(&position) || !expected.remove(&signature.owner) {
+            let OwnerId::Effect(id) = signature.owner else {
+                return Err(ResolvedBuildFailure::InvalidState);
+            };
+            if tables.effect_positions.get(&id) != Some(&position)
+                || !expected.remove(&signature.owner)
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
         for (position, signature) in tables.interfaces.iter().enumerate() {
-            let OwnerId::Interface(id) = signature.owner else { return Err(ResolvedBuildFailure::InvalidState) };
-            if tables.interface_positions.get(&id) != Some(&position) || !expected.remove(&signature.owner) {
+            let OwnerId::Interface(id) = signature.owner else {
+                return Err(ResolvedBuildFailure::InvalidState);
+            };
+            if tables.interface_positions.get(&id) != Some(&position)
+                || !expected.remove(&signature.owner)
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
         for (position, (_, signature)) in tables.resources.iter().enumerate() {
-            let OwnerId::Resource(id) = signature.owner else { return Err(ResolvedBuildFailure::InvalidState) };
-            if tables.resource_positions.get(&id) != Some(&position) || !expected.remove(&signature.owner) {
+            let OwnerId::Resource(id) = signature.owner else {
+                return Err(ResolvedBuildFailure::InvalidState);
+            };
+            if tables.resource_positions.get(&id) != Some(&position)
+                || !expected.remove(&signature.owner)
+            {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
         }
-        if !expected.is_empty() { return Err(ResolvedBuildFailure::InvalidState); }
+        if !expected.is_empty() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
         Ok(())
     }
 
@@ -18023,9 +19124,17 @@ impl ResolvedRegistry {
         parameters: &[ResolvedTypeVariable],
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        budget.charge(parameters.len().checked_add(1).ok_or(ResolvedBuildFailure::TypeResource)?)
+        budget
+            .charge(
+                parameters
+                    .len()
+                    .checked_add(1)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-        let signature = self.owner_signature(owner).ok_or(ResolvedBuildFailure::InvalidState)?;
+        let signature = self
+            .owner_signature(owner)
+            .ok_or(ResolvedBuildFailure::InvalidState)?;
         if signature.parameters.len() != parameters.len()
             || match owner {
                 OwnerId::Resource(id) => family != self.resource_signature_family(id),
@@ -18035,7 +19144,9 @@ impl ResolvedRegistry {
             return Err(ResolvedBuildFailure::InvalidState);
         }
         for (identity, parameter) in signature.parameters.iter().zip(parameters) {
-            let canonical = self.type_variables.get(identity)
+            let canonical = self
+                .type_variables
+                .get(identity)
                 .ok_or(ResolvedBuildFailure::InvalidState)?;
             if *identity != parameter.id
                 || !same_checker_type_variable_with_budget(canonical, parameter, budget)
@@ -18055,7 +19166,14 @@ impl ResolvedRegistry {
         family: Option<NominalTypeId>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        budget.charge(source.parameters.len().checked_add(1).ok_or(ResolvedBuildFailure::TypeResource)?)
+        budget
+            .charge(
+                source
+                    .parameters
+                    .len()
+                    .checked_add(1)
+                    .ok_or(ResolvedBuildFailure::TypeResource)?,
+            )
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         if let Some(existing) = self.owner_signature(source.owner) {
             if existing.parameters != source.parameters
@@ -18069,7 +19187,8 @@ impl ResolvedRegistry {
             return Ok(());
         }
         let mut identities = Vec::new();
-        identities.try_reserve_exact(source.parameters.len())
+        identities
+            .try_reserve_exact(source.parameters.len())
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for identity in &source.parameters {
             if !self.type_variables.contains_key(identity) {
@@ -18077,10 +19196,14 @@ impl ResolvedRegistry {
             }
             identities.push(*identity);
         }
-        self.owner_signatures.insert(OwnerSignature {
-            owner: source.owner,
-            parameters: identities.into_boxed_slice(),
-        }, family, budget)
+        self.owner_signatures.insert(
+            OwnerSignature {
+                owner: source.owner,
+                parameters: identities.into_boxed_slice(),
+            },
+            family,
+            budget,
+        )
     }
 
     /// Returns foreign manifests authenticated by reserved-path admission.
@@ -18180,6 +19303,8 @@ impl ResolvedRegistry {
             lexical_constructor_positions: HashMap::new(),
             effects: Box::new([]),
             owner_signatures: OwnerSignatures::default(),
+            owner_definitions: Vec::new(),
+            owner_definition_positions: HashMap::new(),
             effect_positions: HashMap::new(),
             nominal_parameters: HashMap::new(),
             type_variables: HashMap::new(),
@@ -18425,7 +19550,9 @@ impl ResolvedRegistry {
             .try_reserve(abstract_nominal_count)
             .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for (id, fact) in &self.abstract_nominal_kinds {
-            let kind = fact.kind.clone_with_budget(budget)
+            let kind = fact
+                .kind
+                .clone_with_budget(budget)
                 .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             abstract_nominal_kinds.insert(
                 *id,
@@ -18439,8 +19566,9 @@ impl ResolvedRegistry {
             }
         }
         for (spelling, resource) in imported.resource_facts() {
-            let kind = NonMaterializedNominalKind::for_resource(resource.id, &resource.parameters, budget)
-            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let kind =
+                NonMaterializedNominalKind::for_resource(resource.id, &resource.parameters, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             abstract_nominal_kinds.insert(
                 resource.family,
                 NonMaterializedNominalKindFact {
@@ -18462,7 +19590,13 @@ impl ResolvedRegistry {
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
             let origin = fact.origin.primary_span();
             if abstract_nominal_kinds
-                .insert(fact.id, NonMaterializedNominalKindFact { kind: NonMaterializedNominalKind::Ordinary(kind), origin })
+                .insert(
+                    fact.id,
+                    NonMaterializedNominalKindFact {
+                        kind: NonMaterializedNominalKind::Ordinary(kind),
+                        origin,
+                    },
+                )
                 .is_some()
             {
                 return Err(ResolvedBuildFailure::InvalidState);
@@ -18500,9 +19634,19 @@ impl ResolvedRegistry {
             }
         }
         self.authenticate_owner_signature_coverage(
-            self.owner_signatures.effects.iter().chain(self.owner_signatures.interfaces.iter())
-                .chain(self.owner_signatures.resources.iter().map(|(_, signature)| signature))
-                .map(|signature| signature.owner), budget)?;
+            self.owner_signatures
+                .effects
+                .iter()
+                .chain(self.owner_signatures.interfaces.iter())
+                .chain(
+                    self.owner_signatures
+                        .resources
+                        .iter()
+                        .map(|(_, signature)| signature),
+                )
+                .map(|signature| signature.owner),
+            budget,
+        )?;
         let mut registry = Self::new(nominals.into_vec(), constructors.into_vec())
             .with_type_parameters_with_budget(parameters.into_vec(), budget)
             .map_err(|()| ResolvedBuildFailure::TypeResource)?
@@ -18578,16 +19722,41 @@ impl ResolvedRegistry {
         }
         remaining.sort_unstable_by_key(|parameter| parameter.id);
         for parameter in remaining {
-            registry.try_insert_checker_type_variable(parameter, budget)?;
-        }
-        for imported_interface in imported.interface_imports() {
-            for parameter in &imported_interface.fact.parameters {
+            if let Some(retained) = parameter.clone_shared_with_budget(budget)? {
+                if registry.type_variables.contains_key(&parameter.id) {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                registry
+                    .type_variables
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let displaced = registry.type_variables.insert(parameter.id, retained);
+                debug_assert!(displaced.is_none());
+            } else {
                 registry.try_insert_checker_type_variable(parameter, budget)?;
             }
+        }
+        for effect in imported.effects() {
+            for parameter in &effect.parameters {
+                registry.try_insert_checker_type_variable(parameter, budget)?;
+            }
+        }
+        for (_, resource) in imported.resource_facts() {
+            for parameter in &resource.parameters {
+                registry.try_insert_checker_type_variable(parameter, budget)?;
+            }
+        }
+        for imported_interface in imported.interface_imports() {
+            registry
+                .retain_shared_canonical_parameters(&imported_interface.fact.parameters, budget)?;
             for method in imported_interface.authority_methods() {
-                for parameter in method.authoritative_type_parameters() {
-                    registry.try_insert_checker_type_variable(parameter, budget)?;
-                }
+                registry.retain_shared_canonical_parameters(
+                    method
+                        .method_binder_authority
+                        .as_ref()
+                        .unwrap_or(&method.type_parameters),
+                    budget,
+                )?;
             }
         }
         for imported_implementation in imported.implementations() {
@@ -18613,7 +19782,18 @@ impl ResolvedRegistry {
                 registry.foreign_modules.insert(*id, Arc::clone(fact));
             }
         }
-        for signature in self.owner_signatures.effects.iter()
+        for definition in &self.owner_definitions {
+            registry.retain_shared_owner_definition(
+                definition.owner,
+                definition.family,
+                &definition.parameters,
+                budget,
+            )?;
+        }
+        for signature in self
+            .owner_signatures
+            .effects
+            .iter()
             .chain(self.owner_signatures.interfaces.iter())
         {
             registry.retain_owner_signature_mirror(signature, None, budget)?;
@@ -18622,16 +19802,32 @@ impl ResolvedRegistry {
             registry.retain_owner_signature_mirror(signature, Some(*family), budget)?;
         }
         for interface in imported.interface_imports() {
-            registry.retain_owner_signature(OwnerId::Interface(interface.fact.id), None,
-                &interface.fact.parameters, budget)?;
-            registry.authenticate_owner_signature(OwnerId::Interface(interface.fact.id), None,
-                &interface.fact.parameters, budget)?;
+            registry.retain_shared_owner_signature(
+                OwnerId::Interface(interface.fact.id),
+                None,
+                &interface.fact.parameters,
+                budget,
+            )?;
+            registry.authenticate_owner_signature(
+                OwnerId::Interface(interface.fact.id),
+                None,
+                &interface.fact.parameters,
+                budget,
+            )?;
         }
         for (_, resource) in imported.resource_facts() {
-            registry.retain_owner_signature(OwnerId::Resource(resource.id), Some(resource.family),
-                &resource.parameters, budget)?;
-            registry.authenticate_owner_signature(OwnerId::Resource(resource.id), Some(resource.family),
-                &resource.parameters, budget)?;
+            registry.retain_owner_signature(
+                OwnerId::Resource(resource.id),
+                Some(resource.family),
+                &resource.parameters,
+                budget,
+            )?;
+            registry.authenticate_owner_signature(
+                OwnerId::Resource(resource.id),
+                Some(resource.family),
+                &resource.parameters,
+                budget,
+            )?;
         }
         Ok(registry)
     }
@@ -18657,17 +19853,40 @@ impl ResolvedRegistry {
         for checked in modules {
             let registry = checked.registry();
             registry.authenticate_owner_signature_coverage(
-                checked.effects().iter().map(|effect| OwnerId::Effect(effect.id))
-                    .chain(checked.interface_facts().iter().map(|interface| OwnerId::Interface(interface.id)))
-                    .chain(checked.providers.iter().flat_map(|code| code.contracts().resource_contracts())
-                        .map(|(_, _, fact)| OwnerId::Resource(fact.id))), type_work)?;
+                checked
+                    .effects()
+                    .iter()
+                    .map(|effect| OwnerId::Effect(effect.id))
+                    .chain(
+                        checked
+                            .interface_facts()
+                            .iter()
+                            .map(|interface| OwnerId::Interface(interface.id)),
+                    )
+                    .chain(
+                        checked
+                            .providers
+                            .iter()
+                            .flat_map(|code| code.contracts().resource_contracts())
+                            .map(|(_, _, fact)| OwnerId::Resource(fact.id)),
+                    ),
+                type_work,
+            )?;
             for effect in checked.effects() {
-                registry.authenticate_owner_signature(OwnerId::Effect(effect.id), None,
-                    &effect.parameters, type_work)?;
+                registry.authenticate_owner_signature(
+                    OwnerId::Effect(effect.id),
+                    None,
+                    &effect.parameters,
+                    type_work,
+                )?;
             }
             for interface in checked.interface_facts() {
-                registry.authenticate_owner_signature(OwnerId::Interface(interface.id), None,
-                    &interface.parameters, type_work)?;
+                registry.authenticate_owner_signature(
+                    OwnerId::Interface(interface.id),
+                    None,
+                    &interface.parameters,
+                    type_work,
+                )?;
             }
             let expected = checked
                 .providers
@@ -18689,8 +19908,12 @@ impl ResolvedRegistry {
                     .charge(expected)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                 for (spelling, _, fact) in certificate.resource_contracts() {
-                    registry.authenticate_owner_signature(OwnerId::Resource(fact.id), Some(fact.family),
-                        &fact.parameters, type_work)?;
+                    registry.authenticate_owner_signature(
+                        OwnerId::Resource(fact.id),
+                        Some(fact.family),
+                        &fact.parameters,
+                        type_work,
+                    )?;
                     let name = registry
                         .abstract_nominal_names
                         .get(&fact.family)
@@ -18706,12 +19929,18 @@ impl ResolvedRegistry {
                                 .ok_or(ResolvedBuildFailure::TypeResource)?,
                         )
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                    let expected_kind = NonMaterializedNominalKind::for_resource(fact.id, &fact.parameters, type_work)
+                    let expected_kind = NonMaterializedNominalKind::for_resource(
+                        fact.id,
+                        &fact.parameters,
+                        type_work,
+                    )
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     if name != spelling
                         || actual.origin != fact.origin.primary_span()
-                        || !actual.kind.same_with_budget(&expected_kind, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        || !actual
+                            .kind
+                            .same_with_budget(&expected_kind, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
                     {
                         return Err(ResolvedBuildFailure::InvalidState);
                     }
@@ -18773,7 +20002,11 @@ impl ResolvedRegistry {
                         .charge(spelling.len())
                         .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     let name = try_clone_string(spelling)?;
-                    let kind = NonMaterializedNominalKind::for_resource(fact.id, &fact.parameters, type_work)
+                    let kind = NonMaterializedNominalKind::for_resource(
+                        fact.id,
+                        &fact.parameters,
+                        type_work,
+                    )
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?;
                     if registry.nominal(fact.family).is_some()
                         || registry.abstract_nominal_names.contains_key(&fact.family)
@@ -18821,23 +20054,47 @@ impl ResolvedRegistry {
         }
         for checked in modules {
             for effect in checked.effects() {
-                registry.retain_owner_signature(OwnerId::Effect(effect.id), None,
-                    &effect.parameters, type_work)?;
-                registry.authenticate_owner_signature(OwnerId::Effect(effect.id), None,
-                    &effect.parameters, type_work)?;
+                registry.retain_owner_signature(
+                    OwnerId::Effect(effect.id),
+                    None,
+                    &effect.parameters,
+                    type_work,
+                )?;
+                registry.authenticate_owner_signature(
+                    OwnerId::Effect(effect.id),
+                    None,
+                    &effect.parameters,
+                    type_work,
+                )?;
             }
             for interface in checked.interface_facts() {
-                registry.retain_owner_signature(OwnerId::Interface(interface.id), None,
-                    &interface.parameters, type_work)?;
-                registry.authenticate_owner_signature(OwnerId::Interface(interface.id), None,
-                    &interface.parameters, type_work)?;
+                registry.retain_shared_owner_signature(
+                    OwnerId::Interface(interface.id),
+                    None,
+                    &interface.parameters,
+                    type_work,
+                )?;
+                registry.authenticate_owner_signature(
+                    OwnerId::Interface(interface.id),
+                    None,
+                    &interface.parameters,
+                    type_work,
+                )?;
             }
             if let Some(code) = &checked.providers {
                 for (_, _, fact) in code.contracts().resource_contracts() {
-                    registry.retain_owner_signature(OwnerId::Resource(fact.id), Some(fact.family),
-                        &fact.parameters, type_work)?;
-                    registry.authenticate_owner_signature(OwnerId::Resource(fact.id), Some(fact.family),
-                        &fact.parameters, type_work)?;
+                    registry.retain_owner_signature(
+                        OwnerId::Resource(fact.id),
+                        Some(fact.family),
+                        &fact.parameters,
+                        type_work,
+                    )?;
+                    registry.authenticate_owner_signature(
+                        OwnerId::Resource(fact.id),
+                        Some(fact.family),
+                        &fact.parameters,
+                        type_work,
+                    )?;
                 }
             }
         }
@@ -18971,24 +20228,14 @@ impl ResolvedRegistry {
     ) -> Self {
         self.lexical_nominal_positions = nominal_positions;
         self.lexical_constructor_positions = constructor_positions;
-        let displaced_nominals =
-            std::mem::replace(&mut self.lexical_nominals, nominals.into_boxed_slice());
-        for nominal in displaced_nominals.into_vec() {
-            if let Some(representation) = nominal.representation {
-                discard_type_iteratively(representation);
-            }
-            discard_origin_iteratively(nominal.origin);
-        }
-        let displaced_constructors = std::mem::replace(
+        discard_resolved_nominals_iteratively(std::mem::replace(
+            &mut self.lexical_nominals,
+            nominals.into_boxed_slice(),
+        ));
+        discard_resolved_constructors_iteratively(std::mem::replace(
             &mut self.lexical_constructors,
             constructors.into_boxed_slice(),
-        );
-        for constructor in displaced_constructors.into_vec() {
-            if let Some(payload) = constructor.payload {
-                discard_type_iteratively(payload);
-            }
-            discard_origin_iteratively(constructor.origin);
-        }
+        ));
         self
     }
 
@@ -19004,26 +20251,92 @@ impl ResolvedRegistry {
         self
     }
 
-    pub(crate) fn with_effects_with_budget(mut self, effects: Vec<ResolvedEffectDeclaration>, budget: &mut TypeWorkBudget) -> Result<Self, ResolvedBuildFailure> {
+    pub(crate) fn with_effects_with_budget(
+        mut self,
+        effects: Vec<ResolvedEffectDeclaration>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
         struct Owned(Vec<ResolvedEffectDeclaration>);
-        impl Drop for Owned { fn drop(&mut self) { for effect in self.0.drain(..) { discard_resolved_effect_iteratively(effect); } } }
-        let mut effects = Owned(effects);
-        budget.charge(effects.0.len()).map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        impl Owned {
+            fn into_vec(mut self) -> Vec<ResolvedEffectDeclaration> {
+                std::mem::take(&mut self.0)
+            }
+        }
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                for effect in self.0.drain(..) {
+                    discard_resolved_effect_iteratively(effect);
+                }
+            }
+        }
+        let effects = Owned(effects);
+        budget
+            .charge(effects.0.len())
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
         let mut positions = HashMap::new();
-        positions.try_reserve(effects.0.len()).map_err(|_| ResolvedBuildFailure::TypeResource)?;
+        positions
+            .try_reserve(effects.0.len())
+            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
         for (position, effect) in effects.0.iter().enumerate() {
-            if positions.insert(effect.id, position).is_some() { return Err(ResolvedBuildFailure::InvalidState); }
-            self.retain_owner_signature(OwnerId::Effect(effect.id), None, &effect.parameters, budget)?;
+            if positions.insert(effect.id, position).is_some() {
+                return Err(ResolvedBuildFailure::InvalidState);
+            }
+            self.retain_owner_signature(
+                OwnerId::Effect(effect.id),
+                None,
+                &effect.parameters,
+                budget,
+            )?;
         }
         self.effect_positions = positions;
-        let displaced = std::mem::replace(&mut self.effects, std::mem::take(&mut effects.0).into_boxed_slice());
-        for effect in displaced.into_vec() { discard_resolved_effect_iteratively(effect); }
+        discard_resolved_effects_iteratively(std::mem::replace(
+            &mut self.effects,
+            effects.into_vec().into_boxed_slice(),
+        ));
         Ok(self)
     }
 
-    pub(crate) fn with_interface_owner_signatures(mut self, interfaces: &[ResolvedInterfaceDeclaration], budget: &mut TypeWorkBudget) -> Result<Self, ResolvedBuildFailure> {
+    fn retain_shared_canonical_parameters(
+        &mut self,
+        parameters: &SharedOwnerParameters,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), ResolvedBuildFailure> {
+        for (slot, parameter) in parameters.iter().enumerate() {
+            if let Some(existing) = self.type_variables.get(&parameter.id) {
+                if !same_checker_type_variable_with_budget(existing, parameter, budget)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    return Err(ResolvedBuildFailure::InvalidState);
+                }
+                continue;
+            }
+            let retained =
+                CanonicalTypeVariable::shared_original(parameters, slot, parameter.id, budget)?;
+            self.type_variables
+                .try_reserve(1)
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            let displaced = self.type_variables.insert(parameter.id, retained);
+            debug_assert!(displaced.is_none());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn with_interface_owner_signatures(
+        mut self,
+        interfaces: &[ResolvedInterfaceDeclaration],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
         for interface in interfaces {
-            self.retain_owner_signature(OwnerId::Interface(interface.id), None, &interface.parameters, budget)?;
+            self.retain_shared_canonical_parameters(&interface.parameters, budget)?;
+            for method in &interface.methods {
+                self.retain_shared_canonical_parameters(&method.type_parameters, budget)?;
+            }
+            self.retain_shared_owner_signature(
+                OwnerId::Interface(interface.id),
+                None,
+                &interface.parameters,
+                budget,
+            )?;
         }
         Ok(self)
     }
@@ -19032,6 +20345,18 @@ impl ResolvedRegistry {
     pub(crate) fn with_effects(self, effects: Vec<ResolvedEffectDeclaration>) -> Self {
         self.with_effects_with_budget(effects, &mut TypeWorkBudget::unbounded())
             .expect("an admitted in-memory effect fixture fits the work bound")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_effects_for_core_test(
+        mut self,
+        effects: Vec<ResolvedEffectDeclaration>,
+    ) -> Self {
+        discard_resolved_effects_iteratively(std::mem::replace(
+            &mut self.effects,
+            effects.into_boxed_slice(),
+        ));
+        self
     }
 
     /// Looks up one canonical effect declaration by stable identity.
@@ -19059,8 +20384,18 @@ impl ResolvedRegistry {
             .try_reserve(resources.len())
             .map_err(|_| ())?;
         for resource in resources {
-            self.retain_owner_signature(OwnerId::Resource(resource.id), Some(resource.family), &resource.parameters, budget).map_err(|_| ())?;
-            let kind = NonMaterializedNominalKind::for_resource(resource.id, &resource.parameters, budget)?;
+            self.retain_owner_signature(
+                OwnerId::Resource(resource.id),
+                Some(resource.family),
+                &resource.parameters,
+                budget,
+            )
+            .map_err(|_| ())?;
+            let kind = NonMaterializedNominalKind::for_resource(
+                resource.id,
+                &resource.parameters,
+                budget,
+            )?;
             self.abstract_nominal_names
                 .insert(resource.family, resource.spelling.clone());
             self.abstract_nominal_kinds.insert(
@@ -19080,16 +20415,16 @@ impl ResolvedRegistry {
         kinds: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
     ) -> Self {
         self.abstract_nominal_names = names;
-        let displaced = std::mem::replace(&mut self.abstract_nominal_kinds, kinds);
-        for fact in displaced.into_values() {
-            discard_non_materialized_nominal_kind_fact(fact);
-        }
+        discard_non_materialized_nominal_kind_facts(std::mem::replace(
+            &mut self.abstract_nominal_kinds,
+            kinds,
+        ));
         self
     }
 
     fn insert_type_variable(&mut self, parameter: ResolvedTypeVariable) {
-        if let Some(replaced) = self.type_variables.insert(parameter.id, parameter) {
-            discard_resolved_type_variable(replaced);
+        if let Some(replaced) = self.type_variables.insert(parameter.id, parameter.into()) {
+            drop(replaced);
         }
     }
 
@@ -19118,7 +20453,7 @@ impl ResolvedRegistry {
             kind,
             origin: parameter.origin.clone(),
         };
-        let displaced = self.type_variables.insert(parameter.id, retained);
+        let displaced = self.type_variables.insert(parameter.id, retained.into());
         debug_assert!(displaced.is_none());
         Ok(())
     }
@@ -19182,7 +20517,7 @@ impl ResolvedRegistry {
     /// Looks up a declaration type parameter by stable identity.
     #[must_use]
     pub fn type_variable(&self, id: TypeVariableId) -> Option<&ResolvedTypeVariable> {
-        self.type_variables.get(&id)
+        self.type_variables.get(&id).map(AsRef::as_ref)
     }
 
     /// Returns a nominal declaration's ordered parameters.
@@ -19210,8 +20545,16 @@ impl ResolvedRegistry {
         self.abstract_nominal_kinds
             .get(&id)
             .map(|fact| match &fact.kind {
-                NonMaterializedNominalKind::Ordinary(kind) => CanonicalNominalKind::Frozen { kind, origin: fact.origin },
-                NonMaterializedNominalKind::RowBearingResource(resource) => CanonicalNominalKind::RowBearingResource { resource: *resource, origin: fact.origin },
+                NonMaterializedNominalKind::Ordinary(kind) => CanonicalNominalKind::Frozen {
+                    kind,
+                    origin: fact.origin,
+                },
+                NonMaterializedNominalKind::RowBearingResource(resource) => {
+                    CanonicalNominalKind::RowBearingResource {
+                        resource: *resource,
+                        origin: fact.origin,
+                    }
+                }
             })
     }
 
@@ -19236,7 +20579,10 @@ impl ResolvedRegistry {
         };
         let extra = NominalTypeId::new(family.module(), u32::MAX);
         match mutation {
-            0 => self.abstract_nominal_kinds.get_mut(&family).unwrap().kind = NonMaterializedNominalKind::Ordinary(Kind::Type),
+            0 => {
+                self.abstract_nominal_kinds.get_mut(&family).unwrap().kind =
+                    NonMaterializedNominalKind::Ordinary(Kind::Type)
+            }
             1 => self.abstract_nominal_kinds.get_mut(&family).unwrap().origin = span,
             2 => {
                 let parameter = self
@@ -19355,8 +20701,12 @@ impl ResolvedRegistry {
                 .try_reserve(certificate.resource_count())
                 .map_err(|_| ResolvedBuildFailure::TypeResource)?;
             for (spelling, _, fact) in certificate.resource_contracts() {
-                self.authenticate_owner_signature(OwnerId::Resource(fact.id), Some(fact.family),
-                    &fact.parameters, work)?;
+                self.authenticate_owner_signature(
+                    OwnerId::Resource(fact.id),
+                    Some(fact.family),
+                    &fact.parameters,
+                    work,
+                )?;
                 if !families.insert(fact.family) || self.nominal(fact.family).is_some() {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
@@ -19378,9 +20728,12 @@ impl ResolvedRegistry {
                 if name != spelling || kind.origin != fact.origin.primary_span() {
                     return Err(ResolvedBuildFailure::InvalidState);
                 }
-                let expected = NonMaterializedNominalKind::for_resource(fact.id, &fact.parameters, work)
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                if !kind.kind.same_with_budget(&expected, work)
+                let expected =
+                    NonMaterializedNominalKind::for_resource(fact.id, &fact.parameters, work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                if !kind
+                    .kind
+                    .same_with_budget(&expected, work)
                     .map_err(|()| ResolvedBuildFailure::TypeResource)?
                 {
                     return Err(ResolvedBuildFailure::InvalidState);
@@ -19433,7 +20786,7 @@ impl ResolvedRegistry {
     }
 
     pub(crate) fn type_variables(&self) -> impl Iterator<Item = &ResolvedTypeVariable> {
-        self.type_variables.values()
+        self.type_variables.values().map(AsRef::as_ref)
     }
 
     pub(crate) fn type_variable_count(&self) -> usize {
@@ -19626,7 +20979,7 @@ impl ResolvedRegistry {
                 let Some(removed) = self.type_variables.remove(&parameter) else {
                     return false;
                 };
-                discard_resolved_type_variable(removed);
+                drop(removed);
             }
             CoreGlobalParameterRowMutationForTest::AddSurplusPosition(owner) => {
                 if self.global_parameter_positions.contains_key(&owner) {
@@ -19650,20 +21003,108 @@ impl ResolvedRegistry {
         self.display_type_with_inference(ty, true)
     }
 
+    pub(crate) fn display_source_argument(
+        &self,
+        argument: &crate::types::KindedArgument,
+    ) -> String {
+        self.display_structural_with_inference(None, Some(argument), true)
+    }
+
     fn display_type_with_inference(&self, ty: &Type, anonymous_inference: bool) -> String {
+        self.display_structural_with_inference(Some(ty), None, anonymous_inference)
+    }
+
+    fn display_structural_with_inference(
+        &self,
+        ty: Option<&Type>,
+        argument: Option<&crate::types::KindedArgument>,
+        anonymous_inference: bool,
+    ) -> String {
         enum Task<'a> {
             Type(&'a Type),
+            Argument(&'a crate::types::KindedArgument),
             ApplicationSpine(&'a Type),
             EffectRow(&'a crate::types::EffectRow),
+            EffectInstance(&'a crate::types::EffectInstance),
+            RowTail(&'a crate::types::EffectRowTail),
             Text(&'static str),
         }
 
         let mut output = String::new();
-        let mut work = vec![Task::Type(ty)];
+        let mut work = vec![match (ty, argument) {
+            (Some(ty), None) => Task::Type(ty),
+            (None, Some(argument)) => Task::Argument(argument),
+            _ => unreachable!("exactly one display root"),
+        }];
         while let Some(task) = work.pop() {
             match task {
+                Task::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+                    work.push(Task::Type(ty))
+                }
+                Task::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                    work.push(Task::EffectRow(row))
+                }
+                Task::Type(Type::ResourceApply(resource, arguments)) => {
+                    if let Some(family) = self.resource_signature_family(*resource) {
+                        if let Some(nominal) = self.nominal(family) {
+                            output.push_str(&nominal.spelling);
+                        } else {
+                            output.push_str("<resource>");
+                        }
+                    } else {
+                        output.push_str("<resource>");
+                    }
+                    output.push('<');
+                    work.push(Task::Text(">"));
+                    for (index, argument) in arguments.iter().enumerate().rev() {
+                        work.push(Task::Argument(argument));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
                 Task::Text(text) => output.push_str(text),
-                Task::EffectRow(row) => output.push_str(&row.to_string()),
+                Task::EffectRow(row) => {
+                    output.push('{');
+                    work.push(Task::Text("}"));
+                    if let Some(tail) = row.tail() {
+                        work.push(Task::RowTail(tail));
+                        work.push(Task::Text("| "));
+                    }
+                    for (index, member) in row.known().iter().enumerate().rev() {
+                        work.push(Task::EffectInstance(member));
+                        if index > 0 {
+                            work.push(Task::Text(", "));
+                        }
+                    }
+                }
+                Task::RowTail(tail) => match tail.variable() {
+                    EffectRowVariable::Rigid(identity) => {
+                        if let Some(variable) = self.type_variable(identity) {
+                            output.push_str(&variable.spelling);
+                        } else {
+                            output.push('_');
+                        }
+                    }
+                    EffectRowVariable::Inference(_) => output.push('_'),
+                },
+                Task::EffectInstance(member) => {
+                    if let Some(effect) = self.effect(member.effect()) {
+                        output.push_str(&effect.spelling);
+                    } else {
+                        output.push_str("<effect>");
+                    }
+                    if !member.arguments().is_empty() {
+                        output.push('<');
+                        work.push(Task::Text(">"));
+                        for (index, argument) in member.arguments().iter().enumerate().rev() {
+                            work.push(Task::Argument(argument));
+                            if index > 0 {
+                                work.push(Task::Text(", "));
+                            }
+                        }
+                    }
+                }
                 Task::Type(Type::Int) => output.push_str("Int"),
                 Task::Type(Type::Bool) => output.push_str("Bool"),
                 Task::Type(Type::Unit) => output.push_str("Unit"),
@@ -19827,7 +21268,7 @@ impl ResolvedRegistry {
             discard_resolved_type_variables(parameters);
         }
         for parameter in type_variables.into_values() {
-            discard_resolved_type_variable(parameter);
+            drop(parameter);
         }
         drop(global_parameter_rows);
         drop(abstract_nominal_kinds);
@@ -19840,6 +21281,38 @@ fn discard_resolved_type_variable(parameter: ResolvedTypeVariable) {
 
 fn discard_non_materialized_nominal_kind_fact(fact: NonMaterializedNominalKindFact) {
     drop(fact);
+}
+
+fn discard_non_materialized_nominal_kind_facts(
+    facts: HashMap<NominalTypeId, NonMaterializedNominalKindFact>,
+) {
+    for fact in facts.into_values() {
+        discard_non_materialized_nominal_kind_fact(fact);
+    }
+}
+
+fn discard_resolved_nominals_iteratively(nominals: Box<[ResolvedNominalType]>) {
+    for nominal in nominals.into_vec() {
+        if let Some(representation) = nominal.representation {
+            discard_type_iteratively(representation);
+        }
+        discard_origin_iteratively(nominal.origin);
+    }
+}
+
+fn discard_resolved_constructors_iteratively(constructors: Box<[ResolvedConstructor]>) {
+    for constructor in constructors.into_vec() {
+        if let Some(payload) = constructor.payload {
+            discard_type_iteratively(payload);
+        }
+        discard_origin_iteratively(constructor.origin);
+    }
+}
+
+fn discard_resolved_effects_iteratively(effects: Box<[ResolvedEffectDeclaration]>) {
+    for effect in effects.into_vec() {
+        discard_resolved_effect_iteratively(effect);
+    }
 }
 
 fn charge_retained_origin(origin: &Origin, budget: &mut TypeWorkBudget) -> Result<(), ()> {
@@ -20139,6 +21612,17 @@ pub struct ResolvedTypeProvenance {
 /// One node in a resolved type-provenance arena.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedTypeProvenanceNode {
+    /// A complete resource owner application and its ordered argument roots.
+    Resource {
+        span: Span,
+        resource: ResourceDefinitionId,
+        arguments: Box<[usize]>,
+    },
+    /// A tagged complete row argument and canonical member argument roots.
+    Row {
+        span: Span,
+        argument_roots: Box<[usize]>,
+    },
     /// An atomic or nominal type occurrence.
     Fact(Span),
     /// A tuple occurrence and its element provenance roots.
@@ -20177,7 +21661,9 @@ impl ResolvedTypeProvenance {
             ResolvedTypeProvenanceNode::Fact(span)
             | ResolvedTypeProvenanceNode::Tuple { span, .. }
             | ResolvedTypeProvenanceNode::Function { span, .. }
-            | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
+            | ResolvedTypeProvenanceNode::Application { span, .. }
+            | ResolvedTypeProvenanceNode::Resource { span, .. }
+            | ResolvedTypeProvenanceNode::Row { span, .. } => *span,
         })
     }
 
@@ -20238,7 +21724,7 @@ pub struct ResolvedInterfaceDeclaration {
     /// Exact declared spelling.
     pub spelling: String,
     /// The interface's nonempty ordered resolved type parameters.
-    pub parameters: Box<[ResolvedTypeVariable]>,
+    pub parameters: SharedOwnerParameters,
     /// The optional resolved source determination edge.
     pub determination: Option<ResolvedInterfaceDetermination>,
     /// Nonempty methods in semantic declaration order.
@@ -20449,7 +21935,7 @@ pub struct ResolvedInterfaceMethod {
     /// Resolved source value type.
     pub annotation: ResolvedType,
     /// Ordered method-local binders or absent-list rejection candidates.
-    pub type_parameters: Box<[ResolvedTypeVariable]>,
+    pub type_parameters: SharedOwnerParameters,
     /// Whether `type_parameters` came from a present, nonempty complete source list.
     pub has_explicit_type_parameters: bool,
     /// Causal method provenance.
@@ -20469,13 +21955,43 @@ pub struct ResolvedInterfaceOccurrence {
     pub origin: Origin,
 }
 
+/// One ordered source argument for a resource, effect, or interface owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedOwnerArgument {
+    /// Explicit TypeArg or RowArg semantic payload.
+    pub ty: crate::types::KindedArgument,
+    /// Source provenance for the argument and its nested components.
+    pub provenance: ResolvedTypeProvenance,
+    /// Causal source origin.
+    pub origin: Origin,
+    /// Complete written span.
+    pub span: Span,
+}
+impl From<ResolvedType> for ResolvedOwnerArgument {
+    fn from(value: ResolvedType) -> Self {
+        Self {
+            ty: crate::types::KindedArgument::TypeArg(value.ty),
+            provenance: value.provenance,
+            origin: value.origin,
+            span: value.span,
+        }
+    }
+}
+impl ResolvedOwnerArgument {
+    /// Disposes an argument with no recursion through its type or row trees.
+    pub fn discard_iteratively(self) {
+        crate::types::discard_kinded_argument_iteratively(self.ty);
+        discard_origin_iteratively(self.origin);
+    }
+}
+
 /// One complete resolved interface application.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedInterfaceApplication {
     /// Resolved interface occurrence.
     pub interface: ResolvedInterfaceOccurrence,
     /// Nonempty ordered resolved type arguments.
-    pub arguments: Box<[ResolvedType]>,
+    pub arguments: Box<[ResolvedOwnerArgument]>,
     /// Complete interface application span.
     pub span: Span,
 }
@@ -21063,7 +22579,7 @@ impl ResourceAcquisition {
             || source.id != self.provider
             || source.span != self.span
             || source.application.interface.id != api.provider()
-            || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == Type::Variable(self.identity))
+            || !matches!(source.application.arguments.as_ref(), [argument] if argument.ty == crate::types::KindedArgument::TypeArg(Type::Variable(self.identity)))
             || source.method_groups.len() != api.method_names().len()
         {
             return false;
@@ -21096,7 +22612,7 @@ impl ResourceAcquisition {
                 && operand.origin.primary_span() == self.span
                 && request.operation == crate::types::OperationId::new(api.ops(), ordinal as u32)
                 && request.effect.instance.effect() == api.ops()
-                && matches!(request.effect.instance.arguments(), [Type::Variable(identity)] if *identity == self.identity)
+                && matches!(request.effect.instance.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == self.identity)
                 && operand.term == ResolvedTermName::Global(parameter.id)
                 && operand.evidence.is_empty()
                 && parameter.id.module() == Some(self.provider.module())
@@ -21400,9 +22916,7 @@ pub(crate) fn discard_resolved_implementation_iteratively(implementation: Resolv
 }
 
 pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfaceDeclaration) {
-    for parameter in interface.parameters {
-        discard_origin_iteratively(parameter.origin);
-    }
+    drop(interface.parameters);
     if let Some(determination) = interface.determination {
         for parameter in determination.determinant.parameters {
             discard_origin_iteratively(parameter.origin);
@@ -21413,9 +22927,7 @@ pub(crate) fn discard_resolved_interface_iteratively(interface: ResolvedInterfac
     }
     for method in interface.methods.into_vec() {
         discard_resolved_type(method.annotation);
-        for parameter in method.type_parameters.into_vec() {
-            discard_origin_iteratively(parameter.origin);
-        }
+        drop(method.type_parameters);
         discard_origin_iteratively(method.origin);
     }
     discard_origin_iteratively(interface.origin);
@@ -21450,7 +22962,7 @@ pub(crate) fn discard_resolved_requirement(requirement: ResolvedRequirement) {
 fn discard_resolved_interface_application(application: ResolvedInterfaceApplication) {
     discard_origin_iteratively(application.interface.origin);
     for argument in application.arguments {
-        discard_resolved_type(argument);
+        argument.discard_iteratively();
     }
 }
 
@@ -21671,46 +23183,134 @@ mod tests {
         let ordinary_family = NominalTypeId::new(module, 1);
         let malformed_family = NominalTypeId::new(module, 2);
         let parameters = [
-            ResolvedTypeVariable { id: TypeVariableId::resolved(module, 0), spelling: "S".into(), kind: Kind::Type, origin: Origin::Source(span) },
-            ResolvedTypeVariable { id: TypeVariableId::resolved(module, 1), spelling: "E".into(), kind: Kind::EffectRow, origin: Origin::Source(span) },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "S".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "E".into(),
+                kind: Kind::EffectRow,
+                origin: Origin::Source(span),
+            },
         ];
         let mut work = TypeWorkBudget::unbounded();
         let canonical = clone_resolved_type_variables_with_budget(&parameters, &mut work).unwrap();
-        let mut registry = ResolvedRegistry::default().with_additional_type_variables(canonical.into_vec());
-        for (id, family, formals) in [(mixed, mixed_family, parameters.as_slice()),
-            (ordinary, ordinary_family, &parameters[..1]), (malformed, malformed_family, &parameters[1..])]
-        {
-            registry.retain_owner_signature(OwnerId::Resource(id), Some(family), formals, &mut work).unwrap();
-            registry.abstract_nominal_kinds.insert(family, NonMaterializedNominalKindFact {
-                kind: NonMaterializedNominalKind::for_resource(id, formals, &mut work).unwrap(), origin: span,
-            });
+        let mut registry = ResolvedRegistry::default().with_additional_type_variables(canonical);
+        for (id, family, formals) in [
+            (mixed, mixed_family, parameters.as_slice()),
+            (ordinary, ordinary_family, &parameters[..1]),
+            (malformed, malformed_family, &parameters[1..]),
+        ] {
+            registry
+                .retain_owner_signature(OwnerId::Resource(id), Some(family), formals, &mut work)
+                .unwrap();
+            registry.abstract_nominal_kinds.insert(
+                family,
+                NonMaterializedNominalKindFact {
+                    kind: NonMaterializedNominalKind::for_resource(id, formals, &mut work).unwrap(),
+                    origin: span,
+                },
+            );
         }
         let mut environments = crate::kind::KindEnvironments::new_with_registry(&registry);
-        environments.insert_row_resource_family(mixed_family, mixed, span, &mut work).unwrap();
-        environments.insert_row_resource_family(malformed_family, malformed, span, &mut work).unwrap();
-        let Some(CanonicalNominalKind::Frozen { kind, .. }) = registry.nominal_kind(ordinary_family) else { panic!("ordinary constructor kind retained") };
-        environments.insert_frozen_nominal(ordinary_family, kind, span, &mut work).unwrap();
-        let proper = Type::ResourceApply(mixed, vec![KindedArgument::TypeArg(Type::Unit), KindedArgument::RowArg(EffectRow::empty())].into_boxed_slice());
+        environments
+            .insert_row_resource_family(mixed_family, mixed, &parameters, span, &mut work)
+            .unwrap();
+        environments
+            .insert_row_resource_family(
+                malformed_family,
+                malformed,
+                &parameters[1..],
+                span,
+                &mut work,
+            )
+            .unwrap();
+        let Some(CanonicalNominalKind::Frozen { kind, .. }) =
+            registry.nominal_kind(ordinary_family)
+        else {
+            panic!("ordinary constructor kind retained")
+        };
+        environments
+            .insert_frozen_nominal(ordinary_family, kind, span, &mut work)
+            .unwrap();
+        let proper = Type::ResourceApply(
+            mixed,
+            vec![
+                KindedArgument::TypeArg(Type::Unit),
+                KindedArgument::RowArg(EffectRow::empty()),
+            ]
+            .into_boxed_slice(),
+        );
         let mut exact = TypeWorkBudget::unbounded();
-        assert_eq!(environments.synthesize_body_free_kind(&proper, span, &mut exact).unwrap(), &Kind::Type);
+        assert_eq!(
+            environments
+                .synthesize_body_free_kind(&proper, span, &mut exact)
+                .unwrap(),
+            &Kind::Type
+        );
         let total = exact.used();
-        assert_eq!(environments.synthesize_body_free_kind(&proper, span, &mut TypeWorkBudget::with_limit(total)).unwrap(), &Kind::Type);
-        assert!(environments.synthesize_body_free_kind(&proper, span, &mut TypeWorkBudget::with_limit(total - 1)).unwrap_err().is_resource_exhaustion());
+        assert_eq!(
+            environments
+                .synthesize_body_free_kind(&proper, span, &mut TypeWorkBudget::with_limit(total))
+                .unwrap(),
+            &Kind::Type
+        );
+        assert!(
+            environments
+                .synthesize_body_free_kind(
+                    &proper,
+                    span,
+                    &mut TypeWorkBudget::with_limit(total - 1)
+                )
+                .unwrap_err()
+                .is_resource_exhaustion()
+        );
         for forged in [
-            Type::ResourceApply(ordinary, vec![KindedArgument::TypeArg(Type::Unit)].into_boxed_slice()),
-            Type::ResourceApply(malformed, vec![KindedArgument::RowArg(EffectRow::empty())].into_boxed_slice()),
-            Type::ResourceApply(mixed, vec![KindedArgument::TypeArg(Type::Unit), KindedArgument::TypeArg(Type::Unit)].into_boxed_slice()),
+            Type::ResourceApply(
+                ordinary,
+                vec![KindedArgument::TypeArg(Type::Unit)].into_boxed_slice(),
+            ),
+            Type::ResourceApply(
+                malformed,
+                vec![KindedArgument::RowArg(EffectRow::empty())].into_boxed_slice(),
+            ),
+            Type::ResourceApply(
+                mixed,
+                vec![
+                    KindedArgument::TypeArg(Type::Unit),
+                    KindedArgument::TypeArg(Type::Unit),
+                ]
+                .into_boxed_slice(),
+            ),
             Type::ResourceApply(mixed, Box::new([])),
             Type::Nominal(mixed_family),
             Type::Application(Box::new(Type::Nominal(mixed_family)), Box::new(Type::Unit)),
         ] {
-            let failure = environments.synthesize_body_free_kind(&forged, span, &mut work).unwrap_err();
+            let failure = environments
+                .synthesize_body_free_kind(&forged, span, &mut work)
+                .unwrap_err();
             assert!(!failure.is_resource_exhaustion());
             assert!(!failure.is_source_rejection());
         }
-        let ordinary_application = Type::Application(Box::new(Type::Nominal(ordinary_family)), Box::new(Type::Unit));
-        assert_eq!(environments.synthesize_body_free_kind(&ordinary_application, span, &mut work).unwrap(), &Kind::Type);
-        assert_eq!(environments.synthesize_body_free_kind(&Type::Nominal(ordinary_family), span, &mut work).unwrap(), kind);
+        let ordinary_application = Type::Application(
+            Box::new(Type::Nominal(ordinary_family)),
+            Box::new(Type::Unit),
+        );
+        assert_eq!(
+            environments
+                .synthesize_body_free_kind(&ordinary_application, span, &mut work)
+                .unwrap(),
+            &Kind::Type
+        );
+        assert_eq!(
+            environments
+                .synthesize_body_free_kind(&Type::Nominal(ordinary_family), span, &mut work)
+                .unwrap(),
+            kind
+        );
     }
 
     #[test]
@@ -21723,24 +23323,49 @@ mod tests {
         let expected = [OwnerId::Effect(first), OwnerId::Effect(second)];
         let mut work = TypeWorkBudget::unbounded();
         let mut registry = ResolvedRegistry::default();
-        registry.authenticate_owner_signature_coverage([], &mut work).unwrap();
+        registry
+            .authenticate_owner_signature_coverage([], &mut work)
+            .unwrap();
         for owner in expected {
-            registry.retain_owner_signature(owner, None, &[], &mut work).unwrap();
+            registry
+                .retain_owner_signature(owner, None, &[], &mut work)
+                .unwrap();
         }
-        registry.authenticate_owner_signature_coverage(expected, &mut work).unwrap();
+        registry
+            .authenticate_owner_signature_coverage(expected, &mut work)
+            .unwrap();
         registry.owner_signatures.effect_positions.insert(first, 1);
         registry.owner_signatures.effect_positions.insert(second, 0);
-        assert_eq!(registry.authenticate_owner_signature_coverage(expected, &mut work), Err(ResolvedBuildFailure::InvalidState));
+        assert_eq!(
+            registry.authenticate_owner_signature_coverage(expected, &mut work),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
         registry.owner_signatures.effect_positions.insert(first, 0);
         registry.owner_signatures.effect_positions.insert(second, 1);
-        registry.retain_owner_signature(OwnerId::Interface(extra), None, &[], &mut work).unwrap();
-        assert_eq!(registry.authenticate_owner_signature_coverage(expected, &mut work), Err(ResolvedBuildFailure::InvalidState));
+        registry
+            .retain_owner_signature(OwnerId::Interface(extra), None, &[], &mut work)
+            .unwrap();
+        assert_eq!(
+            registry.authenticate_owner_signature_coverage(expected, &mut work),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
         // The same empty, unassociated interface is legitimate when its
         // independently retained defining fact belongs to the consuming view.
         let complete = expected.into_iter().chain([OwnerId::Interface(extra)]);
-        registry.authenticate_owner_signature_coverage(complete, &mut work).unwrap();
-        registry.owner_signatures.interface_positions.insert(InterfaceId::new(module, 1), 0);
-        assert_eq!(registry.authenticate_owner_signature_coverage(expected.into_iter().chain([OwnerId::Interface(extra)]), &mut work), Err(ResolvedBuildFailure::InvalidState));
+        registry
+            .authenticate_owner_signature_coverage(complete, &mut work)
+            .unwrap();
+        registry
+            .owner_signatures
+            .interface_positions
+            .insert(InterfaceId::new(module, 1), 0);
+        assert_eq!(
+            registry.authenticate_owner_signature_coverage(
+                expected.into_iter().chain([OwnerId::Interface(extra)]),
+                &mut work
+            ),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
     }
 
     #[test]
@@ -21751,38 +23376,94 @@ mod tests {
         let resource = ResourceDefinitionId::new(module, 0);
         let family = NominalTypeId::new(module, 0);
         let definition = [
-            ResolvedTypeVariable { id: TypeVariableId::resolved(module, 0), spelling: "S".into(), kind: Kind::Type, origin: Origin::Source(span) },
-            ResolvedTypeVariable { id: TypeVariableId::resolved(module, 1), spelling: "E".into(), kind: Kind::EffectRow, origin: Origin::Source(span) },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 0),
+                spelling: "S".into(),
+                kind: Kind::Type,
+                origin: Origin::Source(span),
+            },
+            ResolvedTypeVariable {
+                id: TypeVariableId::resolved(module, 1),
+                spelling: "E".into(),
+                kind: Kind::EffectRow,
+                origin: Origin::Source(span),
+            },
         ];
         let mut work = TypeWorkBudget::unbounded();
         let canonical = clone_resolved_type_variables_with_budget(&definition, &mut work).unwrap();
-        let mut registry = ResolvedRegistry::default().with_additional_type_variables(canonical.into_vec());
+        let mut registry = ResolvedRegistry::default().with_additional_type_variables(canonical);
         let owner = OwnerId::Resource(resource);
-        registry.retain_owner_signature(owner, Some(family), &definition, &mut work).unwrap();
-        registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work).unwrap();
+        registry
+            .retain_owner_signature(owner, Some(family), &definition, &mut work)
+            .unwrap();
+        registry
+            .authenticate_owner_signature(owner, Some(family), &definition, &mut work)
+            .unwrap();
         let index = registry.owner_signatures.resource_positions[&resource];
-        registry.owner_signatures.resources[index].1.parameters.swap(0, 1);
-        assert_eq!(registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work), Err(ResolvedBuildFailure::InvalidState));
-        registry.owner_signatures.resources[index].1.parameters.swap(0, 1);
+        registry.owner_signatures.resources[index]
+            .1
+            .parameters
+            .swap(0, 1);
+        assert_eq!(
+            registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+        registry.owner_signatures.resources[index]
+            .1
+            .parameters
+            .swap(0, 1);
         // The table-facing variable and a second retained mirror agree on the
         // forged kind. The original declaration stays untouched.
         let mut forged = clone_resolved_type_variables_with_budget(&definition, &mut work).unwrap();
         forged[1].kind = Kind::Type;
-        registry.type_variables.get_mut(&definition[1].id).unwrap().kind = Kind::Type;
-        registry.authenticate_owner_signature(owner, Some(family), &forged, &mut work).unwrap();
-        assert_eq!(registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work), Err(ResolvedBuildFailure::InvalidState));
-        registry.type_variables.get_mut(&definition[1].id).unwrap().kind = Kind::EffectRow;
+        registry
+            .type_variables
+            .get_mut(&definition[1].id)
+            .unwrap()
+            .kind = Kind::Type;
+        registry
+            .authenticate_owner_signature(owner, Some(family), &forged, &mut work)
+            .unwrap();
+        assert_eq!(
+            registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
+        registry
+            .type_variables
+            .get_mut(&definition[1].id)
+            .unwrap()
+            .kind = Kind::EffectRow;
         registry.owner_signatures.resources[index].0 = NominalTypeId::new(module, 1);
-        assert_eq!(registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work), Err(ResolvedBuildFailure::InvalidState));
+        assert_eq!(
+            registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work),
+            Err(ResolvedBuildFailure::InvalidState)
+        );
         registry.owner_signatures.resources[index].0 = family;
-        registry.authenticate_owner_signature(owner, Some(family), &definition, &mut work).unwrap();
+        registry
+            .authenticate_owner_signature(owner, Some(family), &definition, &mut work)
+            .unwrap();
         // Eligibility of ordinary effect/interface signatures has no resource
         // association prerequisite.
-        for owner in [OwnerId::Effect(EffectId::new(module, 0)), OwnerId::Interface(InterfaceId::new(module, 0))] {
-            registry.retain_owner_signature(owner, None, &definition, &mut work).unwrap();
-            registry.authenticate_owner_signature(owner, None, &definition, &mut work).unwrap();
+        for owner in [
+            OwnerId::Effect(EffectId::new(module, 0)),
+            OwnerId::Interface(InterfaceId::new(module, 0)),
+        ] {
+            registry
+                .retain_owner_signature(owner, None, &definition, &mut work)
+                .unwrap();
+            registry
+                .authenticate_owner_signature(owner, None, &definition, &mut work)
+                .unwrap();
         }
-        assert_eq!(registry.authenticate_owner_signature(owner, Some(family), &definition, &mut TypeWorkBudget::with_limit(0)), Err(ResolvedBuildFailure::TypeResource));
+        assert_eq!(
+            registry.authenticate_owner_signature(
+                owner,
+                Some(family),
+                &definition,
+                &mut TypeWorkBudget::with_limit(0)
+            ),
+            Err(ResolvedBuildFailure::TypeResource)
+        );
     }
 
     #[test]
@@ -21792,16 +23473,34 @@ mod tests {
         let module = ModuleId::from(source.id());
         let id = ResourceDefinitionId::new(module, 0);
         let mut parameters = [ResolvedTypeVariable {
-            id: TypeVariableId::resolved(module, 0), spelling: "F".into(),
-            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)), origin: Origin::Source(span),
+            id: TypeVariableId::resolved(module, 0),
+            spelling: "F".into(),
+            kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+            origin: Origin::Source(span),
         }];
         let mut work = TypeWorkBudget::unbounded();
-        let ordinary = NonMaterializedNominalKind::for_resource(id, &parameters, &mut work).unwrap();
-        let NonMaterializedNominalKind::Ordinary(kind) = ordinary else { panic!("row-free resource preserves its constructor kind") };
-        assert_eq!(kind, Kind::Arrow(Box::new(parameters[0].kind.clone()), Box::new(Kind::Type)));
+        let ordinary =
+            NonMaterializedNominalKind::for_resource(id, &parameters, &mut work).unwrap();
+        let NonMaterializedNominalKind::Ordinary(kind) = ordinary else {
+            panic!("row-free resource preserves its constructor kind")
+        };
+        assert_eq!(
+            kind,
+            Kind::Arrow(Box::new(parameters[0].kind.clone()), Box::new(Kind::Type))
+        );
         parameters[0].kind = Kind::EffectRow;
-        assert_eq!(NonMaterializedNominalKind::for_resource(id, &parameters, &mut work).unwrap(), NonMaterializedNominalKind::RowBearingResource(id));
-        assert!(NonMaterializedNominalKind::for_resource(id, &parameters, &mut TypeWorkBudget::with_limit(0)).is_err());
+        assert_eq!(
+            NonMaterializedNominalKind::for_resource(id, &parameters, &mut work).unwrap(),
+            NonMaterializedNominalKind::RowBearingResource(id)
+        );
+        assert!(
+            NonMaterializedNominalKind::for_resource(
+                id,
+                &parameters,
+                &mut TypeWorkBudget::with_limit(0)
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -22055,7 +23754,8 @@ mod tests {
                                 ),
                                 origin: Origin::Source(span),
                                 span,
-                            }]),
+                            }
+                            .into()]),
                             span,
                         },
                         method_groups: groups,
@@ -23277,7 +24977,7 @@ mod tests {
                 id: interface,
                 public: true,
                 spelling: "Relation".to_owned(),
-                parameters: source_parameters,
+                parameters: source_parameters.into(),
                 determination: source_determination,
                 methods: Box::new([]),
                 origin: Origin::Source(span),
@@ -23339,7 +25039,7 @@ mod tests {
             public: true,
             spelling: "Relation".to_owned(),
             determination: Some(determination(source_parameters.as_ref())),
-            parameters: source_parameters,
+            parameters: source_parameters.into(),
             methods: Box::new([]),
             origin: Origin::Source(span),
             span,
@@ -23723,7 +25423,7 @@ mod tests {
                         .collect::<Vec<_>>()
                         .into_boxed_slice(),
                 );
-                assert_exact(&wide_without_nominals, WIDTH + 1, 0, 1);
+                assert_exact(&wide_without_nominals, WIDTH + 1, 0, WIDTH);
                 discard_type_iteratively(wide_without_nominals);
             })
             .expect("the nominal-collection worker should spawn")
@@ -23978,12 +25678,18 @@ mod tests {
                     spelling: "A".to_owned(),
                     kind: Kind::Type,
                     origin: Origin::Source(span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([InheritedOwnerParameter {
+                        owner: OwnerId::Interface(id),
+                        slot: 0,
+                        binder: parameter,
+                    }]),
                     id: MethodId::new(id, 0),
                     spelling: format!("{spelling}Method"),
-                    type_parameters: Box::new([]),
+                    type_parameters: Box::new([]).into(),
                     method_binder_authority: None,
                     value_type: Type::Function(
                         Box::new(Type::Variable(parameter)),
@@ -23997,14 +25703,18 @@ mod tests {
                 span,
             }
         };
-        summary.interfaces.push(make_interface(module, 0, "First"));
-        summary.interfaces.push(make_interface(module, 1, "Second"));
+        summary
+            .interfaces
+            .push(make_interface(module, 0, "First").into());
+        summary
+            .interfaces
+            .push(make_interface(module, 1, "Second").into());
         for (position, interface) in summary.interfaces.iter().enumerate() {
             summary.interface_positions.insert(interface.id, position);
         }
         summary
             .hidden_interfaces
-            .push(make_interface(hidden_module, 0, "Hidden"));
+            .push(make_interface(hidden_module, 0, "Hidden").into());
 
         for (spelling, interface) in [
             ("First", summary.interfaces[0].id),
@@ -24202,55 +25912,68 @@ mod tests {
             )),
         );
         let mut summary = ExportSummary::empty(module);
-        summary.interfaces.push(CheckedInterfaceFact {
-            id: interface,
-            spelling: "Functor".to_owned(),
-            parameters: Box::new([ResolvedTypeVariable {
-                id: interface_parameter,
-                spelling: "F".to_owned(),
-                kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+        summary.interfaces.push(
+            CheckedInterfaceFact {
+                id: interface,
+                spelling: "Functor".to_owned(),
+                parameters: Box::new([ResolvedTypeVariable {
+                    id: interface_parameter,
+                    spelling: "F".to_owned(),
+                    kind: Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    origin: Origin::Source(interface_span),
+                }])
+                .into(),
+                determination: None,
+                methods: Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([InheritedOwnerParameter {
+                        owner: OwnerId::Interface(interface),
+                        slot: 0,
+                        binder: interface_parameter,
+                    }]),
+                    id: method,
+                    spelling: "map".to_owned(),
+                    type_parameters: Box::new([
+                        ResolvedTypeVariable {
+                            id: first,
+                            spelling: "A".to_owned(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(first_span),
+                        },
+                        ResolvedTypeVariable {
+                            id: second,
+                            spelling: "B".to_owned(),
+                            kind: Kind::Type,
+                            origin: Origin::Source(second_span),
+                        },
+                    ])
+                    .into(),
+                    method_binder_authority: Some(
+                        Box::new([
+                            ResolvedTypeVariable {
+                                id: first,
+                                spelling: "A".to_owned(),
+                                kind: Kind::Type,
+                                origin: Origin::Source(first_span),
+                            },
+                            ResolvedTypeVariable {
+                                id: second,
+                                spelling: "B".to_owned(),
+                                kind: Kind::Type,
+                                origin: Origin::Source(second_span),
+                            },
+                        ])
+                        .into(),
+                    ),
+                    value_type: method_type,
+                    origin: Origin::Source(method_span),
+                    annotation_span: method_span,
+                    span: method_span,
+                }]),
                 origin: Origin::Source(interface_span),
-            }]),
-            determination: None,
-            methods: Box::new([CheckedInterfaceMethodFact {
-                id: method,
-                spelling: "map".to_owned(),
-                type_parameters: Box::new([
-                    ResolvedTypeVariable {
-                        id: first,
-                        spelling: "A".to_owned(),
-                        kind: Kind::Type,
-                        origin: Origin::Source(first_span),
-                    },
-                    ResolvedTypeVariable {
-                        id: second,
-                        spelling: "B".to_owned(),
-                        kind: Kind::Type,
-                        origin: Origin::Source(second_span),
-                    },
-                ]),
-                method_binder_authority: Some(Box::new([
-                    ResolvedTypeVariable {
-                        id: first,
-                        spelling: "A".to_owned(),
-                        kind: Kind::Type,
-                        origin: Origin::Source(first_span),
-                    },
-                    ResolvedTypeVariable {
-                        id: second,
-                        spelling: "B".to_owned(),
-                        kind: Kind::Type,
-                        origin: Origin::Source(second_span),
-                    },
-                ])),
-                value_type: method_type,
-                origin: Origin::Source(method_span),
-                annotation_span: method_span,
-                span: method_span,
-            }]),
-            origin: Origin::Source(interface_span),
-            span: interface_span,
-        });
+                span: interface_span,
+            }
+            .into(),
+        );
         summary.interface_positions.insert(interface, 0);
         summary.interface_name_order.push("Functor".to_owned());
         summary
@@ -24264,7 +25987,7 @@ mod tests {
             Some(PolymorphicMethodSummaryMutationForTest::Missing) => {
                 let mut parameters = std::mem::take(&mut method.type_parameters).into_vec();
                 parameters.remove(0);
-                method.type_parameters = parameters.into_boxed_slice();
+                method.type_parameters = parameters.into_boxed_slice().into();
             }
             Some(PolymorphicMethodSummaryMutationForTest::Extra) => {
                 let mut parameters = std::mem::take(&mut method.type_parameters).into_vec();
@@ -24274,30 +25997,31 @@ mod tests {
                     kind: Kind::Type,
                     origin: Origin::Source(second_span),
                 });
-                method.type_parameters = parameters.into_boxed_slice();
+                method.type_parameters = parameters.into_boxed_slice().into();
             }
             Some(PolymorphicMethodSummaryMutationForTest::Duplicate) => {
-                method.type_parameters[1].id = method.type_parameters[0].id;
+                let first = method.type_parameters[0].id;
+                method.type_parameters.make_mut_for_test()[1].id = first;
             }
             Some(PolymorphicMethodSummaryMutationForTest::Reordered) => {
-                method.type_parameters.swap(0, 1);
+                method.type_parameters.make_mut_for_test().swap(0, 1);
             }
             Some(PolymorphicMethodSummaryMutationForTest::WrongKind) => {
-                method.type_parameters[0].kind =
+                method.type_parameters.make_mut_for_test()[0].kind =
                     Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
             }
             Some(PolymorphicMethodSummaryMutationForTest::WrongOwner) => {
-                method.type_parameters[0].id =
+                method.type_parameters.make_mut_for_test()[0].id =
                     TypeVariableId::resolved(ModuleId::new(u32::MAX - 1), 1);
             }
             Some(PolymorphicMethodSummaryMutationForTest::WrongOrigin) => {
-                method.type_parameters[0].origin = Origin::Generated {
+                method.type_parameters.make_mut_for_test()[0].origin = Origin::Generated {
                     cause: Box::new(Origin::Source(first_span)),
                     reason: crate::source::GeneratedReason::ConstantFolding,
                 };
             }
             Some(PolymorphicMethodSummaryMutationForTest::WrongSpelling) => {
-                method.type_parameters[0].spelling = "Forged".to_owned();
+                method.type_parameters.make_mut_for_test()[0].spelling = "Forged".to_owned();
             }
             Some(PolymorphicMethodSummaryMutationForTest::FreeBinder) => {
                 drop(std::mem::replace(
@@ -24387,7 +26111,8 @@ mod tests {
                 kind: Kind::Type,
                 origin: Origin::Source(span),
             }]
-            .into_boxed_slice(),
+            .into_boxed_slice()
+            .into(),
             determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
@@ -24409,7 +26134,8 @@ mod tests {
                     spelling: "A".to_owned(),
                     kind: Kind::Type,
                     origin: Origin::Source(span),
-                }]),
+                }])
+                .into(),
                 has_explicit_type_parameters: true,
                 origin: Origin::Source(span),
                 span,
@@ -24424,9 +26150,14 @@ mod tests {
         let checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameters: Box::new([resolved_interface.parameters[0].clone()]),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]).into(),
             determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
+                inherited_parameters: Box::new([InheritedOwnerParameter {
+                    owner: OwnerId::Interface(interface),
+                    slot: 0,
+                    binder: interface_parameter,
+                }]),
                 id: method,
                 spelling: "keep".to_owned(),
                 type_parameters: Box::new([ResolvedTypeVariable {
@@ -24434,13 +26165,17 @@ mod tests {
                     spelling: "Forged".to_owned(),
                     kind: Kind::Type,
                     origin: forged_origin,
-                }]),
-                method_binder_authority: Some(Box::new([ResolvedTypeVariable {
-                    id: canonical,
-                    spelling: "A".to_owned(),
-                    kind: Kind::Type,
-                    origin: Origin::Source(span),
-                }])),
+                }])
+                .into(),
+                method_binder_authority: Some(
+                    Box::new([ResolvedTypeVariable {
+                        id: canonical,
+                        spelling: "A".to_owned(),
+                        kind: Kind::Type,
+                        origin: Origin::Source(span),
+                    }])
+                    .into(),
+                ),
                 value_type: Type::Function(
                     Box::new(Type::Variable(forged)),
                     Box::new(Type::Variable(interface_parameter)),
@@ -24451,7 +26186,8 @@ mod tests {
             }]),
             origin: Origin::Source(span),
             span,
-        }];
+        }]
+        .map(SharedCheckedInterfaceFact::from);
         let mut export_candidate = ResolvedExportCandidate::default();
         export_candidate
             .try_insert_interface(
@@ -24524,7 +26260,8 @@ mod tests {
                 kind: Kind::Type,
                 origin: Origin::Source(span),
             }]
-            .into_boxed_slice(),
+            .into_boxed_slice()
+            .into(),
             determination: None,
             methods: Box::new([ResolvedInterfaceMethod {
                 id: method,
@@ -24541,7 +26278,7 @@ mod tests {
                     origin: Origin::Source(span),
                     span,
                 },
-                type_parameters: Box::new([]),
+                type_parameters: Box::new([]).into(),
                 has_explicit_type_parameters: false,
                 origin: Origin::Source(span),
                 span,
@@ -24556,12 +26293,17 @@ mod tests {
         let mut checked = [CheckedInterfaceFact {
             id: interface,
             spelling: "Boxed".to_owned(),
-            parameters: Box::new([resolved_interface.parameters[0].clone()]),
+            parameters: Box::new([resolved_interface.parameters[0].clone()]).into(),
             determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
+                inherited_parameters: Box::new([InheritedOwnerParameter {
+                    owner: OwnerId::Interface(interface),
+                    slot: 0,
+                    binder: interface_parameter,
+                }]),
                 id: method,
                 spelling: "keep".to_owned(),
-                type_parameters: Box::new([]),
+                type_parameters: Box::new([]).into(),
                 method_binder_authority: None,
                 value_type: Type::Function(
                     Box::new(Type::Variable(interface_parameter)),
@@ -24573,7 +26315,8 @@ mod tests {
             }]),
             origin: Origin::Source(span),
             span,
-        }];
+        }]
+        .map(SharedCheckedInterfaceFact::from);
         let mut export_candidate = ResolvedExportCandidate::default();
         export_candidate
             .try_insert_interface(
@@ -24610,7 +26353,7 @@ mod tests {
             span,
         });
 
-        let assert_rejected = |checked: &[CheckedInterfaceFact]| {
+        let assert_rejected = |checked: &[SharedCheckedInterfaceFact]| {
             assert_eq!(
                 ExportSummary::freeze(
                     &resolved,
@@ -24644,15 +26387,19 @@ mod tests {
 
     #[test]
     fn method_binder_authority_retention_has_exact_independent_ledgers() {
-        // One embedded private payload is graph storage. Each of the two binder copies owns
-        // one record (including inline span), one spelling byte and one `Type` Kind node in TypeWork.
+        // One private graph edge retains the immutable original two-binder
+        // payload. TypeWork admits one retained Arc, independently of the
+        // constraint ledger's one embedded authority edge.
         const EXACT_CONSTRAINT_WORK: usize = 1;
-        const EXACT_TYPE_WORK: usize = 2 * (2 + 1);
+        const EXACT_TYPE_WORK: usize = 1;
         let summary = polymorphic_method_summary(None);
 
         assert_eq!(
             clone_method_binder_authority_payload(
-                summary.interfaces[0].methods[0].authoritative_type_parameters(),
+                summary.interfaces[0].methods[0]
+                    .method_binder_authority
+                    .as_ref()
+                    .unwrap(),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK),
                 &mut crate::interface::InterfaceConstraintBudget::with_limit(
                     EXACT_CONSTRAINT_WORK - 1,
@@ -24662,7 +26409,10 @@ mod tests {
         );
         assert_eq!(
             clone_method_binder_authority_payload(
-                summary.interfaces[0].methods[0].authoritative_type_parameters(),
+                summary.interfaces[0].methods[0]
+                    .method_binder_authority
+                    .as_ref()
+                    .unwrap(),
                 &mut TypeWorkBudget::with_limit(EXACT_TYPE_WORK - 1),
                 &mut crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK,),
             ),
@@ -24672,7 +26422,10 @@ mod tests {
         let mut exact_constraint =
             crate::interface::InterfaceConstraintBudget::with_limit(EXACT_CONSTRAINT_WORK);
         let authority = clone_method_binder_authority_payload(
-            summary.interfaces[0].methods[0].authoritative_type_parameters(),
+            summary.interfaces[0].methods[0]
+                .method_binder_authority
+                .as_ref()
+                .unwrap(),
             &mut exact_type,
             &mut exact_constraint,
         )
@@ -24713,7 +26466,7 @@ mod tests {
 
         let mut monomorphic =
             interface_authentication_summary(InterfaceAuthenticationMutationForTest::None);
-        monomorphic.interfaces[0].methods[0].method_binder_authority = Some(Box::new([]));
+        monomorphic.interfaces[0].methods[0].method_binder_authority = Some(Box::new([]).into());
         assert_eq!(
             authenticate_method_binder_authority(
                 &monomorphic.interfaces[0].methods[0],
@@ -24737,15 +26490,19 @@ mod tests {
                     .span(ByteRange::new(0, 1).expect("the authority range should be ordered"))
                     .expect("the authority span should fit");
                 drop(CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([]),
                     id: MethodId::new(InterfaceId::new(module, 0), 0),
                     spelling: "method".to_owned(),
-                    type_parameters: Box::new([]),
-                    method_binder_authority: Some(Box::new([ResolvedTypeVariable {
-                        id: TypeVariableId::resolved(module, 0),
-                        spelling: "A".to_owned(),
-                        kind: Kind::Type,
-                        origin: generated_origin(&source, DEPTH),
-                    }])),
+                    type_parameters: Box::new([]).into(),
+                    method_binder_authority: Some(
+                        Box::new([ResolvedTypeVariable {
+                            id: TypeVariableId::resolved(module, 0),
+                            spelling: "A".to_owned(),
+                            kind: Kind::Type,
+                            origin: generated_origin(&source, DEPTH),
+                        }])
+                        .into(),
+                    ),
                     value_type: Type::Unit,
                     origin: Origin::Source(span),
                     annotation_span: span,
@@ -24762,7 +26519,7 @@ mod tests {
         // The interface carrier costs 15 cells. The global adds one expression,
         // canonical-global, and term-binder cell; six closed-type collection
         // cells; two first-group index cells; and two Unit comparison cells.
-        const EXACT_CONSTRAINT_WORK: usize = 15 + 3 + 6 + 2 + 2;
+        const EXACT_CONSTRAINT_WORK: usize = 15 + 3 + 6 + 2 + 2 + 2;
         let summary = interface_summary_with_duplicate_global_requirements();
 
         let mut measured = crate::interface::InterfaceConstraintBudget::default();
@@ -24837,9 +26594,18 @@ mod tests {
         // implementation-count scan, one G+M term-binder slot, one local
         // authorization method cell, two exact ground-head cells, ten fused
         // interface-method substitution cells, and two implementation-index
-        // cells.
-        const EXACT: usize = 35;
-        const TYPE_WORK: usize = 58;
+        // cells. Complete owner-argument tags add four constraint cells;
+        // original owner-kind and inherited-role checks remain independently
+        // charged. Canonical kind records, borrowed permission IDs and the
+        // intrinsic function result avoid duplicate storage and a root walk.
+        const EXACT: usize = 35 + 4;
+        const TYPE_WORK: usize = 52;
+        // The last ordinary value-kind comparison costs one Type cell;
+        // the final nonoverlap index then admits two Constraint cells
+        // atomically. Constraint refusal therefore follows all Type work,
+        // while Type refusal leaves the two index cells unadmitted.
+        const CONSTRAINT_REFUSAL_TYPE_PREFIX: usize = TYPE_WORK;
+        const TYPE_REFUSAL_CONSTRAINT_PREFIX: usize = EXACT - 2;
         let summary = interface_summary_with_local_implementation(false);
         let mut short_type = TypeWorkBudget::with_limit(TYPE_WORK);
         let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT - 1);
@@ -24848,7 +26614,7 @@ mod tests {
             Err(ResolvedBuildFailure::ConstraintResource),
         );
         assert_eq!(short.used(), EXACT - 2);
-        assert_eq!(short_type.used(), TYPE_WORK);
+        assert_eq!(short_type.used(), CONSTRAINT_REFUSAL_TYPE_PREFIX);
 
         let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
         let mut type_short_constraint =
@@ -24860,7 +26626,7 @@ mod tests {
         assert_eq!(type_short.used(), TYPE_WORK - 1);
         assert_eq!(
             type_short_constraint.used(),
-            33,
+            TYPE_REFUSAL_CONSTRAINT_PREFIX,
             "Type failure follows every carrier comparison and precedes final index retention",
         );
         for _ in 0..2 {
@@ -25274,6 +27040,8 @@ mod tests {
                 abstract_nominal_kinds,
                 provider_contracts,
                 foreign_modules,
+                owner_definitions,
+                owner_definition_positions,
             } = registry;
             let _ = (
                 lexical_nominals,
@@ -25306,6 +27074,8 @@ mod tests {
                 abstract_nominal_kinds,
                 provider_contracts,
                 foreign_modules,
+                owner_definitions,
+                owner_definition_positions,
             );
         }
 
@@ -25386,6 +27156,11 @@ mod tests {
             origin: Origin::Source(span),
             span,
         }]);
+        let checked_effect = clone_resolved_effect_with_budget(
+            &registry.effects()[0],
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .expect("the defining effect should fit");
         vec![CheckedModule {
             providers: None,
             module,
@@ -25393,7 +27168,7 @@ mod tests {
             direct_dependencies: Box::new([]),
             declaration_order: Box::new([]),
             interfaces: Box::new([]),
-            effects: Box::new([]),
+            effects: Box::new([checked_effect]),
             imported_effects: Box::new([]),
             implementations: Box::new([]),
             definitions: Box::new([]),
@@ -25419,7 +27194,10 @@ mod tests {
         // The fixed eight cells retain the family-id slice, both nominal
         // staging/destination rows and positions, both constructor
         // carrier/position cells, and the canonical-variable staging slot.
-        const TYPE_WORK: usize = 6 * DEPTH + 19 + 2;
+        // Ten additional cells authenticate and retain the zero-argument
+        // effect original reference, defining record, signature and indexes.
+        const TYPE_WORK: usize = 6 * DEPTH + 19 + 2 + 10;
+        const TYPE_PREFLIGHT: usize = 4;
         std::thread::Builder::new()
             .name("deep-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -25442,11 +27220,12 @@ mod tests {
                     CONSTRAINT_WORK - 1,
                     "the one-short Kind traversal charges every completed visit",
                 );
-                assert_eq!(untouched_type.used(), 1);
+                assert_eq!(untouched_type.used(), TYPE_PREFLIGHT);
 
                 let mut exact_constraint =
                     crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-                let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 2);
+                let mut type_short =
+                    TypeWorkBudget::with_limit(TYPE_PREFLIGHT + 6 * DEPTH + 19 - 1);
                 assert_eq!(
                     ResolvedRegistry::combine_checked(
                         &modules,
@@ -25456,7 +27235,7 @@ mod tests {
                     Err(ResolvedBuildFailure::TypeResource),
                 );
                 assert_eq!(exact_constraint.used(), CONSTRAINT_WORK);
-                assert_eq!(type_short.used(), 1);
+                assert_eq!(type_short.used(), TYPE_PREFLIGHT);
 
                 for _ in 0..2 {
                     let mut constraint =
@@ -25570,6 +27349,17 @@ mod tests {
         .with_type_parameters(vec![(nominal, nominal_parameters)])
         .with_additional_type_variables(additional);
 
+        let mut registry = registry;
+        for (index, parameter) in interface_parameters.iter().enumerate() {
+            registry
+                .retain_owner_signature(
+                    OwnerId::Interface(InterfaceId::new(module, u32::try_from(index).unwrap())),
+                    None,
+                    std::slice::from_ref(parameter),
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .expect("the fixture retains each independently defined interface owner");
+        }
         let interface_facts = interface_parameters
             .into_iter()
             .enumerate()
@@ -25581,9 +27371,14 @@ mod tests {
                     spelling: format!("Interface{index}"),
                     determination: None,
                     methods: vec![CheckedInterfaceMethodFact {
+                        inherited_parameters: Box::new([InheritedOwnerParameter {
+                            owner: OwnerId::Interface(id),
+                            slot: 0,
+                            binder: parameter.id,
+                        }]),
                         id: method,
                         spelling: "method".to_owned(),
-                        type_parameters: Box::new([]),
+                        type_parameters: Box::new([]).into(),
                         method_binder_authority: None,
                         value_type: Type::Function(
                             Box::new(Type::Variable(parameter.id)),
@@ -25594,7 +27389,7 @@ mod tests {
                         span,
                     }]
                     .into_boxed_slice(),
-                    parameters: Box::new([parameter]),
+                    parameters: Box::new([parameter]).into(),
                     origin: Origin::Source(span),
                     span,
                 }
@@ -25689,7 +27484,11 @@ mod tests {
             schemes: vec![global_scheme],
             checked_interfaces: Box::new([]),
             checked_implementations: Box::new([]),
-            interface_facts: interface_facts.into_boxed_slice(),
+            interface_facts: interface_facts
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
             implementation_facts: vec![implementation].into_boxed_slice(),
             exports: ExportSummary::empty(module),
             span,
@@ -25704,13 +27503,16 @@ mod tests {
         // constructor, every owner slot and canonical identity, and the
         // nominal/global/implementation mirrors. The interface carrier mirror
         // belongs to the consuming linked-evidence validator. TypeWork owns
-        // only the canonical records plus the scalar global row. The fixed
+        // the canonical records, complete interface originals/signatures,
+        // and the scalar global row. The fixed
         // final cell reserves the non-empty global-owner uniqueness index.
         const CONSTRAINT_WORK: usize = 13 * OWNER_COUNT + 12;
-        // Five cells per owner retain the canonical-variable staging rows and
-        // the scalar global-parameter identities. Nine fixed cells retain the
-        // family, nominal, constructor, global-row, and row-index storage.
-        const TYPE_WORK: usize = 15 * OWNER_COUNT + 9 + 2;
+        // Existing canonical/global retention costs fifteen cells per owner.
+        // Source owner preflight costs seven, and independently retained
+        // shared interface originals, signatures, indexes and authentication
+        // cost twelve more. Nine fixed storage cells and two module cells remain.
+        const TYPE_WORK: usize = 34 * OWNER_COUNT + 9 + 2;
+        const TYPE_PREFLIGHT: usize = 7 * OWNER_COUNT + 1;
         std::thread::Builder::new()
             .name("wide-combined-registry".to_owned())
             .stack_size(256 * 1024)
@@ -25728,17 +27530,18 @@ mod tests {
                     Err(ResolvedBuildFailure::ConstraintResource),
                 );
                 assert_eq!(constraint_short.used(), CONSTRAINT_WORK - 1);
-                assert_eq!(untouched_type.used(), 1);
+                assert_eq!(untouched_type.used(), TYPE_PREFLIGHT);
 
                 let mut constraint =
                     crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-                let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 2);
+                let mut type_short =
+                    TypeWorkBudget::with_limit(TYPE_PREFLIGHT + 15 * OWNER_COUNT + 9 - 1);
                 assert_eq!(
                     ResolvedRegistry::combine_checked(&modules, &mut type_short, &mut constraint,),
                     Err(ResolvedBuildFailure::TypeResource),
                 );
                 assert_eq!(constraint.used(), CONSTRAINT_WORK);
-                assert_eq!(type_short.used(), 1);
+                assert_eq!(type_short.used(), TYPE_PREFLIGHT);
 
                 for _ in 0..2 {
                     let mut constraint =
@@ -25794,11 +27597,12 @@ mod tests {
     #[test]
     fn combine_checked_prices_the_canonical_interface_kind_before_retention() {
         const CONSTRAINT_WORK: usize = 25;
-        // The one-owner fixture normally costs 24 TypeWork cells. Replacing
-        // the canonical interface Kind `Type` with `Type -> Type` adds two
-        // retained Kind nodes even though the independently retained interface
-        // carrier remains shallow for evidence validation to reject later.
-        const TYPE_WORK: usize = 26 + 2;
+        // The one-owner fixture costs 45 TypeWork cells. A coherent
+        // `Type -> Type` binder adds two preflight Kind visits, two canonical
+        // Kind copies and two independent signature Kind visits. The defining
+        // original records are shared while their authentication remains full.
+        const TYPE_WORK: usize = 34 + 11 + 6;
+        const TYPE_PREFLIGHT: usize = 10;
         let mut modules = wide_combined_registry_fixture(4);
         let interface_parameter = modules[0].interface_facts[0].parameters[0].id;
         Arc::get_mut(&mut modules[0].registry)
@@ -25807,10 +27611,18 @@ mod tests {
             .get_mut(&interface_parameter)
             .expect("the canonical interface binder should exist")
             .kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        Arc::get_mut(&mut modules[0].registry)
+            .unwrap()
+            .owner_definitions[0]
+            .parameters
+            .make_mut_for_test()[0]
+            .kind = Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
+        modules[0].interface_facts[0].parameters.make_mut_for_test()[0].kind =
+            Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type));
 
         let mut constraint =
             crate::interface::InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-        let mut one_short = TypeWorkBudget::with_limit(TYPE_WORK - 2);
+        let mut one_short = TypeWorkBudget::with_limit(TYPE_PREFLIGHT + 24 + 2 - 1);
         assert_eq!(
             ResolvedRegistry::combine_checked(&modules, &mut one_short, &mut constraint),
             Err(ResolvedBuildFailure::TypeResource),
@@ -25818,7 +27630,7 @@ mod tests {
         assert_eq!(constraint.used(), CONSTRAINT_WORK);
         assert_eq!(
             one_short.used(),
-            1,
+            TYPE_PREFLIGHT,
             "the aggregate TypeWork charge is atomic"
         );
 
@@ -26392,45 +28204,49 @@ mod tests {
             ImplementationMirrorKind,
         }
 
+        // Defining-owner authentication precedes the independent registry
+        // ConstraintWork pass. One shallow interface costs seven TypeWork
+        // cells beyond the module visit; two cost fourteen. Missing canonical
+        // or mismatched owner identities pin their earlier failure prefixes.
         let mutations = [
-            (Mutation::ConstructorOwner, 13, 0),
-            (Mutation::ConstructorIdentityOwner, 13, 0),
-            (Mutation::FamilyOrdinal, 13, 0),
+            (Mutation::ConstructorOwner, 13, 7),
+            (Mutation::ConstructorIdentityOwner, 13, 7),
+            (Mutation::FamilyOrdinal, 13, 7),
             (Mutation::FamilyOrder, 13, 0),
-            (Mutation::NominalPosition, 13, 0),
-            (Mutation::NominalPositionExtra, 13, 0),
-            (Mutation::ConstructorPosition, 13, 0),
-            (Mutation::ConstructorPositionExtra, 13, 0),
+            (Mutation::NominalPosition, 13, 7),
+            (Mutation::NominalPositionExtra, 13, 7),
+            (Mutation::ConstructorPosition, 13, 7),
+            (Mutation::ConstructorPositionExtra, 13, 7),
             (Mutation::MissingEmptyParameterRow, 9, 0),
-            (Mutation::ExtraParameterRow, 13, 0),
-            (Mutation::AbstractName, 0, 0),
-            (Mutation::AbstractKind, 0, 0),
-            (Mutation::CanonicalValueIdentity, 17, 0),
-            (Mutation::MissingNominalCanonical, 0, 0),
-            (Mutation::MissingInterfaceCanonical, 0, 0),
-            (Mutation::MissingGlobalCanonical, 0, 0),
-            (Mutation::MissingImplementationCanonical, 0, 0),
-            (Mutation::ForeignZeroParameterGlobal, 12, 0),
-            (Mutation::ForeignZeroHeadImplementation, 13, 0),
-            (Mutation::CanonicalMirrorSpelling, 18, 0),
-            (Mutation::CanonicalMirrorOrigin, 19, 0),
-            (Mutation::CanonicalMirrorKind, 20, 0),
-            (Mutation::NominalMirrorSpelling, 18, 0),
-            (Mutation::NominalMirrorOrigin, 19, 0),
-            (Mutation::NominalMirrorKind, 20, 0),
-            (Mutation::NominalParameterOwner, 26, 0),
-            (Mutation::NominalParameterOrder, 26, 0),
-            (Mutation::InterfaceParameterOwner, 20, 0),
-            (Mutation::GlobalParameterOwner, 31, 0),
-            (Mutation::DuplicateGlobalParameterIdentity, 31, 0),
-            (Mutation::GeneratedGlobalParameterIdentity, 21, 0),
-            (Mutation::NominalGlobalParameterIdentity, 21, 0),
-            (Mutation::GlobalMirrorKind, 22, 0),
-            (Mutation::ImplementationParameterOwner, 36, 0),
-            (Mutation::ImplementationParameterOrder, 36, 0),
-            (Mutation::ImplementationMirrorSpelling, 23, 0),
-            (Mutation::ImplementationMirrorOrigin, 24, 0),
-            (Mutation::ImplementationMirrorKind, 25, 0),
+            (Mutation::ExtraParameterRow, 13, 7),
+            (Mutation::AbstractName, 0, 7),
+            (Mutation::AbstractKind, 0, 7),
+            (Mutation::CanonicalValueIdentity, 17, 7),
+            (Mutation::MissingNominalCanonical, 0, 7),
+            (Mutation::MissingInterfaceCanonical, 0, 4),
+            (Mutation::MissingGlobalCanonical, 0, 7),
+            (Mutation::MissingImplementationCanonical, 0, 7),
+            (Mutation::ForeignZeroParameterGlobal, 12, 7),
+            (Mutation::ForeignZeroHeadImplementation, 13, 7),
+            (Mutation::CanonicalMirrorSpelling, 18, 7),
+            (Mutation::CanonicalMirrorOrigin, 19, 7),
+            (Mutation::CanonicalMirrorKind, 20, 7),
+            (Mutation::NominalMirrorSpelling, 18, 7),
+            (Mutation::NominalMirrorOrigin, 19, 7),
+            (Mutation::NominalMirrorKind, 20, 7),
+            (Mutation::NominalParameterOwner, 26, 14),
+            (Mutation::NominalParameterOrder, 26, 14),
+            (Mutation::InterfaceParameterOwner, 0, 4),
+            (Mutation::GlobalParameterOwner, 31, 14),
+            (Mutation::DuplicateGlobalParameterIdentity, 31, 14),
+            (Mutation::GeneratedGlobalParameterIdentity, 21, 7),
+            (Mutation::NominalGlobalParameterIdentity, 21, 7),
+            (Mutation::GlobalMirrorKind, 22, 7),
+            (Mutation::ImplementationParameterOwner, 36, 14),
+            (Mutation::ImplementationParameterOrder, 36, 14),
+            (Mutation::ImplementationMirrorSpelling, 23, 7),
+            (Mutation::ImplementationMirrorOrigin, 24, 7),
+            (Mutation::ImplementationMirrorKind, 25, 7),
         ];
         for (mutation, expected_constraint_work, expected_type_work) in mutations {
             let mut modules = match mutation {
@@ -26532,21 +28348,21 @@ mod tests {
                         .type_variables
                         .remove(&id)
                         .expect("the nominal canonical binder should exist");
-                    discard_resolved_type_variable(removed);
+                    drop(removed);
                 }
                 Mutation::MissingInterfaceCanonical => {
                     let removed = registry
                         .type_variables
                         .remove(&interface_parameter.expect("the fixture has an interface binder"))
                         .expect("the interface canonical binder should exist");
-                    discard_resolved_type_variable(removed);
+                    drop(removed);
                 }
                 Mutation::MissingGlobalCanonical => {
                     let removed = registry
                         .type_variables
                         .remove(&global_parameter.expect("the fixture has a global binder"))
                         .expect("the global canonical binder should exist");
-                    discard_resolved_type_variable(removed);
+                    drop(removed);
                 }
                 Mutation::MissingImplementationCanonical => {
                     let removed = registry
@@ -26556,7 +28372,7 @@ mod tests {
                                 .expect("the fixture has an implementation binder"),
                         )
                         .expect("the implementation canonical binder should exist");
-                    discard_resolved_type_variable(removed);
+                    drop(removed);
                 }
                 Mutation::ForeignZeroParameterGlobal => {
                     modules[0].schemes[0].binder = BinderId::resolved(ModuleId::new(99), 0);
@@ -26623,7 +28439,7 @@ mod tests {
                     parameters[1].id = parameters[0].id;
                 }
                 Mutation::InterfaceParameterOwner => {
-                    modules[0].interface_facts[0].parameters[0].id =
+                    modules[0].interface_facts[0].parameters.make_mut_for_test()[0].id =
                         TypeVariableId::resolved(ModuleId::new(99), 0);
                 }
                 Mutation::GlobalParameterOwner => {
@@ -26719,7 +28535,11 @@ mod tests {
                     Err(ResolvedBuildFailure::ConstraintResource),
                     "{mutation:?}",
                 );
-                assert_eq!(type_work.used(), modules.len(), "{mutation:?}");
+                assert_eq!(
+                    type_work.used(),
+                    expected_type_work + modules.len(),
+                    "{mutation:?}"
+                );
             }
         }
     }
@@ -26876,7 +28696,10 @@ mod tests {
     fn summary_carrier_comparisons_are_constraint_only_exact_and_stack_safe() {
         const DEPTH: usize = 32_768;
         const MIRROR_WORK: usize = 2 * DEPTH + 2;
-        const SUBSTITUTION_WORK: usize = 4 * DEPTH + 4;
+        // Simultaneous Type/row substitution retains both replacement indexes
+        // and the tagged argument, then traverses/copies the complete type and
+        // independently compares the instantiated type.
+        const SUBSTITUTION_WORK: usize = 6 * DEPTH + 7;
         const METHOD_REQUIREMENT_WORK: usize = 5 * DEPTH + 4;
 
         std::thread::Builder::new()
@@ -26928,15 +28751,15 @@ mod tests {
                     }
                     leaf
                 };
-                let expected = deep_type(Type::Variable(parameter_id));
-                let actual = deep_type(Type::Unit);
+                let expected = IterativeTypeOwner::new(deep_type(Type::Variable(parameter_id)));
+                let actual = IterativeTypeOwner::new(deep_type(Type::Unit));
                 let mut substitution_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(SUBSTITUTION_WORK - 1);
                 assert_eq!(
                     same_summary_type_after_substitutions(
                         &expected,
                         &parameters,
-                        &[Type::Unit],
+                        &[crate::types::KindedArgument::TypeArg(Type::Unit)],
                         &actual,
                         &mut substitution_short,
                     ),
@@ -26949,15 +28772,15 @@ mod tests {
                     same_summary_type_after_substitutions(
                         &expected,
                         &parameters,
-                        &[Type::Unit],
+                        &[crate::types::KindedArgument::TypeArg(Type::Unit)],
                         &actual,
                         &mut substitution_exact,
                     ),
                     Ok(true),
                 );
                 assert_eq!(substitution_exact.used(), SUBSTITUTION_WORK);
-                discard_type_iteratively(expected);
-                discard_type_iteratively(actual);
+                drop(expected);
+                drop(actual);
                 drop(scheme);
                 drop(parameters);
 
@@ -27028,7 +28851,7 @@ mod tests {
         // Each distinct bare prerequisite variable owns one pending-root
         // retention, one Type visit, one variable-set storage cell, and one
         // canonical owner-index lookup: WIDTH * (1 + 1 + 1 + 1).
-        const EXACT_WORK: usize = 4 * WIDTH;
+        const EXACT_WORK: usize = (4 + 1) * WIDTH;
 
         std::thread::Builder::new()
             .name("wide-implementation-prerequisite-binders".to_owned())
@@ -27076,20 +28899,20 @@ mod tests {
                     origin: Origin::Source(span),
                     span,
                 };
-                let canonical_variables = fact
-                    .head_parameters
-                    .iter()
-                    .map(|parameter| {
-                        (
+                let mut canonical_variables = KindEnvironments::new();
+                let mut setup_work = TypeWorkBudget::with_limit(WIDTH);
+                for parameter in &fact.head_parameters {
+                    canonical_variables
+                        .insert_summary_declared(
                             parameter.id,
-                            (
-                                &parameter.kind,
-                                parameter.origin.primary_span(),
-                                SummaryBinderOwner::Implementation(implementation),
-                            ),
+                            &parameter.kind,
+                            parameter.origin.primary_span(),
+                            SummaryBinderOwner::Implementation(implementation),
+                            &mut setup_work,
                         )
-                    })
-                    .collect::<HashMap<_, _>>();
+                        .expect("the canonical implementation binder should be admitted");
+                }
+                assert_eq!(setup_work.used(), WIDTH);
 
                 let mut one_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
@@ -27103,7 +28926,7 @@ mod tests {
                 );
                 assert_eq!(
                     one_short.used(),
-                    3 * WIDTH,
+                    4 * WIDTH,
                     "the final WIDTH-cell owner-lookup batch must fail atomically",
                 );
 
@@ -27121,20 +28944,20 @@ mod tests {
                 }
 
                 let foreign_implementation = ImplId::new(module, 1);
-                let foreign_variables = fact
-                    .head_parameters
-                    .iter()
-                    .map(|parameter| {
-                        (
+                let mut foreign_variables = KindEnvironments::new();
+                let mut foreign_setup_work = TypeWorkBudget::with_limit(WIDTH);
+                for parameter in &fact.head_parameters {
+                    foreign_variables
+                        .insert_summary_declared(
                             parameter.id,
-                            (
-                                &parameter.kind,
-                                parameter.origin.primary_span(),
-                                SummaryBinderOwner::Implementation(foreign_implementation),
-                            ),
+                            &parameter.kind,
+                            parameter.origin.primary_span(),
+                            SummaryBinderOwner::Implementation(foreign_implementation),
+                            &mut foreign_setup_work,
                         )
-                    })
-                    .collect::<HashMap<_, _>>();
+                        .expect("the other implementation binder should be admitted");
+                }
+                assert_eq!(foreign_setup_work.used(), WIDTH);
                 let mut invalid =
                     crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
                 assert_eq!(
@@ -27276,7 +29099,8 @@ mod tests {
                 late_implementations.push(implementation(WIDTH, InterfaceId::new(module, 0)));
                 // The duplicate comparison materializes both complete argument
                 // vectors before structural overlap, adding one visit per side.
-                let overlap_work = 2 * WIDTH + 7;
+                // The complete owner-argument pair adds its tagged root visit.
+                let overlap_work = 2 * WIDTH + 8;
                 let mut overlap_short =
                     crate::interface::InterfaceConstraintBudget::with_limit(overlap_work - 1);
                 assert_eq!(
@@ -27333,7 +29157,7 @@ mod tests {
         // pair, four complete-argument visits, one key-position validation,
         // two selected visits, one key comparison, four key-match visits, and
         // eight independent full-head-match visits.
-        const EXACT_WORK: usize = 2 + 1 + 4 + 1 + 2 + 1 + 4 + 8;
+        const EXACT_WORK: usize = 2 + 1 + 4 + 1 + 2 + 1 + 4 + 8 + 3;
         let mut short = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK - 1);
         assert_eq!(
             authenticate_nonoverlapping_summary_implementations(
@@ -27344,8 +29168,20 @@ mod tests {
             Err(ResolvedBuildFailure::ConstraintResource),
         );
         assert_eq!(short.used(), EXACT_WORK - 1);
-        assert_eq!(facts[0].arguments(), &[Type::Int, Type::Int]);
-        assert_eq!(facts[1].arguments(), &[Type::Int, Type::Bool]);
+        assert_eq!(
+            facts[0].arguments(),
+            &[
+                crate::types::KindedArgument::TypeArg(Type::Int),
+                crate::types::KindedArgument::TypeArg(Type::Int)
+            ]
+        );
+        assert_eq!(
+            facts[1].arguments(),
+            &[
+                crate::types::KindedArgument::TypeArg(Type::Int),
+                crate::types::KindedArgument::TypeArg(Type::Bool)
+            ]
+        );
 
         let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(EXACT_WORK);
         assert_eq!(
@@ -27358,8 +29194,20 @@ mod tests {
         );
         assert_eq!(exact.used(), EXACT_WORK);
         assert_eq!(exact.charge(1), Err(()));
-        assert_eq!(facts[0].arguments(), &[Type::Int, Type::Int]);
-        assert_eq!(facts[1].arguments(), &[Type::Int, Type::Bool]);
+        assert_eq!(
+            facts[0].arguments(),
+            &[
+                crate::types::KindedArgument::TypeArg(Type::Int),
+                crate::types::KindedArgument::TypeArg(Type::Int)
+            ]
+        );
+        assert_eq!(
+            facts[1].arguments(),
+            &[
+                crate::types::KindedArgument::TypeArg(Type::Int),
+                crate::types::KindedArgument::TypeArg(Type::Bool)
+            ]
+        );
     }
 
     #[test]
@@ -27368,7 +29216,7 @@ mod tests {
         // determinant slicing (5), key/dependent variable discovery (6),
         // required-variable membership (1), dependent-variable admission (1),
         // and exact parameter coverage (2).
-        const EXACT_WORK: usize = 20;
+        const EXACT_WORK: usize = 20 + 2;
         let source = SourceFile::new("determined-global-summary.ash", "global")
             .expect("the detached-global source should fit");
         let span = source
@@ -27582,30 +29430,45 @@ mod tests {
         };
 
         let mut summary = ExportSummary::empty(module);
-        summary.interfaces.push(CheckedInterfaceFact::new(
-            interface,
-            "Relation".to_owned(),
-            Box::new([
-                parameter(key_parameter, "Key"),
-                parameter(dependent_parameter, "Value"),
-            ]),
-            Some(DeterminationKey::new(Box::new([0]))),
-            Box::new([CheckedInterfaceMethodFact {
-                id: method,
-                spelling: "relate".to_owned(),
-                type_parameters: Box::new([]),
-                method_binder_authority: None,
-                value_type: Type::Function(
-                    Box::new(Type::Variable(key_parameter)),
-                    Box::new(Type::Int),
-                ),
-                origin: Origin::Source(span),
-                annotation_span: span,
+        summary.interfaces.push(
+            CheckedInterfaceFact::new(
+                interface,
+                "Relation".to_owned(),
+                Box::new([
+                    parameter(key_parameter, "Key"),
+                    parameter(dependent_parameter, "Value"),
+                ]),
+                Some(DeterminationKey::new(Box::new([0]))),
+                Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([
+                        InheritedOwnerParameter {
+                            owner: OwnerId::Interface(interface),
+                            slot: 0,
+                            binder: key_parameter,
+                        },
+                        InheritedOwnerParameter {
+                            owner: OwnerId::Interface(interface),
+                            slot: 1,
+                            binder: dependent_parameter,
+                        },
+                    ]),
+                    id: method,
+                    spelling: "relate".to_owned(),
+                    type_parameters: Box::new([]).into(),
+                    method_binder_authority: None,
+                    value_type: Type::Function(
+                        Box::new(Type::Variable(key_parameter)),
+                        Box::new(Type::Int),
+                    ),
+                    origin: Origin::Source(span),
+                    annotation_span: span,
+                    span,
+                }]),
+                Origin::Source(span),
                 span,
-            }]),
-            Origin::Source(span),
-            span,
-        ));
+            )
+            .into(),
+        );
         summary.interface_positions.insert(interface, 0);
         summary.interface_name_order.push("Relation".to_owned());
         summary
@@ -27710,58 +29573,81 @@ mod tests {
             .into_boxed_slice();
 
         let mut summary = ExportSummary::empty(module);
-        summary.interfaces.push(CheckedInterfaceFact::new(
-            relation,
-            "Relation".to_owned(),
-            Box::new([
-                parameter(key_parameter, "Key", Kind::Type),
-                parameter(
-                    dependent_parameter,
-                    "ValueConstructor",
-                    Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
-                ),
-            ]),
-            Some(DeterminationKey::new(Box::new([0]))),
-            Box::new([CheckedInterfaceMethodFact {
-                id: relation_method,
-                spelling: "relate".to_owned(),
-                type_parameters: Box::new([]),
-                method_binder_authority: None,
-                value_type: Type::Function(
-                    Box::new(Type::Variable(key_parameter)),
-                    Box::new(Type::Application(
-                        Box::new(Type::Variable(dependent_parameter)),
+        summary.interfaces.push(
+            CheckedInterfaceFact::new(
+                relation,
+                "Relation".to_owned(),
+                Box::new([
+                    parameter(key_parameter, "Key", Kind::Type),
+                    parameter(
+                        dependent_parameter,
+                        "ValueConstructor",
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::Type)),
+                    ),
+                ]),
+                Some(DeterminationKey::new(Box::new([0]))),
+                Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([
+                        InheritedOwnerParameter {
+                            owner: OwnerId::Interface(relation),
+                            slot: 0,
+                            binder: key_parameter,
+                        },
+                        InheritedOwnerParameter {
+                            owner: OwnerId::Interface(relation),
+                            slot: 1,
+                            binder: dependent_parameter,
+                        },
+                    ]),
+                    id: relation_method,
+                    spelling: "relate".to_owned(),
+                    type_parameters: Box::new([]).into(),
+                    method_binder_authority: None,
+                    value_type: Type::Function(
                         Box::new(Type::Variable(key_parameter)),
-                    )),
-                ),
-                origin: Origin::Source(span),
-                annotation_span: span,
+                        Box::new(Type::Application(
+                            Box::new(Type::Variable(dependent_parameter)),
+                            Box::new(Type::Variable(key_parameter)),
+                        )),
+                    ),
+                    origin: Origin::Source(span),
+                    annotation_span: span,
+                    span,
+                }]),
+                Origin::Source(span),
                 span,
-            }]),
-            Origin::Source(span),
-            span,
-        ));
-        summary.interfaces.push(CheckedInterfaceFact::new(
-            marker,
-            "Marker".to_owned(),
-            Box::new([parameter(marker_parameter, "Value", Kind::Type)]),
-            None,
-            Box::new([CheckedInterfaceMethodFact {
-                id: marker_method,
-                spelling: "mark".to_owned(),
-                type_parameters: Box::new([]),
-                method_binder_authority: None,
-                value_type: Type::Function(
-                    Box::new(Type::Variable(marker_parameter)),
-                    Box::new(Type::Variable(marker_parameter)),
-                ),
-                origin: Origin::Source(span),
-                annotation_span: span,
+            )
+            .into(),
+        );
+        summary.interfaces.push(
+            CheckedInterfaceFact::new(
+                marker,
+                "Marker".to_owned(),
+                Box::new([parameter(marker_parameter, "Value", Kind::Type)]),
+                None,
+                Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([InheritedOwnerParameter {
+                        owner: OwnerId::Interface(marker),
+                        slot: 0,
+                        binder: marker_parameter,
+                    }]),
+                    id: marker_method,
+                    spelling: "mark".to_owned(),
+                    type_parameters: Box::new([]).into(),
+                    method_binder_authority: None,
+                    value_type: Type::Function(
+                        Box::new(Type::Variable(marker_parameter)),
+                        Box::new(Type::Variable(marker_parameter)),
+                    ),
+                    origin: Origin::Source(span),
+                    annotation_span: span,
+                    span,
+                }]),
+                Origin::Source(span),
                 span,
-            }]),
-            Origin::Source(span),
-            span,
-        ));
+            )
+            .into(),
+        );
         summary.interface_positions.insert(relation, 0);
         summary.interface_positions.insert(marker, 1);
         summary.interface_name_order.push("Relation".to_owned());
@@ -27811,19 +29697,17 @@ mod tests {
 
     #[test]
     fn detached_implementation_kind_preflight_precedes_prerequisite_pair_classification() {
-        // Three parameter records and two interface records cost eight
-        // TypeWork cells. The two interface-method kind checks cost thirty,
-        // the concrete head preflight costs five, and the first malformed
-        // prerequisite costs ten: 8 + 30 + 5 + 10 = 53. Constraint work owns
-        // twelve name/interface-index cells, two implementation-index cells,
-        // one authorization cell, two exact-head cells, and four interface
-        // parameter/determination cells: 12 + 2 + 1 + 2 + 4 = 21. Pair-index
-        // storage or comparison is outside both semantic prefixes.
-        const TYPE_WORK: usize = 53;
-        const CONSTRAINT_WORK: usize = 21;
-        // The constraint one-short stops after the eight environment cells and
-        // the twenty-cell `Relation` method kind check.
-        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 28;
+        // Three canonical kind records and two interface records own five
+        // cells. The two interface-method walks own twenty-two cells, the head
+        // preflight five and the malformed prerequisite ten. Nine original
+        // kind and inherited-role cells remain: 5 + 22 + 5 + 10 + 9 = 51.
+        // Constraint admission owns the original twenty-two-cell semantic
+        // prefix before prerequisite pair storage or comparison.
+        const TYPE_WORK: usize = 5 + 22 + 5 + 10 + 9;
+        const CONSTRAINT_WORK: usize = 21 + 1;
+        // Five environment cells, the fifteen-cell Relation method walk and
+        // three independent original/inherited metadata cells precede refusal.
+        const CONSTRAINT_SHORT_TYPE_PREFIX: usize = 5 + 15 + 3;
         for (label, dependents) in [
             ("complete duplicate", [Type::Bool, Type::Bool]),
             ("determined-key conflict", [Type::Bool, Type::Unit]),
@@ -28021,7 +29905,10 @@ mod tests {
             Origin::Source(span),
             span,
         );
-        let arguments = [Type::Int, Type::Bool];
+        let arguments = [
+            crate::types::KindedArgument::TypeArg(Type::Int),
+            crate::types::KindedArgument::TypeArg(Type::Bool),
+        ];
 
         let mut short = crate::interface::InterfaceConstraintBudget::with_limit(1);
         assert_eq!(
@@ -28034,16 +29921,28 @@ mod tests {
             "the complete two-slot retention charge is atomic before reserve",
         );
         assert!(interface.determination().is_none());
-        assert_eq!(arguments, [Type::Int, Type::Bool]);
+        assert_eq!(
+            arguments,
+            [Type::Int, Type::Bool].map(crate::types::KindedArgument::TypeArg)
+        );
 
         for _ in 0..2 {
             let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(2);
             let selected = summary_selection_key_types(&interface, &arguments, &mut exact)
                 .expect("the exact no-edge selection-key retry should retain both arguments");
-            assert_eq!(selected, [&Type::Int, &Type::Bool]);
+            assert_eq!(
+                selected,
+                [
+                    &crate::types::KindedArgument::TypeArg(Type::Int),
+                    &crate::types::KindedArgument::TypeArg(Type::Bool)
+                ]
+            );
             assert_eq!(exact.used(), 2);
             assert!(interface.determination().is_none());
-            assert_eq!(arguments, [Type::Int, Type::Bool]);
+            assert_eq!(
+                arguments,
+                [Type::Int, Type::Bool].map(crate::types::KindedArgument::TypeArg)
+            );
         }
     }
 
@@ -28078,7 +29977,8 @@ mod tests {
             Origin::Source(span),
             span,
         );
-        let arguments = [Type::Int, Type::Bool, Type::Unit];
+        let arguments =
+            [Type::Int, Type::Bool, Type::Unit].map(crate::types::KindedArgument::TypeArg);
 
         // Both position validations precede the atomic two-slot retention charge.
         let mut short = crate::interface::InterfaceConstraintBudget::with_limit(3);
@@ -28091,19 +29991,31 @@ mod tests {
             interface.determination().map(DeterminationKey::positions),
             Some(&[0, 1][..]),
         );
-        assert_eq!(arguments, [Type::Int, Type::Bool, Type::Unit]);
+        assert_eq!(
+            arguments,
+            [Type::Int, Type::Bool, Type::Unit].map(crate::types::KindedArgument::TypeArg)
+        );
 
         for _ in 0..2 {
             let mut exact = crate::interface::InterfaceConstraintBudget::with_limit(4);
             let selected = summary_selection_key_types(&interface, &arguments, &mut exact)
                 .expect("the exact determined selection-key retry should retain both arguments");
-            assert_eq!(selected, [&Type::Int, &Type::Bool]);
+            assert_eq!(
+                selected,
+                [
+                    &crate::types::KindedArgument::TypeArg(Type::Int),
+                    &crate::types::KindedArgument::TypeArg(Type::Bool)
+                ]
+            );
             assert_eq!(exact.used(), 4);
             assert_eq!(
                 interface.determination().map(DeterminationKey::positions),
                 Some(&[0, 1][..]),
             );
-            assert_eq!(arguments, [Type::Int, Type::Bool, Type::Unit]);
+            assert_eq!(
+                arguments,
+                [Type::Int, Type::Bool, Type::Unit].map(crate::types::KindedArgument::TypeArg)
+            );
         }
     }
 
@@ -28148,18 +30060,20 @@ mod tests {
                 Box::new(Type::Variable(first)),
             ),
             Type::Variable(first),
-        ];
+        ]
+        .map(crate::types::KindedArgument::TypeArg);
         let prerequisite = [
             Type::Variable(first),
             Type::Application(
                 Box::new(Type::Nominal(list)),
                 Box::new(Type::Variable(first)),
             ),
-        ];
+        ]
+        .map(crate::types::KindedArgument::TypeArg);
         // Two key extractions own two visits each, complete-prerequisite
         // retention owns two, complete groundness owns eight, and the aligned
         // component plus strict-subterm walk own nine.
-        const EXACT_WORK: usize = 2 + 2 + 2 + 8 + 9;
+        const EXACT_WORK: usize = 2 + 2 + 2 + 8 + 9 + 2;
         let exercise = |work: &mut crate::interface::InterfaceConstraintBudget| {
             let head_key = summary_selection_key_types(&interface, &head, work)?;
             let complete = type_references_with_constraint_budget(&prerequisite, work)?;
@@ -28264,12 +30178,14 @@ mod tests {
                 spelling: "A".to_owned(),
                 kind: Kind::Type,
                 origin: Origin::Source(span),
-            }]),
+            }])
+            .into(),
             determination: None,
             methods: Box::new([CheckedInterfaceMethodFact {
+                inherited_parameters: Box::new([]),
                 id: method_id,
                 spelling: "observe".to_owned(),
-                type_parameters: Box::new([]),
+                type_parameters: Box::new([]).into(),
                 method_binder_authority: None,
                 value_type: value_type(),
                 origin: Origin::Source(span),
@@ -28715,12 +30631,14 @@ mod tests {
                         spelling: "F".to_owned(),
                         kind: deep_kind(),
                         origin: Origin::Source(span),
-                    }]),
+                    }])
+                    .into(),
                     determination: None,
                     methods: Box::new([CheckedInterfaceMethodFact {
+                        inherited_parameters: Box::new([]),
                         id: method,
                         spelling: "deep".to_owned(),
-                        type_parameters: Box::new([]),
+                        type_parameters: Box::new([]).into(),
                         method_binder_authority: None,
                         value_type: public_value_type(),
                         origin: Origin::Source(span),
@@ -28988,9 +30906,10 @@ mod tests {
                         .expect("the wide interface fixture should fit");
                     for ordinal in 0..WIDTH {
                         methods.push(CheckedInterfaceMethodFact {
+                            inherited_parameters: Box::new([]),
                             id: MethodId::new(interface, ordinal as u32),
                             spelling: format!("method{ordinal}"),
-                            type_parameters: Box::new([]),
+                            type_parameters: Box::new([]).into(),
                             method_binder_authority: None,
                             value_type: Type::Function(
                                 Box::new(Type::Variable(parameter)),
@@ -29009,7 +30928,8 @@ mod tests {
                             spelling: "A".to_owned(),
                             kind: Kind::Type,
                             origin: Origin::Source(span),
-                        }]),
+                        }])
+                        .into(),
                         determination: None,
                         methods: methods.into_boxed_slice(),
                         origin: Origin::Source(span),
@@ -30513,8 +32433,10 @@ mod tests {
 
     #[test]
     fn checker_view_interface_binder_has_an_exact_atomic_budget_and_preserves_source() {
-        // One retained binder record and the three nodes of Type -> Type.
-        const EXACT_WORK: usize = 1 + 3;
+        // One canonical reference to immutable original binders, four owner
+        // definition/index/reference cells, six ordered signature cells and
+        // four independent full-kind authentication cells.
+        const EXACT_WORK: usize = 1 + 4 + 6 + 4;
 
         let source = SourceFile::new("checker-interface-binder.ash", "Interface")
             .expect("the checker binder fixture should fit");
@@ -30538,7 +32460,8 @@ mod tests {
                     spelling: "F".into(),
                     kind: kind.clone(),
                     origin: Origin::Source(span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(span),
@@ -30908,7 +32831,8 @@ mod tests {
                     spelling: "A".into(),
                     kind: Kind::Type,
                     origin: Origin::Source(interface_span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(interface_span),
@@ -31179,7 +33103,8 @@ mod tests {
                                 spelling: "A".into(),
                                 kind: Kind::Type,
                                 origin,
-                            }]),
+                            }])
+                            .into(),
                             determination: None,
                             methods: Box::new([]),
                             origin: Origin::Source(span),
@@ -31285,7 +33210,8 @@ mod tests {
                 kind: crate::types::Kind::Type,
                 origin: Origin::Source(span),
             }]
-            .into_boxed_slice(),
+            .into_boxed_slice()
+            .into(),
             determination: None,
             methods: vec![ResolvedInterfaceMethod {
                 id: MethodId::new(interface, 0),
@@ -31299,7 +33225,7 @@ mod tests {
                     origin: Origin::Source(span),
                     span,
                 },
-                type_parameters: Box::new([]),
+                type_parameters: Box::new([]).into(),
                 has_explicit_type_parameters: false,
                 origin: Origin::Source(span),
                 span,
@@ -31452,15 +33378,18 @@ mod tests {
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
                 },
-                arguments: vec![ResolvedType {
-                    ty: Type::Unit,
-                    provenance: ResolvedTypeProvenance::new(
-                        vec![ResolvedTypeProvenanceNode::Fact(span)],
-                        0,
-                    ),
-                    origin: Origin::Source(span),
-                    span,
-                }]
+                arguments: vec![
+                    ResolvedType {
+                        ty: Type::Unit,
+                        provenance: ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    }
+                    .into(),
+                ]
                 .into_boxed_slice(),
                 span,
             },
@@ -31735,15 +33664,18 @@ mod tests {
                             spelling: "Deep".into(),
                             origin: Origin::Source(span),
                         },
-                        arguments: vec![ResolvedType {
-                            ty: Type::Unit,
-                            provenance: ResolvedTypeProvenance::new(
-                                vec![ResolvedTypeProvenanceNode::Fact(span)],
-                                0,
-                            ),
-                            origin: Origin::Source(span),
-                            span,
-                        }]
+                        arguments: vec![
+                            ResolvedType {
+                                ty: Type::Unit,
+                                provenance: ResolvedTypeProvenance::new(
+                                    vec![ResolvedTypeProvenanceNode::Fact(span)],
+                                    0,
+                                ),
+                                origin: Origin::Source(span),
+                                span,
+                            }
+                            .into(),
+                        ]
                         .into_boxed_slice(),
                         span,
                     },
@@ -31941,13 +33873,15 @@ mod tests {
                     )]),
                     type_variables: HashMap::from([(
                         parameter_id,
-                        parameter(generated_origin(&source, DEPTH)),
+                        parameter(generated_origin(&source, DEPTH)).into(),
                     )]),
                     global_parameter_rows: Box::new([]),
                     global_parameter_positions: HashMap::new(),
                     abstract_nominal_names: HashMap::new(),
                     abstract_nominal_kinds: HashMap::new(),
                     owner_signatures: OwnerSignatures::default(),
+                    owner_definitions: Vec::new(),
+                    owner_definition_positions: HashMap::new(),
                     provider_contracts: std::collections::BTreeMap::new(),
                     foreign_modules: std::collections::BTreeMap::new(),
                 };
@@ -32107,12 +34041,18 @@ mod tests {
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([InheritedOwnerParameter {
+                        owner: OwnerId::Interface(interface),
+                        slot: 0,
+                        binder: parameter,
+                    }]),
                     id: method,
                     spelling: "render".into(),
-                    type_parameters: Box::new([]),
+                    type_parameters: Box::new([]).into(),
                     method_binder_authority: None,
                     value_type: Type::Function(
                         Box::new(Type::Variable(parameter)),
@@ -32236,9 +34176,10 @@ mod tests {
         // and method checks, twelve implementation-clone cells, one route
         // clone, and thirteen reference/hidden-interface closure cells.
         // Authentication adds nineteen identity, route, binder, substitution,
-        // and implementation-index cells before publication.
+        // and implementation-index cells before publication. Complete owner
+        // arguments and inherited-role retention/authentication add six cells.
         const STAGING_WORK: usize = 2 + 1 + 3 + 12 + 1 + 13;
-        const EXACT_WORK: usize = STAGING_WORK + 19;
+        const EXACT_WORK: usize = STAGING_WORK + 19 + 6;
         let (empty, empty_used) = freeze_public_implementation_summary_with_limit(false, 0);
         let empty = empty.expect("an unused imported interface should require no constraint work");
         assert_eq!(empty_used, 0);
@@ -32269,9 +34210,9 @@ mod tests {
 
     #[test]
     fn linked_public_authorization_move_has_an_exact_preflight_budget() {
-        // The producer's staging (32) and authentication (19) precede this
-        // independently budgeted move preflight.
-        const SUMMARY_FREEZE_WORK: usize = 32 + 19;
+        // The producer's staging (32), authentication (19), and complete owner
+        // argument/role checks (6) precede this independent move preflight.
+        const SUMMARY_FREEZE_WORK: usize = 32 + 19 + 6;
         let (short_summary, _) =
             freeze_public_implementation_summary_with_limit(true, SUMMARY_FREEZE_WORK);
         let mut short_summary = short_summary.expect("the public summary should freeze");
@@ -32508,15 +34449,18 @@ mod tests {
                     spelling: "Local".to_owned(),
                     origin: Origin::Source(span),
                 },
-                arguments: vec![ResolvedType {
-                    ty: Type::Unit,
-                    provenance: ResolvedTypeProvenance::new(
-                        vec![ResolvedTypeProvenanceNode::Fact(span)],
-                        0,
-                    ),
-                    origin: Origin::Source(span),
-                    span,
-                }]
+                arguments: vec![
+                    ResolvedType {
+                        ty: Type::Unit,
+                        provenance: ResolvedTypeProvenance::new(
+                            vec![ResolvedTypeProvenanceNode::Fact(span)],
+                            0,
+                        ),
+                        origin: Origin::Source(span),
+                        span,
+                    }
+                    .into(),
+                ]
                 .into_boxed_slice(),
                 span,
             },
@@ -32668,8 +34612,8 @@ mod tests {
                 );
                 assert_eq!(
                     short.used(),
-                    DEEP_STAGING - 2,
-                    "the final two-child scheduling charge is atomic",
+                    DEEP_STAGING - 1,
+                    "each completed child scheduling visit is charged",
                 );
                 for _ in 0..2 {
                     let mut exact = TypeWorkBudget::with_limit(DEEP_EXACT);
@@ -33028,12 +34972,18 @@ mod tests {
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(interface_span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: vec![CheckedInterfaceMethodFact {
+                    inherited_parameters: Box::new([InheritedOwnerParameter {
+                        owner: OwnerId::Interface(interface),
+                        slot: 0,
+                        binder: TypeVariableId::resolved(base, 0),
+                    }]),
                     id: method,
                     spelling: "render".into(),
-                    type_parameters: Box::new([]),
+                    type_parameters: Box::new([]).into(),
                     method_binder_authority: None,
                     value_type: Type::Function(
                         Box::new(Type::Variable(TypeVariableId::resolved(base, 0))),
@@ -33113,8 +35063,8 @@ mod tests {
         // Fifteen cells construct the closure. Full authentication adds one
         // public spelling, one hidden interface index, two global/binder
         // entries, eight scheme/requirement type visits, two requirement-index
-        // entries, and one interface-parameter entry.
-        const EXACT_WORK: usize = 15 + 1 + 1 + 2 + 8 + 2 + 1;
+        // entries, one interface-parameter entry, and one complete argument tag.
+        const EXACT_WORK: usize = 15 + 1 + 1 + 2 + 8 + 2 + 1 + 1;
         let (short, short_used) = freeze_hidden_interface_summary_with_limit(14);
         assert_eq!(short, Err(ResolvedBuildFailure::ConstraintResource));
         assert_eq!(short_used, 14);
@@ -33125,7 +35075,11 @@ mod tests {
             publication_short,
             Err(ResolvedBuildFailure::ConstraintResource)
         );
-        assert_eq!(publication_short_used, EXACT_WORK - 1);
+        assert_eq!(
+            publication_short_used,
+            EXACT_WORK - 1,
+            "the final argument check follows closure publication"
+        );
 
         let (exact, exact_used) = freeze_hidden_interface_summary_with_limit(EXACT_WORK);
         let summary = exact.expect("the exact budget should retain one hidden interface fact");
@@ -33165,7 +35119,8 @@ mod tests {
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(hidden_span),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(hidden_span),
@@ -33214,7 +35169,8 @@ mod tests {
                     spelling: "A".into(),
                     kind: crate::types::Kind::Type,
                     origin: Origin::Source(first),
-                }]),
+                }])
+                .into(),
                 determination: None,
                 methods: Box::new([]),
                 origin: Origin::Source(first),
@@ -33976,6 +35932,7 @@ impl ResourceTypeFact {
         struct Assembly {
             parameters: ResolvedTypeVariableBuffer,
             types: Vec<ResolvedType>,
+            arguments: Vec<ResolvedOwnerArgument>,
             effects: Vec<ResolvedEffectInstance>,
             provider_application: Option<crate::interface::InterfaceApplication>,
         }
@@ -33983,6 +35940,9 @@ impl ResourceTypeFact {
             fn drop(&mut self) {
                 for ty in self.types.drain(..) {
                     discard_resolved_type(ty);
+                }
+                for argument in self.arguments.drain(..) {
+                    argument.discard_iteratively();
                 }
                 for effect in self.effects.drain(..) {
                     drop(effect.instance);
@@ -34009,7 +35969,7 @@ impl ResourceTypeFact {
                 let state = first.next().expect("state retained");
                 let result = first.next().expect("result retained");
                 drop(first);
-                let arguments = arguments.into_boxed_slice();
+                let arguments = std::mem::take(&mut self.arguments).into_boxed_slice();
                 let mut effects = std::mem::take(&mut self.effects).into_iter();
                 ResourceTypeFact {
                     id: definition.id,
@@ -34028,7 +35988,10 @@ impl ResourceTypeFact {
                         arguments,
                         span: definition.provider.span,
                     },
-                    provider_application: self.provider_application.take().expect("canonical provider association retained"),
+                    provider_application: self
+                        .provider_application
+                        .take()
+                        .expect("canonical provider association retained"),
                     provided: effects.next().expect("provided effect retained"),
                     interpreted: effects.next().expect("interpreted effect retained"),
                     origin: definition.origin.clone(),
@@ -34079,6 +36042,7 @@ impl ResourceTypeFact {
                 budget,
             )?,
             types: Vec::new(),
+            arguments: Vec::new(),
             effects: Vec::new(),
             provider_application: None,
         };
@@ -34091,15 +36055,32 @@ impl ResourceTypeFact {
             )?);
         assembly.types.try_reserve_exact(count).map_err(|_| ())?;
         assembly.effects.try_reserve_exact(2).map_err(|_| ())?;
-        for source in [&definition.input, &definition.state, &definition.result]
-            .into_iter()
-            .chain(definition.provider.arguments.iter())
-        {
+        for source in [&definition.input, &definition.state, &definition.result] {
             assembly.types.push(ty(source, budget)?);
+        }
+        assembly
+            .arguments
+            .try_reserve_exact(definition.provider.arguments.len())
+            .map_err(|_| ())?;
+        let mut actuals = Vec::new();
+        actuals
+            .try_reserve_exact(definition.provider.arguments.len())
+            .map_err(|_| ())?;
+        for argument in &definition.provider.arguments {
+            assembly.arguments.push(ResolvedOwnerArgument {
+                ty: crate::types::clone_kinded_argument_with_budget(&argument.ty, budget)?,
+                provenance: argument.provenance.clone(),
+                origin: argument.origin.clone(),
+                span: argument.span,
+            });
+            actuals.push(crate::types::clone_kinded_argument_with_budget(
+                &argument.ty,
+                budget,
+            )?);
         }
         assembly.provider_application = Some(crate::interface::InterfaceApplication::new_kinded(
             definition.provider.interface.id,
-            crate::types::clone_type_arguments_to_kinded_with_budget(definition.provider.arguments.iter().map(|argument| &argument.ty), budget)?,
+            actuals.into_boxed_slice(),
         ));
         for source in [&definition.provided, &definition.interpreted] {
             assembly.effects.push(effect(source, budget)?);
@@ -34123,7 +36104,7 @@ impl Drop for ResourceTypeFact {
             discard_origin_iteratively(std::mem::replace(&mut ty.origin, Origin::Source(ty.span)));
         }
         for argument in std::mem::take(&mut self.provider.arguments) {
-            discard_resolved_type(argument);
+            argument.discard_iteratively();
         }
         let provider_span = self.provider.interface.origin.primary_span();
         discard_origin_iteratively(std::mem::replace(

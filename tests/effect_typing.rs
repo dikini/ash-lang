@@ -395,11 +395,17 @@ fn handlers_forward_other_instances_remove_exactly_and_reintroduce_direct_reques
 
     let forwarded = latent_effects(&checked, "forwarded");
     assert_eq!(forwarded.known().len(), 1);
-    assert_eq!(forwarded.known()[0].arguments(), &[Type::Bool]);
+    assert_eq!(
+        forwarded.known()[0].arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Bool)]
+    );
 
     let delegated = latent_effects(&checked, "delegated");
     assert_eq!(delegated.known().len(), 1);
-    assert_eq!(delegated.known()[0].arguments(), &[Type::Int]);
+    assert_eq!(
+        delegated.known()[0].arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+    );
 
     assert_eq!(latent_effects(&checked, "weakened").known().len(), 2);
 }

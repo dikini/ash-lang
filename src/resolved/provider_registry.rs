@@ -10,6 +10,12 @@ fn charge_provenance(
     for node in provenance.nodes.iter() {
         match node {
             ResolvedTypeProvenanceNode::Tuple { elements, .. } => work.charge(elements.len())?,
+            ResolvedTypeProvenanceNode::Resource { arguments, .. } => {
+                work.charge(arguments.len())?
+            }
+            ResolvedTypeProvenanceNode::Row { argument_roots, .. } => {
+                work.charge(argument_roots.len())?
+            }
             ResolvedTypeProvenanceNode::Function {
                 effect_arguments, ..
             } => work.charge(effect_arguments.len())?,
@@ -101,7 +107,8 @@ impl ResolvedRegistry {
         if remove {
             self.abstract_nominal_kinds.remove(&id);
         } else {
-            self.abstract_nominal_kinds.get_mut(&id).unwrap().kind = NonMaterializedNominalKind::Ordinary(Kind::Type);
+            self.abstract_nominal_kinds.get_mut(&id).unwrap().kind =
+                NonMaterializedNominalKind::Ordinary(Kind::Type);
         }
     }
 
@@ -156,7 +163,9 @@ impl ResolvedRegistry {
         for parameter in parameters.into_vec() {
             // Every absent identity was checked for uniqueness before moving
             // recursive origins out of the iterative-drop buffer.
-            registry.type_variables.insert(parameter.id, parameter);
+            registry
+                .type_variables
+                .insert(parameter.id, parameter.into());
         }
         Ok(registry)
     }
@@ -175,6 +184,8 @@ impl ResolvedRegistry {
             self.lexical_nominals.len(),
             self.lexical_constructors.len(),
             self.effects.len(),
+            self.owner_definitions.len(),
+            self.owner_definition_positions.len(),
             self.owner_signatures.effects.len(),
             self.owner_signatures.interfaces.len(),
             self.owner_signatures.resources.len(),
@@ -190,6 +201,8 @@ impl ResolvedRegistry {
             canonical.lexical_nominals.len(),
             canonical.lexical_constructors.len(),
             canonical.effects.len(),
+            canonical.owner_definitions.len(),
+            canonical.owner_definition_positions.len(),
             canonical.owner_signatures.effects.len(),
             canonical.owner_signatures.interfaces.len(),
             canonical.owner_signatures.resources.len(),
@@ -210,28 +223,64 @@ impl ResolvedRegistry {
             || self.lexical_nominal_positions != canonical.lexical_nominal_positions
             || self.lexical_constructor_positions != canonical.lexical_constructor_positions
             || self.effect_positions != canonical.effect_positions
+            || self.owner_definition_positions != canonical.owner_definition_positions
             || self.owner_signatures.effect_positions != canonical.owner_signatures.effect_positions
-            || self.owner_signatures.interface_positions != canonical.owner_signatures.interface_positions
-            || self.owner_signatures.resource_positions != canonical.owner_signatures.resource_positions
+            || self.owner_signatures.interface_positions
+                != canonical.owner_signatures.interface_positions
+            || self.owner_signatures.resource_positions
+                != canonical.owner_signatures.resource_positions
             || self.global_parameter_positions != canonical.global_parameter_positions
             || self.abstract_nominal_names != canonical.abstract_nominal_names
         {
             return Ok(false);
         }
-        for (left, right) in self.owner_signatures.effects.iter()
+        for (left, right) in self
+            .owner_definitions
+            .iter()
+            .zip(&canonical.owner_definitions)
+        {
+            work.charge(left.parameters.len().checked_add(1).ok_or(())?)?;
+            if left.owner != right.owner
+                || left.family != right.family
+                || left.parameters.len() != right.parameters.len()
+            {
+                return Ok(false);
+            }
+            for (left, right) in left.parameters.iter().zip(&right.parameters) {
+                if !same_checker_type_variable_with_budget(left, right, work)? {
+                    return Ok(false);
+                }
+            }
+        }
+        for (left, right) in self
+            .owner_signatures
+            .effects
+            .iter()
             .chain(self.owner_signatures.interfaces.iter())
-            .zip(canonical.owner_signatures.effects.iter().chain(canonical.owner_signatures.interfaces.iter()))
+            .zip(
+                canonical
+                    .owner_signatures
+                    .effects
+                    .iter()
+                    .chain(canonical.owner_signatures.interfaces.iter()),
+            )
         {
             work.charge(left.parameters.len().checked_add(1).ok_or(())?)?;
             if left.owner != right.owner || left.parameters != right.parameters {
                 return Ok(false);
             }
         }
-        for ((left_family, left), (right_family, right)) in self.owner_signatures.resources.iter()
+        for ((left_family, left), (right_family, right)) in self
+            .owner_signatures
+            .resources
+            .iter()
             .zip(canonical.owner_signatures.resources.iter())
         {
             work.charge(left.parameters.len().checked_add(1).ok_or(())?)?;
-            if left_family != right_family || left.owner != right.owner || left.parameters != right.parameters {
+            if left_family != right_family
+                || left.owner != right.owner
+                || left.parameters != right.parameters
+            {
                 return Ok(false);
             }
         }
@@ -292,9 +341,7 @@ impl ResolvedRegistry {
             let Some(right) = canonical.abstract_nominal_kinds.get(id) else {
                 return Ok(false);
             };
-            if left.origin != right.origin
-                || !left.kind.same_with_budget(&right.kind, work)?
-            {
+            if left.origin != right.origin || !left.kind.same_with_budget(&right.kind, work)? {
                 return Ok(false);
             }
         }

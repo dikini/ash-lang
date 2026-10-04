@@ -15,6 +15,41 @@ changes and DN-0038 drafts remain unstaged in the original worktree. Historical
 proof links below name their recorded main revision. Fresh checks govern every
 new delivery; the paused task is not a concurrent writer.
 
+Batch 0 has passed its common-branch checks on
+`codex/common-resource-support`, based on recovery commit `167bd8c`. Fresh48 builds every workspace test target.
+Ordered Type and row arguments reach source checking, publication, evidence,
+capture, Core validation and transforms. Public owner-argument and SQLite
+declaration checks pass; SQLite client execution still reaches the pending
+instance-admission guard.
+
+Fresh receipts are kept under
+`~/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`.
+Fresh48 passes all 1,523 library cases, with one callback case still ignored,
+and all 99 additional workspace binaries outside the architecture suite.
+All six original interface resource regressions and all four method resource
+cases pass with their fixtures and limits unchanged. The original 24-scope
+256-KiB regression also passes in a fresh child process after summary ownership
+metadata was restricted to declared kind facts. Synthesis and inference facts
+no longer copy this metadata. Authority checks and work accounting are unchanged.
+
+The full fresh48 architecture run passes 40 of 41 cases. Its remaining new
+assertion used the wrong punctuation tokens for the scanner. After correcting
+only that fixture, the rebuilt fresh49 prerequisite-owner case passes. The
+other 40 cases, including bidirectional physical inventory and ownership APIs,
+are unchanged. Both receipts remain available. Independent contract, source
+quality and changed-documentation reviews found no remaining Batch 0 blocker.
+Formatting and the explicit all-targets compiler check pass. Unsigned commit,
+merge and original-worktree verification remain pending; the original branch
+still names the recovery checkpoint.
+
+These checks establish no executed library-defined provider instance. Generic scope admission,
+immutable template specialization, executable native bindings, lifecycle
+ownership and the selected open-row callback and captured-control witness
+remain later delivery obligations. One conditional handler callback test is
+still explicitly ignored until those obligations are implemented. Existing
+native adapter tests observe native backing separately from an Ash session.
+
+## Historical paused checkpoint (2026-10-03)
 
 Execution stops at the user's requested pause after the current bounded work.
 The sole source writer and external Core preparer have stopped. The external

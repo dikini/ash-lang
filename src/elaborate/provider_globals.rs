@@ -89,7 +89,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     fn prepare_provider_completed_globals(
         &mut self,
         globals: &[super::CheckedGlobalScheme],
-        interfaces: &[CheckedInterfaceFact],
+        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
         imported: &ImportedFacts,
     ) -> Result<ProviderExternalGlobals, TypeError> {
         let mut lowering = EvidenceLowering {
@@ -194,7 +194,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(super) fn prepare_provider_defining_facts(
         &mut self,
         globals: &[super::CheckedGlobalScheme],
-        interfaces: &[CheckedInterfaceFact],
+        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
         implementations: &[CheckedImplementationFact],
         imported: &ImportedFacts,
         constraint_work: &mut super::InterfaceConstraintBudget,
@@ -542,7 +542,9 @@ fn same_global_source(
         work.charge(right.arguments().len())
             .map_err(|()| type_resource())?;
         for (left, right) in left.arguments().iter().zip(right.arguments()) {
-            if !same_type_with_budget(left, right, work).map_err(|()| type_resource())? {
+            if !crate::types::same_kinded_argument_with_budget(left, right, work)
+                .map_err(|()| type_resource())?
+            {
                 return Ok(false);
             }
         }
@@ -1148,7 +1150,7 @@ mod tests {
                 assert!(
                     same_type_with_budget(
                         &lowered_method.ty,
-                        &scheme.requirements[0].arguments()[0],
+                        crate::elaborate::test_owner_type(&scheme.requirements[0].arguments()[0]),
                         &mut TypeWorkBudget::unbounded()
                     )
                     .unwrap()
@@ -1207,7 +1209,7 @@ mod tests {
                         assert!(
                             same_type_with_budget(
                                 &complete.requirements[0].methods[0].ty,
-                                &scheme.requirements[0].arguments()[0],
+                                crate::elaborate::test_owner_type(&scheme.requirements[0].arguments()[0]),
                                 &mut TypeWorkBudget::unbounded()
                             )
                             .unwrap()

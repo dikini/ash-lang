@@ -1047,7 +1047,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
     };
     assert_eq!(checked_implementation.id, implementation);
     assert_eq!(checked_implementation.interface(), observe);
-    assert_eq!(checked_implementation.arguments(), [Type::Nominal(option)]);
+    assert_eq!(
+        checked_implementation.arguments(),
+        [ash::types::KindedArgument::TypeArg(Type::Nominal(option))]
+    );
     let checked_relay = checked_dependency
         .schemes()
         .iter()
@@ -1128,7 +1131,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .expect("the entry should import the selected Observe<Option> implementation");
     assert_eq!(imported_implementation.id, implementation);
     assert_eq!(imported_implementation.interface(), observe);
-    assert_eq!(imported_implementation.arguments(), [Type::Nominal(option)]);
+    assert_eq!(
+        imported_implementation.arguments(),
+        [ash::types::KindedArgument::TypeArg(Type::Nominal(option))]
+    );
     let checked_entry = check_module(resolved_entry)
         .expect("the entry should type-check from detached imported facts");
     let main = checked_entry
@@ -1165,7 +1171,10 @@ fn linked_higher_kinded_core_revalidates_after_both_transforms() {
         .selection()
         .expect("entry checking should fill observe's evidence slot");
     assert_eq!(observe_selection.interface(), observe);
-    assert_eq!(observe_selection.arguments(), [Type::Nominal(option)]);
+    assert_eq!(
+        observe_selection.arguments(),
+        [ash::types::KindedArgument::TypeArg(Type::Nominal(option))]
+    );
     assert_eq!(observe_selection.node_count(), 1);
     let Some(EvidenceNode::Implementation {
         implementation: selected_implementation,
@@ -1419,17 +1428,22 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
             assert_eq!(implementation_fact.id, implementation);
             assert_eq!(implementation_fact.interface(), relation);
             assert_eq!(implementation_fact.arguments().len(), 3);
-            assert_eq!(implementation_fact.arguments()[0], Type::Nominal(wrap));
+            assert_eq!(
+                implementation_fact.arguments()[0],
+                ash::types::KindedArgument::TypeArg(Type::Nominal(wrap))
+            );
             assert!(matches!(
                 &implementation_fact.arguments()[1],
-                Type::Application(function, argument)
+                ash::types::KindedArgument::TypeArg(Type::Application(function, argument))
                     if function.as_ref() == &Type::Nominal(wrap)
                         && argument.as_ref()
                             == &Type::Variable(implementation_fact.head_parameters[0].id)
             ));
             assert_eq!(
                 implementation_fact.arguments()[2],
-                Type::Variable(implementation_fact.head_parameters[0].id),
+                ash::types::KindedArgument::TypeArg(Type::Variable(
+                    implementation_fact.head_parameters[0].id
+                )),
             );
 
             let relay = module_checked
@@ -1512,9 +1526,12 @@ fn linked_relational_program_crosses_facade_diamond_transforms_and_runtime() {
             assert_eq!(
                 selection.arguments(),
                 [
-                    Type::Nominal(wrap),
-                    Type::Application(Box::new(Type::Nominal(wrap)), Box::new(Type::Int)),
-                    Type::Int,
+                    ash::types::KindedArgument::TypeArg(Type::Nominal(wrap)),
+                    ash::types::KindedArgument::TypeArg(Type::Application(
+                        Box::new(Type::Nominal(wrap)),
+                        Box::new(Type::Int)
+                    )),
+                    ash::types::KindedArgument::TypeArg(Type::Int),
                 ],
             );
             assert!(matches!(

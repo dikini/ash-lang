@@ -1331,6 +1331,34 @@ fn substitute(
         .map_err(|_| invalid(at))?,
     ))
 }
+fn substitute_argument(
+    source: &crate::types::KindedArgument,
+    types: &ExternalTypes,
+    rows: &HashMap<crate::types::TypeVariableId, crate::types::EffectRow>,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::types::IterativeArgumentOwner, ValidationError> {
+    let value = crate::types::substitute_kinded_argument_with(source, &types.0, rows, |cells| {
+        work.charge(cells)
+    })
+    .map_err(|()| resource())?
+    .map_err(|_| invalid(at))?;
+    Ok(crate::types::IterativeArgumentOwner::new(value))
+}
+
+fn require_same_argument(
+    left: &crate::types::KindedArgument,
+    right: &crate::types::KindedArgument,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if crate::types::same_kinded_argument_with_budget(left, right, work).map_err(|()| resource())? {
+        Ok(())
+    } else {
+        Err(invalid(at))
+    }
+}
+
 fn require_same(
     left: &Type,
     right: &Type,
@@ -1401,13 +1429,44 @@ fn canonical_scheme(
                 .0
                 .try_reserve(interface.parameters.len())
                 .map_err(|_| resource())?;
-            for (parameter, argument) in interface.parameters.iter().zip(requirement.arguments()) {
-                replacements.insert_discarding_replaced(
-                    parameter.id,
-                    clone_type_with_budget(argument, work).map_err(|()| resource())?,
+            let mut method_rows = HashMap::new();
+            charge(work, rows.len() + interface.parameters.len())?;
+            method_rows
+                .try_reserve(rows.len() + interface.parameters.len())
+                .map_err(|_| resource())?;
+            for (variable, row) in &rows {
+                method_rows.insert(
+                    *variable,
+                    crate::types::clone_effect_row_with_budget(row, work)
+                        .map_err(|()| resource())?,
                 );
             }
-            let mut domain = substitute(&method.value_type, &replacements, &rows, at, work)?;
+            for (parameter, argument) in interface.parameters.iter().zip(requirement.arguments()) {
+                match (&parameter.kind, argument) {
+                    (crate::types::Kind::EffectRow, crate::types::KindedArgument::RowArg(row)) => {
+                        if method_rows
+                            .insert(
+                                parameter.id,
+                                crate::types::clone_effect_row_with_budget(row, work)
+                                    .map_err(|()| resource())?,
+                            )
+                            .is_some()
+                        {
+                            return Err(invalid(at));
+                        }
+                    }
+                    (kind, crate::types::KindedArgument::TypeArg(ty))
+                        if *kind != crate::types::Kind::EffectRow =>
+                    {
+                        replacements.insert_discarding_replaced(
+                            parameter.id,
+                            clone_type_with_budget(ty, work).map_err(|()| resource())?,
+                        )
+                    }
+                    _ => return Err(invalid(at)),
+                }
+            }
+            let mut domain = substitute(&method.value_type, &replacements, &method_rows, at, work)?;
             if !method.authoritative_type_parameters().is_empty() {
                 let mut parameters = Vec::new();
                 charge(work, method.authoritative_type_parameters().len())?;
@@ -1836,10 +1895,15 @@ fn authenticate_staged_externals_context<'a>(
                 .zip(pending.application.arguments())
                 .zip(pending.selection.arguments())
             {
-                let expected =
-                    substitute(formal, &actual_types, &actual_rows, occurrence.root, work)?;
-                require_same(&expected, checked, occurrence.root, work)?;
-                require_same(&expected, selected, occurrence.root, work)?;
+                let expected = substitute_argument(
+                    formal,
+                    &actual_types,
+                    &actual_rows,
+                    occurrence.root,
+                    work,
+                )?;
+                require_same_argument(expected.as_ref(), checked, occurrence.root, work)?;
+                require_same_argument(expected.as_ref(), selected, occurrence.root, work)?;
             }
             let mut constraints =
                 crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
@@ -3448,7 +3512,7 @@ impl RetainedHandlerExternals {
                 }
                 charge(work, expected.arguments().len())?;
                 for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
-                    require_same(expected, actual, occurrence.node, work)?;
+                    require_same_argument(expected, actual, occurrence.node, work)?;
                 }
             }
         }
@@ -3530,7 +3594,9 @@ impl RetainedHandlerExternals {
                 .iter()
                 .zip(actual.application.arguments())
             {
-                if !same_type_with_budget(left, right, work).map_err(|()| resource())? {
+                if !crate::types::same_kinded_argument_with_budget(left, right, work)
+                    .map_err(|()| resource())?
+                {
                     return Err(invalid(actual.node));
                 }
             }

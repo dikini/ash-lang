@@ -417,8 +417,8 @@ mod tests {
                     spelling: "Show".into(),
                     origin: Origin::Source(span),
                 },
-                arguments: vec![ResolvedType {
-                    ty: Type::Unit,
+                arguments: vec![crate::resolved::ResolvedOwnerArgument {
+                    ty: crate::types::KindedArgument::TypeArg(Type::Unit),
                     provenance: ResolvedTypeProvenance::new(
                         vec![ResolvedTypeProvenanceNode::Fact(span)],
                         0,

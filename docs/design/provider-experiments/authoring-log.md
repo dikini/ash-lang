@@ -2491,3 +2491,13 @@ proposed wrapper names the retained unread suffix needed for those checks.
 The external `ffi-blueprint-2026-10-03/contrast-walkthrough` draft and root review
 preserve these findings without implementing a third binding. Actual blueprint
 and tool trials remain pending with the SQLite, arena and borrowing cases.
+
+On 2026-10-04, the common-support workstream preserved the original experiment
+in unsigned unverified recovery commit `167bd8c` before creating
+`codex/common-resource-support` in its own worktree. The paused task was not
+resumed. Unrelated DN-0038 and proof-tooling drafts remain outside that commit.
+The common migration extends the existing source, evidence, Core and evaluator
+carriers with ordered Type/row owner arguments and original owner signatures.
+Library compilation alone is preparation; declaration publication, deep-input
+regressions, independent review and integration must pass before Batch 0 is
+reported as delivered. SQLite and arena execution remain pending at this point.

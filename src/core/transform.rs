@@ -98,17 +98,17 @@ impl TransformFamily for EffectOperationFamily {
         match operation {
             EffectOperation::ProviderStateAccess(access) => {
                 builder.charge_effect_metadata(access.arguments().len())?;
-                let mut arguments = IterativeTypeBuffer(Vec::new());
+                let mut arguments = IterativeArgumentBuffer(Vec::new());
                 arguments
                     .try_reserve(access.arguments().len())
                     .map_err(|_| TransformError::Build(BuildError::TypeWorkExceeded))?;
                 for argument in access.arguments() {
-                    arguments.push(builder.clone_type_for_rebuild(argument)?);
+                    arguments.push(builder.clone_owner_argument_for_rebuild(argument)?);
                 }
                 // Resolve the single child before moving the guarded clones.
                 let operand = remap(remapped, access.operand())?;
                 builder.provider_state_access(
-                    super::effect::ProviderStateAccessNode::new(
+                    super::effect::ProviderStateAccessNode::new_kinded(
                         access.method(),
                         access.definition(),
                         arguments.into_vec().into_boxed_slice(),
@@ -1488,7 +1488,10 @@ mod tests {
         };
         assert_eq!(access.method(), method);
         assert_eq!(access.definition(), definition);
-        assert_eq!(access.arguments(), arguments);
+        assert_eq!(
+            access.arguments(),
+            arguments.clone().map(crate::types::KindedArgument::TypeArg)
+        );
         assert_eq!(access.operand(), replacement);
         assert_ne!(access.operand(), original);
     }
@@ -1770,7 +1773,11 @@ mod tests {
         // Constructor admission reserves both the E=4 consumed bitmap and
         // the E=4 anchor carrier, adding the second E term to prior totals.
         const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
+        // Complete tags add four anchor-clone visits, four retained tag
+        // admissions, and two additional selected-application comparisons.
+        const COMPLETE_TAG_REPLAY_WORK: usize = 4 + 4 + 2;
         const IDENTITY_WORK: usize = CORE_WORK
+            + COMPLETE_TAG_REPLAY_WORK
             + ANCHOR_REPLAY_WORK
             + PRODUCER_REMAP_WORK
             + CONSTRUCTOR_SECOND_CARRIER_WORK
@@ -1835,7 +1842,6 @@ mod tests {
                 _ => {}
             }
         }
-        eprintln!("linked transform additional fallible carrier work={payload_carrier_work}");
         let registry = Arc::clone(fixture.program.registry());
         let catalog = Arc::clone(fixture.program.method_evidence());
         let weak_registry = Arc::downgrade(&registry);
@@ -3169,5 +3175,25 @@ mod provider_draft_tests {
             .unwrap(),
             order
         );
+    }
+}
+
+struct IterativeArgumentBuffer(Vec<crate::types::KindedArgument>);
+impl IterativeArgumentBuffer {
+    fn try_reserve(&mut self, count: usize) -> Result<(), std::collections::TryReserveError> {
+        self.0.try_reserve(count)
+    }
+    fn push(&mut self, argument: crate::types::KindedArgument) {
+        self.0.push(argument);
+    }
+    fn into_vec(mut self) -> Vec<crate::types::KindedArgument> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for IterativeArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
     }
 }

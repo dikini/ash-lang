@@ -149,7 +149,12 @@ fn hidden_and_opaque_dependents_cross_summaries_without_access_widening() {
         let [requirement] = scheme.scheme.requirements.as_ref() else {
             panic!("{spelling} should retain one relational requirement");
         };
-        let [_, _, Type::Nominal(dependent)] = requirement.arguments() else {
+        let [
+            _,
+            _,
+            ash::types::KindedArgument::TypeArg(Type::Nominal(dependent)),
+        ] = requirement.arguments()
+        else {
             panic!("{spelling} should retain one nominal dependent in position three");
         };
         (*dependent, scheme.binder)
@@ -220,7 +225,10 @@ fn hidden_and_opaque_dependents_cross_summaries_without_access_widening() {
         let [requirement] = imported.scheme.requirements.as_ref() else {
             panic!("the imported marker should retain one requirement");
         };
-        assert_eq!(requirement.arguments()[2], Type::Nominal(dependent));
+        assert_eq!(
+            requirement.arguments()[2],
+            ash::types::KindedArgument::TypeArg(Type::Nominal(dependent))
+        );
     }
 
     let base_source = fs::read_to_string(fixture_root.join("base.ash"))
@@ -778,7 +786,9 @@ fn public_impl_retains_its_private_head_identity_as_hidden_metadata() {
     let [implementation] = dependency_checked.implementation_facts() else {
         panic!("the dependency should retain its public implementation");
     };
-    let [ash::types::Type::Nominal(hidden)] = implementation.arguments() else {
+    let [ash::types::KindedArgument::TypeArg(ash::types::Type::Nominal(hidden))] =
+        implementation.arguments()
+    else {
         panic!("the implementation head should retain the private nominal identity");
     };
     let entry = module_named(&graph, "entry.ash");

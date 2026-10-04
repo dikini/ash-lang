@@ -248,7 +248,10 @@ fn nested_owner_row_arguments_preserve_exact_identity_and_lacks() {
     let application = |row| {
         EffectInstance::new_kinded(
             outer,
-            Box::new([KindedArgument::TypeArg(Type::Int), KindedArgument::RowArg(row)]),
+            Box::new([
+                KindedArgument::TypeArg(Type::Int),
+                KindedArgument::RowArg(row),
+            ]),
         )
     };
     assert_eq!(
@@ -258,16 +261,22 @@ fn nested_owner_row_arguments_preserve_exact_identity_and_lacks() {
     // Only the tail's lacks set differs; the owner, known members and tail ID agree.
     assert_ne!(
         application(EffectRow::with_tail(
-            Box::new([k.clone()]), tail, Box::new([k.clone(), h.clone()]),
+            Box::new([k.clone()]),
+            tail,
+            Box::new([k.clone(), h.clone()]),
         )),
         application(EffectRow::with_tail(
-            Box::new([k.clone()]), tail, Box::new([k.clone(), j]),
+            Box::new([k.clone()]),
+            tail,
+            Box::new([k.clone(), j]),
         )),
     );
     // Only the tail identity differs; the known members and lacks set agree.
     assert_ne!(
         application(EffectRow::with_tail(
-            Box::new([k.clone()]), tail, Box::new([k.clone(), h.clone()]),
+            Box::new([k.clone()]),
+            tail,
+            Box::new([k.clone(), h.clone()]),
         )),
         application(EffectRow::with_tail(
             Box::new([k.clone()]),
@@ -305,7 +314,10 @@ fn type_substitution_descends_into_owner_row_members_and_lacks() {
     ));
     let replacements = HashMap::from([(parameter, Type::Bool)]);
     assert_eq!(actual.substitute_type_variables(&replacements), expected);
-    assert!(matches!(actual.known()[0].arguments(), [KindedArgument::RowArg(_)]));
+    assert!(matches!(
+        actual.known()[0].arguments(),
+        [KindedArgument::RowArg(_)]
+    ));
 }
 
 #[test]
@@ -318,11 +330,20 @@ fn mixed_resource_applications_retain_defining_identity_and_slot_order() {
     let make = |definition, row| {
         Type::ResourceApply(
             definition,
-            Box::new([KindedArgument::TypeArg(Type::Int), KindedArgument::RowArg(row)]),
+            Box::new([
+                KindedArgument::TypeArg(Type::Int),
+                KindedArgument::RowArg(row),
+            ]),
         )
     };
-    assert_eq!(resource, ash::resolved::ResourceDefinitionId::new(module, 0));
-    assert_eq!(make(resource, EffectRow::empty()), make(resource, EffectRow::empty()));
+    assert_eq!(
+        resource,
+        ash::resolved::ResourceDefinitionId::new(module, 0)
+    );
+    assert_eq!(
+        make(resource, EffectRow::empty()),
+        make(resource, EffectRow::empty())
+    );
     assert_ne!(
         make(resource, EffectRow::empty()),
         make(ResourceDefinitionId::new(module, 1), EffectRow::empty()),
@@ -331,7 +352,10 @@ fn mixed_resource_applications_retain_defining_identity_and_slot_order() {
         make(resource, EffectRow::empty()),
         Type::ResourceApply(
             resource,
-            Box::new([KindedArgument::RowArg(EffectRow::empty()), KindedArgument::TypeArg(Type::Int)]),
+            Box::new([
+                KindedArgument::RowArg(EffectRow::empty()),
+                KindedArgument::TypeArg(Type::Int)
+            ]),
         ),
     );
 }
@@ -341,31 +365,37 @@ fn alternating_resource_row_arguments_clone_compare_hash_and_drop_on_small_stack
     use ash::types::{KindedArgument, ResourceDefinitionId, discard_type_iteratively};
     use std::hash::{DefaultHasher, Hash, Hasher};
 
-    std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
-        let source = SourceFile::new("alternating-owner-rows.ash", "").expect("fixture should fit");
-    let module = ModuleId::from(source.id());
-        let definition = ResourceDefinitionId::new(module, 0);
-        let owner = EffectId::new(module, 0);
-        // This raw graph tests structural ownership; it is not a well-kinded source resource.
-        let mut ty = Type::Unit;
-        for _ in 0..10_000 {
-            ty = Type::ResourceApply(
-                definition,
-                Box::new([KindedArgument::RowArg(EffectRow::singleton(
-                    EffectInstance::new_kinded(owner, Box::new([KindedArgument::TypeArg(ty)])),
-                ))]),
-            );
-        }
-        let copy = ty.clone();
-        assert_eq!(ty, copy);
-        let hash = |value: &Type| {
-            let mut state = DefaultHasher::new();
-            value.hash(&mut state);
-            state.finish()
-        };
-        assert_eq!(hash(&ty), hash(&copy));
-        assert_eq!(format!("{ty:?}"), format!("{copy:?}"));
-        discard_type_iteratively(ty);
-        discard_type_iteratively(copy);
-    }).expect("small-stack witness starts").join().expect("alternating owners remain stack safe");
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let source =
+                SourceFile::new("alternating-owner-rows.ash", "").expect("fixture should fit");
+            let module = ModuleId::from(source.id());
+            let definition = ResourceDefinitionId::new(module, 0);
+            let owner = EffectId::new(module, 0);
+            // This raw graph tests structural ownership; it is not a well-kinded source resource.
+            let mut ty = Type::Unit;
+            for _ in 0..10_000 {
+                ty = Type::ResourceApply(
+                    definition,
+                    Box::new([KindedArgument::RowArg(EffectRow::singleton(
+                        EffectInstance::new_kinded(owner, Box::new([KindedArgument::TypeArg(ty)])),
+                    ))]),
+                );
+            }
+            let copy = ty.clone();
+            assert_eq!(ty, copy);
+            let hash = |value: &Type| {
+                let mut state = DefaultHasher::new();
+                value.hash(&mut state);
+                state.finish()
+            };
+            assert_eq!(hash(&ty), hash(&copy));
+            assert_eq!(format!("{ty:?}"), format!("{copy:?}"));
+            discard_type_iteratively(ty);
+            discard_type_iteratively(copy);
+        })
+        .expect("small-stack witness starts")
+        .join()
+        .expect("alternating owners remain stack safe");
 }

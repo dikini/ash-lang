@@ -615,6 +615,7 @@ fn clone_types(
 fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), UsefulnessError> {
     enum Task<'a> {
         Type(&'a Type),
+        Argument(&'a crate::types::KindedArgument),
         Slice(std::slice::Iter<'a, Type>),
     }
 
@@ -627,9 +628,24 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                     work.push(Task::Type(ty));
                 }
             }
+            Task::Argument(crate::types::KindedArgument::TypeArg(ty)) => work.push(Task::Type(ty)),
+            Task::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                budget.charge(1 + usize::from(row.tail().is_some()))?;
+                for member in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    budget.charge(1)?;
+                    work.extend(member.arguments().iter().map(Task::Argument));
+                }
+            }
             Task::Type(ty) => {
                 budget.charge(1)?;
                 match ty {
+                    Type::ResourceApply(_, arguments) => {
+                        work.extend(arguments.iter().map(Task::Argument))
+                    }
                     Type::Tuple(elements) => work.push(Task::Slice(elements.iter())),
                     Type::Function(domain, codomain) => {
                         work.push(Task::Type(codomain));
@@ -637,7 +653,7 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                     }
                     Type::EffectfulFunction(domain, codomain) => {
                         for argument in codomain.effect_arguments() {
-                            work.push(Task::Type(argument));
+                            work.push(Task::Argument(argument));
                         }
                         work.push(Task::Type(&codomain.value));
                         work.push(Task::Type(domain));
@@ -724,7 +740,8 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         | Type::EffectfulFunction(_, _)
         | Type::Variable(_)
         | Type::Inference(_)
-        | Type::Forall(_, _) => None,
+        | Type::Forall(_, _)
+        | Type::ResourceApply(_, _) => None,
     }
 }
 
@@ -1042,8 +1059,8 @@ mod tests {
         let (registry, constructor, owner) = constructor_registry(WIDTH, Type::Int);
         let applied = Type::apply_arguments(Type::Nominal(owner), vec![Type::Bool; WIDTH]);
         // W application-spine visits + W replacement records + W retained
-        // argument leaves + one substituted payload cell.
-        let required = WIDTH * 3 + 1;
+        // argument leaves + one admitted traversal root + one substituted payload cell.
+        let required = WIDTH * 3 + 2;
         let mut exact = UsefulnessBudget {
             remaining: required,
         };

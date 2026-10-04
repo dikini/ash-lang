@@ -767,6 +767,8 @@ pub struct SurfaceType {
 /// The closed Ash type family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SurfaceTypeKind {
+    /// A tagged complete row argument, admitted only in an owner application.
+    RowArgument(SurfaceEffectRow),
     /// Arbitrary-precision integers.
     Int,
     /// Boolean values.

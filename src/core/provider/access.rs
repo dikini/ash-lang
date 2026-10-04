@@ -12,7 +12,7 @@ use crate::{
     resolved::ResourceDefinitionId,
     types::{
         IterativeTypeOwner, NominalTypeId, Type, TypeVariableId, clone_type_with_budget,
-        discard_type_iteratively, same_effect_rows_with_budget, substitute_type_variables_with,
+        discard_type_iteratively, same_effect_rows_with_budget,
     },
 };
 
@@ -68,7 +68,9 @@ pub(crate) fn mutate_state_access(
         AccessMutation::Definition => {
             definition = ResourceDefinitionId::new(definition.module(), definition.ordinal() + 1)
         }
-        AccessMutation::Arguments => arguments[0] = Type::Int,
+        AccessMutation::Arguments => {
+            arguments[0] = crate::types::KindedArgument::TypeArg(Type::Int)
+        }
         AccessMutation::Operand => operand = program.root,
         AccessMutation::Result => program.nodes[ordinal].ty = Type::Int,
         AccessMutation::Effects => {
@@ -89,7 +91,10 @@ pub(crate) fn mutate_state_access(
                 .iter()
                 .find_map(|stored| match &stored.kind {
                     EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                        Some(request.effect().arguments()[0].clone())
+                        match &request.effect().arguments()[0] {
+                            crate::types::KindedArgument::TypeArg(ty) => Some(ty.clone()),
+                            _ => None,
+                        }
                     }
                     _ => None,
                 })
@@ -104,7 +109,7 @@ pub(crate) fn mutate_state_access(
                 Box::new(Type::Nominal(state)),
                 Box::new(own_identity.clone()),
             );
-            arguments[0] = own_identity;
+            arguments[0] = crate::types::KindedArgument::TypeArg(own_identity);
         }
         AccessMutation::Callable => {
             let body =
@@ -139,7 +144,7 @@ pub(crate) fn mutate_state_access(
         }
     }
     program.nodes[ordinal].kind = EffectExprKind::Operation(EffectOperation::ProviderStateAccess(
-        super::super::effect::ProviderStateAccessNode::new(
+        super::super::effect::ProviderStateAccessNode::new_kinded(
             method,
             definition,
             arguments.into_boxed_slice(),
@@ -217,6 +222,27 @@ pub(crate) fn check_state_access_associations(
 }
 
 struct Substitutions(HashMap<TypeVariableId, Type>);
+impl Substitutions {
+    fn insert_unique_cloned(
+        &mut self,
+        variable: TypeVariableId,
+        ty: &Type,
+        work: &mut TypeWorkBudget,
+        id: NodeId,
+    ) -> Result<(), ValidationError> {
+        if self.0.contains_key(&variable) {
+            return Err(invalid(id));
+        }
+        charge(work, 1)?;
+        self.0.try_reserve(1).map_err(|_| resource())?;
+        let copied = clone_type_with_budget(ty, work).map_err(|()| resource())?;
+        if let Some(displaced) = self.0.insert(variable, copied) {
+            discard_type_iteratively(displaced);
+            return Err(invalid(id));
+        }
+        Ok(())
+    }
+}
 impl Drop for Substitutions {
     fn drop(&mut self) {
         for (_, ty) in self.0.drain() {
@@ -281,6 +307,9 @@ impl<'a, 'b> AssociationCatalog<'a, 'b> {
                 .arguments()
                 .get(*coordinate)
                 .ok_or_else(|| invalid(request_id))?;
+            let crate::types::KindedArgument::TypeArg(expected) = expected else {
+                return Err(invalid(request_id));
+            };
             if !same_type_with_budget(argument, expected, work).map_err(|()| resource())? {
                 return Err(invalid(request_id));
             }
@@ -362,46 +391,108 @@ impl<'a, 'b> AssociationCatalog<'a, 'b> {
             .ok_or_else(|| invalid(id))?;
         let stored = node(program, id)?;
         let operand = node(program, access.operand())?;
-        let (family, arguments) = nominal_arguments(&operand.ty, id, work)?;
-        if family != association.family
-            || arguments.len() != association.parameters.len()
+        enum Actual<'a> {
+            Type(&'a Type),
+            Argument(&'a crate::types::KindedArgument),
+        }
+        let mut arguments = Vec::new();
+        match &operand.ty {
+            Type::ResourceApply(definition, actuals) => {
+                if *definition != association.definition {
+                    return Err(invalid(id));
+                }
+                charge(work, actuals.len())?;
+                arguments
+                    .try_reserve(actuals.len())
+                    .map_err(|_| resource())?;
+                arguments.extend(actuals.iter().map(Actual::Argument));
+            }
+            ty => {
+                let (family, actuals) = nominal_arguments(ty, id, work)?;
+                if family != association.family {
+                    return Err(invalid(id));
+                }
+                charge(work, actuals.len())?;
+                arguments
+                    .try_reserve(actuals.len())
+                    .map_err(|_| resource())?;
+                arguments.extend(actuals.into_iter().map(Actual::Type));
+            }
+        }
+        if arguments.len() != association.parameters.len()
             || arguments.len() != access.arguments().len()
         {
             return Err(invalid(id));
         }
         let mut substitutions = Substitutions(HashMap::new());
-        charge(work, arguments.len())?;
-        substitutions
-            .0
-            .try_reserve(arguments.len())
-            .map_err(|_| resource())?;
+        let mut rows = HashMap::new();
+        // Only row slots reserve this map. Type slots are admitted by the
+        // substitution owner immediately before retaining their cloned value.
+        let row_count = access
+            .arguments()
+            .iter()
+            .filter(|argument| matches!(argument, crate::types::KindedArgument::RowArg(_)))
+            .count();
+        charge(work, row_count)?;
+        rows.try_reserve(row_count).map_err(|_| resource())?;
         for ((parameter, actual), retained) in association
             .parameters
             .iter()
             .zip(arguments)
             .zip(access.arguments())
         {
-            if !same_type_with_budget(actual, retained, work).map_err(|()| resource())? {
-                return Err(invalid(id));
-            }
-            let replacement = IterativeTypeOwner::new(
-                clone_type_with_budget(actual, work).map_err(|()| resource())?,
-            );
-            match substitutions.0.entry(*parameter) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(replacement.into_inner());
+            let canonical = program
+                .registry
+                .type_variable(*parameter)
+                .ok_or_else(|| invalid(id))?;
+            match (&canonical.kind, actual, retained) {
+                (
+                    crate::types::Kind::EffectRow,
+                    Actual::Argument(crate::types::KindedArgument::RowArg(actual)),
+                    crate::types::KindedArgument::RowArg(retained),
+                ) => {
+                    if !same_effect_rows_with_budget(actual, retained, work)
+                        .map_err(|()| resource())?
+                    {
+                        return Err(invalid(id));
+                    }
+                    if rows
+                        .insert(
+                            *parameter,
+                            crate::types::clone_effect_row_with_budget(actual, work)
+                                .map_err(|()| resource())?,
+                        )
+                        .is_some()
+                    {
+                        return Err(invalid(id));
+                    }
                 }
-                std::collections::hash_map::Entry::Occupied(_) => return Err(invalid(id)),
+                (kind, actual, crate::types::KindedArgument::TypeArg(retained))
+                    if *kind != crate::types::Kind::EffectRow =>
+                {
+                    let actual = match actual {
+                        Actual::Type(ty)
+                        | Actual::Argument(crate::types::KindedArgument::TypeArg(ty)) => ty,
+                        _ => return Err(invalid(id)),
+                    };
+                    if !same_type_with_budget(actual, retained, work).map_err(|()| resource())? {
+                        return Err(invalid(id));
+                    }
+                    substitutions.insert_unique_cloned(*parameter, actual, work, id)?;
+                }
+                _ => return Err(invalid(id)),
             }
         }
         let expected = IterativeTypeOwner::new(
-            substitute_type_variables_with(
+            crate::types::substitute_type_and_row_variables_with(
                 association.state,
                 &substitutions.0,
+                &rows,
                 |cells| work.charge(cells),
                 || (),
             )
-            .map_err(|()| resource())?,
+            .map_err(|()| resource())?
+            .map_err(|_| invalid(id))?,
         );
         if !same_type_with_budget(&expected, &stored.ty, work).map_err(|()| resource())?
             || !same_effect_rows_with_budget(&operand.effects, &stored.effects, work)

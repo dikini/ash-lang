@@ -330,7 +330,13 @@ fn ordinary_multi_parameter_relation_selects_and_evaluates() {
         panic!("the ordinary relation should retain one checked implementation");
     };
     assert_eq!(implementation.interface(), interface.id);
-    assert_eq!(implementation.arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(
+        implementation.arguments(),
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
+    );
 
     let method = MethodId::new(interface.id, 0);
     let main = checked
@@ -351,7 +357,13 @@ fn ordinary_multi_parameter_relation_selects_and_evaluates() {
         .selection()
         .expect("the complete ordinary application should select evidence");
     assert_eq!(selection.interface(), interface.id);
-    assert_eq!(selection.arguments(), &[Type::Int, Type::Bool]);
+    assert_eq!(
+        selection.arguments(),
+        &[
+            ash::types::KindedArgument::TypeArg(Type::Int),
+            ash::types::KindedArgument::TypeArg(Type::Bool)
+        ]
+    );
     assert!(matches!(
         selection.node(selection.root()),
         Some(EvidenceNode::Implementation { implementation: selected, .. })
@@ -945,7 +957,7 @@ fn determined_global_retains_dependent_only_binder_in_scheme_order() {
     };
 
     assert!(
-        matches!(requirement.arguments(), [Type::Variable(found), Type::Variable(output)]
+        matches!(requirement.arguments(), [ash::types::KindedArgument::TypeArg(Type::Variable(found)), ash::types::KindedArgument::TypeArg(Type::Variable(output))]
         if *found == key.0 && *output == dependent.0)
     );
 }
@@ -1038,7 +1050,9 @@ fn checked_equational_and_operational_schemes_keep_ordered_requirements_outside_
         };
         assert_eq!(
             argument,
-            &Type::Variable(scheme.scheme.type_parameters[0].0)
+            &ash::types::KindedArgument::TypeArg(Type::Variable(
+                scheme.scheme.type_parameters[0].0
+            ))
         );
     }
 }
