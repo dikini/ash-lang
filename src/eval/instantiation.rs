@@ -146,7 +146,9 @@ impl Instantiation {
 
     pub(super) fn activation(effect: &EffectInstance) -> Option<ActivationKey> {
         match effect.arguments() {
-            [Type::Inference(identity)] => Some(ActivationKey(identity.value())),
+            [crate::types::KindedArgument::TypeArg(Type::Inference(identity))] => {
+                Some(ActivationKey(identity.value()))
+            }
             _ => None,
         }
     }
@@ -353,9 +355,15 @@ impl Instantiation {
                 )
             })?;
         for argument in effect.arguments() {
-            arguments.push(IterativeTypeOwner::new(
-                self.ty_in_phase(argument, work, phase)?,
-            ));
+            let substituted = match argument {
+                crate::types::KindedArgument::TypeArg(ty) => {
+                    crate::types::KindedArgument::TypeArg(self.ty_in_phase(ty, work, phase)?)
+                }
+                crate::types::KindedArgument::RowArg(row) => {
+                    crate::types::KindedArgument::RowArg(self.row(row, work)?)
+                }
+            };
+            arguments.push(crate::types::IterativeArgumentOwner::new(substituted));
         }
         // Admit the final owner before moving individually guarded types.
         let mut retained = Vec::new();
@@ -367,8 +375,12 @@ impl Instantiation {
                 None,
             )
         })?;
-        retained.extend(arguments.into_iter().map(IterativeTypeOwner::into_inner));
-        Ok(EffectInstance::new(
+        retained.extend(
+            arguments
+                .into_iter()
+                .map(crate::types::IterativeArgumentOwner::into_inner),
+        );
+        Ok(EffectInstance::new_kinded(
             effect.effect(),
             retained.into_boxed_slice(),
         ))
@@ -723,7 +735,12 @@ mod tests {
                     } else {
                         computation.effects().known()
                     };
-                    assert!(instances[0].arguments().iter().all(|ty| *ty == Type::Bool));
+                    assert!(
+                        instances[0]
+                            .arguments()
+                            .iter()
+                            .all(|ty| *ty == crate::types::KindedArgument::TypeArg(Type::Bool))
+                    );
                 }
             }
         }

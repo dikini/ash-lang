@@ -55,6 +55,7 @@ use crate::{
 pub(crate) struct MethodEvidenceMethod {
     pub(crate) id: MethodId,
     pub(crate) interface_parameters: Box<[TypeVariableId]>,
+    pub(crate) inherited_parameters: Box<[crate::resolved::InheritedOwnerParameter]>,
     pub(crate) parameters: Box<[(TypeVariableId, Kind)]>,
     pub(crate) value_type: Type,
 }
@@ -296,6 +297,20 @@ impl Drop for IterativeTypeMap {
     }
 }
 
+struct IterativeArgumentBuffer(Vec<crate::types::KindedArgument>);
+impl IterativeArgumentBuffer {
+    fn into_boxed_slice(mut self) -> Box<[crate::types::KindedArgument]> {
+        std::mem::take(&mut self.0).into_boxed_slice()
+    }
+}
+impl Drop for IterativeArgumentBuffer {
+    fn drop(&mut self) {
+        for argument in self.0.drain(..) {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
+
 struct IterativeTypeSequence(std::vec::IntoIter<Type>);
 
 impl IterativeTypeSequence {
@@ -493,21 +508,30 @@ pub(crate) fn same_imported_method_evidence_catalog(
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ()> {
         work.charge(1)?;
-        if a.interface() != b.interface() { return Ok(false); }
+        if a.interface() != b.interface() {
+            return Ok(false);
+        }
         work.charge(a.arguments().len())?;
-        if a.arguments().len() != b.arguments().len() { return Ok(false); }
+        if a.arguments().len() != b.arguments().len() {
+            return Ok(false);
+        }
         let type_work = work;
         for (left, right) in a.arguments().iter().zip(b.arguments()) {
             match (left, right) {
-            (crate::types::KindedArgument::TypeArg(left), crate::types::KindedArgument::TypeArg(right)) => {
-                if !same_type_with_budget(left, right, type_work)? { return Ok(false); }
-            }
-            _ => {
-                if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
-                    return Ok(false);
+                (
+                    crate::types::KindedArgument::TypeArg(left),
+                    crate::types::KindedArgument::TypeArg(right),
+                ) => {
+                    if !same_type_with_budget(left, right, type_work)? {
+                        return Ok(false);
+                    }
+                }
+                _ => {
+                    if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
+                        return Ok(false);
+                    }
                 }
             }
-        }
         }
         Ok(true)
     }
@@ -530,7 +554,13 @@ pub(crate) fn same_imported_method_evidence_catalog(
         return Ok(false);
     }
     for (a, b) in left.methods.iter().zip(&right.methods) {
+        work.charge(
+            a.inherited_parameters
+                .len()
+                .saturating_add(b.inherited_parameters.len()),
+        )?;
         if a.id != b.id
+            || a.inherited_parameters != b.inherited_parameters
             || !ids(&a.interface_parameters, &b.interface_parameters, work)?
             || !parameters(&a.parameters, &b.parameters, work)?
             || !same_type_with_budget(&a.value_type, &b.value_type, work)?
@@ -1134,19 +1164,33 @@ fn method_evidence_adapter_application_matches(
         return Ok(false);
     }
     for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
-        if let (crate::types::KindedArgument::TypeArg(expected), crate::types::KindedArgument::TypeArg(actual)) = (expected, actual) {
+        if let (
+            crate::types::KindedArgument::TypeArg(expected),
+            crate::types::KindedArgument::TypeArg(actual),
+        ) = (expected, actual)
+        {
             let expected = IterativeTypeOwner::new(substitute_type_variables_with(
-                expected, &replacements.0, |cells| type_work.charge(cells), || (),
+                expected,
+                &replacements.0,
+                |cells| type_work.charge(cells),
+                || (),
             )?);
-            if !same_type_with_budget(&expected, actual, type_work)? { return Ok(false); }
+            if !same_type_with_budget(&expected, actual, type_work)? {
+                return Ok(false);
+            }
             continue;
         }
         let expected = crate::types::IterativeArgumentOwner::new(
             crate::types::map_kinded_argument_types_with_budget(
                 expected,
-                &mut |ty, budget: &mut TypeWorkBudget| substitute_type_variables_with(
-                    ty, &replacements.0, |cells| budget.charge(cells), || (),
-                ),
+                &mut |ty, budget: &mut TypeWorkBudget| {
+                    substitute_type_variables_with(
+                        ty,
+                        &replacements.0,
+                        |cells| budget.charge(cells),
+                        || (),
+                    )
+                },
                 type_work,
                 &mut |_| (),
             )?,
@@ -1169,8 +1213,13 @@ fn same_interface_application_with_budget(
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
         match (left, right) {
-            (crate::types::KindedArgument::TypeArg(left), crate::types::KindedArgument::TypeArg(right)) => {
-                if !same_type_with_budget(left, right, type_work)? { return Ok(false); }
+            (
+                crate::types::KindedArgument::TypeArg(left),
+                crate::types::KindedArgument::TypeArg(right),
+            ) => {
+                if !same_type_with_budget(left, right, type_work)? {
+                    return Ok(false);
+                }
             }
             _ => {
                 if !crate::types::same_kinded_argument_with_budget(left, right, type_work)? {
@@ -2550,27 +2599,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .try_reserve(1)
             .map_err(|_| BuildError::TypeWorkExceeded)?;
         let (interface, arguments) = application.into_parts();
-        let mut pending = IterativeTypeSequence(arguments.into_vec().into_iter());
-        let mut admitted = IterativeTypeBuffer(Vec::new());
-        admitted
-            .0
-            .try_reserve(pending.len())
-            .map_err(|_| BuildError::TypeWorkExceeded)?;
-        while let Some(argument) = pending.next() {
-            let (argument, _) = admit_type_with_status(
-                argument,
-                &mut self.type_work,
-                true,
-                F::ALLOWS_EFFECTFUL_TYPES,
-            )?;
-            admitted.0.push(argument);
-        }
+        let admitted = self.admit_owner_arguments(arguments)?;
         self.method_evidence_anchors.push(MethodEvidenceAnchor {
             node,
             owner,
             requirement,
             method,
-            application: InterfaceApplication::new(interface, admitted.into_boxed_slice()),
+            application: InterfaceApplication::new_kinded(interface, admitted),
             role,
             occurrence,
             expectation,
@@ -3138,6 +3173,14 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         clone_type_with_budget(ty, &mut self.type_work).map_err(|()| BuildError::TypeWorkExceeded)
     }
 
+    pub(super) fn clone_owner_argument_for_rebuild(
+        &mut self,
+        argument: &crate::types::KindedArgument,
+    ) -> Result<crate::types::KindedArgument, BuildError> {
+        crate::types::clone_kinded_argument_with_budget(argument, &mut self.type_work)
+            .map_err(|()| BuildError::TypeWorkExceeded)
+    }
+
     pub(super) fn clone_effect_row_for_rebuild(
         &mut self,
         row: &EffectRow,
@@ -3146,45 +3189,62 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             .map_err(|()| BuildError::TypeWorkExceeded)
     }
 
+    fn admit_owner_arguments(
+        &mut self,
+        arguments: Box<[crate::types::KindedArgument]>,
+    ) -> Result<Box<[crate::types::KindedArgument]>, BuildError> {
+        let owned = IterativeArgumentBuffer(arguments.into_vec());
+        self.type_work
+            .charge(owned.0.len())
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let (contains_inference, normalize) = scan_type_admission(
+            TypeAdmissionTask::Owner(&owned.0, 0),
+            &mut self.type_work,
+            true,
+            F::ALLOWS_EFFECTFUL_TYPES,
+        )?;
+        self.requires_type_rewrite |= contains_inference;
+        if normalize {
+            let mut normalized = IterativeArgumentBuffer(Vec::new());
+            normalized
+                .0
+                .try_reserve_exact(owned.0.len())
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            for argument in &owned.0 {
+                normalized.0.push(
+                    crate::types::clone_kinded_argument_with_budget(argument, &mut self.type_work)
+                        .map_err(|()| BuildError::TypeWorkExceeded)?,
+                );
+            }
+            Ok(normalized.into_boxed_slice())
+        } else {
+            Ok(owned.into_boxed_slice())
+        }
+    }
+
     pub(super) fn admit_provider_state_access_arguments(
         &mut self,
-        arguments: Box<[Type]>,
-    ) -> Result<Box<[Type]>, BuildError> {
-        let mut pending = IterativeTypeSequence(arguments.into_vec().into_iter());
-        self.type_work
-            .charge(pending.len())
-            .map_err(|()| BuildError::TypeWorkExceeded)?;
-        let mut admitted = IterativeTypeBuffer(Vec::new());
-        admitted
-            .0
-            .try_reserve_exact(pending.len())
-            .map_err(|_| BuildError::TypeWorkExceeded)?;
-        let mut requires_type_rewrite = false;
-        while let Some(argument) = pending.next() {
-            let (argument, contains_inference) = admit_type_with_status(
-                argument,
-                &mut self.type_work,
-                true,
-                F::ALLOWS_EFFECTFUL_TYPES,
-            )?;
-            requires_type_rewrite |= contains_inference;
-            admitted.0.push(argument);
-        }
-        self.requires_type_rewrite |= requires_type_rewrite;
-        Ok(admitted.into_boxed_slice())
+        arguments: Box<[crate::types::KindedArgument]>,
+    ) -> Result<Box<[crate::types::KindedArgument]>, BuildError> {
+        self.admit_owner_arguments(arguments)
     }
 
     pub(super) fn admit_effect_instance(
         &mut self,
         instance: crate::types::EffectInstance,
     ) -> Result<crate::types::EffectInstance, BuildError> {
-        self.type_work.charge(instance.arguments().len())
+        self.type_work
+            .charge(instance.arguments().len())
             .map_err(|()| BuildError::TypeWorkExceeded)?;
         let (contains_inference, normalize) = scan_type_admission(
             TypeAdmissionTask::Owner(instance.arguments(), 0),
-            &mut self.type_work, false, F::ALLOWS_EFFECTFUL_TYPES,
+            &mut self.type_work,
+            false,
+            F::ALLOWS_EFFECTFUL_TYPES,
         )?;
-        if contains_inference { return Err(BuildError::InvalidPayload); }
+        if contains_inference {
+            return Err(BuildError::InvalidPayload);
+        }
         if normalize {
             crate::types::clone_effect_instance_with_budget(&instance, &mut self.type_work)
                 .map_err(|()| BuildError::TypeWorkExceeded)
@@ -4519,11 +4579,14 @@ fn admit_structured_type_with_status(
 ) -> Result<(Type, bool), BuildError> {
     let owned = IterativeTypeOwner::new(ty);
     let (contains_inference, normalize) = scan_type_admission(
-        TypeAdmissionTask::Visit(&owned, 0), type_work, charge_structure, allow_effectful,
+        TypeAdmissionTask::Visit(&owned, 0),
+        type_work,
+        charge_structure,
+        allow_effectful,
     )?;
     if normalize {
-        let normalized = clone_type_with_budget(&owned, type_work)
-            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let normalized =
+            clone_type_with_budget(&owned, type_work).map_err(|()| BuildError::TypeWorkExceeded)?;
         Ok((normalized, contains_inference))
     } else {
         Ok((owned.into_inner(), contains_inference))
@@ -4540,9 +4603,12 @@ fn scan_type_admission<'a>(
     // Keep ordinary Type structure admission optional. New owner-vector
     // scheduling below has its own real retention charges in either mode.
     if charge_structure && matches!(initial, TypeAdmissionTask::Visit(_, _)) {
-        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+        type_work
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
     }
-    work.try_reserve_exact(1).map_err(|_| BuildError::TypeWorkExceeded)?;
+    work.try_reserve_exact(1)
+        .map_err(|_| BuildError::TypeWorkExceeded)?;
     work.push(initial);
     let mut exceeded = false;
     let mut contains_inference = false;
@@ -4550,7 +4616,8 @@ fn scan_type_admission<'a>(
     #[cfg(test)]
     record_type_admission_pending(work.len());
     while let Some(task) = work.pop() {
-        work.try_reserve(3).map_err(|_| BuildError::TypeWorkExceeded)?;
+        work.try_reserve(3)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
         match task {
             TypeAdmissionTask::Visit(ty, depth) => match ty {
                 Type::Inference(_) => contains_inference = true,
@@ -4558,7 +4625,9 @@ fn scan_type_admission<'a>(
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     if charge_structure {
-                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        type_work
+                            .charge(2)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                     }
                     work.push(TypeAdmissionTask::Visit(argument, child_depth));
                     // The unary left spine records source application width.
@@ -4568,7 +4637,9 @@ fn scan_type_admission<'a>(
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     if charge_structure {
-                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        type_work
+                            .charge(2)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                     }
                     work.push(TypeAdmissionTask::Visit(codomain, child_depth));
                     work.push(TypeAdmissionTask::Visit(domain, child_depth));
@@ -4576,7 +4647,10 @@ fn scan_type_admission<'a>(
                 Type::Tuple(elements) => {
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
-                    work.push(TypeAdmissionTask::VisitSequence(elements.iter(), child_depth));
+                    work.push(TypeAdmissionTask::VisitSequence(
+                        elements.iter(),
+                        child_depth,
+                    ));
                 }
                 Type::Forall(parameters, body) => {
                     charge_kinded_type_parameters(parameters, type_work)
@@ -4584,7 +4658,9 @@ fn scan_type_admission<'a>(
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     if charge_structure {
-                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        type_work
+                            .charge(1)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                     }
                     work.push(TypeAdmissionTask::Visit(body, child_depth));
                 }
@@ -4594,24 +4670,40 @@ fn scan_type_admission<'a>(
                     work.push(TypeAdmissionTask::Owner(arguments, child_depth));
                 }
                 Type::EffectfulFunction(domain, computation) => {
-                    if !allow_effectful { return Err(BuildError::InvalidPayload); }
+                    if !allow_effectful {
+                        return Err(BuildError::InvalidPayload);
+                    }
                     charge_effect_row_cells(computation.effects(), type_work)
                         .map_err(|()| BuildError::TypeWorkExceeded)?;
                     normalize |= computation.effects().is_empty();
-                    contains_inference |= matches!(computation.effects().tail().map(|tail| tail.variable()), Some(EffectRowVariable::Inference(_)));
+                    contains_inference |= matches!(
+                        computation.effects().tail().map(|tail| tail.variable()),
+                        Some(EffectRowVariable::Inference(_))
+                    );
                     let child_depth = depth.saturating_add(1);
                     exceeded |= child_depth > CORE_PAYLOAD_DEPTH_LIMIT;
                     // Row metadata does not add Type structural depth.
-                    for instance in computation.effects().known().iter()
-                        .chain(computation.effects().tail().into_iter().flat_map(|tail| tail.lacks())) {
-                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
-                        work.try_reserve(1).map_err(|_| BuildError::TypeWorkExceeded)?;
+                    for instance in computation.effects().known().iter().chain(
+                        computation
+                            .effects()
+                            .tail()
+                            .into_iter()
+                            .flat_map(|tail| tail.lacks()),
+                    ) {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
+                        work.try_reserve(1)
+                            .map_err(|_| BuildError::TypeWorkExceeded)?;
                         work.push(TypeAdmissionTask::Owner(instance.arguments(), child_depth));
                     }
                     if charge_structure {
-                        type_work.charge(2).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        type_work
+                            .charge(2)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                     }
-                    work.try_reserve(2).map_err(|_| BuildError::TypeWorkExceeded)?;
+                    work.try_reserve(2)
+                        .map_err(|_| BuildError::TypeWorkExceeded)?;
                     work.push(TypeAdmissionTask::Visit(computation.value(), child_depth));
                     work.push(TypeAdmissionTask::Visit(domain, child_depth));
                 }
@@ -4620,7 +4712,9 @@ fn scan_type_admission<'a>(
             TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
                 if let Some(ty) = remaining.next() {
                     if charge_structure {
-                        type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        type_work
+                            .charge(1)
+                            .map_err(|()| BuildError::TypeWorkExceeded)?;
                     }
                     work.push(TypeAdmissionTask::VisitSequence(remaining, depth));
                     work.push(TypeAdmissionTask::Visit(ty, depth));
@@ -4628,7 +4722,8 @@ fn scan_type_admission<'a>(
             }
             TypeAdmissionTask::Owner(arguments, depth) => {
                 crate::types::visit_owner_components_with_charge(
-                    arguments.iter(), type_work,
+                    arguments.iter(),
+                    type_work,
                     |ty, budget| {
                         budget.charge(1)?;
                         work.try_reserve(1).map_err(|_| ())?;
@@ -4636,16 +4731,20 @@ fn scan_type_admission<'a>(
                         Ok(())
                     },
                     |tail, _| {
-                        contains_inference |= matches!(tail.variable(), EffectRowVariable::Inference(_));
+                        contains_inference |=
+                            matches!(tail.variable(), EffectRowVariable::Inference(_));
                         Ok(())
                     },
-                ).map_err(|()| BuildError::TypeWorkExceeded)?;
+                )
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
             }
         }
         #[cfg(test)]
         record_type_admission_pending(work.len());
     }
-    if exceeded { return Err(BuildError::TypeDepthExceeded); }
+    if exceeded {
+        return Err(BuildError::TypeDepthExceeded);
+    }
     Ok((contains_inference, normalize))
 }
 
@@ -4782,7 +4881,7 @@ mod tests {
     fn one_method_evidence_anchor_and_finish_have_an_exact_retry_boundary() {
         // The unary complete application adds one container-authentication
         // unit and one retained argument-slot unit to the predecessor 14.
-        const AUTHENTICATE_AND_FINISH_WORK: usize = 16;
+
         let source = SourceFile::new("method-anchor.ash", "()").expect("test source");
         let origin = generated_origin(&source, 0);
         let interface = InterfaceId::new(ModuleId::new(0), 0);
@@ -4834,10 +4933,20 @@ mod tests {
             )
         };
 
+        let (mut measured, measured_node) = prepare();
+        let initial_work = measured.type_work.used();
+        authenticate(&mut measured, measured_node)
+            .expect("measure complete tagged anchor admission");
+        let authenticate_and_finish_work =
+            measured.type_work.used() - initial_work + measured.consumed_method_evidence.len();
+        measured
+            .finish(measured_node)
+            .expect("measured anchor publication");
+
         let (mut short, short_node) = prepare();
         short
             .charge_type_work_for_test(
-                TYPE_WORK_LIMIT - short.type_work.used() - (AUTHENTICATE_AND_FINISH_WORK - 1),
+                TYPE_WORK_LIMIT - short.type_work.used() - (authenticate_and_finish_work - 1),
             )
             .expect("the one-short prefix should fit");
         authenticate(&mut short, short_node).expect("the exact anchor emission should fit");
@@ -4852,7 +4961,7 @@ mod tests {
             let (mut exact, exact_node) = prepare();
             exact
                 .charge_type_work_for_test(
-                    TYPE_WORK_LIMIT - exact.type_work.used() - AUTHENTICATE_AND_FINISH_WORK,
+                    TYPE_WORK_LIMIT - exact.type_work.used() - authenticate_and_finish_work,
                 )
                 .expect("the exact prefix should fit");
             authenticate(&mut exact, exact_node).expect("the exact anchor emission should fit");
@@ -4873,6 +4982,11 @@ mod tests {
             vec![MethodEvidenceMethod {
                 id: method,
                 interface_parameters: Box::new([parameter]),
+                inherited_parameters: Box::new([crate::resolved::InheritedOwnerParameter {
+                    owner: crate::resolved::OwnerId::Interface(interface),
+                    slot: 0,
+                    binder: parameter,
+                }]),
                 parameters: Box::new([]),
                 value_type: Type::Function(
                     Box::new(Type::Variable(parameter)),
@@ -4982,14 +5096,30 @@ mod tests {
         for fresh in 0..2 {
             let (mut builder, nodes) = prepare();
             // Binder 1 + clone 2 + method lookup 1 + expectation scan 4
-            // + matching application 2 + retained anchor 8 + admission 1;
+            // + matching application 2 + retained anchor 8 + owner admission 3;
             // each reached expectation adds lookup 6 + dispatch 1.
             for ordinal in [2, 0, 1] {
                 let reached = match ordinal {
                     2 => 4,
                     _ => 2,
                 };
-                let work = 19 + builder.method_evidence_anchors.len() + 7 * reached;
+                let (mut measured, measured_nodes) = prepare();
+                for prior_ordinal in [2, 0, 1].into_iter().take_while(|prior| *prior != ordinal) {
+                    measured
+                        .authenticate_lexical_capture_use(
+                            measured_nodes[prior_ordinal],
+                            0,
+                            prior_ordinal,
+                        )
+                        .unwrap();
+                }
+                let initial_work = measured.type_work.used();
+                measured
+                    .authenticate_lexical_capture_use(measured_nodes[ordinal], 0, ordinal)
+                    .unwrap();
+                let work = measured.type_work.used() - initial_work;
+                // Complete argument tags and catalog authority supplement the predecessor accounting.
+                assert!(work >= 19 + builder.method_evidence_anchors.len() + 7 * reached);
                 let prior = builder.method_evidence_anchors.len();
                 let consumed = builder.consumed_method_evidence.clone();
                 builder.type_work = TypeWorkBudget::with_limit(work - 1);
@@ -5749,7 +5879,8 @@ mod tests {
             admit_type_with_status(application(), &mut short, true, false),
             Err(BuildError::TypeWorkExceeded),
         );
-        assert_eq!(short.used(), 4);
+        // The refused two-cell reservation is atomic, so only three cells are consumed.
+        assert_eq!(short.used(), 3);
     }
 
     #[test]

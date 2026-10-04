@@ -27,11 +27,193 @@ use super::{
 use crate::{
     source::Span,
     types::{
-        EffectInstance, EffectRow, EffectRowVariable, Type, TypeVariableId, TypeWorkBudget,
-        clone_effect_row_with_budget, clone_type_with_budget, rebuild_effect_row_with_budget,
-        same_type_with_budget, substitute_type_and_row_variables_with,
+        EffectInstance, EffectRow, EffectRowVariable, KindedArgument, Type, TypeVariableId,
+        TypeWorkBudget, clone_effect_row_with_budget, clone_type_with_budget,
+        rebuild_effect_row_with_budget, same_type_with_budget,
+        substitute_type_and_row_variables_with,
     },
 };
+
+/// Potential coincidence differs from equality: a rigid row formal may be
+/// instantiated at a call site. Closed rows preserve their defining families;
+/// ordinary exact equality is checked before this conservative relation.
+fn extend_possible_owner_pairs<'a>(
+    left: &'a [KindedArgument],
+    right: &'a [KindedArgument],
+    pending_types: &mut Vec<(&'a Type, &'a Type)>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    charge(budget, left.len() + right.len())?;
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(left.len())
+        .map_err(|_| Failure::Resource)?;
+    pending.extend(left.iter().zip(right));
+    while let Some((left, right)) = pending.pop() {
+        charge(budget, 1)?;
+        match (left, right) {
+            (KindedArgument::TypeArg(left), KindedArgument::TypeArg(right)) => {
+                pending_types
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                pending_types.push((left, right));
+            }
+            (KindedArgument::RowArg(left), KindedArgument::RowArg(right)) => {
+                // Neither an open prefix nor its lacks facts establish
+                // inequality before complete callable substitution is known.
+                if left.tail().is_some() || right.tail().is_some() {
+                    continue;
+                }
+                // Closed-row defining effect IDs are stable under substitution.
+                // Multiple instances of one family may coincide after type/row
+                // substitution, so only a unique pair determines argument pairs.
+                charge(budget, left.known().len() + right.known().len())?;
+                for member in left.known() {
+                    charge(budget, left.known().len() + right.known().len())?;
+                    let left_count = left
+                        .known()
+                        .iter()
+                        .filter(|candidate| candidate.effect() == member.effect())
+                        .count();
+                    let mut matches = right
+                        .known()
+                        .iter()
+                        .filter(|candidate| candidate.effect() == member.effect());
+                    let Some(other) = matches.next() else {
+                        return Ok(false);
+                    };
+                    if left_count == 1 && matches.next().is_none() {
+                        if member.arguments().len() != other.arguments().len() {
+                            return Ok(false);
+                        }
+                        charge(budget, member.arguments().len())?;
+                        pending
+                            .try_reserve(member.arguments().len())
+                            .map_err(|_| Failure::Resource)?;
+                        pending.extend(member.arguments().iter().zip(other.arguments()));
+                    }
+                }
+                for member in right.known() {
+                    charge(budget, left.known().len())?;
+                    if !left
+                        .known()
+                        .iter()
+                        .any(|candidate| candidate.effect() == member.effect())
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+/// Retain explicit owner RowArg equations alongside ordinary type equations.
+/// A closed actual prefix can identify a known member; an open actual row
+/// cannot select one instance on the basis of its prefix alone.
+fn extend_owner_context_pairs<'a>(
+    formal: &'a [KindedArgument],
+    actual: &'a [KindedArgument],
+    pending_types: &mut Vec<(&'a Type, &'a Type)>,
+    row_equations: &mut Vec<(&'a EffectRow, Option<&'a EffectRow>)>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    charge(budget, formal.len() + actual.len())?;
+    if formal.len() != actual.len() {
+        return Ok(());
+    }
+    let mut pending = Vec::new();
+    pending
+        .try_reserve(formal.len())
+        .map_err(|_| Failure::Resource)?;
+    pending.extend(formal.iter().zip(actual));
+    while let Some((formal, actual)) = pending.pop() {
+        charge(budget, 1)?;
+        match (formal, actual) {
+            (KindedArgument::TypeArg(formal), KindedArgument::TypeArg(actual)) => {
+                pending_types
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                pending_types.push((formal, actual));
+            }
+            (KindedArgument::RowArg(formal), KindedArgument::RowArg(actual)) => {
+                if matches!(
+                    formal.tail().map(|tail| tail.variable()),
+                    Some(EffectRowVariable::Rigid(_))
+                ) {
+                    row_equations
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    row_equations.push((formal, Some(actual)));
+                }
+                if actual.tail().is_some() {
+                    continue;
+                }
+                charge(budget, formal.known().len())?;
+                for effect in formal.known() {
+                    charge(budget, actual.known().len())?;
+                    let mut matches = actual
+                        .known()
+                        .iter()
+                        .filter(|member| member.effect() == effect.effect());
+                    if let Some(candidate) = matches.next()
+                        && matches.next().is_none()
+                        && effect.arguments().len() == candidate.arguments().len()
+                    {
+                        charge(budget, effect.arguments().len())?;
+                        pending
+                            .try_reserve(effect.arguments().len())
+                            .map_err(|_| Failure::Resource)?;
+                        pending.extend(effect.arguments().iter().zip(candidate.arguments()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn retain_owner_row_universe<'a>(
+    arguments: &'a [KindedArgument],
+    rows: &mut Vec<&'a EffectRow>,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    let mut pending = Vec::new();
+    charge(budget, arguments.len())?;
+    pending
+        .try_reserve(arguments.len())
+        .map_err(|_| Failure::Resource)?;
+    pending.extend(arguments);
+    while let Some(argument) = pending.pop() {
+        charge(budget, 1)?;
+        if let KindedArgument::RowArg(row) = argument {
+            rows.try_reserve(1).map_err(|_| Failure::Resource)?;
+            rows.push(row);
+            charge(
+                budget,
+                row.known().len() + row.tail().map_or(0, |tail| tail.lacks().len()),
+            )?;
+            for member in row
+                .known()
+                .iter()
+                .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+            {
+                charge(budget, member.arguments().len())?;
+                pending
+                    .try_reserve(member.arguments().len())
+                    .map_err(|_| Failure::Resource)?;
+                pending.extend(member.arguments());
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug)]
 pub(super) enum Control {
@@ -799,6 +981,7 @@ struct RowBinding {
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
     types: Vec<&'a Type>,
+    owner_rows: Vec<&'a EffectRow>,
     contexts: Vec<Context>,
     labels: Vec<Request>,
     label_cache: HashMap<(usize, usize), usize>,
@@ -826,6 +1009,21 @@ impl<'a> Analysis<'a> {
             )
         });
         let mut types: Vec<&Type> = Vec::new();
+        let mut owner_rows = Vec::new();
+        charge(budget, graph.code.len())?;
+        for code in &graph.code {
+            if let Control::Request(request)
+            | Control::Handler {
+                effect: request, ..
+            }
+            | Control::Resource {
+                effect: request, ..
+            } = code
+                && let Some(effect) = &request.effect
+            {
+                retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
+            }
+        }
         let mut pending = Vec::new();
         pending
             .try_reserve(graph.types.0.len() + graph.callables.len())
@@ -887,8 +1085,23 @@ impl<'a> Analysis<'a> {
                         pending
                             .try_reserve(effect.arguments().len())
                             .map_err(|_| Failure::Resource)?;
-                        pending.extend(effect.arguments());
+                        retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
+                        crate::types::extend_owner_type_children_with_charge(
+                            effect.arguments(),
+                            &mut pending,
+                            budget,
+                        )
+                        .map_err(|_| Failure::Resource)?;
                     }
+                }
+                Type::ResourceApply(_, arguments) => {
+                    retain_owner_row_universe(arguments, &mut owner_rows, budget)?;
+                    crate::types::extend_owner_type_children_with_charge(
+                        arguments.iter(),
+                        &mut pending,
+                        budget,
+                    )
+                    .map_err(|_| Failure::Resource)?;
                 }
                 _ => {}
             }
@@ -902,6 +1115,7 @@ impl<'a> Analysis<'a> {
         Ok(Self {
             graph,
             types,
+            owner_rows,
             contexts,
             labels: Vec::new(),
             label_cache: HashMap::new(),
@@ -1020,25 +1234,68 @@ impl<'a> Analysis<'a> {
     ) -> Result<usize, Failure> {
         let mut label = request.copy(budget)?;
         if let Some(effect) = &request.effect {
-            let mut arguments = TypeArguments(Vec::new());
+            let mut arguments = super::KindedArguments(Vec::new());
+            charge(budget, effect.arguments().len())?;
             arguments
                 .0
                 .try_reserve(effect.arguments().len())
                 .map_err(|_| Failure::Resource)?;
-            for argument in effect.arguments() {
-                arguments
-                    .0
-                    .push(self.substitute(argument, context, budget)?);
+            let substitutions = self.type_replacements(&self.contexts[context].bindings, budget)?;
+            let mut rows = HashMap::new();
+            rows.try_reserve(self.contexts[context].rows.len())
+                .map_err(|_| Failure::Resource)?;
+            for binding in &self.contexts[context].rows {
+                charge(budget, 1)?;
+                if binding.unproved
+                    || binding.tail == Some(EffectRowVariable::rigid(binding.variable))
+                {
+                    continue;
+                }
+                let effect = |id: &usize| {
+                    self.labels[*id]
+                        .effect
+                        .as_deref()
+                        .expect("exact row labels have instances")
+                };
+                let row = rebuild_effect_row_with_budget(
+                    binding.known.iter().map(effect),
+                    binding.tail,
+                    binding.lacks.iter().map(effect),
+                    clone_type_with_budget,
+                    budget,
+                )
+                .map_err(|_| Failure::Resource)?;
+                rows.insert(binding.variable, row);
             }
-            label.effect = Some(Arc::new(EffectInstance::new(
+            for argument in effect.arguments() {
+                arguments.0.push(
+                    crate::types::substitute_kinded_argument_with(
+                        argument,
+                        &substitutions.0,
+                        &rows,
+                        |units| budget.charge(units),
+                    )
+                    .map_err(|_| Failure::Resource)?
+                    .map_err(|_| Failure::Invalid)?,
+                );
+            }
+            label.effect = Some(Arc::new(EffectInstance::new_kinded(
                 effect.effect(),
                 arguments.into_boxed_slice(),
             )));
             // Widening applies to the effect identity, never unrelated effects.
+            charge(
+                budget,
+                self.contexts[context].bindings.len() + self.contexts[context].rows.len(),
+            )?;
             label.ambiguous_instance |= self.contexts[context]
                 .bindings
                 .iter()
-                .any(|(_, ty)| *ty == usize::MAX);
+                .any(|(_, ty)| *ty == usize::MAX)
+                || self.contexts[context]
+                    .rows
+                    .iter()
+                    .any(|binding| binding.unproved);
         }
         self.intern_label(label, budget)
     }
@@ -1108,7 +1365,9 @@ impl<'a> Analysis<'a> {
         pending
             .try_reserve(ae.arguments().len())
             .map_err(|_| Failure::Resource)?;
-        pending.extend(ae.arguments().iter().zip(be.arguments()));
+        if !extend_possible_owner_pairs(ae.arguments(), be.arguments(), &mut pending, budget)? {
+            return Ok((false, true));
+        }
         while let Some((a, b)) = pending.pop() {
             charge(budget, 1)?;
             match (a, b) {
@@ -1128,6 +1387,11 @@ impl<'a> Analysis<'a> {
                 (Type::Forall(_, a), Type::Forall(_, b)) => {
                     pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                     pending.push((a, b));
+                }
+                (Type::ResourceApply(a, left), Type::ResourceApply(b, right)) if a == b => {
+                    if !extend_possible_owner_pairs(left, right, &mut pending, budget)? {
+                        return Ok((false, true));
+                    }
                 }
                 (Type::Tuple(a), Type::Tuple(b)) if a.len() == b.len() => {
                     pending
@@ -1238,12 +1502,27 @@ impl<'a> Analysis<'a> {
                             pending
                                 .try_reserve(effect.arguments().len())
                                 .map_err(|_| Failure::Resource)?;
-                            pending.extend(effect.arguments().iter().zip(candidate.arguments()));
+                            extend_owner_context_pairs(
+                                effect.arguments(),
+                                candidate.arguments(),
+                                &mut pending,
+                                &mut row_equations,
+                                budget,
+                            )?;
                         }
                     }
                 }
             } else {
                 match (formal, actual) {
+                    (Type::ResourceApply(a, left), Type::ResourceApply(b, right)) if a == b => {
+                        extend_owner_context_pairs(
+                            left,
+                            right,
+                            &mut pending,
+                            &mut row_equations,
+                            budget,
+                        )?;
+                    }
                     (Type::Application(a, b), Type::Application(c, d)) => {
                         pending.try_reserve(2).map_err(|_| Failure::Resource)?;
                         pending.push((a, c));
@@ -1367,18 +1646,42 @@ impl<'a> Analysis<'a> {
             .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
         {
             charge(budget, instance.arguments().len())?;
-            for argument in instance.arguments() {
-                let mut found = false;
-                for original in &self.types {
-                    if same_type_with_budget(argument, original, budget)
-                        .map_err(|_| Failure::Resource)?
-                    {
-                        found = true;
-                        break;
+            crate::types::visit_owner_type_children_with_charge(
+                instance.arguments(),
+                budget,
+                |argument, budget| {
+                    let mut found = false;
+                    for original in &self.types {
+                        if same_type_with_budget(argument, original, budget)? {
+                            found = true;
+                            break;
+                        }
                     }
+                    unproved |= !found;
+                    Ok(())
+                },
+            )
+            .map_err(|_| Failure::Resource)?;
+        }
+        let mut actual_owner_rows = Vec::new();
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
+            retain_owner_row_universe(instance.arguments(), &mut actual_owner_rows, budget)?;
+        }
+        for row_argument in actual_owner_rows {
+            let mut found = false;
+            for original in &self.owner_rows {
+                if crate::types::same_effect_rows_with_budget(row_argument, original, budget)
+                    .map_err(|_| Failure::Resource)?
+                {
+                    found = true;
+                    break;
                 }
-                unproved |= !found;
             }
+            unproved |= !found;
         }
         if !unproved {
             for (destination, instances) in [

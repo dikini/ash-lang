@@ -126,7 +126,10 @@ fn resolves_local_interface_and_method_identities() {
     );
     assert_eq!(requirement.id.declaration(), 0);
     assert_eq!(requirement.application.interface.id, interface.id);
-    assert_eq!(requirement.application.arguments[0].ty, Type::Int);
+    assert_eq!(
+        requirement.application.arguments[0].ty,
+        ash::types::KindedArgument::TypeArg(Type::Int)
+    );
 
     let ResolvedExprKind::Apply(application) = &same.equations[0].body.kind else {
         panic!("expected a method application");
@@ -352,7 +355,7 @@ fn resolves_duplicate_requirements_as_distinct_ordered_occurrences() {
     );
     assert!(matches!(
         requirement_only.application.arguments[0].ty,
-        Type::Variable(id) if id == same.interface.type_parameters[1].id
+        ash::types::KindedArgument::TypeArg(Type::Variable(id)) if id == same.interface.type_parameters[1].id
     ));
 }
 
@@ -452,7 +455,7 @@ fn resolves_impl_prerequisites_and_method_occurrences_to_method_ids() {
 
     assert!(matches!(
         implementation.head.arguments[0].ty,
-        Type::Variable(id) if id == head_parameter.id
+        ash::types::KindedArgument::TypeArg(Type::Variable(id)) if id == head_parameter.id
     ));
     assert_eq!(first.id.owner(), RequirementOwner::Impl(implementation.id));
     assert_eq!(first.id.declaration(), 0);
@@ -462,11 +465,11 @@ fn resolves_impl_prerequisites_and_method_occurrences_to_method_ids() {
     assert_eq!(second.application.interface.id, interface.id);
     assert!(matches!(
         first.application.arguments[0].ty,
-        Type::Variable(id) if id == head_parameter.id
+        ash::types::KindedArgument::TypeArg(Type::Variable(id)) if id == head_parameter.id
     ));
     assert!(matches!(
         second.application.arguments[0].ty,
-        Type::Variable(id) if id == prerequisite_only_parameter.id
+        ash::types::KindedArgument::TypeArg(Type::Variable(id)) if id == prerequisite_only_parameter.id
     ));
 
     let [group] = implementation.method_groups.as_ref() else {
@@ -1023,9 +1026,9 @@ fn relational_interface_binders_and_applications_preserve_source_order() {
             .map(|argument| &argument.ty)
             .collect::<Vec<_>>(),
         [
-            &Type::Variable(head_parameter.id),
-            &Type::Nominal(carrier),
-            &Type::Unit,
+            &ash::types::KindedArgument::TypeArg(Type::Variable(head_parameter.id)),
+            &ash::types::KindedArgument::TypeArg(Type::Nominal(carrier)),
+            &ash::types::KindedArgument::TypeArg(Type::Unit),
         ]
     );
     let [requirement] = consume.interface.requirements.as_ref() else {
@@ -1040,9 +1043,9 @@ fn relational_interface_binders_and_applications_preserve_source_order() {
             .map(|argument| &argument.ty)
             .collect::<Vec<_>>(),
         [
-            &Type::Variable(global_parameter.id),
-            &Type::Nominal(carrier),
-            &Type::Unit,
+            &ash::types::KindedArgument::TypeArg(Type::Variable(global_parameter.id)),
+            &ash::types::KindedArgument::TypeArg(Type::Nominal(carrier)),
+            &ash::types::KindedArgument::TypeArg(Type::Unit),
         ]
     );
 }

@@ -2620,7 +2620,11 @@ impl<'a> Analysis<'a> {
                 .map_err(|_| Failure::Resource)?;
             self.slots[slot].atoms.push(atom);
             self.revision += 1;
-            for reader in copy_slice(&self.slots[slot].readers, budget)? {
+            // Enqueue mutates queue flags, never this reader list. Retain its
+            // fixed extent and copy each scalar identity as it is used.
+            let reader_count = self.slots[slot].readers.len();
+            for index in 0..reader_count {
+                let reader = self.slots[slot].readers[index];
                 self.enqueue(reader, budget)?;
             }
         }

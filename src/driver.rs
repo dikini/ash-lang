@@ -841,6 +841,7 @@ where
         | Type::Bool
         | Type::Unit
         | Type::Tuple(_)
+        | Type::ResourceApply(_, _)
         | Type::Nominal(_)
         | Type::Application(_, _)
         | Type::Variable(_)
@@ -851,7 +852,11 @@ where
     if main_has_effects {
         return Err(entry_failure(EntryReason::MainEffects, main_span));
     }
-    if !closed_entry_result(result_type) {
+    if !closed_entry_result(result_type, &mut checking_type_work).map_err(|()| {
+        FileFailure::from(PipelineFailure::Typing(TypeError::Internal(
+            crate::elaborate::ElaborationFailure::TypeResourceExhausted,
+        )))
+    })? {
         return Err(entry_failure(EntryReason::MainOpenResult, main_span));
     }
     if !main.scheme.requirements.is_empty() {
@@ -994,34 +999,16 @@ fn internal_file_failure() -> FileFailure {
     )))
 }
 
-fn closed_entry_result(root: &Type) -> bool {
-    let mut work = vec![root];
-    while let Some(ty) = work.pop() {
-        match ty {
-            Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _) => return false,
-            Type::Tuple(elements) => work.extend(elements),
-            Type::Application(function, argument) => {
-                work.push(argument);
-                work.push(function);
-            }
-            Type::Function(domain, codomain) => {
-                work.push(codomain);
-                work.push(domain);
-            }
-            Type::EffectfulFunction(domain, codomain) => {
-                if codomain.effects().tail().is_some() {
-                    return false;
-                }
-                for instance in codomain.effects().known() {
-                    work.extend(instance.arguments());
-                }
-                work.push(codomain.value());
-                work.push(domain);
-            }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
-        }
-    }
-    true
+fn closed_entry_result(root: &Type, work: &mut TypeWorkBudget) -> Result<bool, ()> {
+    crate::types::visit_type_structure_with_budget(root, work, |node, _| {
+        Ok(matches!(
+            node,
+            crate::types::TypeStructureNode::Type(
+                Type::Variable(_) | Type::Inference(_) | Type::Forall(_, _)
+            ) | crate::types::TypeStructureNode::Tail(_)
+        ))
+    })
+    .map(|open| !open)
 }
 
 const fn projection_reason(error: ProjectionError) -> &'static str {
@@ -1206,9 +1193,18 @@ mod tests {
             Box::new(Type::Inference(InferenceVariableId::new(0))),
         );
 
-        assert!(closed_entry_result(&closed));
-        assert!(!closed_entry_result(&rigid));
-        assert!(!closed_entry_result(&inference));
+        assert_eq!(
+            closed_entry_result(&closed, &mut TypeWorkBudget::unbounded()),
+            Ok(true)
+        );
+        assert_eq!(
+            closed_entry_result(&rigid, &mut TypeWorkBudget::unbounded()),
+            Ok(false)
+        );
+        assert_eq!(
+            closed_entry_result(&inference, &mut TypeWorkBudget::unbounded()),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -1530,19 +1526,17 @@ mod tests {
         // publication. The fixed graph order is base, short facade, first long
         // facade, second long facade, then entry; linking and linked evidence
         // validation contribute the final two additive boundaries.
-        // Producer authentication adds 329, 317, 317, 318, and 3 cells to
-        // checking. Shared capture visits remove 72, 72, 74, and 73 repeated
-        // nominal-retention cells from the four importers. Linking still
-        // contributes 149 cells; linked-evidence validation contributes 1660.
-        // Shared type-clone preflights remove 24 checking cells in the base
-        // and 12 in each importer, without changing retained type work.
-        // Omitting constructor control calls removes five capture-metadata
-        // admission cells from each of the four importers.
+        // Complete tagged argument traversal and inherited-owner roles are
+        // charged at each consuming boundary. Linking contributes 149 cells;
+        // independent linked-evidence validation contributes 1,769 cells.
+        // Immutable imported facts retain one original authority; each of the
+        // four import routes removes three duplicate retention cells.
+        // Final method admission removes four duplicate binder-map slots and
+        // one repeated Function-result kind queue; full child checks remain.
         const EXPECTED_BOUNDARIES: [usize; 13] = [
-            0, 1, 1_134, 1_692, 2_281, 2_839, 3_428, 3_978, 4_572, 5_552, 5_968, 6_117, 7_779,
+            0, 1, 1_138, 1_721, 2_335, 2_918, 3_532, 4_107, 4_726, 5_756, 6_208, 6_357, 8_126,
         ];
-        const EXACT_CONSTRAINT_WORK: usize =
-            6_876 + (329 + 317 + 317 + 318 + 3) - (72 + 72 + 74 + 73) - (24 + 4 * 12) - 4 * 5 + 2; // selected adapter-row key retention
+        const EXACT_CONSTRAINT_WORK: usize = 8_126;
         let source = relational_interface_graph_source();
         let directory = source
             .0
@@ -1719,30 +1713,31 @@ mod tests {
     fn wide_interface_graph_records_the_exact_validation_prefix() {
         // Keep linking just below the unchanged graph limit so the witness
         // continues to isolate validation as the first over-budget phase.
-        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 29) / 65;
-        // Dependency checking is declaration 8W + checked facts 6W +
+        const WIDTH: usize = (crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT - 29) / 63;
+        // Dependency checking is declaration 6W + checked facts 6W +
         // selector admission 7W + summary freeze 10W + producer
         // authentication 7W. Both clone preflights charge their three type
         // cells to both ledgers. A monomorphic method
         // has no private binder payload and therefore adds no authority work.
-        const DEPENDENCY_CHECKED: usize = 38 * WIDTH;
+        const DEPENDENCY_CHECKED: usize = 36 * WIDTH;
         // Entry resolution adds complete-vector summary authentication 7W, first-route
         // interface retention 9W, and one dependency-route cell.
-        const ENTRY_RESOLVED: usize = 54 * WIDTH + 1;
+        const ENTRY_RESOLVED: usize = 52 * WIDTH + 1;
         // Entry checking additionally authenticates the W imported interface
         // arities and visits its one global declaration before interface and
         // method admission. Producer authentication adds three cells for
         // the entry's withheld main name.
-        const ENTRY_CHECKED: usize = 62 * WIDTH + 16;
+        const ENTRY_CHECKED: usize = 60 * WIDTH + 16;
         // Linking adds its W+7 graph/carrier prefix, W+5 structural
         // authentication, and the W-cell canonical-owner uniqueness index.
         // It does not repeat the 3W complete interface mirror owned by the
         // consuming evidence validator.
-        const LINKED: usize = 65 * WIDTH + 28;
-        // Validation owns a 49W+55 complete-application authentication suffix
+        const LINKED: usize = 63 * WIDTH + 28;
+        // Validation owns a 46W+55 complete-application authentication suffix
         // and publishes one private method-evidence capability only after the
-        // complete graph succeeds.
-        const VALIDATED: usize = 114 * WIDTH + 83;
+        // complete graph succeeds. Borrowed singleton binder coverage removes
+        // two map slots; the proved Function kind removes one repeated queue.
+        const VALIDATED: usize = 109 * WIDTH + 83;
         let source = TestSource::write(concat!(
             "import dependency as Dependency\n",
             "main : Unit -> Int\n",
@@ -1832,7 +1827,7 @@ mod tests {
         );
         const {
             assert!(LINKED < crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
-            assert!(LINKED + 65 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
+            assert!(LINKED + 63 >= crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
             assert!(VALIDATED > crate::interface::INTERFACE_CONSTRAINT_WORK_LIMIT);
         }
     }

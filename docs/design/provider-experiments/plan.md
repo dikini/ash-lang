@@ -36,6 +36,38 @@ program for Ash-authored foreign-library interfaces. These experiments can
 supply evidence for that program. Its requirements do not expand this plan's
 native-call profile, steps or completion criteria.
 
+## Common support deliveries (2026-10-04)
+
+The common workstream uses `codex/common-resource-support` in
+`.worktree/common-resource-support`, starting from unsigned recovery commit
+`167bd8c`. That checkpoint is unverified. Each accepted delivery merges with an
+unsigned merge commit into `codex/provider-experiments`; main is excluded.
+
+1. Restore a coherent tagged owner migration in `types`, `resolved`, `kind`,
+   evidence, elaboration and every Core consumer. Check independent owner
+   signatures, argument tags, saturation and lexical scope; preserve Type-only
+   native ABI mapping and bounded work/disposal. Run the M1 commands below,
+   affected deep regressions and architecture checks before review/integration.
+2. Connect initializer checking, checked-template specialization, descriptor
+   scopes, executable bindings and ownership handoff through the public driver.
+   Execute S-01 and observe statement finalization before connection close.
+3. Add only arena configuration, acquire, usage and finish through that same
+   mechanism. Execute `(64, 4)` usage, repeat/nest scopes, refusal and release.
+4. Execute complete rows and control obligations: formal open Delta callback,
+   separate same-sigma/same-epsilon different-c witness, resume, structural
+   discard, outer cleanup, consumed and retained completion reports. Reject
+   malformed source/Core authority and escape. Run integrated `cargo xtask verify`.
+
+Root owns serial Cargo commands, tracking, unsigned commits and merges.
+Independent agents own disjoint Core, evidence and owner metadata files during
+Batch 0. Review the final diff and actual evidence after their changes converge.
+An implementation obstacle does not authorize changing the selected semantics.
+
+SQLite-specific work after S-01 includes the remaining copying/API cases.
+Arena-specific work after the basic lifecycle includes typed allocation, Layout,
+references, containment, borrowing and storage families. Those are excluded from
+common support, as are DN-0037 and DN-0038.
+
 ## Existing implementation and planned changes
 
 Current [syntax](../../../spec/syntax.md) selects only `cell` or `native_buffer`
@@ -141,17 +173,20 @@ parser diagnostics remain implementation preparation, not adopted architecture.
 
 ### Execution checkpoints for the common instance bridge
 
-These checkpoints refine Step 2; they do not replace Steps 3 through 7.
-The [current checkpoint](execution.md#current-checkpoint) records actual
-progress and evidence. Each row depends on acceptance of its predecessor.
+These implementation checkpoints refine Step 2; they do not replace Steps 3
+through 7. M1 belongs to common Batch 0. M2 through M4 and the S-01 part of M5
+form the connected source-to-runtime delivery in common Batch 1. The complete
+row and control cases in M5 belong to common Batch 3. The labels below are not delivery batch
+numbers. The [current checkpoint](execution.md#current-checkpoint) records
+actual progress and evidence. Each row depends on acceptance of its predecessor.
 
 | Checkpoint | Boundary removed | Required exit evidence |
 | --- | --- | --- |
 | M1: structural migration | Type-only assumptions in complete owner arguments and their consumers. | Charged, fallible traversal and reconstruction; canonical signatures, kind and scope checks; unchanged deep-disposal regression; frozen contract then quality review. |
-| M2/B1: source preparation | Resource instances cannot yet check their preceding-scope actuals and initializer. | Typed initializer checked once, Statement connection inference, body-only fresh identity, complete mixed actuals and attributable refusals. |
-| M3/B2: publication and specialization | Complete parent arguments and inherited roles cannot yet cross body-free contracts and executable templates. | One simultaneous substitution, original defining authority, distinct copied occurrence identities, complete catalog relocation and independent linkage refusal. |
-| M4/B3: ordinary Core | Instance topology and request-specific continuation demand are not yet reconstructed. | Real body epsilon and per-request c; every handler/resume/descendant solved; independent final Core validation and transforms with no unresolved recipe. |
-| M5/B4: runtime | Authenticated declarations have no executable provider dispatch. | Reviewed binding and ownership handoff, public-driver S-01, native release observations, generic callback execution and the separate same-sigma/same-epsilon different-c witness. |
+| M2: source preparation | Resource instances cannot yet check their preceding-scope actuals and initializer. | Typed initializer checked once, Statement connection inference, body-only fresh identity, complete mixed actuals and attributable refusals. |
+| M3: publication and specialization | Complete parent arguments and inherited roles cannot yet cross body-free contracts and executable templates. | One simultaneous substitution, original defining authority, distinct copied occurrence identities, complete catalog relocation and independent linkage refusal. |
+| M4: ordinary Core | Instance topology and request-specific continuation demand are not yet reconstructed. | Real body epsilon and per-request c; every handler/resume/descendant solved; independent final Core validation and transforms with no unresolved recipe. |
+| M5: runtime | Authenticated declarations have no executable provider dispatch. | Reviewed binding and ownership handoff, public-driver S-01, native release observations, generic callback execution and the separate same-sigma/same-epsilon different-c witness. |
 
 The current M1 gate uses existing targets, after the connected migration is
 complete. A development-only compiler check may diagnose the incomplete batch;

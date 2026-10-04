@@ -290,7 +290,10 @@ fn inline_result_rows_survive_resolution_and_checking() {
         panic!("the explicit result should retain exactly one effect")
     };
     assert_eq!(instance.effect(), EffectId::new(module.id(), 0));
-    assert_eq!(instance.arguments(), &[Type::Int]);
+    assert_eq!(
+        instance.arguments(),
+        &[ash::types::KindedArgument::TypeArg(Type::Int)]
+    );
     assert!(explicit.header.result_effects.tail().is_none());
     assert!(pure.header.result_effects.is_empty());
 }

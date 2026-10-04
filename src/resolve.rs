@@ -7,6 +7,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+use crate::resolved::CheckedInterfaceMethodFact;
+
 use crate::{
     core::capture::CaptureGraphVisits,
     diagnostic::{Diagnostic, SourceLabel},
@@ -20,33 +23,32 @@ use crate::{
         AuthorizedImplementationFact, Binder, BinderId, CandidateConstructor, CandidateEffect,
         CandidateFactSource, CandidateGlobal, CandidateHiddenNominal, CandidateInterface,
         CandidateMethod, CandidateNominal, CheckedImplementationFact, CheckedInterfaceFact,
-        CheckedInterfaceMethodFact, DirectDependencyRoute, ExportSummary, ExportedConstructor,
-        ExportedGlobal, ExportedType, ExportedTypeAccess, ImplementationAuthorization,
-        ImplementationRouteRank, ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme,
-        ImportedNominalMergeFailure, ImportedTypeAccess, ResolvedApplicationExpr,
-        ResolvedBinaryExpr, ResolvedBinding, ResolvedBlock, ResolvedBuildFailure,
-        ResolvedConstructor, ResolvedConstructorOccurrence, ResolvedDefinition,
-        ResolvedDefinitionKind, ResolvedDeterminationParameter, ResolvedDeterminationSide,
-        ResolvedEffectDeclaration, ResolvedEffectInstance, ResolvedEffectOperation,
-        ResolvedEquation, ResolvedEquationalGlobal, ResolvedExportCandidate, ResolvedExpr,
-        ResolvedExprKind, ResolvedExternalInterface, ResolvedFunctionExpr, ResolvedHandleExpr,
-        ResolvedHandlerClause, ResolvedImplementation, ResolvedImplementationMethodGroup,
-        ResolvedInlineOperationalGlobal, ResolvedInlineOperationalHeader,
-        ResolvedInterfaceApplication, ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination,
-        ResolvedInterfaceMethod, ResolvedInterfaceOccurrence, ResolvedLocalDeclaration,
-        ResolvedMatchArm, ResolvedMatchExpr, ResolvedModule, ResolvedModuleParts,
-        ResolvedNominalDeclarationKind, ResolvedNominalType, ResolvedOccurrence, ResolvedPattern,
-        ResolvedPatternKind, ResolvedPerformExpr, ResolvedRecursiveGroup, ResolvedRecursiveMember,
-        ResolvedRegistry, ResolvedRequirement, ResolvedResumeExpr, ResolvedTermName, ResolvedType,
-        ResolvedTypeProvenance, ResolvedTypeProvenanceNode, ResolvedTypeVariable,
-        ResolvedTypedPattern, ResumeId, ValidatedImportedNominalMerge, WithheldExport,
-        WithheldExportKind, WithheldNamespace, clone_resolved_effect_with_budget,
-        clone_resolved_type_variable_with_budget, clone_resolved_type_variables_with_budget,
-        discard_resolved_definition_iteratively, discard_resolved_effect_iteratively,
-        discard_resolved_equation_iteratively, discard_resolved_expression_iteratively,
-        discard_resolved_implementation_iteratively, discard_resolved_interface_iteratively,
-        discard_resolved_local_declaration_iteratively, discard_resolved_pattern_iteratively,
-        discard_resolved_requirement,
+        DirectDependencyRoute, ExportSummary, ExportedConstructor, ExportedGlobal, ExportedType,
+        ExportedTypeAccess, ImplementationAuthorization, ImplementationRouteRank,
+        ImportedConstructorFact, ImportedFacts, ImportedGlobalScheme, ImportedNominalMergeFailure,
+        ImportedTypeAccess, ResolvedApplicationExpr, ResolvedBinaryExpr, ResolvedBinding,
+        ResolvedBlock, ResolvedBuildFailure, ResolvedConstructor, ResolvedConstructorOccurrence,
+        ResolvedDefinition, ResolvedDefinitionKind, ResolvedDeterminationParameter,
+        ResolvedDeterminationSide, ResolvedEffectDeclaration, ResolvedEffectInstance,
+        ResolvedEffectOperation, ResolvedEquation, ResolvedEquationalGlobal,
+        ResolvedExportCandidate, ResolvedExpr, ResolvedExprKind, ResolvedExternalInterface,
+        ResolvedFunctionExpr, ResolvedHandleExpr, ResolvedHandlerClause, ResolvedImplementation,
+        ResolvedImplementationMethodGroup, ResolvedInlineOperationalGlobal,
+        ResolvedInlineOperationalHeader, ResolvedInterfaceApplication,
+        ResolvedInterfaceDeclaration, ResolvedInterfaceDetermination, ResolvedInterfaceMethod,
+        ResolvedInterfaceOccurrence, ResolvedLocalDeclaration, ResolvedMatchArm, ResolvedMatchExpr,
+        ResolvedModule, ResolvedModuleParts, ResolvedNominalDeclarationKind, ResolvedNominalType,
+        ResolvedOccurrence, ResolvedPattern, ResolvedPatternKind, ResolvedPerformExpr,
+        ResolvedRecursiveGroup, ResolvedRecursiveMember, ResolvedRegistry, ResolvedRequirement,
+        ResolvedResumeExpr, ResolvedTermName, ResolvedType, ResolvedTypeProvenance,
+        ResolvedTypeProvenanceNode, ResolvedTypeVariable, ResolvedTypedPattern, ResumeId,
+        ValidatedImportedNominalMerge, WithheldExport, WithheldExportKind, WithheldNamespace,
+        clone_resolved_effect_with_budget, clone_resolved_type_variable_with_budget,
+        clone_resolved_type_variables_with_budget, discard_resolved_definition_iteratively,
+        discard_resolved_effect_iteratively, discard_resolved_equation_iteratively,
+        discard_resolved_expression_iteratively, discard_resolved_implementation_iteratively,
+        discard_resolved_interface_iteratively, discard_resolved_local_declaration_iteratively,
+        discard_resolved_pattern_iteratively, discard_resolved_requirement,
         same_checked_implementation_fact_observing_nominals_with_budget,
         same_checked_interface_fact_observing_nominals_with_budget,
         same_imported_constructor_fact_observing_nominals_with_budget,
@@ -68,13 +70,13 @@ use crate::{
     types::{
         ComputationType, ConstructorId, EffectId, EffectInstance, EffectRow, EffectRowVariable,
         IterativeTypeOwner, Kind, NominalTypeId, OperationId, Type, TypeVariableId, TypeWorkBudget,
-        charge_kind_nodes, charge_type_cells, clone_type_with_budget,
-        compare_effect_instances_with_budget, discard_type_iteratively,
-        effect_row_from_canonical_source_parts_with_budget, same_kind_with_charge,
+        charge_kind_nodes, charge_type_cells, compare_effect_instances_with_budget,
+        discard_type_iteratively, effect_row_from_canonical_source_parts_with_budget,
+        same_kind_with_charge,
     },
 };
 
-struct ResolvedTypeBuffer(Vec<(Type, usize)>);
+struct ResolvedTypeBuffer(Vec<(crate::types::KindedArgument, usize)>);
 
 struct ImportedTypeCloneBuffer(Vec<Type>);
 
@@ -303,7 +305,7 @@ impl Drop for ImportedTypeCloneBuffer {
 }
 
 impl Deref for ResolvedTypeBuffer {
-    type Target = Vec<(Type, usize)>;
+    type Target = Vec<(crate::types::KindedArgument, usize)>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -312,28 +314,38 @@ impl Deref for ResolvedTypeBuffer {
 
 impl ResolvedTypeBuffer {
     fn push(&mut self, value: (Type, usize)) {
+        self.0
+            .push((crate::types::KindedArgument::TypeArg(value.0), value.1));
+    }
+    fn push_argument(&mut self, value: (crate::types::KindedArgument, usize)) {
         self.0.push(value);
     }
-
     fn pop_owned(&mut self) -> Option<(IterativeTypeOwner, usize)> {
+        let (argument, root) = self.0.pop()?;
+        match argument {
+            crate::types::KindedArgument::TypeArg(ty) => Some((IterativeTypeOwner::new(ty), root)),
+            argument => {
+                crate::types::discard_kinded_argument_iteratively(argument);
+                None
+            }
+        }
+    }
+    fn pop_argument(&mut self) -> Option<(crate::types::IterativeArgumentOwner, usize)> {
         self.0
             .pop()
-            .map(|(ty, root)| (IterativeTypeOwner::new(ty), root))
+            .map(|(arg, root)| (crate::types::IterativeArgumentOwner::new(arg), root))
     }
-
     fn split_off(&mut self, at: usize) -> Self {
         Self(self.0.split_off(at))
     }
-
-    fn into_vec(mut self) -> Vec<(Type, usize)> {
+    fn into_vec(mut self) -> Vec<(crate::types::KindedArgument, usize)> {
         std::mem::take(&mut self.0)
     }
 }
-
 impl Drop for ResolvedTypeBuffer {
     fn drop(&mut self) {
-        while let Some((ty, _)) = self.0.pop() {
-            discard_type_iteratively(ty);
+        while let Some((arg, _)) = self.0.pop() {
+            crate::types::discard_kinded_argument_iteratively(arg);
         }
     }
 }
@@ -476,6 +488,20 @@ impl Drop for ResolvedDeclarationBuffer {
     }
 }
 
+struct ResolvedOwnerOccurrenceBuffer(Vec<crate::resolved::ResolvedOwnerArgument>);
+impl ResolvedOwnerOccurrenceBuffer {
+    fn into_vec(mut self) -> Vec<crate::resolved::ResolvedOwnerArgument> {
+        std::mem::take(&mut self.0)
+    }
+}
+impl Drop for ResolvedOwnerOccurrenceBuffer {
+    fn drop(&mut self) {
+        for arg in self.0.drain(..) {
+            arg.discard_iteratively();
+        }
+    }
+}
+
 struct ResolvedTypeOccurrenceBuffer(Vec<ResolvedType>);
 
 impl ResolvedTypeOccurrenceBuffer {
@@ -550,9 +576,7 @@ impl Drop for ResolvedInterfaceMethodBuffer {
     fn drop(&mut self) {
         for method in self.0.drain(..) {
             method.annotation.discard_iteratively();
-            for parameter in method.type_parameters.into_vec() {
-                discard_origin_iteratively(parameter.origin);
-            }
+            drop(method.type_parameters);
             discard_origin_iteratively(method.origin);
         }
     }
@@ -2560,8 +2584,12 @@ fn retain_resolved_type_argument_owners(
 ) -> Result<Box<[Type]>, ()> {
     budget.charge(arguments.len())?;
     let mut retained = Vec::new();
-    retained.try_reserve_exact(arguments.len()).map_err(|_| ())?;
-    for argument in arguments { retained.push(argument.into_inner()); }
+    retained
+        .try_reserve_exact(arguments.len())
+        .map_err(|_| ())?;
+    for argument in arguments {
+        retained.push(argument.into_inner());
+    }
     Ok(retained.into_boxed_slice())
 }
 
@@ -3259,7 +3287,7 @@ impl Resolver {
         }
 
         let mut resolved = ResolvedInterfaceBuffer(Vec::with_capacity(declarations.len()));
-        let mut retained_type_variables = Vec::new();
+        let retained_type_variables = Vec::new();
         for ((declaration, identity), pending) in
             declarations.iter().zip(identities).zip(parameters)
         {
@@ -3276,24 +3304,6 @@ impl Resolver {
                     problem: "mismatch",
                 }));
             }
-            retained_type_variables
-                .try_reserve(pending.parameters.len())
-                .map_err(|_| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        declaration.span,
-                        "interface parameter registry storage could not be reserved",
-                    )
-                })?;
-            for (parameter, source_parameter) in
-                pending.parameters.iter().zip(declaration.parameters.iter())
-            {
-                retained_type_variables.push(self.clone_type_variable_for_retention(
-                    parameter,
-                    source_parameter.name.span,
-                    "interface parameter retention exceeded its type-work budget",
-                )?);
-            }
             let mut methods =
                 ResolvedInterfaceMethodBuffer(Vec::with_capacity(declaration.methods.len()));
             for ((method, method_id), type_parameters) in declaration
@@ -3302,22 +3312,6 @@ impl Resolver {
                 .zip(identity.methods)
                 .zip(pending.methods)
             {
-                retained_type_variables
-                    .try_reserve(type_parameters.len())
-                    .map_err(|_| {
-                        error(
-                            ResolveReason::TypeResourceExhausted,
-                            method.span,
-                            "interface method parameter registry storage could not be reserved",
-                        )
-                    })?;
-                for type_parameter in &type_parameters {
-                    retained_type_variables.push(self.clone_type_variable_for_retention(
-                        type_parameter,
-                        method.span,
-                        "interface method parameter retention exceeded its type-work budget",
-                    )?);
-                }
                 let scope_width = pending
                     .parameters
                     .len()
@@ -3372,11 +3366,27 @@ impl Resolver {
                 self.type_scopes.push(scope);
                 let annotation = self.resolve_type(&method.annotation);
                 let _ = self.type_scopes.pop();
+                let annotation = ResolvedTypeOccurrenceOwner::new(annotation?);
+                let type_parameters = if type_parameters.is_empty() {
+                    crate::resolved::SharedOwnerParameters::default()
+                } else {
+                    crate::resolved::SharedOwnerParameters::from_boxed_with_budget(
+                        type_parameters.into_boxed_slice(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|_| {
+                        error(
+                            ResolveReason::TypeResourceExhausted,
+                            method.span,
+                            "shared method parameter retention exceeded its type-work budget",
+                        )
+                    })?
+                };
                 methods.0.push(ResolvedInterfaceMethod {
                     id: method_id,
                     spelling: method.name.text.clone(),
-                    annotation: annotation?,
-                    type_parameters: type_parameters.into_boxed_slice(),
+                    annotation: annotation.into_inner(),
+                    type_parameters,
                     has_explicit_type_parameters: method.type_parameters.is_some(),
                     origin: Origin::Source(method.span),
                     span: method.span,
@@ -3393,7 +3403,17 @@ impl Resolver {
                 id: identity.id,
                 public: declaration.public,
                 spelling: declaration.name.text.clone(),
-                parameters: pending.parameters.into_boxed_slice(),
+                parameters: crate::resolved::SharedOwnerParameters::from_boxed_with_budget(
+                    pending.parameters.into_boxed_slice(),
+                    &mut self.type_work,
+                )
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        declaration.span,
+                        "shared defining interface parameters exceeded their type-work budget",
+                    )
+                })?,
                 determination,
                 methods: methods.into_vec().into_boxed_slice(),
                 origin: Origin::Source(declaration.span),
@@ -4349,23 +4369,8 @@ impl Resolver {
                     "imported interface retention exceeded its work budget",
                 )
             })?;
-        self.type_work.charge(retained_fact_count).map_err(|()| {
-            error(
-                ResolveReason::TypeResourceExhausted,
-                span,
-                "imported interface retention exceeded its type-work budget",
-            )
-        })?;
-        let mut methods = Vec::new();
         let mut authority_method_indices: Vec<usize> = Vec::new();
-        methods.try_reserve(exported.methods.len()).map_err(|_| {
-            error(
-                ResolveReason::ConstraintResourceExhausted,
-                span,
-                "imported interface retention exceeded its work budget",
-            )
-        })?;
-        for method in &exported.methods {
+        for (method_index, method) in exported.methods.iter().enumerate() {
             if method.id.interface() != exported.id {
                 return Err(error(
                     ResolveReason::InternalState,
@@ -4401,13 +4406,6 @@ impl Resolver {
                     "imported method authority exceeded its work budget",
                 )
             })?;
-            self.type_work.charge(authority_work).map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported method authority exceeded its type-work budget",
-                )
-            })?;
             self.constraint_work
                 .charge_type(&method.value_type)
                 .map_err(|()| {
@@ -4418,106 +4416,23 @@ impl Resolver {
                     )
                 })?;
             self.retain_type_nominals(&method.value_type, summary, span)?;
-            let value_type = IterativeTypeOwner::new(
-                clone_type_with_budget(&method.value_type, &mut self.type_work).map_err(|()| {
-                    error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "imported method signature exceeded its type-work budget",
-                    )
-                })?,
-            );
-            let type_parameters = clone_resolved_type_variables_with_budget(
-                method.type_parameters(),
-                &mut self.type_work,
-            )
-            .map_err(|()| {
-                error(
-                    ResolveReason::TypeResourceExhausted,
-                    span,
-                    "imported method parameters exceeded their type-work budget",
-                )
-            })?;
-            methods.push(
-                CheckedInterfaceMethodFact::clone_with_binder_authority(
-                    method,
-                    type_parameters.into_boxed_slice(),
-                    value_type.into_inner(),
+            method
+                .authenticate_shared_original(&mut self.constraint_work)
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
+            method
+                .authenticate_inherited_parameters(
+                    crate::resolved::OwnerId::Interface(exported.id),
+                    &exported.parameters,
                     &mut self.type_work,
-                    &mut self.constraint_work,
                 )
-                .map_err(|failure| match failure {
-                    ResolvedBuildFailure::Kind(context) => kind_context_error(
-                        context,
-                        span,
-                        "an imported method authority disagrees with its checked mirror",
-                    )
-                    .with_context(ResolveContext::WorkState {
-                        part: "imported-method-authority",
-                        problem: "mismatch",
-                    }),
-                    ResolvedBuildFailure::TypeResource => error(
-                        ResolveReason::TypeResourceExhausted,
-                        span,
-                        "imported method authority exceeded its type-work budget",
-                    ),
-                    ResolvedBuildFailure::ConstraintResource => error(
-                        ResolveReason::ConstraintResourceExhausted,
-                        span,
-                        "imported method authority exceeded its work budget",
-                    ),
-                    ResolvedBuildFailure::InvalidState => error(
-                        ResolveReason::InternalState,
-                        span,
-                        "an imported method authority disagrees with its checked mirror",
-                    )
-                    .with_context(ResolveContext::WorkState {
-                        part: "imported-method-authority",
-                        problem: "mismatch",
-                    }),
-                })?,
-            );
+                .map_err(|failure| imported_fact_comparison_error(failure, span))?;
             if authority_work != 0 {
-                authority_method_indices.push(methods.len() - 1);
+                authority_method_indices.push(method_index);
             }
         }
-        let mut parameters = ImportedTypeVariableBuffer(Vec::new());
-        parameters
-            .try_reserve(exported.parameters.len())
-            .map_err(|_| {
-                error(
-                    ResolveReason::ConstraintResourceExhausted,
-                    span,
-                    "imported interface parameters exceeded their work budget",
-                )
-            })?;
-        for parameter in &exported.parameters {
-            parameters.push(self.clone_type_variable_for_retention(
-                parameter,
-                span,
-                "imported interface parameter exceeded its type-work budget",
-            )?);
-        }
-        let determination = exported
-            .determination()
-            .map(|key| key.clone_with_budget(&mut self.constraint_work))
-            .transpose()
-            .map_err(|()| {
-                error(
-                    ResolveReason::ConstraintResourceExhausted,
-                    span,
-                    "imported interface determinant key exceeded its work budget",
-                )
-            })?;
-        let retained = CheckedInterfaceFact::new(
-            exported.id,
-            exported.spelling.clone(),
-            parameters.into_boxed_slice(),
-            determination,
-            methods.into_boxed_slice(),
-            exported.origin.clone(),
-            exported.span,
-        );
+        let retained = summary
+            .retain_interface_original(exported, &mut self.type_work)
+            .map_err(|failure| imported_fact_comparison_error(failure, span))?;
         self.imported.insert_interface_with_authority_indices(
             retained,
             authority_method_indices.into_boxed_slice(),
@@ -4780,14 +4695,16 @@ impl Resolver {
                 )
             })?;
         for argument in fact.arguments() {
-            self.constraint_work.charge_type(argument).map_err(|()| {
-                error(
-                    ResolveReason::ConstraintResourceExhausted,
-                    span,
-                    "imported implementation head exceeded its work budget",
-                )
-            })?;
-            self.retain_type_nominals(argument, summary, span)?;
+            self.constraint_work
+                .charge_argument(argument)
+                .map_err(|()| {
+                    error(
+                        ResolveReason::ConstraintResourceExhausted,
+                        span,
+                        "imported implementation head exceeded its work budget",
+                    )
+                })?;
+            self.retain_argument_nominals(argument, summary, span)?;
         }
 
         self.type_work
@@ -4824,14 +4741,16 @@ impl Resolver {
                 }));
             }
             for argument in prerequisite.arguments() {
-                self.constraint_work.charge_type(argument).map_err(|()| {
-                    error(
-                        ResolveReason::ConstraintResourceExhausted,
-                        span,
-                        "imported prerequisite exceeded its work budget",
-                    )
-                })?;
-                self.retain_type_nominals(argument, summary, span)?;
+                self.constraint_work
+                    .charge_argument(argument)
+                    .map_err(|()| {
+                        error(
+                            ResolveReason::ConstraintResourceExhausted,
+                            span,
+                            "imported prerequisite exceeded its work budget",
+                        )
+                    })?;
+                self.retain_argument_nominals(argument, summary, span)?;
             }
             prerequisites.push(CheckedRequirement {
                 id: prerequisite.id,
@@ -5000,7 +4919,7 @@ impl Resolver {
                 })?;
             for requirement in &method.scheme.requirements {
                 for argument in requirement.arguments() {
-                    self.constraint_work.charge_type(argument).map_err(|()| {
+                    self.constraint_work.charge_argument(argument).map_err(|()| {
                         error(
                             ResolveReason::ConstraintResourceExhausted,
                             span,
@@ -5233,13 +5152,15 @@ impl Resolver {
                 })?;
             for requirement in &exported.scheme.requirements {
                 for argument in requirement.arguments() {
-                    self.constraint_work.charge_type(argument).map_err(|()| {
-                        error(
-                            ResolveReason::ConstraintResourceExhausted,
-                            span,
-                            "imported requirement type exceeded its work budget",
-                        )
-                    })?;
+                    self.constraint_work
+                        .charge_argument(argument)
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::ConstraintResourceExhausted,
+                                span,
+                                "imported requirement type exceeded its work budget",
+                            )
+                        })?;
                 }
             }
         }
@@ -5338,7 +5259,7 @@ impl Resolver {
         self.retain_type_nominals(&scheme.value_type, summary, span)?;
         for requirement in &scheme.requirements {
             for argument in requirement.arguments() {
-                self.retain_type_nominals(argument, summary, span)?;
+                self.retain_argument_nominals(argument, summary, span)?;
             }
         }
         Ok(())
@@ -5353,7 +5274,7 @@ impl Resolver {
         }
         for requirement in &scheme.requirements {
             for argument in requirement.arguments() {
-                charge_type_cells(argument, &mut work)?;
+                crate::types::charge_kinded_argument_with_budget(argument, &mut work)?;
             }
         }
         charge_type_cells(scheme.value_type(), &mut work)?;
@@ -5376,7 +5297,7 @@ impl Resolver {
     ) -> Result<(), ResolveError> {
         for requirement in &exported.scheme.requirements {
             for argument in requirement.arguments() {
-                collect_type_nominal_identities_with_constraint_budget(
+                crate::interface::collect_argument_nominal_identities_with_constraint_budget(
                     argument,
                     &mut self.constraint_work,
                     nominal_identities,
@@ -5428,119 +5349,69 @@ impl Resolver {
         span: crate::source::Span,
         type_work: &mut TypeWorkBudget,
     ) -> Result<IterativeTypeOwner, ResolveError> {
-        enum Task<'a> {
-            Visit(&'a Type),
-            Sequence(std::slice::Iter<'a, Type>),
-            Tuple(usize),
-            Application,
-            Function,
-            EffectfulFunction(EffectRow),
-        }
+        crate::types::clone_type_with_budget(payload, type_work)
+            .map(IterativeTypeOwner::new)
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "imported constructor payload retention exceeded its type-work budget",
+                )
+            })
+    }
 
-        const MESSAGE: &str =
-            "imported constructor payload retention exceeded its type-work budget";
-        let start = type_work.used();
-        charge_type_cells(payload, type_work)
-            .map_err(|()| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
-        let type_cells = type_work
-            .used()
-            .checked_sub(start)
-            .ok_or_else(|| error(ResolveReason::InternalState, span, MESSAGE))?;
-
-        let mut work = Vec::new();
-        work.try_reserve(type_cells)
-            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
-        work.push(Task::Visit(payload));
-        let mut rebuilt = ImportedTypeCloneBuffer(Vec::new());
-        rebuilt
-            .0
-            .try_reserve(type_cells)
-            .map_err(|_| error(ResolveReason::TypeResourceExhausted, span, MESSAGE))?;
-        while let Some(task) = work.pop() {
-            match task {
-                Task::Visit(Type::Int) => rebuilt.push(Type::Int),
-                Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
-                Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
-                Task::Visit(Type::Variable(id)) => rebuilt.push(Type::Variable(*id)),
-                Task::Visit(Type::Inference(id)) => rebuilt.push(Type::Inference(*id)),
-                Task::Visit(Type::Nominal(id)) => rebuilt.push(Type::Nominal(*id)),
-                Task::Visit(Type::Tuple(elements)) => {
-                    work.push(Task::Tuple(elements.len()));
-                    work.push(Task::Sequence(elements.iter()));
+    fn retain_argument_nominals(
+        &mut self,
+        argument: &crate::types::KindedArgument,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        let resource = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "imported argument traversal exceeded its type-work budget",
+            )
+        };
+        let mut pending = Vec::new();
+        self.type_work.charge(1).map_err(|()| resource())?;
+        pending.try_reserve_exact(1).map_err(|_| resource())?;
+        pending.push(argument);
+        while let Some(argument) = pending.pop() {
+            match argument {
+                crate::types::KindedArgument::TypeArg(ty) => {
+                    self.retain_type_nominals(ty, summary, span)?
                 }
-                Task::Visit(Type::Application(function, argument)) => {
-                    work.push(Task::Application);
-                    work.push(Task::Visit(argument));
-                    work.push(Task::Visit(function));
-                }
-                Task::Visit(Type::Function(domain, codomain)) => {
-                    work.push(Task::Function);
-                    work.push(Task::Visit(codomain));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
-                    work.push(Task::EffectfulFunction(codomain.effects().clone()));
-                    work.push(Task::Visit(codomain.value()));
-                    work.push(Task::Visit(domain));
-                }
-                Task::Visit(Type::Forall(_, _)) => {
-                    return Err(error(ResolveReason::InternalState, span, MESSAGE));
-                }
-                Task::Sequence(mut remaining) => {
-                    if let Some(next) = remaining.next() {
-                        work.push(Task::Sequence(remaining));
-                        work.push(Task::Visit(next));
+                crate::types::KindedArgument::RowArg(row) => {
+                    self.type_work
+                        .charge(1 + usize::from(row.tail().is_some()))
+                        .map_err(|()| resource())?;
+                    for instance in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
+                        self.type_work.charge(1).map_err(|()| resource())?;
+                        let effect = summary.effect_by_id(instance.effect()).ok_or_else(|| {
+                            error(
+                                ResolveReason::InternalState,
+                                span,
+                                "an exported argument references missing effect metadata",
+                            )
+                        })?;
+                        self.retain_imported_effect(effect, span)?;
+                        self.type_work
+                            .charge(instance.arguments().len())
+                            .map_err(|()| resource())?;
+                        pending
+                            .try_reserve(instance.arguments().len())
+                            .map_err(|_| resource())?;
+                        pending.extend(instance.arguments().iter().rev());
                     }
-                }
-                Task::Tuple(count) => {
-                    let elements = rebuilt.split_off(rebuilt.0.len() - count).into_vec();
-                    rebuilt.push(Type::Tuple(elements.into_boxed_slice()));
-                }
-                Task::Application => {
-                    let argument = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated application retains its argument");
-                    let function = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated application retains its function");
-                    rebuilt.push(Type::Application(
-                        Box::new(function.into_inner()),
-                        Box::new(argument.into_inner()),
-                    ));
-                }
-                Task::Function => {
-                    let codomain = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated function retains its codomain");
-                    let domain = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated function retains its domain");
-                    rebuilt.push(Type::Function(
-                        Box::new(domain.into_inner()),
-                        Box::new(codomain.into_inner()),
-                    ));
-                }
-                Task::EffectfulFunction(effects) => {
-                    let codomain = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated effectful function retains its codomain");
-                    let domain = rebuilt
-                        .pop_owned()
-                        .expect("an authenticated effectful function retains its domain");
-                    rebuilt.push(Type::function_computation(
-                        domain.into_inner(),
-                        ComputationType::new(codomain.into_inner(), effects),
-                    ));
                 }
             }
         }
-        let cloned = rebuilt
-            .pop_owned()
-            .ok_or_else(|| error(ResolveReason::InternalState, span, MESSAGE))?;
-        if !rebuilt.0.is_empty() {
-            return Err(error(ResolveReason::InternalState, span, MESSAGE));
-        }
-        Ok(cloned)
+        Ok(())
     }
 
     fn retain_type_nominals(
@@ -5570,6 +5441,8 @@ impl Resolver {
     ) -> Result<(), ResolveError> {
         enum Task<'a> {
             Type(&'a Type),
+            Argument(&'a crate::types::KindedArgument),
+            Row(&'a EffectRow),
             Sequence(std::slice::Iter<'a, Type>),
         }
 
@@ -5608,17 +5481,94 @@ impl Resolver {
             )
         })?;
         while let Some(task) = pending.pop() {
-            let Task::Type(ty) = task else {
-                let Task::Sequence(mut remaining) = task else {
-                    unreachable!()
-                };
-                if let Some(next) = remaining.next() {
-                    pending.push(Task::Sequence(remaining));
-                    pending.push(Task::Type(next));
+            let ty = match task {
+                Task::Type(ty) => ty,
+                Task::Sequence(mut remaining) => {
+                    if let Some(next) = remaining.next() {
+                        pending.push(Task::Sequence(remaining));
+                        pending.push(Task::Type(next));
+                    }
+                    continue;
                 }
-                continue;
+                Task::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+                    pending.push(Task::Type(ty));
+                    continue;
+                }
+                Task::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                    pending.push(Task::Row(row));
+                    continue;
+                }
+                Task::Row(row) => {
+                    for instance in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
+                        let identity = instance.effect();
+                        let mut already_seen = false;
+                        for retained in &seen_effects {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect membership exceeded its type-work budget",
+                                )
+                            })?;
+                            if *retained == identity {
+                                already_seen = true;
+                                break;
+                            }
+                        }
+                        if !already_seen {
+                            self.type_work.charge(1).map_err(|()| {
+                                error(
+                                    ResolveReason::TypeResourceExhausted,
+                                    span,
+                                    "imported effect ordering exceeded its type-work budget",
+                                )
+                            })?;
+                            seen_effects.push(identity);
+                        }
+                        pending.extend(instance.arguments().iter().map(Task::Argument));
+                    }
+                    continue;
+                }
             };
             match ty {
+                Type::ResourceApply(resource, arguments) => {
+                    let family = summary.resource_family_by_id(*resource).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "an exported type references missing resource metadata",
+                        )
+                    })?;
+                    let mut already_seen = false;
+                    for retained in &seen {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "imported resource membership exceeded its type-work budget",
+                            )
+                        })?;
+                        if *retained == family {
+                            already_seen = true;
+                            break;
+                        }
+                    }
+                    if !already_seen {
+                        self.type_work.charge(1).map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "imported resource ordering exceeded its type-work budget",
+                            )
+                        })?;
+                        seen.push(family);
+                    }
+                    pending.extend(arguments.iter().map(Task::Argument));
+                }
                 Type::Nominal(id) => {
                     // Only capture metadata may mention internal lexical IDs.
                     // Keep traversing its complete types, including embedded
@@ -5661,36 +5611,7 @@ impl Resolver {
                     pending.push(Task::Type(domain));
                 }
                 Type::EffectfulFunction(domain, codomain) => {
-                    for instance in codomain.effects().known() {
-                        let identity = instance.effect();
-                        let mut already_seen = false;
-                        for retained in &seen_effects {
-                            self.type_work.charge(1).map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    span,
-                                    "imported effect membership exceeded its type-work budget",
-                                )
-                            })?;
-                            if retained == &identity {
-                                already_seen = true;
-                                break;
-                            }
-                        }
-                        if !already_seen {
-                            self.type_work.charge(1).map_err(|()| {
-                                error(
-                                    ResolveReason::TypeResourceExhausted,
-                                    span,
-                                    "imported effect ordering exceeded its type-work budget",
-                                )
-                            })?;
-                            seen_effects.push(identity);
-                        }
-                    }
-                    for argument in codomain.effect_arguments() {
-                        pending.push(Task::Type(argument));
-                    }
+                    pending.push(Task::Row(codomain.effects()));
                     pending.push(Task::Type(codomain.value()));
                     pending.push(Task::Type(domain));
                 }
@@ -6674,17 +6595,24 @@ impl Resolver {
                     )
                 })?;
             for argument in &written.arguments {
-                let ResolvedType { ty, provenance, .. } = self.resolve_type(argument)?;
+                let crate::resolved::ResolvedOwnerArgument { ty, provenance, .. } =
+                    self.resolve_owner_argument(argument)?;
                 roots.push(argument_provenance.len());
                 argument_provenance.push(provenance);
-                arguments.push(IterativeTypeOwner::new(ty));
+                arguments.push(crate::types::IterativeArgumentOwner::new(ty));
             }
-            let instance = EffectInstance::from_type_arguments_with_budget(effect,
-                retain_resolved_type_argument_owners(arguments, &mut self.type_work)
-                    .map_err(|()| error(ResolveReason::TypeResourceExhausted, written.span,
-                        "effect-argument retention exceeded its type-work budget"))?, &mut self.type_work).map_err(|()| error(
-                    ResolveReason::TypeResourceExhausted, written.span,
-                    "effect-argument retention exceeded its type-work budget"))?;
+            let mut retained = Vec::new();
+            retained.try_reserve_exact(arguments.len()).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    written.span,
+                    "effect argument retention could not reserve storage",
+                )
+            })?;
+            for argument in arguments {
+                retained.push(argument.into_inner());
+            }
+            let instance = EffectInstance::new_kinded(effect, retained.into_boxed_slice());
             resolved_instances.push((instance, written.span, roots.into_boxed_slice()));
         }
         let tail = row
@@ -6751,8 +6679,9 @@ impl Resolver {
             )
         })?;
         for argument in arguments {
-            let ResolvedType { ty, provenance, .. } = self.resolve_type(argument)?;
-            resolved.push(crate::types::IterativeTypeOwner::new(ty));
+            let crate::resolved::ResolvedOwnerArgument { ty, provenance, .. } =
+                self.resolve_owner_argument(argument)?;
+            resolved.push(crate::types::IterativeArgumentOwner::new(ty));
             argument_provenance.push(provenance);
         }
         self.type_work.charge(resolved.len()).map_err(|()| {
@@ -6774,10 +6703,7 @@ impl Resolver {
             retained.push(argument.into_inner());
         }
         Ok(ResolvedEffectInstance {
-            instance: EffectInstance::from_type_arguments_with_budget(identity,
-                retained.into_boxed_slice(), &mut self.type_work).map_err(|()| error(
-                    ResolveReason::TypeResourceExhausted, span,
-                    "effect-argument retention exceeded its type-work budget"))?,
+            instance: EffectInstance::new_kinded(identity, retained.into_boxed_slice()),
             argument_provenance: argument_provenance.into_boxed_slice(),
             origin: Origin::Source(effect.span()),
             span,
@@ -6864,7 +6790,7 @@ impl Resolver {
                 problem: "empty",
             }));
         }
-        let mut arguments = ResolvedTypeOccurrenceBuffer(Vec::new());
+        let mut arguments = ResolvedOwnerOccurrenceBuffer(Vec::new());
         arguments
             .0
             .try_reserve_exact(application.arguments.len())
@@ -6876,7 +6802,7 @@ impl Resolver {
                 )
             })?;
         for argument in &application.arguments {
-            arguments.0.push(self.resolve_type(argument)?);
+            arguments.0.push(self.resolve_owner_argument(argument)?);
         }
         Ok(ResolvedInterfaceApplication {
             interface,
@@ -7564,12 +7490,23 @@ impl Resolver {
                     .chain(implementation_type_parameters),
             )
             .with_effects_with_budget(registry_effects, &mut self.type_work)
-            .and_then(|registry| registry.with_interface_owner_signatures(&self.resolved_interfaces.0, &mut self.type_work))
-            .map_err(|failure| error(
-                if matches!(failure, crate::resolved::ResolvedBuildFailure::TypeResource) { ResolveReason::TypeResourceExhausted } else { ResolveReason::InternalState },
-                surface.span,
-                "effect-argument storage exceeded its type-work budget",
-            ))?;
+            .and_then(|registry| {
+                registry.with_interface_owner_signatures(
+                    &self.resolved_interfaces.0,
+                    &mut self.type_work,
+                )
+            })
+            .map_err(|failure| {
+                error(
+                    if matches!(failure, crate::resolved::ResolvedBuildFailure::TypeResource) {
+                        ResolveReason::TypeResourceExhausted
+                    } else {
+                        ResolveReason::InternalState
+                    },
+                    surface.span,
+                    "effect-argument storage exceeded its type-work budget",
+                )
+            })?;
         let mut global_binders = vec![None; surface_definitions.len()];
         for declaration in &surface.declaration_order {
             match *declaration {
@@ -8708,12 +8645,37 @@ impl Resolver {
     }
 
     fn resolve_type(&mut self, surface: &SurfaceType) -> Result<ResolvedType, ResolveError> {
+        let argument = self.resolve_owner_argument(surface)?;
+        match argument.ty {
+            crate::types::KindedArgument::TypeArg(ty) => Ok(ResolvedType {
+                ty,
+                provenance: argument.provenance,
+                origin: argument.origin,
+                span: argument.span,
+            }),
+            wrong => {
+                crate::types::discard_kinded_argument_iteratively(wrong);
+                Err(error(
+                    ResolveReason::TypeKind,
+                    surface.span,
+                    "a row argument cannot occupy an ordinary value-type position",
+                ))
+            }
+        }
+    }
+
+    fn resolve_owner_argument(
+        &mut self,
+        surface: &SurfaceType,
+    ) -> Result<crate::resolved::ResolvedOwnerArgument, ResolveError> {
         enum ApplicationHead {
             Nominal(NominalTypeId),
             Variable(TypeVariableId),
+            Resource(crate::resolved::ResourceDefinitionId),
         }
         enum Task<'a> {
             Visit(&'a SurfaceType),
+            Row(&'a crate::surface::SurfaceEffectRow, usize),
             Sequence(std::slice::Iter<'a, SurfaceType>),
             Tuple(usize, crate::source::Span),
             Function(
@@ -8748,6 +8710,23 @@ impl Resolver {
                         )
                     })?;
                     match &current.kind {
+                        SurfaceTypeKind::RowArgument(row) => {
+                            let count = row
+                                .effects
+                                .iter()
+                                .try_fold(0usize, |count, member| {
+                                    count.checked_add(member.arguments.len())
+                                })
+                                .ok_or_else(|| {
+                                    error(
+                                        ResolveReason::TypeResourceExhausted,
+                                        current.span,
+                                        "row argument size exceeded the work budget",
+                                    )
+                                })?;
+                            tasks.push(Task::Row(row, count));
+                            tasks.push(Task::EffectInstances(row.effects.iter()));
+                        }
                         SurfaceTypeKind::Int => {
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                             completed.push((Type::Int, provenance.len() - 1));
@@ -8790,7 +8769,17 @@ impl Resolver {
                             {
                                 ApplicationHead::Variable(*variable)
                             } else {
-                                ApplicationHead::Nominal(self.nominal_reference(constructor)?.id)
+                                let family = self.nominal_reference(constructor)?.id;
+                                match self.resource_families.get(&family).copied() {
+                                    Some(resource)
+                                        if arguments.iter().any(|argument| {
+                                            matches!(argument.kind, SurfaceTypeKind::RowArgument(_))
+                                        }) =>
+                                    {
+                                        ApplicationHead::Resource(resource)
+                                    }
+                                    _ => ApplicationHead::Nominal(family),
+                                }
                             };
                             tasks.push(Task::Application(
                                 head,
@@ -8877,7 +8866,12 @@ impl Resolver {
                             elements
                                 .into_vec()
                                 .into_iter()
-                                .map(|(ty, _)| ty)
+                                .map(|(ty, _)| {
+                                    let crate::types::KindedArgument::TypeArg(ty) = ty else {
+                                        unreachable!("tuple elements are ordinary types")
+                                    };
+                                    ty
+                                })
                                 .collect::<Vec<_>>()
                                 .into_boxed_slice(),
                         ),
@@ -8978,7 +8972,7 @@ impl Resolver {
                             })?;
                             for _ in source_instance.arguments.iter().rev() {
                                 let (argument, root) =
-                                    effect_arguments.pop_owned().ok_or_else(|| {
+                                    effect_arguments.pop_argument().ok_or_else(|| {
                                         error(
                                             ResolveReason::InternalState,
                                             source_instance.span,
@@ -8997,14 +8991,13 @@ impl Resolver {
                             arguments.reverse();
                             roots.reverse();
                             written.push((
-                                EffectInstance::from_type_arguments_with_budget(
+                                EffectInstance::new_kinded(
                                     self.effect_reference(&source_instance.effect)?,
-                                    retain_resolved_type_argument_owners(arguments, &mut self.type_work)
-                                        .map_err(|()| error(ResolveReason::TypeResourceExhausted,
-                                            source_instance.span, "effect-argument retention exceeded its type-work budget"))?,
-                                    &mut self.type_work,
-                                ).map_err(|()| error(ResolveReason::TypeResourceExhausted,
-                                    source_instance.span, "effect-argument retention exceeded its type-work budget"))?,
+                                    arguments
+                                        .into_iter()
+                                        .map(|argument| argument.into_inner())
+                                        .collect(),
+                                ),
                                 source_instance.span,
                                 roots.into_boxed_slice(),
                             ));
@@ -9082,6 +9075,77 @@ impl Resolver {
                     });
                     completed.push((ty, provenance.len() - 1));
                 }
+                Task::Row(row, count) => {
+                    let split = completed.len().checked_sub(count).ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            row.span,
+                            "missing row arguments",
+                        )
+                    })?;
+                    let mut arguments = completed.split_off(split);
+                    let mut written = Vec::new();
+                    for member in row.effects.iter().rev() {
+                        let mut args = Vec::new();
+                        let mut roots = Vec::new();
+                        for _ in 0..member.arguments.len() {
+                            let (argument, root) = arguments.pop_argument().ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    row.span,
+                                    "missing member argument",
+                                )
+                            })?;
+                            args.push(argument.into_inner());
+                            roots.push(root);
+                        }
+                        args.reverse();
+                        roots.reverse();
+                        written.push((
+                            EffectInstance::new_kinded(
+                                self.effect_reference(&member.effect)?,
+                                args.into_boxed_slice(),
+                            ),
+                            member.span,
+                            roots.into_boxed_slice(),
+                        ));
+                    }
+                    written.reverse();
+                    let tail = row
+                        .tail
+                        .as_ref()
+                        .map(|tail| {
+                            self.type_scopes
+                                .iter()
+                                .rev()
+                                .find_map(|scope| scope.get(&tail.text))
+                                .copied()
+                                .map(EffectRowVariable::rigid)
+                                .ok_or_else(|| {
+                                    lookup_error(
+                                        ResolveContext::EffectRowParameter,
+                                        tail.span,
+                                        &tail.text,
+                                        "this row tail parameter is not declared",
+                                    )
+                                })
+                        })
+                        .transpose()?;
+                    let (effects, argument_roots) = build_source_effect_row_with_provenance(
+                        written,
+                        tail,
+                        row.span,
+                        &mut self.type_work,
+                    )?;
+                    provenance.push(ResolvedTypeProvenanceNode::Row {
+                        span: row.span,
+                        argument_roots,
+                    });
+                    completed.push_argument((
+                        crate::types::KindedArgument::RowArg(effects),
+                        provenance.len() - 1,
+                    ));
+                }
                 Task::Application(head, source_arguments, span, constructor_span) => {
                     let count = source_arguments.len();
                     self.type_work.charge(count).map_err(|()| {
@@ -9103,10 +9167,35 @@ impl Resolver {
                         })
                     })?;
                     let arguments = completed.split_off(split);
+                    if let ApplicationHead::Resource(resource) = head {
+                        let roots = arguments
+                            .iter()
+                            .map(|(_, root)| *root)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice();
+                        provenance.push(ResolvedTypeProvenanceNode::Resource {
+                            span,
+                            resource,
+                            arguments: roots,
+                        });
+                        completed.push((
+                            Type::ResourceApply(
+                                resource,
+                                arguments
+                                    .into_vec()
+                                    .into_iter()
+                                    .map(|(argument, _)| argument)
+                                    .collect(),
+                            ),
+                            provenance.len() - 1,
+                        ));
+                        continue;
+                    }
                     provenance.push(ResolvedTypeProvenanceNode::Fact(constructor_span));
                     let mut function = match head {
                         ApplicationHead::Nominal(owner) => Type::Nominal(owner),
                         ApplicationHead::Variable(variable) => Type::Variable(variable),
+                        ApplicationHead::Resource(_) => unreachable!(),
                     };
                     let mut function_root = provenance.len() - 1;
                     for ((argument, argument_root), source_argument) in
@@ -9118,6 +9207,13 @@ impl Resolver {
                             argument: argument_root,
                             argument_span: source_argument.span,
                         });
+                        let crate::types::KindedArgument::TypeArg(argument) = argument else {
+                            return Err(error(
+                                ResolveReason::TypeKind,
+                                source_argument.span,
+                                "an ordinary Type constructor cannot accept a row argument",
+                            ));
+                        };
                         function = Type::Application(Box::new(function), Box::new(argument));
                         function_root = provenance.len() - 1;
                     }
@@ -9136,7 +9232,7 @@ impl Resolver {
                 problem: "incomplete",
             }));
         }
-        let (ty, root) = completed.pop_owned().ok_or_else(|| {
+        let (ty, root) = completed.pop_argument().ok_or_else(|| {
             error(
                 ResolveReason::InternalState,
                 surface.span,
@@ -9147,7 +9243,7 @@ impl Resolver {
                 problem: "missing",
             })
         })?;
-        Ok(ResolvedType {
+        Ok(crate::resolved::ResolvedOwnerArgument {
             ty: ty.into_inner(),
             provenance: ResolvedTypeProvenance::new(provenance, root),
             origin: Origin::Source(surface.span),
@@ -10033,16 +10129,29 @@ impl Resolver {
                 }),
                 span,
             };
-            self.type_work.charge(1).map_err(|()| error(ResolveReason::TypeResourceExhausted,
-                span, "effect-argument retention exceeded its type-work budget"))?;
+            self.type_work.charge(1).map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    span,
+                    "effect-argument retention exceeded its type-work budget",
+                )
+            })?;
             let request = ResolvedExpr {
                 kind: ResolvedExprKind::Perform(ResolvedPerformExpr {
                     effect: ResolvedEffectInstance {
                         argument_provenance: Box::new([]),
                         instance: crate::types::EffectInstance::from_type_arguments_with_budget(
-                            api.ops(), Box::new([Type::Variable(identity.id)]), &mut self.type_work,
-                        ).map_err(|()| error(ResolveReason::TypeResourceExhausted, span,
-                            "effect-argument retention exceeded its type-work budget"))?,
+                            api.ops(),
+                            Box::new([Type::Variable(identity.id)]),
+                            &mut self.type_work,
+                        )
+                        .map_err(|()| {
+                            error(
+                                ResolveReason::TypeResourceExhausted,
+                                span,
+                                "effect-argument retention exceeded its type-work budget",
+                            )
+                        })?,
                         origin: Origin::Source(span),
                         span,
                     },
@@ -10099,8 +10208,8 @@ impl Resolver {
                     spelling: "Provider".to_owned(),
                     origin: Origin::Source(span),
                 },
-                arguments: Box::new([ResolvedType {
-                    ty: Type::Variable(identity.id),
+                arguments: Box::new([crate::resolved::ResolvedOwnerArgument {
+                    ty: crate::types::KindedArgument::TypeArg(Type::Variable(identity.id)),
                     provenance: crate::resolved::ResolvedTypeProvenance::new(
                         vec![crate::resolved::ResolvedTypeProvenanceNode::Fact(span)],
                         0,
@@ -10350,6 +10459,22 @@ impl Resolver {
                         span,
                         &mut expressions,
                     )?;
+                }
+                ResolveTask::FinishResume { owner, span } => {
+                    let value = expressions.pop_owned().ok_or_else(|| {
+                        error(
+                            ResolveReason::InternalState,
+                            span,
+                            "resume value resolution produced no expression",
+                        )
+                    })?;
+                    expressions.push(ResolvedExpr {
+                        kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
+                            owner: Some(owner),
+                            value: Box::new(value.into_inner()),
+                        }),
+                        span,
+                    });
                 }
                 ResolveTask::FinishHook { effect, span } => {
                     let body = expressions.pop_owned().ok_or_else(|| {
@@ -11668,14 +11793,25 @@ impl Resolver {
                     .last()
                     .copied()
                     .ok_or_else(|| continuation_outside_clause(expression.span, "resume"))?;
-                let value = self.resolve_expr(value)?;
-                expressions.push(ResolvedExpr {
-                    kind: ResolvedExprKind::Resume(ResolvedResumeExpr {
-                        owner: Some(owner),
-                        value: Box::new(value),
-                    }),
+                self.type_work.charge(2).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resume value work exceeded its type-work budget",
+                    )
+                })?;
+                tasks.0.try_reserve(2).map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        expression.span,
+                        "resume value work could not reserve storage",
+                    )
+                })?;
+                tasks.push(ResolveTask::FinishResume {
+                    owner,
                     span: expression.span,
                 });
+                tasks.push(ResolveTask::VisitExpr(value));
             }
             SurfaceExprKind::Discard => {
                 let owner = self
@@ -11759,6 +11895,10 @@ struct PendingProviderResource {
 }
 
 enum ResolveTask<'a> {
+    FinishResume {
+        owner: ResumeId,
+        span: Span,
+    },
     FinishPerform {
         effect: ResolvedEffectInstance,
         operation: crate::types::OperationId,
@@ -11877,6 +12017,7 @@ impl ResolveTask<'_> {
             Self::VisitRecursiveGroup(group) => group.span,
             Self::FinishApplication { span }
             | Self::FinishPerform { span, .. }
+            | Self::FinishResume { span, .. }
             | Self::FinishCleanup { span }
             | Self::FinishHook { span, .. }
             | Self::FinishRegistration { span, .. }
@@ -12593,6 +12734,14 @@ fn collect_free_type_names<'a>(
             )
         })?;
         match &ty.kind {
+            SurfaceTypeKind::RowArgument(row) => {
+                if let Some(tail) = &row.tail {
+                    work.push(Task::RowTail(tail));
+                }
+                for effect in row.effects.iter().rev() {
+                    work.push(Task::Slice(effect.arguments.iter()));
+                }
+            }
             SurfaceTypeKind::Named(name) => {
                 let SurfaceReference::Unqualified(name) = name else {
                     continue;
@@ -15542,7 +15691,7 @@ mod tests {
                 .imported
                 .implementations()
                 .map(|implementation| match implementation.fact.arguments() {
-                    [Type::Nominal(id)] => *id,
+                    [crate::types::KindedArgument::TypeArg(Type::Nominal(id))] => *id,
                     _ => panic!("each selected implementation should retain its nominal head"),
                 })
                 .collect::<Vec<_>>();
@@ -15576,18 +15725,13 @@ mod tests {
 
     #[test]
     fn hidden_interface_import_route_uses_its_exact_constraint_budget() {
-        // ConstraintWork owns one route visit, three interface/method/binder
-        // retained facts, two traversals of the five-cell method type, and the
-        // method binder's record, Source-Origin, and Type-Kind authentication,
-        // plus one private canonical method-authority row and its poly-only
-        // checker-view ordinal index. The binder record moves from the removed
-        // aggregate pre-scan into the canonical method pass; the new ordinal
-        // index is one additional graph slot only for this polymorphic method.
-        // TypeWork owns the same three retained carriers, two five-cell type
-        // traversals, and two records plus Type Kinds for the interface and
-        // method binders, plus one independent retained canonical method binder.
-        const EXACT_CONSTRAINT_WORK: usize = 1 + 3 + 2 * 5 + 3 + 1 + 1;
-        const EXACT_TYPE_WORK: usize = 3 + 2 * 5 + 3 * (2 + 1);
+        // ConstraintWork owns the route, two fact records, one polymorphic
+        // index, one declared binder, the thirteen-cell bounded type walk and
+        // complete binder record/Origin/Kind authentication. TypeWork owns
+        // five nominal-closure visits, one inherited role, one hidden-original
+        // search and the retained reference to that immutable checked fact.
+        const EXACT_CONSTRAINT_WORK: usize = 1 + 2 + 1 + 1 + 13 + 3;
+        const EXACT_TYPE_WORK: usize = 5 + 1 + 1 + 1;
 
         let constraint_short =
             retain_hidden_interface_import_with_limits(EXACT_CONSTRAINT_WORK - 1, EXACT_TYPE_WORK);
@@ -15597,9 +15741,8 @@ mod tests {
         assert_eq!(error.reason, ResolveReason::ConstraintResourceExhausted);
         assert_eq!(constraint_short.constraint_used, EXACT_CONSTRAINT_WORK - 1,);
         assert_eq!(
-            constraint_short.type_used,
-            EXACT_TYPE_WORK - 2 * (2 + 1),
-            "constraint failure precedes the final six method-binder TypeWork cells",
+            constraint_short.type_used, 5,
+            "constraint failure precedes inherited-role authentication and checked-fact retention",
         );
         assert!(constraint_short.retained.is_none());
 
@@ -15610,7 +15753,7 @@ mod tests {
             .expect_err("one missing type unit should reject hidden interface retention");
         assert_eq!(error.reason, ResolveReason::TypeResourceExhausted);
         assert_eq!(type_short.constraint_used, EXACT_CONSTRAINT_WORK);
-        assert_eq!(type_short.type_used, EXACT_TYPE_WORK - 1);
+        assert_eq!(type_short.type_used, EXACT_TYPE_WORK - 1,);
         assert!(type_short.retained.is_none());
 
         let exact =
@@ -17321,15 +17464,10 @@ mod tests {
         //   3P + M(2P + 3).
         const PREPARATION_WORK: usize =
             3 * PARAMETER_COUNT + METHOD_COUNT * (2 * PARAMETER_COUNT + 3);
-        // Resolution clones every canonical interface binder, then each
-        // method retains one P-wide scope map and resolves the same three
-        // annotation nodes:
-        //   2P + M(P + 3).
-        // P0..P9 have two spelling bytes; P10..P31 have three. Each
-        // retained binder record includes its inline Source span.
-        const RETAINED_PARAMETER_WORK: usize = 10 * (2 + 2) + 22 * (3 + 2);
-        const RESOLUTION_WORK: usize =
-            RETAINED_PARAMETER_WORK + METHOD_COUNT * (PARAMETER_COUNT + 3);
+        // Each method retains one P-wide scope map and resolves its three
+        // annotation nodes. One immutable original parameter array is then
+        // published; canonical registry bindings later retain its slots.
+        const RESOLUTION_WORK: usize = METHOD_COUNT * (PARAMETER_COUNT + 3) + 1;
         const EXACT_WORK: usize = PREPARATION_WORK + RESOLUTION_WORK;
 
         let parameter_names = (0..PARAMETER_COUNT)
@@ -17383,7 +17521,10 @@ mod tests {
         assert!(exact.type_scopes.is_empty());
         assert_eq!(interfaces[0].parameters.len(), PARAMETER_COUNT);
         assert_eq!(interfaces[0].methods.len(), METHOD_COUNT);
-        assert_eq!(retained.len(), PARAMETER_COUNT);
+        assert!(
+            retained.is_empty(),
+            "canonical registry bindings retain immutable originals at publication"
+        );
     }
 
     #[test]
@@ -17668,7 +17809,8 @@ mod tests {
         // M + (C + A) + (H + K) + V + (H + K + V) + A
         // = 1 + 2 + 4 + 3 + 7 + 1 = 18.
         const METHOD_RECORDS: usize = 1;
-        const APPLICATION_CARRIER_CELLS: usize = 1;
+        // Complete arguments own a guarded staging slot and a retained slot.
+        const APPLICATION_CARRIER_CELLS: usize = 2;
         const ARGUMENT_CELLS: usize = 1;
         const HEAD_RECORDS: usize = 1;
         const KIND_NODES: usize = 3;

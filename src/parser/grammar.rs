@@ -1102,8 +1102,8 @@ fn interface_application(parser: &mut Parser<'_>) -> bool {
             return false;
         }
         let _ = parser.bump();
-        let mut arguments_valid = if starts_type(parser) {
-            type_expression(parser);
+        let mut arguments_valid = if starts_type(parser) || parser.at(&TokenKind::LeftBrace) {
+            application_argument(parser);
             true
         } else {
             report_pending_expected(parser, ExpectedForm::InterfaceApplication);
@@ -1111,8 +1111,8 @@ fn interface_application(parser: &mut Parser<'_>) -> bool {
         };
         while parser.at(&TokenKind::Comma) {
             let _ = parser.bump();
-            if starts_type(parser) {
-                type_expression(parser);
+            if starts_type(parser) || parser.at(&TokenKind::LeftBrace) {
+                application_argument(parser);
             } else {
                 report_pending_expected(parser, ExpectedForm::InterfaceApplication);
                 arguments_valid = false;
@@ -2494,12 +2494,25 @@ fn atomic_type(parser: &mut Parser<'_>) {
 
 fn type_arguments(parser: &mut Parser<'_>) {
     let _ = parser.bump();
-    type_expression(parser);
+    application_argument(parser);
     while parser.at(&TokenKind::Comma) {
         let _ = parser.bump();
-        type_expression(parser);
+        application_argument(parser);
     }
     let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Type);
+}
+
+fn application_argument(parser: &mut Parser<'_>) {
+    if parser.at(&TokenKind::LeftBrace) {
+        if parser.enter_structure() {
+            effect_row(parser);
+            parser.leave_structure();
+        } else {
+            parser.consume_rest();
+        }
+    } else {
+        type_expression(parser);
+    }
 }
 
 fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {

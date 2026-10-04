@@ -985,7 +985,10 @@ fn relational_summary_rejects_complete_parameter_and_application_tampering_matri
 fn determined_summary_method_seed_has_exact_admission_boundaries() {
     // Each of the two methods adds one determinant-subset comparison and one
     // required-key coverage lookup to the predecessor body-free kind work.
-    const TYPE_WORK: usize = 38;
+    // Both methods independently authenticate their two inherited owner slots.
+    // Canonical records live in the kind table, tiny permission domains borrow
+    // their original IDs, and complete function synthesis supplies Type directly.
+    const TYPE_WORK: usize = 26 + 2 * 2;
     const CONSTRAINT_WORK: usize = 11;
     let tree = TempTree::create();
     let graph = load(
@@ -1270,8 +1273,15 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
         + DEPENDENT_FREE_VARIABLE_WORK
         + COVERAGE_SUBSET_WORK;
     const PREDECESSOR_CONSTRAINT_WORK: usize = 60;
-    const EXACT_CONSTRAINT_WORK: usize = PREDECESSOR_CONSTRAINT_WORK + RELATIONSHIP_WORK;
-    const EXACT_TYPE_WORK: usize = 105;
+    // Complete tagged arguments are traversed for structural determination,
+    // rather than dropping their tag at the relationship boundary.
+    const COMPLETE_ARGUMENT_WORK: usize = 15;
+    const EXACT_CONSTRAINT_WORK: usize =
+        PREDECESSOR_CONSTRAINT_WORK + RELATIONSHIP_WORK + COMPLETE_ARGUMENT_WORK;
+    // Canonical and inherited-role authentication retains every visit while
+    // sharing four kind-table records and borrowing the two-ID method domain.
+    // Complete function synthesis supplies its intrinsic Type without a pair walk.
+    const EXACT_TYPE_WORK: usize = 104;
     assert_eq!(
         (measured_constraint.used(), measured_type.used()),
         (EXACT_CONSTRAINT_WORK, EXACT_TYPE_WORK),
@@ -1317,7 +1327,10 @@ fn determined_summary_relationship_authentication_has_an_exact_retry_boundary() 
         .expect("the exact fixture should retain one implementation");
     assert!(matches!(
         implementation.fact().arguments(),
-        [Type::Application(_, _), Type::Variable(_)]
+        [
+            crate::types::KindedArgument::TypeArg(Type::Application(_, _)),
+            crate::types::KindedArgument::TypeArg(Type::Variable(_))
+        ]
     ));
 }
 

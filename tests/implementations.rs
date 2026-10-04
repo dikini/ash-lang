@@ -1102,7 +1102,7 @@ fn checked_impl_method_owns_substituted_constrained_scheme() {
     let Type::Function(domain, codomain) = method.scheme.value_type() else {
         panic!("the substituted method scheme should remain callable");
     };
-    let [head_argument] = implementation.arguments() else {
+    let [ash::types::KindedArgument::TypeArg(head_argument)] = implementation.arguments() else {
         panic!("the unary implementation should retain one head argument");
     };
     assert_eq!(domain.as_ref(), head_argument);

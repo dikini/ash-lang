@@ -762,7 +762,7 @@ authority. Its retained fields are:
 ProviderStateAccess {
   method: MethodId,
   definition: ResourceDefinitionId,
-  arguments: [Type],
+  arguments: [KindedArgument],
   operand: NodeId
 }
 ```
@@ -770,7 +770,10 @@ ProviderStateAccess {
 The method's owner supplies its canonical `InterfaceId`. The independently
 checked resource association supplies the client type `Q<r, alpha>` and
 substituted state template; those determine the operand and result types.
-Ordered arguments follow the resource declaration's binders. Ordinary node
+Ordered arguments follow the resource declaration's binders and retain the
+TypeArg or RowArg tag selected by the complete-owner amendment below. Native
+ABI vectors remain Type-only and use the separately authenticated interpret
+mapping. Ordinary node
 metadata already retains the result type and origin. The operation contributes
 no intrinsic outward effect; its operand's effects remain in the result row.
 It is not an ordinary method application or a foreign request with an invented
@@ -1005,8 +1008,10 @@ constructor without the corresponding controlled operation is not authority.
 Status: selected amendment to DN-0036 experimental P-1. Independent contract
 and prose reviews approve bounded experimental selection. It remains informative
 and off `main`: selection is neither current Ash, product adoption nor executed
-source proof. The current module-publication implementation slice remains
-Type-only; row-aware compiler work requires a subsequent explicit slice.
+source proof. The recorded module-publication checkpoint was Type-only. The
+common-support workstream now implements the row-aware slice; its
+[execution record](execution.md#current-checkpoint) distinguishes source
+progress from verified delivery.
 Revision-2 review approved the design for evidence work; the later attribution
 correction identifies associated EffectId uniqueness as a new bounded rule.
 The frozen amendment SHA-256 is
@@ -1015,6 +1020,15 @@ SHA-256 is `caa0392fb371dbac14d46b0079f25fc3547b6b4b799399bcf242f344212d0edc`.
 The [plan](plan.md#complete-owner-row-argument-follow-on) records review and
 follow-on evidence. These hashes identify external design evidence, not source
 or runtime results.
+
+Current implementation evidence includes public declaration checking and module
+publication with mixed owner arguments, imported row payloads and original
+owner signatures. Independent Core and evidence checks reject wrong argument
+tags, unsaturated applications, missing owner records and out-of-scope variables
+or tails. These are checked boundary properties, not a proof of the amendment.
+They do not establish generic provider-scope execution, lifecycle completion,
+captured-control specialization or the open-row callback witness. The execution
+record identifies the tested source and remaining obligations.
 
 Current [row and kind
 rules](../../../spec/static-semantics.md#computation-types-and-effect-rows)

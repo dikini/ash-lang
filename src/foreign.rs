@@ -1464,7 +1464,7 @@ mod storage_tests {
                 id: interface,
                 public: false,
                 spelling: "storage".into(),
-                parameters: Box::new([]),
+                parameters: Box::new([]).into(),
                 determination: None,
                 methods: Box::new([]),
                 origin: deep_origin(),

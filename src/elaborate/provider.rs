@@ -4,10 +4,9 @@
 mod external;
 use external::StagedProviderExternals;
 
-use super::OwnedTypeBuffer;
 use super::{
     Arc, BinderId, BuildError, CheckedEffectClause, CoreElaborator, CoreLoweringFamily,
-    CorePattern, Deref, EffectOperation, EffectRow, EffectRowVariable, ElaborationFailure,
+    CorePattern, EffectOperation, EffectRow, EffectRowVariable, ElaborationFailure,
     ElaborationTask, EvidenceSelector, HashMap, HashSet, IterativeTypeOwner, Kind, MethodId,
     Origin, PendingEvidencePublication, RefCell, ResolvedExpr, ResolvedExprKind, ResolvedModule,
     Span, Type, TypeError, TypeReason, TypeVariableId, TypeWorkBudget, TypedNode, TypedNodeOwner,
@@ -17,13 +16,14 @@ use super::{
     discard_type_iteratively, first_invalid_handler_operation_with_budget,
     foreign_privilege_unavailable, inference_failure, invalid_state, provider, provider_globals,
     reserve_context_entry, row_exclusion_error, same_type_with_budget, selection_failure,
-    substitute_type_variables_with, type_resource,
+    type_resource,
 };
 #[cfg(test)]
 use super::{
     CheckedModule, CorePatternKind, EffectElaborator, InterfaceConstraintBudget, InterfaceReason,
     ResolvedPatternKind, UsefulnessBudget, check_module,
 };
+use super::{OwnedTypeBuffer, OwnerReplacementBuffer};
 use crate::core::{CoreBuilder, EffectOperationFamily, NodeId, TypedBinder, effect::HandlerId};
 use crate::{
     foreign::ForeignResultFact,
@@ -124,7 +124,43 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             return Err(foreign_privilege_unavailable());
         }
         let exposed = IterativeTypeOwner::new(self.zonk(&operand.ty)?);
-        let (family, arguments) = nominal_arguments(&exposed, &mut self.type_work)?;
+        let (family, arguments) = match &*exposed {
+            Type::ResourceApply(definition, arguments) => (
+                self.registry
+                    .resource_signature_family(*definition)
+                    .ok_or_else(invalid_state)?,
+                crate::types::clone_kinded_arguments_with_budget(
+                    arguments.iter(),
+                    &mut self.type_work,
+                )
+                .map_err(|()| type_resource())?,
+            ),
+            ty => {
+                let (family, arguments) = nominal_arguments(ty, &mut self.type_work)?;
+                let mut retained = OwnedTypeBuffer(Vec::new());
+                self.type_work
+                    .charge(arguments.len())
+                    .map_err(|()| type_resource())?;
+                retained
+                    .try_reserve(arguments.len())
+                    .map_err(|_| type_resource())?;
+                for argument in arguments {
+                    retained.push(
+                        clone_type_with_budget(argument, &mut self.type_work)
+                            .map_err(|()| type_resource())?,
+                    );
+                }
+                (
+                    family,
+                    crate::types::type_arguments_to_kinded_with_budget(
+                        retained.into_boxed_slice(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?,
+                )
+            }
+        };
+        let arguments = super::OwnedArgumentBuffer::from_box(arguments, &mut self.type_work)?;
         let context = self.provider_context.as_ref().ok_or_else(invalid_state)?;
         self.type_work
             .charge(context.state_associations.len())
@@ -139,27 +175,25 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     "state access requires an exact checked local header association",
                 )
             })?;
-        if arguments.len() != association.parameters.len() {
+        if arguments.0.len() != association.parameters.len() {
             return Err(contract_error(
                 span,
                 "state access resource argument count differs",
             ));
         }
         let definition = association.definition;
-        let (substitutions, retained_arguments) = retain_state_access_arguments(
-            &association.parameters,
-            &arguments,
-            &mut self.type_work,
-        )?;
+        let mut substitutions = OwnerReplacementBuffer::new();
+        for (parameter, argument) in association.parameters.iter().zip(arguments.0.iter()) {
+            substitutions.insert_cloned(*parameter, argument, &mut self.type_work)?;
+        }
         let state = IterativeTypeOwner::new(
-            substitute_type_variables_with(
-                &association.state,
-                &substitutions,
-                |cells| self.type_work.charge(cells),
-                || (),
-            )
-            .map_err(|()| type_resource())?,
+            substitutions.substitute(&association.state, &mut self.type_work)?,
         );
+        let retained_arguments = crate::types::clone_kinded_arguments_with_budget(
+            arguments.0.iter().map(|argument| argument.as_ref()),
+            &mut self.type_work,
+        )
+        .map_err(|()| type_resource())?;
         let provenance = self.at_span_provenance(&state, span)?;
         let ty = self.clone_type(&state)?;
         let effects = self.core_effect_row(&operand.effects)?;
@@ -168,10 +202,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             effects,
             Origin::Source(span),
             EffectOperation::ProviderStateAccess(
-                crate::core::effect::ProviderStateAccessNode::new(
+                crate::core::effect::ProviderStateAccessNode::new_kinded(
                     method,
                     definition,
-                    retained_arguments.into_boxed_slice(),
+                    retained_arguments,
                     operand.node,
                 ),
             ),
@@ -190,48 +224,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         if self.registry.foreign_modules().next().is_none() {
             return Ok(false);
         }
-        let mut pending = Vec::new();
-        pending.try_reserve(1).map_err(|_| type_resource())?;
-        pending.push(root);
-        while let Some(ty) = pending.pop() {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            pending.try_reserve(2).map_err(|_| type_resource())?;
-            match ty {
-                Type::Nominal(id) if self.registry.foreign_state(*id).is_some() => return Ok(true),
-                Type::Application(function, argument) | Type::Function(function, argument) => {
-                    pending.push(function);
-                    pending.push(argument);
-                }
-                Type::EffectfulFunction(domain, computation) => {
-                    pending.push(domain);
-                    pending.push(computation.value());
-                    self.type_work
-                        .charge(computation.effects().known().len())
-                        .map_err(|()| type_resource())?;
-                    for effect in computation.effects().known() {
-                        self.type_work
-                            .charge(effect.arguments().len())
-                            .map_err(|()| type_resource())?;
-                        pending
-                            .try_reserve(effect.arguments().len())
-                            .map_err(|_| type_resource())?;
-                        pending.extend(effect.arguments());
-                    }
-                }
-                Type::Tuple(elements) => {
-                    self.type_work
-                        .charge(elements.len())
-                        .map_err(|()| type_resource())?;
-                    pending
-                        .try_reserve(elements.len())
-                        .map_err(|_| type_resource())?;
-                    pending.extend(elements.iter());
-                }
-                Type::Forall(_, body) => pending.push(body),
-                _ => {}
-            }
-        }
-        Ok(false)
+        crate::types::visit_type_structure_with_budget(root, &mut self.type_work, |node, _| {
+            Ok(
+                matches!(node, crate::types::TypeStructureNode::Type(Type::Nominal(id))
+                if self.registry.foreign_state(*id).is_some()),
+            )
+        })
+        .map_err(|()| type_resource())
     }
 
     pub(super) fn check_provider_source_application(
@@ -524,7 +523,7 @@ pub(crate) struct CheckedProviderContracts {
     )>,
 }
 struct ProviderDeclarationContract {
-    provider_application: Arc<crate::interface::InterfaceApplication>,
+    provider_application: std::sync::Arc<crate::interface::InterfaceApplication>,
     spelling: String,
     public: bool,
     fact: std::sync::Arc<crate::resolved::ResourceTypeFact>,
@@ -568,20 +567,26 @@ fn authenticate_provider_application_witness(
         || fact.provider.interface.id != checked_application.interface()
         || fact.provider_application.arguments().len() != checked_application.arguments().len()
         || fact.provider.arguments.len() != checked_application.arguments().len()
-    { return Err(Failure::InvalidState); }
-    work.charge(checked_application.arguments().len()).map_err(|()| Failure::TypeResource)?;
-    for ((canonical, checked), written) in fact.provider_application.arguments().iter()
-        .zip(checked_application.arguments()).zip(fact.provider.arguments.iter())
+    {
+        return Err(Failure::InvalidState);
+    }
+    work.charge(checked_application.arguments().len())
+        .map_err(|()| Failure::TypeResource)?;
+    for ((canonical, checked), written) in fact
+        .provider_application
+        .arguments()
+        .iter()
+        .zip(checked_application.arguments())
+        .zip(fact.provider.arguments.iter())
     {
         if !crate::types::same_kinded_argument_with_budget(canonical, checked, work)
             .map_err(|()| Failure::TypeResource)?
-        { return Err(Failure::InvalidState); }
-        let crate::types::KindedArgument::TypeArg(checked) = checked else {
-            // Written Row provenance is outside M1; semantic rows
-            // remain tagged in every canonical carrier.
+        {
             return Err(Failure::InvalidState);
-        };
-        if !same_type_with_budget(checked, &written.ty, work).map_err(|()| Failure::TypeResource)? {
+        }
+        if !crate::types::same_kinded_argument_with_budget(checked, &written.ty, work)
+            .map_err(|()| Failure::TypeResource)?
+        {
             return Err(Failure::InvalidState);
         }
     }
@@ -606,6 +611,11 @@ impl CheckedProviderContracts {
         work: &mut TypeWorkBudget,
     ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
         use crate::resolved::ResolvedBuildFailure as Failure;
+        // This call borrows immutable original facts. Reconstruct each fact's
+        // own canonical manifest once, while checking each registry occurrence
+        // and its source mapping below. No authority survives this call.
+        let mut authenticated_native_facts: Vec<&Arc<crate::foreign::ForeignModuleFact>> =
+            Vec::new();
         work.charge(self.sources.len())
             .map_err(|()| Failure::TypeResource)?;
         let mut modules = HashSet::new();
@@ -621,23 +631,40 @@ impl CheckedProviderContracts {
                 return Err(Failure::InvalidState);
             }
         }
-        work.charge(self.declarations.len().checked_mul(3).ok_or(Failure::TypeResource)?)
-            .map_err(|()| Failure::TypeResource)?;
+        work.charge(
+            self.declarations
+                .len()
+                .checked_mul(3)
+                .ok_or(Failure::TypeResource)?,
+        )
+        .map_err(|()| Failure::TypeResource)?;
         let mut associated_interfaces = HashMap::new();
         let mut associated_effects = HashMap::new();
-        associated_interfaces.try_reserve(self.declarations.len()).map_err(|_| Failure::TypeResource)?;
-        associated_effects.try_reserve(self.declarations.len()).map_err(|_| Failure::TypeResource)?;
+        associated_interfaces
+            .try_reserve(self.declarations.len())
+            .map_err(|_| Failure::TypeResource)?;
+        associated_effects
+            .try_reserve(self.declarations.len())
+            .map_err(|_| Failure::TypeResource)?;
         for declaration in &self.declarations {
             let fact = &declaration.fact;
             let checked_application = &declaration.provider_application;
             let interface = checked_application.interface();
             let provided = fact.provided.instance.effect();
-            if interface.module() != fact.id.module() || provided.module() != fact.id.module()
-                || associated_interfaces.insert(interface, fact.id).is_some_and(|owner| owner != fact.id)
-                || associated_effects.insert(provided, fact.id).is_some_and(|owner| owner != fact.id)
-            { return Err(Failure::InvalidState); }
+            if interface.module() != fact.id.module()
+                || provided.module() != fact.id.module()
+                || associated_interfaces
+                    .insert(interface, fact.id)
+                    .is_some_and(|owner| owner != fact.id)
+                || associated_effects
+                    .insert(provided, fact.id)
+                    .is_some_and(|owner| owner != fact.id)
+            {
+                return Err(Failure::InvalidState);
+            }
             let canonical = &declaration.acquire.canonical;
-            let signature = canonical.owner_signature(crate::resolved::OwnerId::Interface(interface))
+            let signature = canonical
+                .owner_signature(crate::resolved::OwnerId::Interface(interface))
                 .ok_or(Failure::InvalidState)?;
             if signature.parameters.len() != checked_application.arguments().len() {
                 return Err(Failure::InvalidState);
@@ -720,6 +747,7 @@ impl CheckedProviderContracts {
                     &lifecycle.canonical,
                     fact,
                     &self.sources,
+                    &mut authenticated_native_facts,
                     work,
                 )?;
             }
@@ -734,6 +762,7 @@ impl CheckedProviderContracts {
                 declaration.handlers.canonical_registry(),
                 fact,
                 &self.sources,
+                &mut authenticated_native_facts,
                 work,
             )?;
         }
@@ -940,13 +969,14 @@ fn authenticate_contract_origin(
         }
     }
 }
-fn authenticate_contract_native_registry(
-    registry: &crate::resolved::ResolvedRegistry,
+fn authenticate_contract_native_registry<'a>(
+    registry: &'a crate::resolved::ResolvedRegistry,
     fact: &crate::resolved::ResourceTypeFact,
     sources: &[(
         crate::module::ModuleId,
         std::sync::Arc<crate::source::SourceFile>,
     )],
+    authenticated: &mut Vec<&'a Arc<crate::foreign::ForeignModuleFact>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
     use crate::resolved::ResolvedBuildFailure as Failure;
@@ -961,28 +991,43 @@ fn authenticate_contract_native_registry(
         )
         .map_err(|()| Failure::TypeResource)?;
         registered |= native.effects.contains(&fact.interpreted.instance.effect());
-        native.authenticate(work).map_err(|failure| {
-            if failure.is_resource_exhaustion() {
-                Failure::TypeResource
-            } else {
-                Failure::InvalidState
+        work.charge(authenticated.len())
+            .map_err(|()| Failure::TypeResource)?;
+        if !authenticated
+            .iter()
+            .any(|previous| Arc::ptr_eq(previous, native))
+        {
+            native.authenticate(work).map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    Failure::TypeResource
+                } else {
+                    Failure::InvalidState
+                }
+            })?;
+            // Origins belong to the same immutable native fact. The memo is
+            // confined to this authentication and this fixed source table;
+            // publish its entry only after both fact and origins authenticate.
+            let source_id = authenticate_contract_origin(&native.admission.origin, sources, work)?;
+            work.charge(sources.len())
+                .map_err(|()| Failure::TypeResource)?;
+            if !sources.iter().any(|(module, source)| {
+                *module == native.admission.module_id && source.id() == source_id
+            }) {
+                return Err(Failure::InvalidState);
             }
-        })?;
-        let source_id = authenticate_contract_origin(&native.admission.origin, sources, work)?;
-        work.charge(sources.len())
-            .map_err(|()| Failure::TypeResource)?;
-        if !sources.iter().any(|(module, source)| {
-            *module == native.admission.module_id && source.id() == source_id
-        }) {
-            return Err(Failure::InvalidState);
-        }
-        work.charge(native.operations.len())
-            .map_err(|()| Failure::TypeResource)?;
-        for operation in &native.operations {
-            authenticate_contract_origin(&operation.origin, sources, work)?;
-        }
-        if let Some(access) = &native.state_access {
-            authenticate_contract_origin(&access.origin, sources, work)?;
+            work.charge(native.operations.len())
+                .map_err(|()| Failure::TypeResource)?;
+            for operation in &native.operations {
+                authenticate_contract_origin(&operation.origin, sources, work)?;
+            }
+            if let Some(access) = &native.state_access {
+                authenticate_contract_origin(&access.origin, sources, work)?;
+            }
+            work.charge(1).map_err(|()| Failure::TypeResource)?;
+            authenticated
+                .try_reserve_exact(1)
+                .map_err(|_| Failure::TypeResource)?;
+            authenticated.push(native);
         }
     }
     if !registered {
@@ -992,7 +1037,7 @@ fn authenticate_contract_native_registry(
 }
 
 struct CheckedProviderDeclaration {
-    provider_application: Arc<crate::interface::InterfaceApplication>,
+    provider_application: std::sync::Arc<crate::interface::InterfaceApplication>,
     spelling: String,
     public: bool,
     fact: std::sync::Arc<crate::resolved::ResourceTypeFact>,
@@ -1031,7 +1076,8 @@ impl CheckedProviderGroup {
         for (code, contract) in self.declarations.iter().zip(&certificate.declarations) {
             if !Arc::ptr_eq(&code.fact, &contract.fact)
                 || !Arc::ptr_eq(&code.provider_application, &contract.provider_application)
-                || code.public != contract.public {
+                || code.public != contract.public
+            {
                 return Err(Failure::InvalidState);
             }
             for (entry, proof) in [
@@ -1147,6 +1193,18 @@ pub(super) fn check_module_provider_group(
     if module.resources().is_empty() {
         return Ok(None);
     }
+    // Every declaration in this group borrows the same immutable module. Share
+    // its authenticated source inventory and template registry; each compiler
+    // context and each final Core admission still checks its own occurrence.
+    module
+        .authenticate_owner_definitions(type_work)
+        .map_err(super::resolved_build_error)?;
+    let registry = Arc::new(
+        module
+            .registry()
+            .provider_template_view(module.imported_facts(), type_work)
+            .map_err(super::resolved_build_error)?,
+    );
     let mut declarations = Vec::new();
     type_work
         .charge(module.resources().len())
@@ -1164,6 +1222,7 @@ pub(super) fn check_module_provider_group(
     for definition in module.resources() {
         headers.push(with_module_provider_compiler(
             module,
+            &registry,
             defining,
             type_work,
             coverage_work,
@@ -1174,6 +1233,7 @@ pub(super) fn check_module_provider_group(
     for (definition, header) in module.resources().iter().zip(&headers) {
         let mut acquire = with_module_provider_compiler(
             module,
+            &registry,
             defining,
             type_work,
             coverage_work,
@@ -1208,6 +1268,7 @@ pub(super) fn check_module_provider_group(
 
         let mut finish = with_module_provider_compiler(
             module,
+            &registry,
             defining,
             type_work,
             coverage_work,
@@ -1242,6 +1303,7 @@ pub(super) fn check_module_provider_group(
 
         let handler = with_module_provider_compiler(
             module,
+            &registry,
             defining,
             type_work,
             coverage_work,
@@ -1305,8 +1367,12 @@ pub(super) fn check_module_provider_group(
             .map_err(|_| type_resource())?;
         spelling.push_str(&definition.spelling);
         declarations.push(CheckedProviderDeclaration {
-            provider_application: Arc::new(header.provider_application.clone_with_budget(type_work)
-                .map_err(|()| type_resource())?),
+            provider_application: Arc::new(
+                header
+                    .provider_application
+                    .clone_with_budget(type_work)
+                    .map_err(|()| type_resource())?,
+            ),
             spelling,
             public: definition.public,
             fact,
@@ -1415,22 +1481,17 @@ fn module_provider_failure(failure: LifecycleDraftCheckError) -> TypeError {
 
 fn with_module_provider_compiler<T>(
     module: &crate::resolved::ResolvedModule,
+    registry: &Arc<crate::resolved::ResolvedRegistry>,
     defining: Option<&std::sync::Arc<crate::resolved::ProviderDefiningFacts>>,
     type_work: &mut TypeWorkBudget,
     coverage_work: &mut super::UsefulnessBudget,
     constraint_work: &mut super::InterfaceConstraintBudget,
     check: impl FnOnce(&mut CoreElaborator<EffectOperationFamily>) -> Result<T, TypeError>,
 ) -> Result<T, TypeError> {
-    module.authenticate_owner_definitions(type_work).map_err(super::resolved_build_error)?;
-    let registry_result = module
-        .registry()
-        .provider_template_view(module.imported_facts(), type_work);
-
-    let registry = Arc::new(registry_result.map_err(super::resolved_build_error)?);
     let compiler_result =
         CoreElaborator::<EffectOperationFamily>::for_module_with_registry_and_work(
             module,
-            registry,
+            Arc::clone(registry),
             type_work,
             coverage_work.clone(),
         );
@@ -1543,15 +1604,11 @@ impl LifecycleTemplateDraft {
             work,
         )
         .map_err(LifecycleDraftCheckError::Core)?;
-        let mut substitutions = ProviderSubstitutions::default();
-        work.charge(self.formal_parameters.len())
-            .map_err(|()| LifecycleDraftCheckError::Resource)?;
-        substitutions
-            .0
-            .try_reserve(self.formal_parameters.len())
-            .map_err(|_| LifecycleDraftCheckError::Resource)?;
-        for (source, generated, _) in &self.formal_parameters {
-            substitutions.insert_discarding_replaced(*source, Type::Variable(*generated));
+        let mut substitutions = OwnerReplacementBuffer::new();
+        for (source, generated, kind) in &self.formal_parameters {
+            substitutions
+                .insert_fresh(*source, *generated, kind, work)
+                .map_err(|_| LifecycleDraftCheckError::Resource)?;
         }
         let mut arguments = OwnedTypeBuffer(Vec::new());
         work.charge(definition.interpreted.instance.arguments().len())
@@ -1566,26 +1623,21 @@ impl LifecycleTemplateDraft {
                 return Err(LifecycleDraftCheckError::InvalidEntry);
             };
             arguments.push(
-                substitute_type_variables_with(
-                    argument,
-                    &substitutions,
-                    |cells| work.charge(cells),
-                    || (),
-                )
-                .map_err(|()| LifecycleDraftCheckError::Resource)?,
+                substitutions
+                    .substitute(argument, work)
+                    .map_err(|_| LifecycleDraftCheckError::Resource)?,
             );
         }
         let native = crate::types::EffectInstance::from_type_arguments_with_budget(
-            definition.interpreted.instance.effect(), arguments.into_boxed_slice(), work,
-        ).map_err(|()| LifecycleDraftCheckError::Resource)?;
+            definition.interpreted.instance.effect(),
+            arguments.into_boxed_slice(),
+            work,
+        )
+        .map_err(|_| LifecycleDraftCheckError::Resource)?;
         let state = IterativeTypeOwner::new(
-            substitute_type_variables_with(
-                &definition.state.ty,
-                &substitutions,
-                |cells| work.charge(cells),
-                || (),
-            )
-            .map_err(|()| LifecycleDraftCheckError::Resource)?,
+            substitutions
+                .substitute(&definition.state.ty, work)
+                .map_err(|_| LifecycleDraftCheckError::Resource)?,
         );
         let context = crate::core::provider::LifecycleFlowContext {
             phase: match self.phase {
@@ -1851,7 +1903,7 @@ impl CoreElaborator<EffectOperationFamily> {
             &roots,
             imported,
             publication,
-            &ProviderSubstitutions(HashMap::new()),
+            &OwnerReplacementBuffer::new(),
             &[&prepared.state_parameter],
             &patterns,
             pending_rows,
@@ -2128,11 +2180,7 @@ impl CoreElaborator<EffectOperationFamily> {
                     .saturating_add(4),
             )
             .map_err(|()| type_resource())?;
-        let mut substitutions = ProviderSubstitutions::default();
-        substitutions
-            .0
-            .try_reserve(definition.parameters.len())
-            .map_err(|_| type_resource())?;
+        let mut substitutions = OwnerReplacementBuffer::new();
         let mut formal_parameters = Vec::new();
         formal_parameters
             .try_reserve_exact(definition.parameters.len())
@@ -2143,7 +2191,12 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|_| type_resource())?;
         for parameter in &definition.parameters {
             let generated = self.fresh_type_variable(&parameter.kind, definition.span)?;
-            substitutions.insert_discarding_replaced(parameter.id, Type::Variable(generated));
+            substitutions.insert_fresh(
+                parameter.id,
+                generated,
+                &parameter.kind,
+                &mut self.type_work,
+            )?;
             formal_parameters.push((
                 parameter.id,
                 generated,
@@ -2174,20 +2227,14 @@ impl CoreElaborator<EffectOperationFamily> {
             self.builder.rewrite_types_and_rows(
                 None,
                 |ty| {
-                    substitute_type_variables_with(
-                        ty,
-                        &substitutions,
-                        |cells| work.borrow_mut().charge(cells),
-                        || (),
-                    )
-                    .map_err(|()| BuildError::TypeWorkExceeded)
+                    substitutions
+                        .substitute(ty, &mut work.borrow_mut())
+                        .map_err(|_| BuildError::TypeWorkExceeded)
                 },
                 |row| {
-                    row.substitute_type_variables_with_budget(
-                        &substitutions,
-                        &mut work.borrow_mut(),
-                    )
-                    .map_err(|()| BuildError::TypeWorkExceeded)
+                    substitutions
+                        .substitute_row(row, &mut work.borrow_mut())
+                        .map_err(|_| BuildError::TypeWorkExceeded)
                 },
             )?;
         }
@@ -2259,14 +2306,11 @@ fn lifecycle_function_type(
 
 fn lifecycle_template_scheme(
     function: &Type,
-    substitutions: &HashMap<TypeVariableId, Type>,
+    substitutions: &OwnerReplacementBuffer,
     parameters: &[(TypeVariableId, Kind)],
     work: &mut TypeWorkBudget,
 ) -> Result<Type, TypeError> {
-    let function = IterativeTypeOwner::new(
-        substitute_type_variables_with(function, substitutions, |cells| work.charge(cells), || ())
-            .map_err(|()| type_resource())?,
-    );
+    let function = IterativeTypeOwner::new(substitutions.substitute(function, work)?);
     let parameters = clone_kinded_type_parameters_with_budget(parameters, work)
         .map_err(|()| type_resource())?
         .into_boxed_slice();
@@ -2280,8 +2324,10 @@ impl Drop for ProviderHeader {
     }
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct ProviderSubstitutions(HashMap<TypeVariableId, Type>);
+#[cfg(test)]
 impl ProviderSubstitutions {
     fn insert_discarding_replaced(&mut self, parameter: TypeVariableId, ty: Type) {
         if let Some(displaced) = self.0.insert(parameter, ty) {
@@ -2290,12 +2336,14 @@ impl ProviderSubstitutions {
     }
 }
 
-impl Deref for ProviderSubstitutions {
+#[cfg(test)]
+impl std::ops::Deref for ProviderSubstitutions {
     type Target = HashMap<TypeVariableId, Type>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
+#[cfg(test)]
 impl Drop for ProviderSubstitutions {
     fn drop(&mut self) {
         for (_, ty) in self.0.drain() {
@@ -2304,6 +2352,7 @@ impl Drop for ProviderSubstitutions {
     }
 }
 
+#[cfg(test)]
 fn retain_state_access_arguments(
     parameters: &[TypeVariableId],
     arguments: &[&Type],
@@ -2546,7 +2595,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .instance
                 .arguments()
                 .get(fact.owned_identity_position)
-                != Some(&Type::Variable(owner.id))
+                != Some(&crate::types::KindedArgument::TypeArg(Type::Variable(
+                    owner.id,
+                )))
             {
                 return Err(contract_error(
                     definition.interpreted.span,
@@ -2683,13 +2734,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         self.type_work
             .charge(parameters.len().saturating_add(methods.len()))
             .map_err(|()| type_resource())?;
-        let mut substitutions = ProviderSubstitutions::default();
-        substitutions
-            .0
-            .try_reserve(parameters.len())
-            .map_err(|_| type_resource())?;
-        for (parameter, argument) in parameters.iter().zip(definition.provider.arguments.iter()) {
-            substitutions.insert_discarding_replaced(parameter.id, self.clone_type(&argument.ty)?);
+        let mut substitutions = OwnerReplacementBuffer::new();
+        for (parameter, argument) in parameters.iter().zip(&definition.provider.arguments) {
+            substitutions.insert_cloned(parameter.id, &argument.ty, &mut self.type_work)?;
         }
         let mut associations = Vec::new();
         associations
@@ -2724,15 +2771,8 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     ),
                 ),
             ));
-            let actual = IterativeTypeOwner::new(
-                substitute_type_variables_with(
-                    signature,
-                    &substitutions,
-                    |cells| self.type_work.charge(cells),
-                    || (),
-                )
-                .map_err(|()| type_resource())?,
-            );
+            let actual =
+                IterativeTypeOwner::new(substitutions.substitute(signature, &mut self.type_work)?);
             if !same_type_with_budget(&actual, &expected, &mut self.type_work)
                 .map_err(|()| type_resource())?
             {
@@ -2760,9 +2800,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(ProviderHeader {
             provider_application: crate::interface::InterfaceApplication::new_kinded(
                 definition.provider.interface.id,
-                crate::types::clone_type_arguments_to_kinded_with_budget(
-                    definition.provider.arguments.iter().map(|argument| &argument.ty),
-                    &mut self.type_work).map_err(|()| type_resource())?),
+                crate::types::clone_kinded_arguments_with_budget(
+                    definition
+                        .provider
+                        .arguments
+                        .iter()
+                        .map(|argument| &argument.ty),
+                    &mut self.type_work,
+                )
+                .map_err(|()| type_resource())?,
+            ),
             state_association,
             acquire,
             finish,
@@ -3032,10 +3079,10 @@ mod tests {
             // Private deep metadata tests ownership at the actual template
             // assembly boundary; it carries no source or Core admission.
             let function = deep_assembly_type();
-            let substitutions = HashMap::new();
+            let substitutions = OwnerReplacementBuffer::new();
             let parameters = [(TypeVariableId::generated(991), Kind::Type)];
             let mut substitution_work = TypeWorkBudget::unbounded();
-            drop(IterativeTypeOwner::new(substitute_type_variables_with(&function, &substitutions, |cells| substitution_work.charge(cells), || ()).unwrap()));
+            drop(IterativeTypeOwner::new(substitutions.substitute(&function, &mut substitution_work).unwrap()));
             let mut measured = TypeWorkBudget::unbounded();
             drop(IterativeTypeOwner::new(lifecycle_template_scheme(&function, &substitutions, &parameters, &mut measured).unwrap()));
             let cost = measured.used();
@@ -3757,22 +3804,58 @@ mod tests {
     fn provider_application_witness_refuses_coherent_fact_and_written_mirror_forgery() {
         let fixture = Fixture::new(SOURCE);
         let definition = &fixture.resolved.resources()[0];
-        let header = fixture.elaborator().check_provider_header(&fixture.resolved, definition).unwrap();
+        let header = fixture
+            .elaborator()
+            .check_provider_header(&fixture.resolved, definition)
+            .unwrap();
         let mut work = TypeWorkBudget::unbounded();
-        let mut fact = crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, &mut work).unwrap();
-        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work).unwrap();
-        let original = fact.provider_application.clone_with_budget(&mut work).unwrap();
-        fact.provider_application.arguments_mut_for_summary_test()[0] = crate::types::KindedArgument::TypeArg(Type::Int);
-        assert_eq!(authenticate_provider_application_witness(&fact, &header.provider_application, &mut work), Err(crate::resolved::ResolvedBuildFailure::InvalidState));
-        let written = IterativeTypeOwner::new(std::mem::replace(&mut fact.provider.arguments[0].ty, Type::Int));
-        assert_eq!(authenticate_provider_application_witness(&fact, &header.provider_application, &mut work), Err(crate::resolved::ResolvedBuildFailure::InvalidState));
+        let mut fact =
+            crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, &mut work)
+                .unwrap();
+        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work)
+            .unwrap();
+        let original = fact
+            .provider_application
+            .clone_with_budget(&mut work)
+            .unwrap();
+        fact.provider_application.arguments_mut_for_summary_test()[0] =
+            crate::types::KindedArgument::TypeArg(Type::Int);
+        assert_eq!(
+            authenticate_provider_application_witness(
+                &fact,
+                &header.provider_application,
+                &mut work
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+        );
+        let written = crate::types::IterativeArgumentOwner::new(std::mem::replace(
+            &mut fact.provider.arguments[0].ty,
+            crate::types::KindedArgument::TypeArg(Type::Int),
+        ));
+        assert_eq!(
+            authenticate_provider_application_witness(
+                &fact,
+                &header.provider_application,
+                &mut work
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+        );
         // The independently checked header was captured before either fact
         // field changed and remains the original application authority.
         fact.provider.arguments[0].ty = written.into_inner();
         fact.provider_application = original;
-        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work).unwrap();
-        fact.provider_application.arguments_mut_for_summary_test()[0] = crate::types::KindedArgument::RowArg(EffectRow::empty());
-        assert_eq!(authenticate_provider_application_witness(&fact, &header.provider_application, &mut work), Err(crate::resolved::ResolvedBuildFailure::InvalidState));
+        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work)
+            .unwrap();
+        fact.provider_application.arguments_mut_for_summary_test()[0] =
+            crate::types::KindedArgument::RowArg(EffectRow::empty());
+        assert_eq!(
+            authenticate_provider_application_witness(
+                &fact,
+                &header.provider_application,
+                &mut work
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+        );
     }
 
     #[test]

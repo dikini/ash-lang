@@ -1101,7 +1101,9 @@ fn native_request_selection_work_exhaustion_precedes_access() {
     else {
         unreachable!()
     };
-    let [Type::Variable(identity)] = request.effect().arguments() else {
+    let [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] =
+        request.effect().arguments()
+    else {
         panic!("native request identity")
     };
     let instantiation = Instantiation::default()

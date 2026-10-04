@@ -84,7 +84,7 @@ const OWNERS: &[OwnerEvidence] = &[
         source: ELABORATE,
         exact_probe: "fn wide_newtype_constructor_fresh_substitution_is_additive_and_retryable()",
         boundary_markers: &[
-            "const EXACT_WORK: usize = 4 * PARAMETER_COUNT + 3;",
+            "const EXACT_WORK: usize = 5 * PARAMETER_COUNT + 4;",
             "TypeWorkBudget::with_limit(EXACT_WORK - 1)",
             "exact additive attempt {attempt} should fit",
         ],
@@ -135,7 +135,7 @@ const OWNERS: &[OwnerEvidence] = &[
         source: ELABORATE,
         exact_probe: "fn wide_parameterized_newtype_constructor_lowering_is_exact_atomic_and_retryable()",
         boundary_markers: &[
-            "const EXACT_WORK: usize = 18 * PARAMETER_COUNT + 9;",
+            "const EXACT_WORK: usize = 19 * PARAMETER_COUNT + 10;",
             "TypeWorkBudget::with_limit(EXACT_WORK - 1)",
             "the exact fresh whole-constructor budget should retry",
         ],

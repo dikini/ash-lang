@@ -282,6 +282,25 @@ enum MonotypeVariableKinds<'scope, 'kind> {
     },
 }
 
+enum OwnerValidationRoot<'a> {
+    Type(&'a Type),
+    Argument(&'a crate::types::KindedArgument),
+    Instance(&'a EffectInstance),
+    Row(&'a EffectRow),
+    TypeRows(&'a Type),
+}
+
+#[derive(Clone, Copy)]
+enum OwnerValidationRole {
+    KindOnly,
+    FinalRows(NodeId),
+}
+
+enum OwnerValidationOutput {
+    Kind(Option<Kind>),
+    Validated,
+}
+
 impl Drop for OwnedTypeSequence {
     fn drop(&mut self) {
         for ty in self.0.by_ref() {
@@ -2935,6 +2954,8 @@ fn representation_provenance_span(node: &ResolvedTypeProvenanceNode) -> Span {
         ResolvedTypeProvenanceNode::Fact(span)
         | ResolvedTypeProvenanceNode::Tuple { span, .. }
         | ResolvedTypeProvenanceNode::Function { span, .. }
+        | ResolvedTypeProvenanceNode::Resource { span, .. }
+        | ResolvedTypeProvenanceNode::Row { span, .. }
         | ResolvedTypeProvenanceNode::Application { span, .. } => *span,
     }
 }
@@ -3643,6 +3664,35 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let type_binders =
             self.collect_type_binders(&nominal_parameter_owners, &abstraction_owners)?;
         self.validate_method_evidence_type_owners(&type_binders)?;
+        for index in 0..self.program.nodes.len() {
+            let id = node_id(self.program.arena, index)?;
+            let node = self.node(id)?;
+            self.validate_final_carrier_rows(
+                OwnerValidationRoot::TypeRows(&node.ty),
+                &type_binders,
+                id,
+            )?;
+            if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+                F::pure(&node.kind)
+            {
+                self.charge_type_work(application.arguments().len())?;
+                for argument in application.arguments() {
+                    self.validate_final_carrier_rows(
+                        OwnerValidationRoot::TypeRows(argument),
+                        &type_binders,
+                        id,
+                    )?;
+                }
+                self.charge_type_work(application.row_arguments().len())?;
+                for row in application.row_arguments() {
+                    self.validate_final_carrier_rows(
+                        OwnerValidationRoot::Row(row),
+                        &type_binders,
+                        id,
+                    )?;
+                }
+            }
+        }
         self.validate_node_types(
             &nominal_parameter_owners,
             &type_binders,
@@ -4272,6 +4322,28 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Err(ValidationError::new(ValidationReason::NodeType, None));
             }
+            let owner = crate::resolved::OwnerId::Interface(method.id.interface());
+            let signature = self
+                .program
+                .registry
+                .owner_signature(owner)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
+            self.charge_type_work(method.inherited_parameters.len())?;
+            if signature.parameters.as_ref() != method.interface_parameters.as_ref()
+                || method.inherited_parameters.len() != method.interface_parameters.len()
+                || method
+                    .inherited_parameters
+                    .iter()
+                    .zip(&method.interface_parameters)
+                    .enumerate()
+                    .any(|(slot, (role, binder))| {
+                        role.owner != owner
+                            || usize::try_from(role.slot) != Ok(slot)
+                            || role.binder != *binder
+                    })
+            {
+                return Err(ValidationError::new(ValidationReason::Registry, None));
+            }
             previous_method = Some(method.id);
             if let Some((interface, parameters)) = previous_interface_parameters
                 && interface == method.id.interface()
@@ -4320,7 +4392,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .type_variable(*parameter)
                     .ok_or_else(|| ValidationError::new(ValidationReason::Registry, None))?;
                 let Some(actual_kind) =
-                    validator.synthesize_monotype_kind(argument, variable_kinds)?
+                    validator.synthesize_owner_argument_kind(argument, variable_kinds)?
                 else {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 };
@@ -4363,7 +4435,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     || acquisition.methods.get(ordinal) != Some(&owner.binder)
                     || !owner.source_parameters.is_empty()
                     || !owner.captures.is_empty()
-                    || !matches!(owner.application.arguments(), [Type::Variable(identity)] if *identity == acquisition.identity)
+                    || !matches!(owner.application.arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == acquisition.identity)
                 {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 }
@@ -4433,7 +4505,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .iter()
                 .zip(occurrence.checked_application.arguments())
             {
-                if !self.same_type_charged(selected, checked)? {
+                if !self.same_owner_argument_charged(selected, checked)? {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 }
             }
@@ -4621,9 +4693,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             .try_reserve(children)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         let mut contains_tail = false;
-        for instance in row.known().iter().chain(row.tail().into_iter().flat_map(|tail| tail.lacks())) {
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
             contains_tail |= self.schedule_owner_type_scan_children(
-                pending, instance.arguments(), needle, true,
+                pending,
+                instance.arguments(),
+                needle,
+                true,
             )?;
         }
         pending.push(computation.value());
@@ -4640,12 +4719,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     ) -> Result<bool, ValidationError> {
         if !slots_admitted {
             self.charge_type_work(arguments.len())?;
-            pending.try_reserve(arguments.len())
+            pending
+                .try_reserve(arguments.len())
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         }
-        if arguments.iter().all(|argument| matches!(argument, crate::types::KindedArgument::TypeArg(_))) {
+        if arguments
+            .iter()
+            .all(|argument| matches!(argument, crate::types::KindedArgument::TypeArg(_)))
+        {
             for argument in arguments {
-                let crate::types::KindedArgument::TypeArg(ty) = argument else { unreachable!() };
+                let crate::types::KindedArgument::TypeArg(ty) = argument else {
+                    unreachable!()
+                };
                 pending.push(ty);
             }
             return Ok(false);
@@ -5302,24 +5387,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             return Err(ValidationError::new(ValidationReason::NodeType, Some(node)));
         }
-        let mut replacements = TypeReplacementMap::new();
-        self.charge_type_work(method.interface_parameters.len())?;
-        replacements
-            .try_reserve(method.interface_parameters.len())
-            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
-        for (parameter, argument) in method
-            .interface_parameters
-            .iter()
-            .zip(application.arguments())
-        {
-            replacements.insert_replacing(*parameter, self.clone_type_charged(argument)?);
-        }
-        let body = substitute_type_variables_with(
+        let (replacements, rows) =
+            self.owner_substitutions(&method.interface_parameters, application.arguments(), node)?;
+        let body = substitute_type_and_row_variables_with(
             &method.value_type,
             replacements.as_map(),
+            &rows,
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, None),
-        )?;
+        )?
+        .map_err(|_| ValidationError::new(ValidationReason::NodeType, Some(node)))?;
         let mut parameters = Vec::new();
         self.charge_type_work(method.parameters.len())?;
         parameters
@@ -5821,12 +5898,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }) {
                         return Ok(true);
                     }
-                    if self.schedule_effectful_type_children(&mut pending, domain, computation, Some(needle))? {
+                    if self.schedule_effectful_type_children(
+                        &mut pending,
+                        domain,
+                        computation,
+                        Some(needle),
+                    )? {
                         return Ok(true);
                     }
                 }
                 Type::ResourceApply(_, arguments) => {
-                    if self.schedule_owner_type_scan_children(&mut pending, arguments, Some(needle), false)? {
+                    if self.schedule_owner_type_scan_children(
+                        &mut pending,
+                        arguments,
+                        Some(needle),
+                        false,
+                    )? {
                         return Ok(true);
                     }
                 }
@@ -6537,30 +6624,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             &edge.application,
             core_source_replacements.as_map(),
         )?;
-        let mut interface_replacement = TypeReplacementMap::new();
-        if edge.interface_parameters.len() != expected_application.arguments().len() {
-            return Err(ValidationError::new(
-                ValidationReason::ApplicationType,
-                Some(anchor.node),
-            ));
-        }
-        self.charge_type_work(edge.interface_parameters.len())?;
-        interface_replacement
-            .try_reserve(edge.interface_parameters.len())
-            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(anchor.node)))?;
-        for (parameter, argument) in edge
-            .interface_parameters
-            .iter()
-            .zip(expected_application.arguments())
-        {
-            interface_replacement.insert_replacing(*parameter, self.clone_type_charged(argument)?);
-        }
-        let expected_body = substitute_type_variables_with(
+        let (interface_replacement, rows) = self.owner_substitutions(
+            &edge.interface_parameters,
+            expected_application.arguments(),
+            anchor.node,
+        )?;
+        let expected_body = substitute_type_and_row_variables_with(
             &edge.value_type,
             interface_replacement.as_map(),
+            &rows,
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, None),
-        )?;
+        )?
+        .map_err(|_| ValidationError::new(ValidationReason::NodeType, Some(anchor.node)))?;
         let expected_domain = if edge.method_parameters.is_empty() {
             IterativeTypeOwner::new(expected_body)
         } else {
@@ -7669,6 +7745,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         module_sources: Option<&HashMap<ModuleId, SourceId>>,
         parameter_owners: &mut RegistryParameterOwners,
     ) -> Result<(), ValidationError> {
+        let mut owner_work = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let owner_result = self
+            .program
+            .registry
+            .authenticate_owner_definitions(&mut owner_work);
+        self.charge_type_work(owner_work.used())?;
+        owner_result.map_err(|failure| {
+            ValidationError::new(
+                if matches!(failure, crate::resolved::ResolvedBuildFailure::TypeResource) {
+                    ValidationReason::Resource
+                } else {
+                    ValidationReason::Registry
+                },
+                None,
+            )
+        })?;
         let mut next_declaration = HashMap::<ModuleId, u32>::new();
         self.charge_type_work(self.program.registry.effects().len())?;
         next_declaration
@@ -7741,7 +7835,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         .insert(parameter.id, RegistryParameterOwner::Effect(effect.id))
                         .is_some()
                     || !valid_upper_spelling(&parameter.spelling)
-                    || !crate::kind::binder_kind_is_admitted(&parameter.kind, false)
+                    || !crate::kind::binder_kind_is_admitted(&parameter.kind, true)
                     || !self.same_registry_type_variable(canonical, parameter)?
                 {
                     return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -7803,12 +7897,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         visited
             .try_reserve(nodes.len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        enum Payload<'a> {
+            Type(&'a Type),
+            Argument(&'a crate::types::KindedArgument),
+        }
         let mut work = Vec::new();
         self.charge_type_work(1)?;
         work.try_reserve(1)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-        work.push((representation, provenance.root(), declaration));
-        while let Some((ty, index, parent)) = work.pop() {
+        work.push((
+            Payload::Type(representation),
+            provenance.root(),
+            declaration,
+        ));
+        while let Some((payload, index, parent)) = work.pop() {
             self.charge_type_work(1)?;
             let Some(node) = nodes.get(index) else {
                 return Ok(false);
@@ -7823,7 +7925,65 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             {
                 return Ok(false);
             }
+            let ty = match payload {
+                Payload::Type(ty)
+                | Payload::Argument(crate::types::KindedArgument::TypeArg(ty)) => ty,
+                Payload::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                    let ResolvedTypeProvenanceNode::Row { argument_roots, .. } = node else {
+                        return Ok(false);
+                    };
+                    let count = row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                        .try_fold(0usize, |count, instance| {
+                            count.checked_add(instance.arguments().len())
+                        })
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?;
+                    if count != argument_roots.len() {
+                        return Ok(false);
+                    }
+                    self.charge_type_work(
+                        count
+                            + row.known().len()
+                            + row.tail().map_or(0, |tail| tail.lacks().len() + 1),
+                    )?;
+                    work.try_reserve(count)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    let start = work.len();
+                    work.extend(
+                        row.known()
+                            .iter()
+                            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                            .flat_map(|instance| instance.arguments())
+                            .zip(argument_roots.iter().copied())
+                            .map(|(argument, index)| (Payload::Argument(argument), index, span)),
+                    );
+                    work[start..].reverse();
+                    continue;
+                }
+            };
             match (ty, node) {
+                (
+                    Type::ResourceApply(id, arguments),
+                    ResolvedTypeProvenanceNode::Resource {
+                        resource,
+                        arguments: roots,
+                        ..
+                    },
+                ) if id == resource && arguments.len() == roots.len() => {
+                    self.charge_type_work(arguments.len())?;
+                    work.try_reserve(arguments.len())
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.extend(
+                        arguments
+                            .iter()
+                            .zip(roots.iter().copied())
+                            .rev()
+                            .map(|(argument, index)| (Payload::Argument(argument), index, span)),
+                    );
+                }
+
                 (
                     Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
                     ResolvedTypeProvenanceNode::Fact(_),
@@ -7846,8 +8006,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(2)?;
                     work.try_reserve(2)
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-                    work.push((argument, *argument_index, span));
-                    work.push((function, *function_index, span));
+                    work.push((Payload::Type(argument), *argument_index, span));
+                    work.push((Payload::Type(function), *function_index, span));
                 }
                 (
                     Type::Tuple(elements),
@@ -7864,7 +8024,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             .iter()
                             .zip(provenance_elements.iter().copied())
                             .rev()
-                            .map(|(element, index)| (element, index, span)),
+                            .map(|(element, index)| (Payload::Type(element), index, span)),
                     );
                 }
                 (
@@ -7879,8 +8039,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_type_work(2)?;
                     work.try_reserve(2)
                         .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-                    work.push((codomain, *codomain_index, span));
-                    work.push((domain, *domain_index, span));
+                    work.push((Payload::Type(codomain), *codomain_index, span));
+                    work.push((Payload::Type(domain), *domain_index, span));
                 }
                 (
                     Type::EffectfulFunction(domain, codomain),
@@ -7905,11 +8065,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         codomain
                             .effect_arguments()
                             .zip(effect_arguments.iter().copied())
-                            .map(|(argument, index)| (argument, index, span)),
+                            .map(|(argument, index)| (Payload::Argument(argument), index, span)),
                     );
                     work[argument_start..].reverse();
-                    work.push((codomain.value(), *codomain_index, span));
-                    work.push((domain, *domain_index, span));
+                    work.push((Payload::Type(codomain.value()), *codomain_index, span));
+                    work.push((Payload::Type(domain), *domain_index, span));
                 }
                 (Type::Forall(_, _) | Type::Inference(_), _) | (_, _) => return Ok(false),
             }
@@ -7935,6 +8095,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         enum Task<'a> {
             Visit(&'a Type, bool, usize, usize),
             Sequence(std::slice::Iter<'a, Type>, usize),
+            Owner(&'a [crate::types::KindedArgument], usize),
         }
         let mut work = vec![Task::Visit(root, allow_scheme, 0, 0)];
         while let Some(task) = work.pop() {
@@ -7996,13 +8157,61 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             work.push(Task::Visit(codomain, false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
+                        Type::ResourceApply(_, arguments) => {
+                            work.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            work.push(Task::Owner(arguments, depth.saturating_add(1)));
+                        }
                         Type::EffectfulFunction(domain, codomain) if F::ALLOWS_EFFECTFUL_TYPES => {
                             let child_depth = depth.saturating_add(1);
+                            let count = codomain
+                                .effects()
+                                .known()
+                                .len()
+                                .checked_add(
+                                    codomain
+                                        .effects()
+                                        .tail()
+                                        .map_or(0, |tail| tail.lacks().len()),
+                                )
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Resource, None)
+                                })?;
+                            self.charge_type_work(count)?;
+                            work.try_reserve(count.checked_add(2).ok_or_else(|| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?)
+                            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                            for instance in codomain.effects().known().iter().chain(
+                                codomain
+                                    .effects()
+                                    .tail()
+                                    .into_iter()
+                                    .flat_map(|tail| tail.lacks()),
+                            ) {
+                                work.push(Task::Owner(instance.arguments(), child_depth));
+                            }
                             work.push(Task::Visit(codomain.value(), false, child_depth, 0));
                             work.push(Task::Visit(domain, false, child_depth, 0));
                         }
                         Type::EffectfulFunction(_, _) => return Ok(false),
                     }
+                }
+                Task::Owner(arguments, depth) => {
+                    crate::types::visit_owner_components_with_charge(
+                        arguments.iter(),
+                        &mut |cells| self.charge_type_work(cells),
+                        |ty, meter| {
+                            crate::types::TypeWorkMeter::charge(meter, 1)?;
+                            work.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            work.push(Task::Visit(ty, false, depth, 0));
+                            Ok(())
+                        },
+                        |_, _| Ok(()),
+                    )?;
                 }
                 Task::Sequence(mut remaining, depth) => {
                     if let Some(ty) = remaining.next() {
@@ -8070,6 +8279,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Sequence(elements.iter(), depth.saturating_add(1)));
                 }
                 Type::Tuple(_) => return Ok(false),
+                Type::ResourceApply(_, arguments) => {
+                    let child_depth = depth.saturating_add(1);
+                    crate::types::visit_owner_type_children_with_charge(
+                        arguments.iter(),
+                        &mut |cells| self.charge_type_work(cells),
+                        |ty, _| {
+                            work.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            work.push(Task::Visit(ty, child_depth));
+                            Ok(())
+                        },
+                    )?;
+                }
                 Type::Function(domain, codomain) => {
                     let child_depth = depth.saturating_add(1);
                     work.push(Task::Visit(codomain, child_depth));
@@ -8206,17 +8429,23 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         for (left, right) in left.arguments().iter().zip(right.arguments()) {
             let same = match (left, right) {
-                (crate::types::KindedArgument::TypeArg(left), crate::types::KindedArgument::TypeArg(right)) => self.same_type_charged(left, right)?,
+                (
+                    crate::types::KindedArgument::TypeArg(left),
+                    crate::types::KindedArgument::TypeArg(right),
+                ) => self.same_type_charged(left, right)?,
                 _ => {
                     let mut budget = TypeWorkBudget::with_limit(
                         CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
                     );
-                    let result = crate::types::same_kinded_argument_with_budget(left, right, &mut budget);
+                    let result =
+                        crate::types::same_kinded_argument_with_budget(left, right, &mut budget);
                     self.charge_type_work(budget.used())?;
                     result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?
                 }
             };
-            if !same { return Ok(false); }
+            if !same {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -8241,7 +8470,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
         self.charge_type_work(application.arguments().len())?;
         let mut arguments = ArgumentBuffer(Vec::new());
-        arguments.0.try_reserve_exact(application.arguments().len())
+        arguments
+            .0
+            .try_reserve_exact(application.arguments().len())
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
         for argument in application.arguments() {
             let mut budget = TypeWorkBudget::with_limit(
@@ -8249,20 +8480,27 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             );
             let result = crate::types::map_kinded_argument_types_with_budget(
                 argument,
-                &mut |ty, budget: &mut TypeWorkBudget| substitute_type_variables_with(
-                    ty, replacements, |cells| budget.charge(cells), || (),
-                ),
+                &mut |ty, budget: &mut TypeWorkBudget| {
+                    substitute_type_variables_with(
+                        ty,
+                        replacements,
+                        |cells| budget.charge(cells),
+                        || (),
+                    )
+                },
                 &mut budget,
                 &mut |_| (),
             );
             // Keep successful mapping protected across cumulative ledger admission.
             let result = result.map(crate::types::IterativeArgumentOwner::new);
             self.charge_type_work(budget.used())?;
-            let argument = result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+            let argument =
+                result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
             arguments.0.push(argument.into_inner());
         }
         Ok(InterfaceApplication::new_kinded(
-            application.interface(), arguments.into_boxed_slice(),
+            application.interface(),
+            arguments.into_boxed_slice(),
         ))
     }
 
@@ -8448,13 +8686,137 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(kind.clone())
     }
 
+    fn validate_final_carrier_rows(
+        &self,
+        root: OwnerValidationRoot<'_>,
+        type_binders: &CoreTypeBinders<'_>,
+        node: NodeId,
+    ) -> Result<(), ValidationError> {
+        match self.validate_owner_kind_engine(
+            root,
+            MonotypeVariableKinds::Core(type_binders),
+            OwnerValidationRole::FinalRows(node),
+        )? {
+            OwnerValidationOutput::Validated => Ok(()),
+            OwnerValidationOutput::Kind(_) => {
+                Err(ValidationError::new(ValidationReason::NodeType, Some(node)))
+            }
+        }
+    }
+
+    fn synthesize_owner_argument_kind(
+        &self,
+        argument: &crate::types::KindedArgument,
+        variables: MonotypeVariableKinds<'_, '_>,
+    ) -> Result<Option<Kind>, ValidationError> {
+        match self.validate_owner_kind_engine(
+            OwnerValidationRoot::Argument(argument),
+            variables,
+            OwnerValidationRole::KindOnly,
+        )? {
+            OwnerValidationOutput::Kind(kind) => Ok(kind),
+            OwnerValidationOutput::Validated => {
+                Err(ValidationError::new(ValidationReason::NodeType, None))
+            }
+        }
+    }
+
+    fn same_owner_argument_charged(
+        &self,
+        left: &crate::types::KindedArgument,
+        right: &crate::types::KindedArgument,
+    ) -> Result<bool, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let result = crate::types::same_kinded_argument_with_budget(left, right, &mut budget);
+        self.charge_type_work(budget.used())?;
+        result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
+    }
+
+    fn owner_substitutions(
+        &self,
+        parameters: &[crate::types::TypeVariableId],
+        arguments: &[crate::types::KindedArgument],
+        node: NodeId,
+    ) -> Result<
+        (
+            TypeReplacementMap,
+            HashMap<crate::types::TypeVariableId, EffectRow>,
+        ),
+        ValidationError,
+    > {
+        if parameters.len() != arguments.len() {
+            return Err(ValidationError::new(ValidationReason::NodeType, Some(node)));
+        }
+        self.charge_type_work(parameters.len())?;
+        let mut types = TypeReplacementMap::new();
+        let mut rows = HashMap::new();
+        types
+            .try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        rows.try_reserve(parameters.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        for (parameter, argument) in parameters.iter().zip(arguments) {
+            let canonical = self
+                .program
+                .registry
+                .type_variable(*parameter)
+                .ok_or_else(|| ValidationError::new(ValidationReason::Registry, Some(node)))?;
+            match (&canonical.kind, argument) {
+                (Kind::EffectRow, crate::types::KindedArgument::RowArg(row)) => {
+                    if rows
+                        .insert(*parameter, self.clone_effect_row_charged(row)?)
+                        .is_some()
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
+                    }
+                }
+                (kind, crate::types::KindedArgument::TypeArg(ty)) if *kind != Kind::EffectRow => {
+                    if types.as_map().contains_key(parameter) {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
+                    }
+                    types.insert_replacing(*parameter, self.clone_type_charged(ty)?);
+                }
+                _ => return Err(ValidationError::new(ValidationReason::NodeType, Some(node))),
+            }
+        }
+        Ok((types, rows))
+    }
+
     fn synthesize_monotype_kind(
         &self,
         root: &Type,
         variable_kinds: MonotypeVariableKinds<'_, '_>,
     ) -> Result<Option<Kind>, ValidationError> {
+        match self.validate_owner_kind_engine(
+            OwnerValidationRoot::Type(root),
+            variable_kinds,
+            OwnerValidationRole::KindOnly,
+        )? {
+            OwnerValidationOutput::Kind(kind) => Ok(kind),
+            OwnerValidationOutput::Validated => Err(ValidationError::with_cause(
+                ValidationCause::CoreKindResultCount,
+                None,
+            )),
+        }
+    }
+
+    fn validate_owner_kind_engine(
+        &self,
+        root: OwnerValidationRoot<'_>,
+        variable_kinds: MonotypeVariableKinds<'_, '_>,
+        role: OwnerValidationRole,
+    ) -> Result<OwnerValidationOutput, ValidationError> {
         enum Task<'a> {
             Visit(&'a Type),
+            Argument(&'a crate::types::KindedArgument),
+            Instance(&'a EffectInstance),
+            Row(&'a EffectRow),
+            TypeRows(&'a Type),
+            CheckArgument(&'a Kind),
+            FinishResource,
+            FinishRowArgument,
             Sequence(std::slice::Iter<'a, Type>),
             FinishTuple(usize),
             FinishApplication,
@@ -8462,9 +8824,46 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
 
         let resource = || ValidationError::new(ValidationReason::Resource, None);
+        let admitted_owner_kind = |kind: &Kind| -> Result<bool, ValidationError> {
+            let mut pending = Vec::new();
+            self.charge_type_work(1)?;
+            pending.try_reserve(1).map_err(|_| resource())?;
+            pending.push((kind, true));
+            while let Some((kind, complete)) = pending.pop() {
+                match kind {
+                    Kind::Type => {}
+                    Kind::EffectRow if complete => {}
+                    Kind::EffectRow => return Ok(false),
+                    Kind::Arrow(domain, codomain) => {
+                        self.charge_type_work(2)?;
+                        pending.try_reserve(2).map_err(|_| resource())?;
+                        pending.push((codomain.as_ref(), false));
+                        pending.push((domain.as_ref(), false));
+                    }
+                }
+            }
+            Ok(true)
+        };
         let mut work = Vec::new();
+        if matches!(root, OwnerValidationRoot::TypeRows(_)) {
+            self.charge_type_work(1)?;
+        }
         work.try_reserve(1).map_err(|_| resource())?;
-        work.push(Task::Visit(root));
+        let kind_root = matches!(
+            root,
+            OwnerValidationRoot::Type(_) | OwnerValidationRoot::Argument(_)
+        );
+        let node = match role {
+            OwnerValidationRole::KindOnly => None,
+            OwnerValidationRole::FinalRows(node) => Some(node),
+        };
+        work.push(match root {
+            OwnerValidationRoot::Type(ty) => Task::Visit(ty),
+            OwnerValidationRoot::Argument(argument) => Task::Argument(argument),
+            OwnerValidationRoot::Instance(instance) => Task::Instance(instance),
+            OwnerValidationRoot::Row(row) => Task::Row(row),
+            OwnerValidationRoot::TypeRows(ty) => Task::TypeRows(ty),
+        });
         let mut completed = Vec::new();
         while let Some(task) = work.pop() {
             match task {
@@ -8596,7 +8995,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::Visit(Type::Forall(_, _)) => {
                     self.charge_type_work(1)?;
-                    return Ok(None);
+                    return Ok(OwnerValidationOutput::Kind(None));
                 }
                 Task::Visit(Type::Tuple(elements)) => {
                     self.charge_type_work(1)?;
@@ -8620,14 +9019,353 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
                     if !F::ALLOWS_EFFECTFUL_TYPES {
-                        return Ok(None);
+                        return Ok(OwnerValidationOutput::Kind(None));
                     }
                     self.charge_type_work(1)?;
-                    work.try_reserve(3).map_err(|_| resource())?;
+                    self.charge_type_work(1)?;
+                    work.try_reserve(4).map_err(|_| resource())?;
                     work.push(Task::FinishFunction);
+                    work.push(Task::Row(codomain.effects()));
                     work.push(Task::Visit(codomain.value()));
                     work.push(Task::Visit(domain));
                 }
+                Task::Visit(Type::ResourceApply(resource_id, arguments)) => {
+                    self.charge_type_work(1)?;
+                    let registry = &self.program.registry;
+                    let signature = registry
+                        .owner_signature(crate::resolved::OwnerId::Resource(*resource_id))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    let family = registry
+                        .resource_signature_family(*resource_id)
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if !matches!(registry.nominal_kind(family), Some(crate::resolved::CanonicalNominalKind::RowBearingResource { resource: canonical, .. }) if canonical == *resource_id)
+                        || signature.parameters.len() != arguments.len()
+                    {
+                        return Ok(OwnerValidationOutput::Kind(None));
+                    }
+                    let first = signature
+                        .parameters
+                        .first()
+                        .and_then(|id| registry.type_variable(*id))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    if first.kind != Kind::Type {
+                        return Ok(OwnerValidationOutput::Kind(None));
+                    }
+                    self.charge_type_work(arguments.len())?;
+                    let mut has_row = false;
+                    for identity in signature.parameters.iter() {
+                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::Registry, node)
+                        })?;
+                        if !admitted_owner_kind(&parameter.kind)? {
+                            return Ok(OwnerValidationOutput::Kind(None));
+                        }
+                        has_row |= parameter.kind == Kind::EffectRow;
+                    }
+                    if !has_row {
+                        return Ok(OwnerValidationOutput::Kind(None));
+                    }
+                    self.charge_type_work(
+                        arguments
+                            .len()
+                            .checked_mul(2)
+                            .and_then(|n| n.checked_add(1))
+                            .ok_or_else(resource)?,
+                    )?;
+                    work.try_reserve(
+                        arguments
+                            .len()
+                            .checked_mul(2)
+                            .and_then(|n| n.checked_add(1))
+                            .ok_or_else(resource)?,
+                    )
+                    .map_err(|_| resource())?;
+                    work.push(Task::FinishResource);
+                    for (argument, identity) in
+                        arguments.iter().zip(signature.parameters.iter()).rev()
+                    {
+                        let parameter = registry.type_variable(*identity).ok_or_else(|| {
+                            ValidationError::new(ValidationReason::Registry, node)
+                        })?;
+                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                            != matches!(parameter.kind, Kind::EffectRow)
+                        {
+                            return Ok(OwnerValidationOutput::Kind(None));
+                        }
+                        work.push(Task::CheckArgument(&parameter.kind));
+                        work.push(Task::Argument(argument));
+                    }
+                }
+                Task::FinishResource => {
+                    self.charge_type_work(1)?;
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(Kind::Type);
+                }
+                Task::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+                    self.charge_type_work(1)?;
+                    work.try_reserve(1).map_err(|_| resource())?;
+                    work.push(Task::Visit(ty));
+                }
+                Task::Argument(crate::types::KindedArgument::RowArg(row)) => {
+                    self.charge_type_work(2)?;
+                    work.try_reserve(2).map_err(|_| resource())?;
+                    work.push(Task::FinishRowArgument);
+                    work.push(Task::Row(row));
+                }
+                Task::FinishRowArgument => {
+                    self.charge_type_work(1)?;
+                    completed.try_reserve(1).map_err(|_| resource())?;
+                    completed.push(Kind::EffectRow);
+                }
+                Task::CheckArgument(expected) => {
+                    let actual = completed.pop().ok_or_else(|| {
+                        ValidationError::with_cause(ValidationCause::CoreKindResultCount, node)
+                    })?;
+                    if !self.same_kind_charged(expected, &actual)? {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::CoreEffectArgumentKind,
+                            node,
+                        ));
+                    }
+                }
+                Task::Instance(instance) => {
+                    let declaration =
+                        self.program
+                            .registry
+                            .effect(instance.effect())
+                            .ok_or_else(|| {
+                                ValidationError::with_cause(
+                                    ValidationCause::UnknownCoreEffect,
+                                    node,
+                                )
+                            })?;
+                    if declaration.parameters.len() != instance.arguments().len() {
+                        return Err(ValidationError::with_cause(
+                            ValidationCause::CoreEffectArgumentCount,
+                            node,
+                        ));
+                    }
+                    let signature = self
+                        .program
+                        .registry
+                        .owner_signature(crate::resolved::OwnerId::Effect(declaration.id))
+                        .ok_or_else(|| ValidationError::new(ValidationReason::Registry, node))?;
+                    self.charge_type_work(declaration.parameters.len())?;
+                    if signature.parameters.len() != declaration.parameters.len()
+                        || !signature
+                            .parameters
+                            .iter()
+                            .zip(declaration.parameters.iter())
+                            .all(|(id, parameter)| *id == parameter.id)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, node));
+                    }
+                    let count = instance
+                        .arguments()
+                        .len()
+                        .checked_mul(2)
+                        .ok_or_else(resource)?;
+                    self.charge_type_work(count)?;
+                    work.try_reserve(count).map_err(|_| resource())?;
+                    for (parameter, argument) in declaration
+                        .parameters
+                        .iter()
+                        .zip(instance.arguments())
+                        .rev()
+                    {
+                        let canonical = self
+                            .program
+                            .registry
+                            .type_variable(parameter.id)
+                            .ok_or_else(|| {
+                                ValidationError::new(ValidationReason::Registry, node)
+                            })?;
+                        if !admitted_owner_kind(&parameter.kind)?
+                            || !self.same_kind_charged(&canonical.kind, &parameter.kind)?
+                        {
+                            return Err(ValidationError::new(ValidationReason::Registry, node));
+                        }
+                        if matches!(argument, crate::types::KindedArgument::RowArg(_))
+                            != matches!(parameter.kind, Kind::EffectRow)
+                        {
+                            return Err(ValidationError::with_cause(
+                                ValidationCause::CoreEffectArgumentKind,
+                                node,
+                            ));
+                        }
+                        work.push(Task::CheckArgument(&parameter.kind));
+                        work.push(Task::Argument(argument));
+                    }
+                }
+                Task::Row(row) => {
+                    self.charge_type_work(row.known().len())?;
+                    if let Some(tail) = row.tail() {
+                        self.charge_type_work(
+                            tail.lacks().len().checked_add(1).ok_or_else(resource)?,
+                        )?;
+                        match tail.variable() {
+                            crate::types::EffectRowVariable::Inference(_) => match role {
+                                OwnerValidationRole::KindOnly => {
+                                    // No-node kind output confers no final row authority.
+                                    if !matches!(variable_kinds, MonotypeVariableKinds::Core(_)) {
+                                        return Err(ValidationError::new(
+                                            ValidationReason::Registry,
+                                            None,
+                                        ));
+                                    }
+                                }
+                                OwnerValidationRole::FinalRows(node) => {
+                                    if !self.conditional_row_position(row, node)? {
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::UnresolvedCoreRow,
+                                            Some(node),
+                                        ));
+                                    }
+                                }
+                            },
+                            crate::types::EffectRowVariable::Rigid(identity) => {
+                                // An exclusion cannot depend on its own row through
+                                // a nested exact-owner argument: that would introduce
+                                // a recursive lacks constraint in final Core.
+                                for excluded in tail.lacks() {
+                                    let mut dependencies = HashSet::new();
+                                    for argument in excluded.arguments() {
+                                        self.collect_owner_argument_type_variables(
+                                            argument,
+                                            &mut dependencies,
+                                        )?;
+                                    }
+                                    if dependencies.contains(&identity) {
+                                        return Err(ValidationError::with_cause(
+                                            ValidationCause::UnprovedRowLacks,
+                                            node,
+                                        ));
+                                    }
+                                }
+                                let kind = match variable_kinds {
+                                    MonotypeVariableKinds::Core(type_binders) => match identity {
+                                        crate::types::TypeVariableId::Resolved { .. } => {
+                                            if let Some(parameter) =
+                                                self.program.registry.type_variable(identity)
+                                            {
+                                                Some(&parameter.kind)
+                                            } else {
+                                                self.provider_external_parameter_kind(identity)?
+                                            }
+                                        }
+                                        crate::types::TypeVariableId::Generated(_) => {
+                                            type_binders.get(&identity).map(|(kind, _)| *kind)
+                                        }
+                                    },
+                                    MonotypeVariableKinds::CatalogOwner(parameters) => {
+                                        self.charge_type_work(parameters.len())?;
+                                        let mut found = None;
+                                        for (parameter, kind) in parameters {
+                                            if *parameter == identity {
+                                                if found.is_some() {
+                                                    return Err(ValidationError::new(
+                                                        ValidationReason::Registry,
+                                                        node,
+                                                    ));
+                                                }
+                                                found = Some(kind);
+                                            }
+                                        }
+                                        found
+                                    }
+                                    MonotypeVariableKinds::Registry {
+                                        owner,
+                                        parameter_owners,
+                                    } => {
+                                        if parameter_owners.get(&identity)
+                                            != Some(&RegistryParameterOwner::Nominal(owner))
+                                            && !owner.is_lexical()
+                                        {
+                                            return Err(ValidationError::new(
+                                                ValidationReason::Registry,
+                                                node,
+                                            ));
+                                        }
+                                        self.program
+                                            .registry
+                                            .type_variable(identity)
+                                            .map(|parameter| &parameter.kind)
+                                    }
+                                };
+                                let kind = kind.ok_or_else(|| {
+                                    ValidationError::with_cause(
+                                        ValidationCause::UnknownCoreRowBinder,
+                                        node,
+                                    )
+                                })?;
+                                if !matches!(kind, Kind::EffectRow) {
+                                    return Err(ValidationError::with_cause(
+                                        ValidationCause::NonRowTailKind,
+                                        node,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    let count = row
+                        .known()
+                        .len()
+                        .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                        .ok_or_else(resource)?;
+                    work.try_reserve(count).map_err(|_| resource())?;
+                    for instance in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                        .rev()
+                    {
+                        work.push(Task::Instance(instance));
+                    }
+                }
+                Task::TypeRows(ty) => match ty {
+                    Type::ResourceApply(_, arguments) => {
+                        let count = arguments.len();
+                        self.charge_type_work(count)?;
+                        work.try_reserve(count).map_err(|_| resource())?;
+                        for argument in arguments.iter().rev() {
+                            match argument {
+                                crate::types::KindedArgument::TypeArg(ty) => {
+                                    work.push(Task::TypeRows(ty))
+                                }
+                                crate::types::KindedArgument::RowArg(row) => {
+                                    work.push(Task::Row(row))
+                                }
+                            }
+                        }
+                    }
+                    Type::EffectfulFunction(domain, computation) => {
+                        if !F::ALLOWS_EFFECTFUL_TYPES {
+                            return Ok(OwnerValidationOutput::Kind(None));
+                        }
+                        self.charge_type_work(3)?;
+                        work.try_reserve(3).map_err(|_| resource())?;
+                        work.push(Task::TypeRows(computation.value()));
+                        work.push(Task::TypeRows(domain));
+                        work.push(Task::Row(computation.effects()));
+                    }
+                    Type::Tuple(elements) => {
+                        self.charge_type_work(elements.len())?;
+                        work.try_reserve(elements.len()).map_err(|_| resource())?;
+                        work.extend(elements.iter().map(Task::TypeRows));
+                    }
+                    Type::Application(left, right) | Type::Function(left, right) => {
+                        self.charge_type_work(2)?;
+                        work.try_reserve(2).map_err(|_| resource())?;
+                        work.push(Task::TypeRows(right));
+                        work.push(Task::TypeRows(left));
+                    }
+                    Type::Forall(_, body) => {
+                        self.charge_type_work(1)?;
+                        work.try_reserve(1).map_err(|_| resource())?;
+                        work.push(Task::TypeRows(body));
+                    }
+                    _ => {}
+                },
                 Task::Sequence(mut remaining) => {
                     if let Some(next) = remaining.next() {
                         work.try_reserve(2).map_err(|_| resource())?;
@@ -8642,10 +9380,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             None,
                         ));
                     }
-                    let kinds = completed.split_off(completed.len() - count);
-                    for kind in kinds {
+                    for kind in completed.drain(completed.len() - count..) {
                         if !self.same_kind_charged(&kind, &Kind::Type)? {
-                            return Ok(None);
+                            return Ok(OwnerValidationOutput::Kind(None));
                         }
                     }
                     completed.try_reserve(1).map_err(|_| resource())?;
@@ -8665,10 +9402,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         ));
                     };
                     let Kind::Arrow(domain, codomain) = &mut function else {
-                        return Ok(None);
+                        return Ok(OwnerValidationOutput::Kind(None));
                     };
                     if !self.same_kind_charged(domain, &argument)? {
-                        return Ok(None);
+                        return Ok(OwnerValidationOutput::Kind(None));
                     }
                     let result = std::mem::replace(codomain.as_mut(), Kind::Type);
                     completed.try_reserve(1).map_err(|_| resource())?;
@@ -8690,15 +9427,17 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     if !self.same_kind_charged(&domain, &Kind::Type)?
                         || !self.same_kind_charged(&codomain, &Kind::Type)?
                     {
-                        return Ok(None);
+                        return Ok(OwnerValidationOutput::Kind(None));
                     }
                     completed.try_reserve(1).map_err(|_| resource())?;
                     completed.push(Kind::Type);
                 }
             }
         }
-        if completed.len() == 1 {
-            Ok(completed.pop())
+        if kind_root && completed.len() == 1 {
+            Ok(OwnerValidationOutput::Kind(completed.pop()))
+        } else if !kind_root && completed.is_empty() {
+            Ok(OwnerValidationOutput::Validated)
         } else {
             Err(ValidationError::with_cause(
                 ValidationCause::CoreKindResultCount,
@@ -8838,6 +9577,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(argument));
                     work.push(Task::Visit(function));
                 }
+                Type::ResourceApply(_, arguments) => {
+                    crate::types::visit_owner_type_children_with_charge(
+                        arguments.iter(),
+                        &mut |cells| self.charge_type_work(cells),
+                        |ty, _| {
+                            work.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            work.push(Task::Visit(ty));
+                            Ok(())
+                        },
+                    )?;
+                }
                 Type::Function(domain, codomain) => {
                     work.push(Task::Visit(codomain));
                     work.push(Task::Visit(domain));
@@ -8863,7 +9615,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
     fn charge_row_structure(&self, row: &EffectRow) -> Result<(), ValidationError> {
         let mut budget = TypeWorkBudget::with_limit(
-            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()));
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
         let result = crate::types::charge_effect_row_cells(row, &mut budget);
         self.charge_type_work(budget.used())?;
         result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))
@@ -9723,6 +10476,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         | Type::Tuple(_)
                         | Type::Nominal(_)
                         | Type::Application(_, _)
+                        | Type::ResourceApply(_, _)
                         | Type::Variable(_)
                         | Type::Inference(_)
                         | Type::EffectfulFunction(_, _)
@@ -10823,8 +11577,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                         replacements.as_map(),
                                     )?;
                                     for argument in application.arguments() {
-                                        self.charge_type_structure(argument)?;
-                                        self.collect_free_type_variables(argument, &mut free)?;
+                                        self.collect_owner_argument_type_variables(
+                                            argument, &mut free,
+                                        )?;
                                     }
                                 }
                             }
@@ -10910,10 +11665,14 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 .and_then(|()| self.collect_free_type_variables(ty, &mut free))
                                 .err(),
                             super::dialect::OperationTypeMetadata::Argument(argument) => self
-                                .collect_owner_argument_type_variables(argument, &mut free).err(),
+                                .collect_owner_argument_type_variables(argument, &mut free)
+                                .err(),
                             super::dialect::OperationTypeMetadata::Row(row) => self
                                 .charge_row_structure(row)
-                                .and_then(|()| self.collect_effect_row_type_variables(row, &mut free)).err(),
+                                .and_then(|()| {
+                                    self.collect_effect_row_type_variables(row, &mut free)
+                                })
+                                .err(),
                             super::dialect::OperationTypeMetadata::Pattern(pattern) => self
                                 .charge_pattern_type_structure(pattern)
                                 .and_then(|()| {
@@ -11041,24 +11800,35 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     match argument {
                         crate::types::KindedArgument::TypeArg(ty) => {
                             self.charge_type_structure(ty)?;
-                            work.try_reserve(1).map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                            work.try_reserve(1).map_err(|_| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
                             work.push(Task::Visit(ty));
                         }
                         crate::types::KindedArgument::RowArg(_) => {
-                            crate::types::visit_owner_components_with_charge(std::iter::once(argument),
+                            crate::types::visit_owner_components_with_charge(
+                                std::iter::once(argument),
                                 &mut |units| self.charge_type_work(units),
                                 |ty, _| {
                                     self.charge_type_structure(ty)?;
-                                    work.try_reserve(1).map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                                    work.try_reserve(1).map_err(|_| {
+                                        ValidationError::new(ValidationReason::Resource, None)
+                                    })?;
                                     work.push(Task::Visit(ty));
                                     Ok(())
                                 },
                                 |tail, _| {
-                                    if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
-                                        self.retain_type_scope_requirement(&mut discovered, variable)?;
+                                    if let crate::types::EffectRowVariable::Rigid(variable) =
+                                        tail.variable()
+                                    {
+                                        self.retain_type_scope_requirement(
+                                            &mut discovered,
+                                            variable,
+                                        )?;
                                     }
                                     Ok(())
-                                })?;
+                                },
+                            )?;
                         }
                     }
                 }
@@ -11085,17 +11855,26 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
                 Task::Visit(Type::EffectfulFunction(domain, codomain)) => {
                     let row = codomain.effects();
-                    self.charge_type_work(row.known().len().saturating_add(usize::from(row.tail().is_some())))?;
+                    self.charge_type_work(
+                        row.known()
+                            .len()
+                            .saturating_add(usize::from(row.tail().is_some())),
+                    )?;
                     if let Some(tail) = row.tail() {
                         if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
                             self.retain_type_scope_requirement(&mut discovered, variable)?;
                         }
                         self.charge_type_work(tail.lacks().len())?;
                     }
-                    for instance in row.known().iter().chain(row.tail().into_iter().flat_map(|tail| tail.lacks())) {
+                    for instance in row
+                        .known()
+                        .iter()
+                        .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                    {
                         schedule_owner_arguments!(instance.arguments().iter());
                     }
-                    work.try_reserve(2).map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                    work.try_reserve(2)
+                        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
                     work.push(Task::Visit(codomain.value()));
                     work.push(Task::Visit(domain));
                 }
@@ -11127,14 +11906,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         row: &EffectRow,
         output: &mut HashSet<crate::types::TypeVariableId>,
     ) -> Result<(), ValidationError> {
-        self.charge_type_work(row.known().len().saturating_add(usize::from(row.tail().is_some())))?;
+        self.charge_type_work(
+            row.known()
+                .len()
+                .saturating_add(usize::from(row.tail().is_some())),
+        )?;
         if let Some(tail) = row.tail() {
             if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
                 self.retain_type_scope_requirement(output, variable)?;
             }
             self.charge_type_work(tail.lacks().len())?;
         }
-        for instance in row.known().iter().chain(row.tail().into_iter().flat_map(|tail| tail.lacks())) {
+        for instance in row
+            .known()
+            .iter()
+            .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+        {
             for argument in instance.arguments() {
                 match argument {
                     crate::types::KindedArgument::TypeArg(ty) => {
@@ -11143,21 +11930,29 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     crate::types::KindedArgument::RowArg(_) => {
                         let mut tails = Vec::new();
-                        crate::types::visit_owner_components_with_charge(std::iter::once(argument),
+                        crate::types::visit_owner_components_with_charge(
+                            std::iter::once(argument),
                             &mut |units| self.charge_type_work(units),
                             |ty, _| {
                                 self.charge_type_structure(ty)?;
                                 self.collect_free_type_variables(ty, output)
                             },
                             |tail, _| {
-                                if let crate::types::EffectRowVariable::Rigid(variable) = tail.variable() {
+                                if let crate::types::EffectRowVariable::Rigid(variable) =
+                                    tail.variable()
+                                {
                                     self.charge_type_work(1)?;
-                                    tails.try_reserve(1).map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                                    tails.try_reserve(1).map_err(|_| {
+                                        ValidationError::new(ValidationReason::Resource, None)
+                                    })?;
                                     tails.push(variable);
                                 }
                                 Ok(())
-                            })?;
-                        for variable in tails { self.retain_type_scope_requirement(output, variable)?; }
+                            },
+                        )?;
+                        for variable in tails {
+                            self.retain_type_scope_requirement(output, variable)?;
+                        }
                     }
                 }
             }
@@ -11267,7 +12062,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                     .find(|owner| owner.binder == binding.binder().id())
                                 {
                                     for argument in owner.application.arguments() {
-                                        self.collect_type_local_nominals(
+                                        self.collect_owner_argument_local_nominals(
                                             argument,
                                             id,
                                             &mut initializer,
@@ -11630,6 +12425,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(())
     }
 
+    fn collect_owner_argument_local_nominals(
+        &self,
+        argument: &crate::types::KindedArgument,
+        occurrence: NodeId,
+        requirements: &mut ScopeRequirements,
+    ) -> Result<(), ValidationError> {
+        crate::types::visit_owner_type_children_with_charge(
+            std::iter::once(argument),
+            &mut |units| self.charge_type_work(units),
+            |ty, _| self.collect_type_local_nominals(ty, occurrence, requirements),
+        )?;
+        Ok(())
+    }
+
     fn collect_row_local_nominals(
         &self,
         row: &EffectRow,
@@ -11647,7 +12456,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         {
             self.charge_type_work(1)?;
             for argument in instance.arguments() {
-                self.collect_type_local_nominals(argument, occurrence, requirements)?;
+                self.collect_owner_argument_local_nominals(argument, occurrence, requirements)?;
             }
         }
         Ok(())
@@ -11772,12 +12581,18 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         super::dialect::OperationTypeMetadata::Type(ty) => self
                             .collect_type_local_nominals(ty, occurrence, requirements)
                             .err(),
-                        super::dialect::OperationTypeMetadata::Argument(argument) => match argument {
-                            crate::types::KindedArgument::TypeArg(ty) => self.collect_type_local_nominals(ty, occurrence, requirements).err(),
-                            crate::types::KindedArgument::RowArg(row) => self.collect_row_local_nominals(row, occurrence, requirements).err(),
+                        super::dialect::OperationTypeMetadata::Argument(argument) => match argument
+                        {
+                            crate::types::KindedArgument::TypeArg(ty) => self
+                                .collect_type_local_nominals(ty, occurrence, requirements)
+                                .err(),
+                            crate::types::KindedArgument::RowArg(row) => self
+                                .collect_row_local_nominals(row, occurrence, requirements)
+                                .err(),
                         },
                         super::dialect::OperationTypeMetadata::Row(row) => self
-                            .collect_row_local_nominals(row, occurrence, requirements).err(),
+                            .collect_row_local_nominals(row, occurrence, requirements)
+                            .err(),
                         super::dialect::OperationTypeMetadata::Pattern(pattern) => self
                             .collect_pattern_local_nominals(pattern, occurrence, requirements)
                             .err(),
@@ -12395,22 +13210,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 Some(node),
             ));
         }
-        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
-            let Some(argument_kind) =
-                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
-            else {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::CoreEffectInvalidArgument,
-                    Some(node),
-                ));
-            };
-            if !self.same_kind_charged(&parameter.kind, &argument_kind)? {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::CoreEffectArgumentKind,
-                    Some(node),
-                ));
-            }
-        }
+        self.validate_effect_instance(instance, type_binders, node)?;
         let Some(operation) = usize::try_from(operation.operation())
             .ok()
             .and_then(|index| declaration.operations.get(index))
@@ -12422,18 +13222,58 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             ));
         };
         let mut replacements = TypeReplacementMap::new();
+        let mut rows = HashMap::new();
+        self.charge_type_work(declaration.parameters.len())?;
+        let type_count = instance
+            .arguments()
+            .iter()
+            .filter(|argument| matches!(argument, crate::types::KindedArgument::TypeArg(_)))
+            .count();
+        let row_count = instance.arguments().len() - type_count;
+        self.charge_type_work(instance.arguments().len())?;
         replacements
-            .try_reserve(declaration.parameters.len())
+            .try_reserve(type_count)
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
+        rows.try_reserve(row_count)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
         for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
-            replacements.insert_replacing(parameter.id, self.clone_type_charged(argument)?);
+            match argument {
+                crate::types::KindedArgument::TypeArg(ty) => {
+                    replacements.insert_replacing(parameter.id, self.clone_type_charged(ty)?)
+                }
+                crate::types::KindedArgument::RowArg(row) => {
+                    if rows
+                        .insert(parameter.id, self.clone_effect_row_charged(row)?)
+                        .is_some()
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(node)));
+                    }
+                }
+            }
         }
-        let signature = substitute_type_variables_with(
+        let signature = substitute_type_and_row_variables_with(
             &operation.annotation.ty,
             replacements.as_map(),
+            &rows,
             |cells| self.charge_type_work(cells),
             || ValidationError::new(ValidationReason::Resource, Some(node)),
-        )?;
+        )?
+        .map_err(|error| {
+            ValidationError::with_cause(
+                match error {
+                    crate::types::EffectRowError::Ambiguous => {
+                        ValidationCause::TypeSubstitutionAmbiguous
+                    }
+                    crate::types::EffectRowError::Missing => {
+                        ValidationCause::TypeSubstitutionMissing
+                    }
+                    crate::types::EffectRowError::Infinite => {
+                        ValidationCause::TypeSubstitutionInfinite
+                    }
+                },
+                Some(node),
+            )
+        })?;
         let Type::Function(domain, result) = signature else {
             discard_type_iteratively(signature);
             return Err(ValidationError::with_cause(
@@ -12453,36 +13293,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         type_binders: &CoreTypeBinders<'_>,
         node: NodeId,
     ) -> Result<(), ValidationError> {
-        let declaration = self
-            .program
-            .registry
-            .effect(instance.effect())
-            .ok_or_else(|| {
-                ValidationError::with_cause(ValidationCause::UnknownCoreEffect, Some(node))
-            })?;
-        if declaration.parameters.len() != instance.arguments().len() {
-            return Err(ValidationError::with_cause(
-                ValidationCause::CoreEffectArgumentCount,
+        match self.validate_owner_kind_engine(
+            OwnerValidationRoot::Instance(instance),
+            MonotypeVariableKinds::Core(type_binders),
+            OwnerValidationRole::FinalRows(node),
+        )? {
+            OwnerValidationOutput::Validated => Ok(()),
+            OwnerValidationOutput::Kind(_) => Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectInvalidArgument,
                 Some(node),
-            ));
+            )),
         }
-        for (parameter, argument) in declaration.parameters.iter().zip(instance.arguments()) {
-            let Some(actual) =
-                self.synthesize_monotype_kind(argument, MonotypeVariableKinds::Core(type_binders))?
-            else {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::CoreEffectInvalidArgument,
-                    Some(node),
-                ));
-            };
-            if !self.same_kind_charged(&parameter.kind, &actual)? {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::CoreEffectArgumentKind,
-                    Some(node),
-                ));
-            }
-        }
-        Ok(())
     }
 
     fn validate_effect_row(
@@ -12491,53 +13312,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         type_binders: &CoreTypeBinders<'_>,
         node: NodeId,
     ) -> Result<(), ValidationError> {
-        self.charge_type_work(row.known().len())?;
-        for instance in row.known() {
-            self.validate_effect_instance(instance, type_binders, node)?;
+        match self.validate_owner_kind_engine(
+            OwnerValidationRoot::Row(row),
+            MonotypeVariableKinds::Core(type_binders),
+            OwnerValidationRole::FinalRows(node),
+        )? {
+            OwnerValidationOutput::Validated => Ok(()),
+            OwnerValidationOutput::Kind(_) => Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectInvalidArgument,
+                Some(node),
+            )),
         }
-        if let Some(tail) = row.tail() {
-            self.charge_type_work(tail.lacks().len().saturating_add(1))?;
-            let crate::types::EffectRowVariable::Rigid(identity) = tail.variable() else {
-                if self.conditional_row_position(row, node)? {
-                    for instance in tail.lacks() {
-                        self.validate_effect_instance(instance, type_binders, node)?;
-                    }
-                    return Ok(());
-                }
-                return Err(ValidationError::with_cause(
-                    ValidationCause::UnresolvedCoreRow,
-                    Some(node),
-                ));
-            };
-            let kind = match identity {
-                crate::types::TypeVariableId::Resolved { .. } => {
-                    if let Some(parameter) = self.program.registry.type_variable(identity) {
-                        Some(&parameter.kind)
-                    } else {
-                        self.provider_external_parameter_kind(identity)?
-                    }
-                }
-                crate::types::TypeVariableId::Generated(_) => {
-                    type_binders.get(&identity).map(|(kind, _)| *kind)
-                }
-            };
-            let Some(kind) = kind else {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::UnknownCoreRowBinder,
-                    Some(node),
-                ));
-            };
-            if !matches!(kind, Kind::EffectRow) {
-                return Err(ValidationError::with_cause(
-                    ValidationCause::NonRowTailKind,
-                    Some(node),
-                ));
-            }
-            for instance in tail.lacks() {
-                self.validate_effect_instance(instance, type_binders, node)?;
-            }
-        }
-        Ok(())
     }
 
     fn validate_effect_type_rows(
@@ -12546,53 +13331,17 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         type_binders: &CoreTypeBinders<'_>,
         node: NodeId,
     ) -> Result<(), ValidationError> {
-        self.charge_type_work(1)?;
-        let mut work = Vec::new();
-        work.try_reserve(1)
-            .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(node)))?;
-        work.push(root);
-        while let Some(ty) = work.pop() {
-            match ty {
-                Type::Tuple(elements) => {
-                    self.charge_type_work(elements.len())?;
-                    work.try_reserve(elements.len()).map_err(|_| {
-                        ValidationError::new(ValidationReason::Resource, Some(node))
-                    })?;
-                    work.extend(elements.iter());
-                }
-                Type::Application(function, argument) | Type::Function(function, argument) => {
-                    self.charge_type_work(2)?;
-                    work.try_reserve(2).map_err(|_| {
-                        ValidationError::new(ValidationReason::Resource, Some(node))
-                    })?;
-                    work.push(argument);
-                    work.push(function);
-                }
-                Type::EffectfulFunction(domain, computation) => {
-                    self.validate_effect_row(computation.effects(), type_binders, node)?;
-                    self.charge_type_work(2)?;
-                    work.try_reserve(2).map_err(|_| {
-                        ValidationError::new(ValidationReason::Resource, Some(node))
-                    })?;
-                    work.push(computation.value());
-                    work.push(domain);
-                }
-                Type::Forall(_, body) => {
-                    self.charge_type_work(1)?;
-                    work.try_reserve(1).map_err(|_| {
-                        ValidationError::new(ValidationReason::Resource, Some(node))
-                    })?;
-                    work.push(body);
-                }
-                Type::Int
-                | Type::Bool
-                | Type::Unit
-                | Type::Nominal(_)
-                | Type::Variable(_)
-                | Type::Inference(_) => {}
-            }
+        match self.validate_owner_kind_engine(
+            OwnerValidationRoot::TypeRows(root),
+            MonotypeVariableKinds::Core(type_binders),
+            OwnerValidationRole::FinalRows(node),
+        )? {
+            OwnerValidationOutput::Validated => Ok(()),
+            OwnerValidationOutput::Kind(_) => Err(ValidationError::with_cause(
+                ValidationCause::CoreEffectInvalidArgument,
+                Some(node),
+            )),
         }
-        Ok(())
     }
 
     fn resource_api(
@@ -12724,7 +13473,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 };
                 if request.operation() != OperationId::new(api.ops(), ordinal as u32)
                     || request.effect().effect() != api.ops()
-                    || !matches!(request.effect().arguments(), [Type::Variable(identity)] if *identity == authority.identity)
+                    || !matches!(request.effect().arguments(), [crate::types::KindedArgument::TypeArg(Type::Variable(identity))] if *identity == authority.identity)
                     || operand.binder() != function.parameter().id()
                     || binding.binder().origin().primary_span() != authority.span
                 {
@@ -12779,6 +13528,10 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 EffectExprKind::Pure(PureExprKind::Computation(
                     PureComputation::TypeApplication(application),
                 )) => {
+                    self.charge_type_work(application.arguments().len())?;
+                    for argument in application.arguments() {
+                        self.validate_effect_type_rows(argument, type_binders, id)?;
+                    }
                     for row in application.row_arguments() {
                         self.validate_effect_row(row, type_binders, id)?;
                     }
@@ -13025,8 +13778,27 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                         self.charge_type_work(instance.arguments().len().saturating_add(1))?;
                         work.try_reserve(instance.arguments().len())
                             .map_err(|_| resource())?;
-                        work.extend(instance.arguments());
+                        crate::types::visit_owner_type_children_with_charge(
+                            instance.arguments(),
+                            &mut |units| self.charge_type_work(units),
+                            |ty, _| {
+                                work.try_reserve(1).map_err(|_| resource())?;
+                                work.push(ty);
+                                Ok(())
+                            },
+                        )?;
                     }
+                }
+                Type::ResourceApply(_, arguments) => {
+                    crate::types::visit_owner_type_children_with_charge(
+                        arguments.iter(),
+                        &mut |units| self.charge_type_work(units),
+                        |ty, _| {
+                            work.try_reserve(1).map_err(|_| resource())?;
+                            work.push(ty);
+                            Ok(())
+                        },
+                    )?;
                 }
                 Type::Forall(_, body) => work.push(body),
                 _ => {}
@@ -15444,6 +16216,8 @@ mod tests {
                 span,
             },
         ]);
+        let canonical = registry.effects()[0].parameters.to_vec();
+        let registry = registry.with_additional_type_variables(canonical);
         let mut builder = crate::core::EffectCoreBuilder::with_effect_registry(Arc::new(registry));
         let root = builder.unit(Type::Unit, origin(&file)).unwrap();
         let program = builder.finish(root).unwrap();
@@ -17871,6 +18645,7 @@ mod tests {
                     .iter()
                     .map(|parameter| parameter.id)
                     .collect(),
+                inherited_parameters: method.inherited_parameters.clone(),
                 parameters: method
                     .type_parameters
                     .iter()
@@ -17889,9 +18664,11 @@ mod tests {
                 source: authority.provider,
                 method: crate::interface::MethodId::new(interface.id, ordinal as u32),
                 binder: *binder,
-                application: crate::interface::InterfaceApplication::new(
+                application: crate::interface::InterfaceApplication::new_kinded(
                     interface.id,
-                    Box::new([crate::types::Type::Variable(authority.identity)]),
+                    Box::new([crate::types::KindedArgument::TypeArg(
+                        crate::types::Type::Variable(authority.identity),
+                    )]),
                 ),
                 captures: Box::new([]),
             })
@@ -18982,7 +19759,7 @@ mod tests {
                 2 => effects.swap(first, second),
                 _ => unreachable!(),
             }
-            program.registry = Arc::new(registry.clone().with_effects(effects));
+            program.registry = Arc::new(registry.clone().replace_effects_for_core_test(effects));
             assert_eq!(
                 run(&program, CORE_VALIDATION_TYPE_WORK_LIMIT)
                     .0
@@ -19920,8 +20697,16 @@ mod tests {
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
         // The generic implementation head reads its one admitted parameter.
         const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
-        const EXACT_WORK: usize =
-            632 + 1 + 1 + 1 + 1 + CHECKED_STACK_CAPACITY_WORK + 1 + 1 + SCOPED_OWNER_PARAMETER_WORK;
+        const EXACT_WORK: usize = 632
+            + 1
+            + 1
+            + 1
+            + 1
+            + CHECKED_STACK_CAPACITY_WORK
+            + 1
+            + 1
+            + SCOPED_OWNER_PARAMETER_WORK
+            + 24; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -19989,7 +20774,8 @@ mod tests {
             + EXACT_PREREQUISITE_SEQUENCE_WORK
             + 1
             + 1 // producer matcher entry and exact prefix capacity
-            + SCOPED_OWNER_PARAMETER_WORK;
+            + SCOPED_OWNER_PARAMETER_WORK
+            + 26; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -20189,7 +20975,8 @@ mod tests {
             + CHECKED_STACK_CAPACITY_WORK
             + 1
             + 1
-            + SCOPED_OWNER_PARAMETER_WORK;
+            + SCOPED_OWNER_PARAMETER_WORK
+            + 25; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -20256,7 +21043,8 @@ mod tests {
             + 1
             + 2
             + 2 // matcher entries, abstract membership, prefix slots, domain visits
-            + SCOPED_OWNER_PARAMETER_WORK;
+            + SCOPED_OWNER_PARAMETER_WORK
+            + 81; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(exact_work, EXACT_WORK);
 
         let short = Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -20383,9 +21171,9 @@ mod tests {
                     );
                 }
                 Case::WrongInterface => {
-                    anchors[0].application = InterfaceApplication::new(
+                    anchors[0].application = InterfaceApplication::new_kinded(
                         anchors[0].application.interface(),
-                        Box::new([Type::Bool]),
+                        Box::new([crate::types::KindedArgument::TypeArg(Type::Bool)]),
                     );
                 }
                 Case::WrongOrdinal => {
@@ -20524,9 +21312,9 @@ mod tests {
                             matches!(anchor.role, MethodEvidenceAnchorRole::Instantiation { .. })
                         })
                         .expect("the fixture has an instantiation");
-                    anchor.application = InterfaceApplication::new(
+                    anchor.application = InterfaceApplication::new_kinded(
                         anchor.application.interface(),
-                        Box::new([Type::Bool]),
+                        Box::new([crate::types::KindedArgument::TypeArg(Type::Bool)]),
                     );
                 }
                 Case::WrongApplicationOwner => {
@@ -20554,9 +21342,9 @@ mod tests {
                             matches!(anchor.role, MethodEvidenceAnchorRole::Application { .. })
                         })
                         .expect("the fixture has an application");
-                    anchor.application = InterfaceApplication::new(
+                    anchor.application = InterfaceApplication::new_kinded(
                         anchor.application.interface(),
-                        Box::new([Type::Bool]),
+                        Box::new([crate::types::KindedArgument::TypeArg(Type::Bool)]),
                     );
                 }
             }
@@ -20624,7 +21412,9 @@ mod tests {
                 }
                 arguments.pop();
             }
-            VectorApplicationMutation::Extra => arguments.push(Type::Unit),
+            VectorApplicationMutation::Extra => {
+                arguments.push(crate::types::KindedArgument::TypeArg(Type::Unit))
+            }
             VectorApplicationMutation::Reordered => {
                 if arguments.len() < 2 {
                     return false;
@@ -20635,25 +21425,30 @@ mod tests {
                 let Some(first) = arguments.first_mut() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
+                crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                     first,
-                    Type::Forall(Box::new([]), Box::new(Type::Unit)),
+                    crate::types::KindedArgument::TypeArg(Type::Forall(
+                        Box::new([]),
+                        Box::new(Type::Unit),
+                    )),
                 ));
             }
             VectorApplicationMutation::WrongArgumentIdentity => {
                 let Some(first) = arguments.first_mut() else {
                     return false;
                 };
-                discard_type_iteratively(std::mem::replace(
+                crate::types::discard_kinded_argument_iteratively(std::mem::replace(
                     first,
-                    Type::Variable(crate::types::TypeVariableId::generated(u32::MAX)),
+                    crate::types::KindedArgument::TypeArg(Type::Variable(
+                        crate::types::TypeVariableId::generated(u32::MAX),
+                    )),
                 ));
             }
             VectorApplicationMutation::WrongInterface => {
                 interface = crate::interface::InterfaceId::new(ModuleId::new(u32::MAX - 1), 0);
             }
         }
-        *application = InterfaceApplication::new(interface, arguments.into_boxed_slice());
+        *application = InterfaceApplication::new_kinded(interface, arguments.into_boxed_slice());
         true
     }
 
@@ -21086,15 +21881,23 @@ mod tests {
                 }
                 "dependent" => {
                     let owner = &mut owners[unused];
-                    let dependent = if owner.application.arguments()[1] == Type::Bool {
+                    let dependent = if owner.application.arguments()[1]
+                        == crate::types::KindedArgument::TypeArg(Type::Bool)
+                    {
                         Type::Int
                     } else {
-                        assert_eq!(owner.application.arguments()[1], Type::Int);
+                        assert_eq!(
+                            owner.application.arguments()[1],
+                            crate::types::KindedArgument::TypeArg(Type::Int)
+                        );
                         Type::Bool
                     };
-                    owner.application = InterfaceApplication::new(
+                    owner.application = InterfaceApplication::new_kinded(
                         owner.application.interface(),
-                        Box::new([owner.application.arguments()[0].clone(), dependent]),
+                        Box::new([
+                            owner.application.arguments()[0].clone(),
+                            crate::types::KindedArgument::TypeArg(dependent),
+                        ]),
                     );
                 }
                 "parameter" | "parameter-count" | "parameter-swap" | "parameter-order" => {
@@ -21279,14 +22082,19 @@ mod tests {
                     },
                     "method" => anchor.method = sibling_method,
                     "dependent" => {
-                        let dependent = if anchor.application.arguments()[1] == Type::Bool {
+                        let dependent = if anchor.application.arguments()[1]
+                            == crate::types::KindedArgument::TypeArg(Type::Bool)
+                        {
                             Type::Int
                         } else {
                             Type::Bool
                         };
-                        anchor.application = InterfaceApplication::new(
+                        anchor.application = InterfaceApplication::new_kinded(
                             anchor.application.interface(),
-                            Box::new([anchor.application.arguments()[0].clone(), dependent]),
+                            Box::new([
+                                anchor.application.arguments()[0].clone(),
+                                crate::types::KindedArgument::TypeArg(dependent),
+                            ]),
                         );
                     }
                     _ => unreachable!(),
@@ -21688,9 +22496,10 @@ mod tests {
         let validated = validate_modules(fixture.program, &sources, &fixture.module_sources)
             .expect("the unused complete header validates before mutation");
         let mut changed = identity_traversal(&validated).expect("independent Core copy");
-        // Five existing method-parameter checks, one owner, one method
-        // lookup cell, and synthesis/comparison for each of two arguments.
-        const EXACT: usize = 5 + 1 + 1 + 2 * (1 + 1);
+        // Five existing method-parameter checks, two inherited roles, one
+        // owner, one method lookup, and a tag, synthesis, and comparison
+        // for each complete application argument.
+        const EXACT: usize = 5 + 2 + 1 + 1 + 2 * (1 + 1 + 1);
         assert_eq!(changed.method_evidence.methods().len(), 1);
         for remaining in [EXACT - 1, EXACT, EXACT] {
             let validator =
@@ -21710,9 +22519,12 @@ mod tests {
         let mut owners = changed.method_evidence.lexical_owners().to_vec();
         assert_eq!(owners.len(), 1);
         let mut arguments = owners[0].application.arguments().to_vec();
-        assert_eq!(arguments[1], Type::Int);
-        arguments[1] = Type::Nominal(constructor);
-        let application = InterfaceApplication::new(
+        assert_eq!(
+            arguments[1],
+            crate::types::KindedArgument::TypeArg(Type::Int)
+        );
+        arguments[1] = crate::types::KindedArgument::TypeArg(Type::Nominal(constructor));
+        let application = InterfaceApplication::new_kinded(
             owners[0].application.interface(),
             arguments.into_boxed_slice(),
         );
@@ -22035,7 +22847,7 @@ mod tests {
             .registry
             .lexical_nominals()
             .iter()
-            .zip([2, 4])
+            .zip([3, 5])
         {
             let short = make();
             short
@@ -22426,7 +23238,7 @@ mod tests {
         exercise_wide_local_row(&row_validator).expect("the measured local row should fit");
         // One row and one tail header + W instance headers + W nominal argument cells and
         // W identity-index insertions, then two first and propagated entries.
-        const EXACT_ROW_WORK: usize = 2 + ROW_WIDTH + 2 * ROW_WIDTH + 2 + 2;
+        const EXACT_ROW_WORK: usize = 2 + ROW_WIDTH + 3 * ROW_WIDTH + 2 + 2;
         assert_eq!(row_validator.type_work.get(), EXACT_ROW_WORK);
 
         let short = Validator::new_modules(&measured.program, &sources, &measured.module_sources)
@@ -22722,6 +23534,9 @@ mod tests {
                 Task::Visit(Type::Nominal(id)) => output.push(Type::Nominal(*id)),
                 Task::Visit(Type::Variable(id)) => output.push(Type::Variable(*id)),
                 Task::Visit(Type::Inference(id)) => output.push(Type::Inference(*id)),
+                Task::Visit(Type::ResourceApply(..)) => {
+                    panic!("forged pure adapter fixture has no resource applications")
+                }
                 Task::Visit(Type::Application(function, argument)) => {
                     pending.push(Task::Application);
                     pending.push(Task::Visit(argument));
@@ -22791,9 +23606,9 @@ mod tests {
                         | MethodEvidenceAnchorRole::Instantiation { .. }
                 )
             {
-                anchor.application = InterfaceApplication::new(
+                anchor.application = InterfaceApplication::new_kinded(
                     anchor.application.interface(),
-                    Box::new([Type::Bool]),
+                    Box::new([crate::types::KindedArgument::TypeArg(Type::Bool)]),
                 );
             }
         }
@@ -22805,9 +23620,14 @@ mod tests {
             .expect("the catalog retains the adapter occurrence");
         let mut rewritten_arguments = occurrence.checked_application.arguments().to_vec();
         for argument in &mut rewritten_arguments {
-            rewrite_int_to_bool_for_test(argument);
+            match argument {
+                crate::types::KindedArgument::TypeArg(ty) => rewrite_int_to_bool_for_test(ty),
+                crate::types::KindedArgument::RowArg(_) => {
+                    panic!("forged pure adapter fixture has no owner row arguments")
+                }
+            }
         }
-        occurrence.checked_application = InterfaceApplication::new(
+        occurrence.checked_application = InterfaceApplication::new_kinded(
             occurrence.checked_application.interface(),
             rewritten_arguments.into_boxed_slice(),
         );
@@ -23236,6 +24056,25 @@ mod tests {
                 Type::Application(function, argument) | Type::Function(function, argument) => {
                     work.push(argument);
                     work.push(function);
+                }
+                Type::ResourceApply(_, arguments) => {
+                    for argument in arguments {
+                        let mut work = TypeWorkBudget::unbounded();
+                        let mapped = crate::types::map_kinded_argument_types_with_budget(
+                            argument,
+                            &mut |ty, budget: &mut TypeWorkBudget| {
+                                let mut copy = clone_type_with_budget(ty, budget)?;
+                                swap_type_variable_identities(&mut copy, left, right);
+                                Ok::<Type, ()>(copy)
+                            },
+                            &mut work,
+                            &mut |_| (),
+                        )
+                        .expect("test identity replacement");
+                        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                            argument, mapped,
+                        ));
+                    }
                 }
                 Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
@@ -25415,6 +26254,30 @@ mod tests {
                     work.push(argument);
                     work.push(function);
                 }
+                Type::ResourceApply(_, arguments) => {
+                    for argument in arguments {
+                        let mut work = TypeWorkBudget::unbounded();
+                        let mapped = crate::types::map_kinded_argument_types_with_budget(
+                            argument,
+                            &mut |ty, budget: &mut TypeWorkBudget| {
+                                let mut copy = clone_type_with_budget(ty, budget)?;
+                                rewrite_type_variable(
+                                    &mut copy,
+                                    old,
+                                    new,
+                                    rewrite_forall_parameter,
+                                );
+                                Ok::<Type, ()>(copy)
+                            },
+                            &mut work,
+                            &mut |_| (),
+                        )
+                        .expect("test identity replacement");
+                        crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                            argument, mapped,
+                        ));
+                    }
+                }
                 Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
                     if rewrite_forall_parameter {
@@ -25439,6 +26302,15 @@ mod tests {
                 Type::Application(function, argument) | Type::Function(function, argument) => {
                     work.push(argument);
                     work.push(function);
+                }
+                Type::ResourceApply(_, arguments) => {
+                    let mut budget = TypeWorkBudget::unbounded();
+                    crate::types::extend_owner_type_children_with_charge(
+                        arguments,
+                        &mut work,
+                        &mut budget,
+                    )
+                    .expect("test owner metadata traversal");
                 }
                 Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
@@ -25467,6 +26339,27 @@ mod tests {
                 Type::Application(function, argument) | Type::Function(function, argument) => {
                     work.push(argument);
                     work.push(function);
+                }
+                Type::ResourceApply(_, arguments) => {
+                    let mut budget = TypeWorkBudget::unbounded();
+                    let mut contains_tail = false;
+                    crate::types::visit_owner_components_with_charge(
+                        arguments,
+                        &mut budget,
+                        |ty, _| {
+                            work.push(ty);
+                            Ok(())
+                        },
+                        |tail, _| {
+                            contains_tail |=
+                                tail.variable() == crate::types::EffectRowVariable::rigid(sought);
+                            Ok(())
+                        },
+                    )
+                    .expect("test owner metadata traversal");
+                    if contains_tail {
+                        return true;
+                    }
                 }
                 Type::EffectfulFunction(_, _) => {}
                 Type::Forall(parameters, body) => {
@@ -27004,7 +27897,9 @@ mod tests {
             .run_effect()
             .expect_err("forged local representation effect metadata must reject");
         assert_eq!(error.reason(), ValidationReason::EffectIdentity);
-        assert_eq!(error.node(), Some(program.root));
+        // Independent registry kind reconstruction rejects the forged effect
+        // before node-local scope validation.
+        assert_eq!(error.node(), None);
         assert!(crate::presentation::compile_core_validation_failure(&error, &[]).is_ok());
     }
 
@@ -28398,8 +29293,8 @@ mod tests {
 
         let application_validator = Validator::new(&program, &[&file]);
         application_validator
-            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 6)
-            .expect("test setup leaves synthesis, comparison, clone, index, substitution, and result comparison work");
+            .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - 7)
+            .expect("test setup leaves synthesis, comparison, clone, index, substitution queue, result, and result comparison work");
         application_validator
             .validate_computation(
                 application,
@@ -28428,9 +29323,10 @@ mod tests {
         const ARGUMENT_CELLS: usize = WIDTH + 1;
         // Synthesis visits each Type cell and compares each tuple child to
         // Kind::Type, then validation revisits the argument for its retained
-        // substitution clone. The final three units are expected-Kind
-        // comparison, replacement storage, and substituted-result comparison.
-        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 3;
+        // substitution clone. The final four units are expected-Kind
+        // comparison, replacement storage, the structural substitution queue,
+        // and substituted-result comparison.
+        const EXPECTED_WORK: usize = ARGUMENT_CELLS * 3 + 4;
         let file = source();
         let origin = origin(&file);
         let arena = super::super::dialect::ArenaId::new(106);
@@ -28533,7 +29429,9 @@ mod tests {
         const ROOT_TYPE_CELLS: usize = WIDTH * 2 + 1;
         const HEAD_INSPECTION: usize = WIDTH + 1;
         const REPLACEMENT_STORAGE: usize = WIDTH * 2;
-        const PAYLOAD_WORK: usize = 3;
+        // Structural substitution admits its initial work queue before the
+        // payload cell and the payload pattern agreement/kind checks.
+        const PAYLOAD_WORK: usize = 4;
         // The pattern/expected agreement comparison visits the complete root
         // before replacement storage and substitution are admitted.
         const ROOT_COMPARISON: usize = ROOT_TYPE_CELLS;
@@ -30672,7 +31570,7 @@ mod tests {
         const NEWTYPE_PARAMETER_WORK: usize = 4 * 2 + 1;
         // All fixed registry and node validation for this concrete fixture is
         // independent of the conversion's parameter-width term.
-        const VALIDATION_ENVELOPE_WORK: usize = 518;
+        const VALIDATION_ENVELOPE_WORK: usize = 524; // complete structural/source metadata passes
         const EXACT_WORK: usize = VALIDATION_ENVELOPE_WORK + NEWTYPE_PARAMETER_WORK;
         assert_eq!(
             validator.newtype_conversion_parameter_work.get(),

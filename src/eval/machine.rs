@@ -53,7 +53,7 @@ use crate::{
         ValidatedProgram,
     },
     resolved::{BinderId, ResumeId},
-    types::{ConstructorId, EffectInstance, OperationId, TypeWorkBudget, same_type_with_budget},
+    types::{ConstructorId, EffectInstance, OperationId, TypeWorkBudget},
 };
 
 /// Inspectable lexical values available while evaluating one expression.
@@ -2420,7 +2420,7 @@ fn same_effect_instance(
         return Ok(false);
     }
     for (left, right) in left.arguments().iter().zip(right.arguments()) {
-        if !same_type_with_budget(left, right, work)
+        if !crate::types::same_kinded_argument_with_budget(left, right, work)
             .map_err(|()| effect_work_failure(work, None, RuntimePhase::Access))?
         {
             return Ok(false);
@@ -3183,16 +3183,19 @@ mod tests {
             "helper<T> : T -> Int ! {E<T>}\nhelper ignored = perform E<T>.ask ()\n",
             "main : Unit -> Int\nmain () = handle (helper 0) with E<Int> {\nask ignored => resume 42\n}\n",
         ));
-        // Application: 3. Request argument: 2 + 1. Handler search: 1.
-        // Handler argument: 2 + 1. Exact comparison: 1.
-        const REQUIRED: usize = 11;
+        // Application: 3. Request argument: 2 slots + substitution root + Int.
+        // Handler search: 1. Handler argument: 2 slots + Int.
+        // Exact comparison: argument tag + Int.
+        const REQUIRED: usize = 13;
         let mut short = Machine::new_effect(&program);
         short.instantiation_work = TypeWorkBudget::with_limit(REQUIRED - 1);
         assert!(is_work_exhaustion(short.run().unwrap_err()));
         for _ in 0..2 {
             let mut exact = Machine::new_effect(&program);
             exact.instantiation_work = TypeWorkBudget::with_limit(REQUIRED);
-            assert_eq!(exact.run().unwrap().value.to_string(), "42");
+            let result = exact.run().unwrap();
+            assert_eq!(result.value.to_string(), "42");
+            assert_eq!(result.runtime_work, REQUIRED);
         }
     }
 

@@ -313,7 +313,10 @@ fn contains_state(
                     schedule_state_owner_types(&mut pending, effect.arguments(), work)?;
                 }
                 if let Some(tail) = computation.effects().tail() {
-                    charge(work, tail.lacks().len().checked_add(1).ok_or_else(resource)?)?;
+                    charge(
+                        work,
+                        tail.lacks().len().checked_add(1).ok_or_else(resource)?,
+                    )?;
                     for effect in tail.lacks() {
                         schedule_state_owner_types(&mut pending, effect.arguments(), work)?;
                     }
@@ -334,10 +337,17 @@ fn schedule_state_owner_types<'a>(
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     charge(work, arguments.len())?;
-    pending.try_reserve(arguments.len()).map_err(|_| resource())?;
-    if arguments.iter().all(|argument| matches!(argument, crate::types::KindedArgument::TypeArg(_))) {
+    pending
+        .try_reserve(arguments.len())
+        .map_err(|_| resource())?;
+    if arguments
+        .iter()
+        .all(|argument| matches!(argument, crate::types::KindedArgument::TypeArg(_)))
+    {
         for argument in arguments {
-            let crate::types::KindedArgument::TypeArg(ty) = argument else { unreachable!() };
+            let crate::types::KindedArgument::TypeArg(ty) = argument else {
+                unreachable!()
+            };
             pending.push(ty);
         }
         return Ok(());
@@ -352,7 +362,8 @@ fn schedule_state_owner_types<'a>(
             Ok(())
         },
         |_, _| Ok(()),
-    ).map_err(|()| resource())
+    )
+    .map_err(|()| resource())
 }
 
 #[cfg(test)]
