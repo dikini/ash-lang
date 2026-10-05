@@ -5,6 +5,80 @@ const SQLITE: &str =
 const PROVIDER: &str =
     include_str!("../../../../tests/fixtures/provider-experiments/sqlite-copying/provider.ash");
 
+const STATEMENT_METHODS: [&str; 3] = ["bind_int", "step", "column_int"];
+
+fn statement_links(
+    fixture: &Fixture,
+) -> Vec<(crate::types::OperationId, crate::resolved::ResumeId)> {
+    let definition = &fixture.resolved.resources()[1];
+    let effect = fixture
+        .resolved
+        .registry()
+        .effect(definition.provided.instance.effect())
+        .unwrap();
+    assert_eq!(
+        effect
+            .operations
+            .iter()
+            .map(|operation| operation.spelling.as_str())
+            .collect::<Vec<_>>(),
+        STATEMENT_METHODS
+    );
+    assert_eq!(
+        definition
+            .handlers
+            .iter()
+            .map(|clause| clause.operation)
+            .collect::<Vec<_>>(),
+        effect
+            .operations
+            .iter()
+            .map(|operation| operation.id)
+            .collect::<Vec<_>>()
+    );
+    definition
+        .handlers
+        .iter()
+        .map(|clause| (clause.operation, clause.resume))
+        .collect()
+}
+
+fn assert_statement_occurrences(
+    fixture: &Fixture,
+    occurrences: &[CheckedGlobalOccurrence],
+    expected: [usize; 3],
+) {
+    let links = statement_links(fixture);
+    let definition = &fixture.resolved.resources()[1];
+    assert_eq!(links.len(), expected.len());
+    let mut actual = [0; 3];
+    for occurrence in occurrences {
+        let span = occurrence.occurrence.origin.primary_span();
+        let owners = definition
+            .handlers
+            .iter()
+            .enumerate()
+            .filter(|(_, clause)| {
+                let body = clause.body.span;
+                body.source() == span.source()
+                    && body.range().start() <= span.range().start()
+                    && span.range().end() <= body.range().end()
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            owners.len(),
+            1,
+            "every selected occurrence belongs to exactly one actual clause"
+        );
+        actual[owners[0]] += 1;
+    }
+    assert_eq!(
+        actual, expected,
+        "selected occurrences cover the exact ordered Statement roots"
+    );
+}
+
 fn actual_fixture(source: &str) -> external::HelperFixture {
     external::HelperFixture::new(
         &source.replace("import provider as Provider", "import helper as Provider"),
@@ -1844,6 +1918,134 @@ fn selected_error_mapper_in_later_clause_forwarder_and_stored_value_keeps_forest
             "later clause forwarding/stored called={called}: {result:?}"
         );
         assert_selected_slots_empty(&draft);
+    }
+}
+
+#[test]
+fn malformed_original_handler_coordinates_refuse_without_publication_and_retry() {
+    let source = SQLITE.replace("ForeignError error", "ForeignError (Provider.map error)");
+    let fixture = selected_error_fixture(&source);
+    let f = &fixture.fixture;
+    let definition = &f.resolved.resources()[1];
+    let original_slots = definition
+        .handlers
+        .iter()
+        .flat_map(|clause| {
+            crate::elaborate::provider::external::all_provider_expression_occurrences(
+                &clause.body,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap()
+        })
+        .flat_map(|occurrence| occurrence.evidence.iter())
+        .map(|slot| slot.retain_unpublished().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(original_slots.len(), 2 * STATEMENT_METHODS.len());
+    let mut original_ids = original_slots
+        .iter()
+        .map(|slot| slot.storage_id())
+        .collect::<Vec<_>>();
+    original_ids.sort_unstable();
+    let header = f
+        .elaborator()
+        .check_provider_header(&f.resolved, definition)
+        .unwrap();
+    for mutation in 0..4 {
+        let mut compiler = f.elaborator();
+        let prepared = compiler
+            .prepare_provider_handler_source(definition, &header, f.resolved.imported_facts())
+            .unwrap();
+        assert_eq!(
+            prepared
+                .clauses
+                .iter()
+                .map(|clause| (clause.operation, clause.resume))
+                .collect::<Vec<_>>(),
+            statement_links(f)
+        );
+        assert_statement_occurrences(f, &compiler.provider_global_occurrences, [1; 3]);
+        let mut prepared_ids = compiler
+            .provider_global_occurrences
+            .iter()
+            .flat_map(|occurrence| occurrence.occurrence.evidence.iter())
+            .map(|slot| slot.storage_id())
+            .collect::<Vec<_>>();
+        prepared_ids.sort_unstable();
+        assert_eq!(
+            prepared_ids, original_ids,
+            "private preparation retains the exact original source slots"
+        );
+        let publication = compiler.prepare_evidence_publication().unwrap();
+        compiler
+            .type_work
+            .charge(prepared.clauses.len().checked_mul(2).unwrap())
+            .unwrap();
+        let mut roots = Vec::new();
+        roots.try_reserve_exact(prepared.clauses.len()).unwrap();
+        roots.extend(prepared.clauses.iter().map(|clause| clause.body));
+        let mut patterns = Vec::new();
+        patterns.try_reserve_exact(prepared.clauses.len()).unwrap();
+        patterns.extend(prepared.clauses.iter().map(|clause| &*clause.pattern));
+        let pending_rows = compiler
+            .cleanup_rows
+            .take_provider_pending(&compiler.builder, roots[0], &mut compiler.type_work)
+            .unwrap();
+        let first = compiler.provider_global_occurrences[0].node.unwrap();
+        let second = compiler.provider_global_occurrences[1].node.unwrap();
+        assert_ne!(first, second);
+        assert!(
+            compiler
+                .provider_global_occurrences
+                .iter()
+                .all(|occurrence| occurrence.node == occurrence.source_node)
+        );
+        match mutation {
+            0 => compiler.provider_global_occurrences[0].node = None,
+            1 => compiler.provider_global_occurrences[0].source_node = None,
+            2 => compiler.provider_global_occurrences[0].source_node = Some(second),
+            3 => {
+                compiler.provider_global_occurrences[1].node = Some(first);
+                compiler.provider_global_occurrences[1].source_node = Some(first);
+            }
+            _ => unreachable!(),
+        }
+        let result = compiler.lower_provider_source_forest_with_pending(
+            &roots,
+            f.resolved.imported_facts(),
+            publication,
+            &OwnerReplacementBuffer::new(),
+            &[&prepared.state_parameter],
+            &patterns,
+            pending_rows,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(TypeError::Internal(ElaborationFailure::InvalidState))
+            ),
+            "original coordinate mutation {mutation} must refuse malformed private metadata"
+        );
+        assert!(original_slots.iter().all(|slot| slot.selection().is_none()));
+        drop(compiler);
+        let retry = compile(f, 1)
+            .expect("fresh compiler retries the unchanged original three-root fixture");
+        assert_statement_occurrences(
+            f,
+            &retry.staged_externals.as_ref().unwrap().occurrences,
+            [1; 3],
+        );
+        assert_eq!(
+            retry
+                .fragment
+                .clauses
+                .iter()
+                .map(|clause| (clause.operation(), clause.resume()))
+                .collect::<Vec<_>>(),
+            statement_links(f)
+        );
+        independent_compiled(f, &retry, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert_selected_slots_empty(&retry);
+        assert!(original_slots.iter().all(|slot| slot.selection().is_none()));
     }
 }
 

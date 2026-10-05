@@ -391,7 +391,7 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "Core Builder carriers",
             CORE_DIALECT_SOURCE,
             "fn method_evidence_builder_constructor_precharges_both_exact_carriers()",
-            "const EXACT_WORK: usize = 2 * EXPECTATIONS;",
+            "const EXACT_WORK: usize = 6 * EXPECTATIONS;",
         ),
         (
             "Core Builder anchor publication",
@@ -446,6 +446,18 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             CORE_TRANSFORM_SOURCE,
             "fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries()",
             "const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;",
+        ),
+        (
+            "Core transform indexed Builder admission",
+            CORE_TRANSFORM_SOURCE,
+            "fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries()",
+            "const CONSTRUCTOR_INDEX_WORK: usize = 4 * ANCHOR_REPLAY_WORK;",
+        ),
+        (
+            "Core transform exact shortlisted original positions",
+            CORE_TRANSFORM_SOURCE,
+            "fn linked_method_transforms_have_exact_anchor_remap_and_arc_lifecycle_boundaries()",
+            "expectations[..=anchor.expectation]",
         ),
         (
             "rejected pending occurrence teardown",

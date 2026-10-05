@@ -7772,6 +7772,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "WrongRequirementPosition"
                     | "authenticate_method_evidence"
                     | "consumed_method_evidence"
+                    | "method_evidence_anchor_keys"
+                    | "method_evidence_expectation_positions"
                     | "concrete_sources"
                     | "clone_interface_application_for_rebuild"
                     | "empty_method_evidence"
