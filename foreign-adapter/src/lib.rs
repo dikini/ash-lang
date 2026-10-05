@@ -8,6 +8,9 @@ pub mod arena;
 /// Identity-bound executable Ash bindings for the SQLite copying experiment.
 pub mod ash_bindings;
 pub use ash_bindings::{SqliteFinishFaults, sqlite_binding, sqlite_binding_with_finish_faults};
+/// Executable basic arena lifecycle bindings and native observations.
+pub mod arena_bindings;
+pub use arena_bindings::{ArenaEvent, ArenaObservations, arena_binding};
 
 use std::{
     cell::{Cell, RefCell},

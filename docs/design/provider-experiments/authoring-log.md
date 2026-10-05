@@ -2575,3 +2575,23 @@ advanced callback remains explicitly ignored), the repaired syntax expectation,
 public resource stack regression and connected SQLite/resource/Core suites.
 Architecture41 passed in receipt10. These common-branch gates precede the
 unsigned delivery commit and fresh original-worktree integration verification.
+
+Batch 2 preparation keeps arena policy in its library manifest and adapter. The
+compiler sees the same generic provider scope used by SQLite. The public usage
+query reads the existing native backing; release observations occur after that
+backing is destroyed. Configuration refusal occurs before allocation and body
+execution. Fresh verification and original-branch integration remain required.
+
+Batch 1 is verified and integrated on the original branch at unsigned merge
+`7c97a454a930c7cc732ce43f1f25c15ef2eea7f7`. Fresh original compilation,
+1,528 library cases, architecture41 and public/module/Core checks pass. Unrelated
+drafts remain byte-for-byte unchanged. The minimal arena delivery is checked
+separately; its public suite and the SQLite suite pass together in receipt04.
+
+Batch 2 common verification passes the four public arena cases, all ten SQLite
+cases, thirty-two adapter unit cases and nine physical arena cases. All-targets
+compilation and strict carrier inventory pass. Reusing the original target
+required invalidating only the differing foreign/export source inputs on return
+to the common worktree; compatible dependency caches were retained. The arena
+native test now asserts slice emptiness directly, avoiding an ambiguous empty
+array comparison introduced by the added workspace dependency.
