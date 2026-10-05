@@ -290,7 +290,7 @@ impl Drop for MethodEvidenceAdapter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MethodEvidenceProducer {
     Lexical {
         source: crate::interface::LexicalEvidenceId,
@@ -1451,7 +1451,7 @@ fn selection_contains(
     Ok(false)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MethodEvidenceAnchorRole {
     LexicalCaptureUse {
         owner: usize,
@@ -2316,6 +2316,8 @@ pub struct CoreBuilder<F: CoreOperationFamily = PureOperationFamily> {
     method_evidence: Arc<MethodEvidenceCatalog>,
     method_evidence_anchors: Vec<MethodEvidenceAnchor>,
     consumed_method_evidence: Vec<bool>,
+    method_evidence_anchor_keys: HashSet<(NodeId, MethodEvidenceAnchorRole, Option<usize>)>,
+    method_evidence_expectation_positions: HashMap<(Option<usize>, MethodId), Vec<usize>>,
     arena: Option<ArenaId>,
     pub(super) nodes: Vec<StoredNode<F>>,
     next_binder: u32,
@@ -2383,6 +2385,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             method_evidence,
             method_evidence_anchors,
             consumed_method_evidence,
+            method_evidence_anchor_keys: HashSet::new(),
+            method_evidence_expectation_positions: HashMap::new(),
             arena: None,
             nodes: Vec::new(),
             next_binder: 0,
@@ -2436,7 +2440,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         type_work
             .charge(
                 expectation_count
-                    .checked_mul(2)
+                    .checked_mul(6)
                     .ok_or(BuildError::TypeWorkExceeded)?,
             )
             .map_err(|()| BuildError::TypeWorkExceeded)?;
@@ -2449,13 +2453,36 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         method_evidence_anchors
             .try_reserve_exact(expectation_count)
             .map_err(|_| BuildError::TypeWorkExceeded)?;
-        Ok(Self::from_catalogs(
+        // Two original carriers, two bounded index tables, and one original
+        // visit plus retained position per expectation were charged above.
+        let mut method_evidence_anchor_keys = HashSet::new();
+        method_evidence_anchor_keys
+            .try_reserve(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut method_evidence_expectation_positions =
+            HashMap::<(Option<usize>, MethodId), Vec<usize>>::new();
+        method_evidence_expectation_positions
+            .try_reserve(expectation_count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for (position, expected) in method_evidence.expectations().iter().enumerate() {
+            let positions = method_evidence_expectation_positions
+                .entry((expected.occurrence, expected.method))
+                .or_default();
+            positions
+                .try_reserve(1)
+                .map_err(|_| BuildError::TypeWorkExceeded)?;
+            positions.push(position);
+        }
+        let mut builder = Self::from_catalogs(
             registry,
             method_evidence,
             method_evidence_anchors,
             consumed_method_evidence,
             type_work,
-        ))
+        );
+        builder.method_evidence_anchor_keys = method_evidence_anchor_keys;
+        builder.method_evidence_expectation_positions = method_evidence_expectation_positions;
+        Ok(builder)
     }
 
     pub(crate) fn requires_method_evidence_implementation_owner(
@@ -2630,18 +2657,22 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             return Err(BuildError::InvalidPayload);
         }
         self.type_work
-            .charge(self.method_evidence_anchors.len())
+            .charge(2)
             .map_err(|()| BuildError::TypeWorkExceeded)?;
-        if self.method_evidence_anchors.iter().any(|anchor| {
-            anchor.node == node && anchor.role == role && anchor.occurrence == occurrence
-        }) {
+        let anchor_key = (node, role, occurrence);
+        if self.method_evidence_anchor_keys.contains(&anchor_key) {
             return Err(BuildError::InvalidPayload);
         }
-        self.type_work
-            .charge(self.method_evidence.expectations().len())
-            .map_err(|()| BuildError::TypeWorkExceeded)?;
         let mut expectation = None;
-        for (index, expected) in self.method_evidence.expectations().iter().enumerate() {
+        let positions = self
+            .method_evidence_expectation_positions
+            .get(&(occurrence, method))
+            .ok_or(BuildError::InvalidPayload)?;
+        for &index in positions {
+            self.type_work
+                .charge(1)
+                .map_err(|()| BuildError::TypeWorkExceeded)?;
+            let expected = &self.method_evidence.expectations()[index];
             if !self.consumed_method_evidence[index]
                 && expected.occurrence == occurrence
                 && expected.method == method
@@ -2663,7 +2694,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         let Some(expectation) = expectation else {
             return Err(BuildError::InvalidPayload);
         };
-        let retained_anchor_work = 7usize
+        let retained_anchor_work = 8usize
             .checked_add(application.arguments().len())
             .ok_or(BuildError::TypeWorkExceeded)?
             .checked_add(method_evidence_anchor_identity_work(role))
@@ -2674,8 +2705,12 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         self.method_evidence_anchors
             .try_reserve(1)
             .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.method_evidence_anchor_keys
+            .try_reserve(1)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
         let (interface, arguments) = application.into_parts();
         let admitted = self.admit_owner_arguments(arguments)?;
+        self.method_evidence_anchor_keys.insert(anchor_key);
         self.method_evidence_anchors.push(MethodEvidenceAnchor {
             node,
             owner,
@@ -5317,13 +5352,13 @@ mod tests {
     fn lexical_capture_authentication_is_exact_atomic_and_retryable() {
         let source = SourceFile::new("capture-anchor.ash", "()").expect("source");
         let catalog = Arc::new(lexical_capture_catalog());
-        // Four expectations retain two builder carriers each, including 2C
-        // for the three capture expectations.
+        // Four expectations retain six charged carrier/visit units each,
+        // including both exact scalar indexes and original ordered positions.
         assert_eq!(
             CoreBuilder::with_registry_method_evidence_and_type_work(
                 Arc::new(ResolvedRegistry::default()),
                 Arc::clone(&catalog),
-                TypeWorkBudget::with_limit(7),
+                TypeWorkBudget::with_limit(23),
             )
             .expect_err("one missing carrier unit"),
             BuildError::TypeWorkExceeded
@@ -5332,10 +5367,10 @@ mod tests {
             let mut builder = CoreBuilder::with_registry_method_evidence_and_type_work(
                 Arc::new(ResolvedRegistry::default()),
                 Arc::clone(&catalog),
-                TypeWorkBudget::with_limit(8),
+                TypeWorkBudget::with_limit(24),
             )
             .expect("exact carriers");
-            assert_eq!(builder.type_work.used(), 8);
+            assert_eq!(builder.type_work.used(), 24);
             builder.type_work = TypeWorkBudget::unbounded();
             let nodes = catalog.lexical_owners[0]
                 .captures
@@ -5350,9 +5385,9 @@ mod tests {
         };
         for fresh in 0..2 {
             let (mut builder, nodes) = prepare();
-            // Binder 1 + clone 2 + method lookup 1 + expectation scan 4
-            // + matching application 2 + retained anchor 8 + owner admission 3;
-            // each reached expectation adds lookup 6 + dispatch 1.
+            // Binder, application, lookup, indexed visits, and retained key
+            // are charged independently; every candidate still pays the full
+            // original catalog lookup and role/application comparison.
             for ordinal in [2, 0, 1] {
                 let reached = match ordinal {
                     2 => 4,
@@ -5374,9 +5409,10 @@ mod tests {
                     .unwrap();
                 let work = measured.type_work.used() - initial_work;
                 // Complete argument tags and catalog authority supplement the predecessor accounting.
-                assert!(work >= 19 + builder.method_evidence_anchors.len() + 7 * reached);
+                assert!(work >= 19 + 7 * reached);
                 let prior = builder.method_evidence_anchors.len();
                 let consumed = builder.consumed_method_evidence.clone();
+                let keys = builder.method_evidence_anchor_keys.clone();
                 builder.type_work = TypeWorkBudget::with_limit(work - 1);
                 assert_eq!(
                     builder.authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal),
@@ -5385,6 +5421,7 @@ mod tests {
                 );
                 assert_eq!(builder.method_evidence_anchors.len(), prior);
                 assert_eq!(builder.consumed_method_evidence, consumed);
+                assert_eq!(builder.method_evidence_anchor_keys, keys);
                 builder.type_work = TypeWorkBudget::with_limit(work);
                 builder
                     .authenticate_lexical_capture_use(nodes[ordinal], 0, ordinal)
@@ -5455,6 +5492,47 @@ mod tests {
             )
         };
 
+        let (mut rejected, rejected_node) = prepare();
+        assert_eq!(
+            rejected.authenticate_method_evidence(
+                rejected_node,
+                Some(MethodEvidenceOwner::Implementation(implementation)),
+                None,
+                method,
+                InterfaceApplication::new(
+                    interface,
+                    vec![Type::Bool, Type::Int].into_boxed_slice(),
+                ),
+                MethodEvidenceAnchorRole::ImplementationOwner {
+                    implementation,
+                    binder,
+                },
+                None,
+            ),
+            Err(BuildError::InvalidPayload),
+            "an exact lookup key cannot authenticate a permuted application"
+        );
+        assert!(rejected.method_evidence_anchors.is_empty());
+        assert!(rejected.method_evidence_anchor_keys.is_empty());
+        assert_eq!(rejected.consumed_method_evidence, [false]);
+        authenticate(&mut rejected, rejected_node).expect("retry the unchanged full predicate");
+        assert_eq!(
+            authenticate(&mut rejected, rejected_node),
+            Err(BuildError::InvalidPayload),
+            "the complete original anchor key cannot be published twice"
+        );
+        let other_node = rejected
+            .unit(Type::Unit, origin.clone())
+            .expect("a different actual arena coordinate");
+        assert_eq!(
+            authenticate(&mut rejected, other_node),
+            Err(BuildError::InvalidPayload),
+            "a distinct node cannot reuse the consumed original expectation"
+        );
+        assert_eq!(rejected.method_evidence_anchor_keys.len(), 1);
+        assert_eq!(rejected.method_evidence_anchors.len(), 1);
+        assert_eq!(rejected.consumed_method_evidence, [true]);
+
         let (mut measured, measured_node) = prepare();
         let before = measured.type_work.used();
         authenticate(&mut measured, measured_node)
@@ -5475,6 +5553,7 @@ mod tests {
             Err(BuildError::TypeWorkExceeded),
         );
         assert!(short.method_evidence_anchors.is_empty());
+        assert!(short.method_evidence_anchor_keys.is_empty());
         assert_eq!(short.consumed_method_evidence, [false]);
 
         let (mut exact, exact_node) = prepare();
@@ -5487,6 +5566,7 @@ mod tests {
             .expect("the exact complete-vector authentication should retry atomically");
         assert_eq!(exact.type_work.used(), TYPE_WORK_LIMIT);
         assert_eq!(exact.method_evidence_anchors.len(), 1);
+        assert_eq!(exact.method_evidence_anchor_keys.len(), 1);
         assert_eq!(exact.consumed_method_evidence, [true]);
     }
 
@@ -5584,6 +5664,7 @@ mod tests {
                 );
                 assert!(builder.method_evidence_anchors.is_empty());
                 assert_eq!(builder.consumed_method_evidence, [false; 4]);
+                assert!(builder.method_evidence_anchor_keys.is_empty());
             })
             .expect("small-stack worker")
             .join()
@@ -5615,7 +5696,7 @@ mod tests {
             ],
         ));
         const EXPECTATIONS: usize = 2;
-        const EXACT_WORK: usize = 2 * EXPECTATIONS;
+        const EXACT_WORK: usize = 6 * EXPECTATIONS;
 
         assert_eq!(
             CoreBuilder::with_registry_method_evidence_and_type_work(
@@ -5637,6 +5718,15 @@ mod tests {
             assert_eq!(builder.type_work.used(), EXACT_WORK);
             assert_eq!(builder.consumed_method_evidence.capacity(), EXPECTATIONS);
             assert_eq!(builder.method_evidence_anchors.capacity(), EXPECTATIONS);
+            assert!(builder.method_evidence_anchor_keys.is_empty());
+            assert_eq!(builder.method_evidence_expectation_positions.len(), 1);
+            assert_eq!(
+                builder
+                    .method_evidence_expectation_positions
+                    .get(&(None, method)),
+                Some(&vec![0, 1]),
+                "candidate positions retain complete original order"
+            );
         }
     }
 

@@ -2340,6 +2340,10 @@ impl OwnerReplacementBuffer {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.types.as_map().is_empty() && self.rows.is_empty()
+    }
+
     fn insert_fresh(
         &mut self,
         source: TypeVariableId,

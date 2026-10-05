@@ -1,7 +1,7 @@
 //! Contextual checking of unpublished lifecycle helper occurrences.
 
 use super::{
-    Arc, CoreBuilder, CoreElaborator, CorePattern, EffectOperationFamily, HashSet,
+    Arc, CoreBuilder, CoreElaborator, CorePattern, EffectOperationFamily, HashMap, HashSet,
     IterativeTypeOwner, LifecycleDraftCheckError, LifecycleTemplateDraft, OwnedTypeBuffer,
     PendingEvidencePublication, Phase, ResolvedExpr, ResolvedExprKind, ResolvedResourceDefinition,
     TypeError, TypeWorkBudget, TypedNodeOwner, clone_effect_row_with_budget, constraint_resource,
@@ -622,22 +622,27 @@ impl CoreElaborator<EffectOperationFamily> {
         pending_rows: crate::core::provider::HandlerPendingRows,
     ) -> Result<LoweredProviderForest, TypeError> {
         let root = *roots.first().ok_or_else(invalid_state)?;
-        publication
-            .relocate_types_and_rows(
-                |ty, work| {
-                    substitutions
-                        .substitute(ty, work)
-                        .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
-                },
-                |row, work| {
-                    substitutions
-                        .substitute_row(row, work)
-                        .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
-                },
-                &mut self.constraint_work,
-                &mut self.type_work,
-            )
-            .map_err(|failure| selection_failure(failure, None))?;
+        let identity_substitution = substitutions.is_empty();
+        // Publication already owns fully zonked facts and an immutable original
+        // selection. Identity relocation supplies no new evidence authority.
+        if !identity_substitution {
+            publication
+                .relocate_types_and_rows(
+                    |ty, work| {
+                        substitutions
+                            .substitute(ty, work)
+                            .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
+                    },
+                    |row, work| {
+                        substitutions
+                            .substitute_row(row, work)
+                            .map_err(|_| crate::evidence::SelectionFailure::TypeResource)
+                    },
+                    &mut self.constraint_work,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| selection_failure(failure, None))?;
+        }
         let mut occurrences = std::mem::take(&mut self.provider_global_occurrences);
         let mut replacements = HashSet::new();
         self.type_work
@@ -646,7 +651,14 @@ impl CoreElaborator<EffectOperationFamily> {
         replacements
             .try_reserve(occurrences.len())
             .map_err(|_| type_resource())?;
-        for occurrence in &mut occurrences {
+        let mut occurrence_positions = HashMap::new();
+        self.type_work
+            .charge(occurrences.len().checked_mul(2).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        occurrence_positions
+            .try_reserve(occurrences.len())
+            .map_err(|_| type_resource())?;
+        for (position, occurrence) in occurrences.iter_mut().enumerate() {
             let binder = occurrence
                 .occurrence
                 .global_binder()
@@ -660,20 +672,38 @@ impl CoreElaborator<EffectOperationFamily> {
             {
                 return Err(invalid_state());
             }
-            if !replacements.insert(occurrence.node.ok_or_else(invalid_state)?) {
+            let node = occurrence.node.ok_or_else(invalid_state)?;
+            let source_node = occurrence.source_node.ok_or_else(invalid_state)?;
+            // The producer records both original coordinates after the complete
+            // type application. Only node changes during this lowering pass.
+            if source_node != node
+                || !replacements.insert(node)
+                || occurrence_positions.insert(source_node, position).is_some()
+            {
                 return Err(invalid_state());
             }
             let zonked = IterativeTypeOwner::new(self.zonk(&occurrence.value_type)?);
-            occurrence.value_type =
-                IterativeTypeOwner::new(substitutions.substitute(&zonked, &mut self.type_work)?);
+            occurrence.value_type = if identity_substitution {
+                zonked
+            } else {
+                IterativeTypeOwner::new(substitutions.substitute(&zonked, &mut self.type_work)?)
+            };
             for argument in occurrence.arguments.0.iter_mut() {
                 let zonked = IterativeTypeOwner::new(self.zonk(argument)?);
-                let rewritten = substitutions.substitute(&zonked, &mut self.type_work)?;
+                let rewritten = if identity_substitution {
+                    zonked.into_inner()
+                } else {
+                    substitutions.substitute(&zonked, &mut self.type_work)?
+                };
                 discard_type_iteratively(std::mem::replace(argument, rewritten));
             }
             for row in &mut occurrence.row_arguments {
                 let zonked = self.zonk_effect_row(row)?;
-                *row = substitutions.substitute_row(&zonked, &mut self.type_work)?;
+                *row = if identity_substitution {
+                    zonked
+                } else {
+                    substitutions.substitute_row(&zonked, &mut self.type_work)?
+                };
             }
         }
         let placeholder = CoreBuilder::<EffectOperationFamily>::with_registry_for_family(
@@ -752,18 +782,21 @@ impl CoreElaborator<EffectOperationFamily> {
             .map_err(|_| type_resource())?;
         remapped.resize(max, None);
         for original in order {
-            self.type_work
-                .charge(occurrences.len() + 1)
-                .map_err(|()| type_resource())?;
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let occurrence_position = if occurrence_positions.is_empty() {
+                None
+            } else {
+                self.type_work.charge(1).map_err(|()| type_resource())?;
+                occurrence_positions.get(&original).copied()
+            };
             crate::core::transform::begin_provider_draft_work(
                 &mut self.builder,
                 self.type_work.remaining(),
             );
             let result = (|| {
-                let rewritten = if let Some(occurrence) = occurrences
-                    .iter_mut()
-                    .find(|occurrence| occurrence.source_node == Some(original))
-                {
+                let rewritten = if let Some(position) = occurrence_position {
+                    self.type_work.charge(1).map_err(|()| type_resource())?;
+                    let occurrence = occurrences.get_mut(position).ok_or_else(invalid_state)?;
                     let expected = crate::core::transform::provider_draft_type(&source, original)
                         .map_err(provider_transform_failure)?;
                     let provenance = self.at_span_provenance(
