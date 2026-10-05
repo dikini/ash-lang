@@ -2631,3 +2631,23 @@ forty-one architecture checks and the existing public SQLite/arena lifecycles.
 Formatting and changed-document review pass. Unsigned original integration and
 fresh integrated checks remain the delivery gate. This changes execution order, not the P-1 goal or
 current Ash semantics.
+
+## 2026-10-05: bounded watcher membership
+
+The next isolated common delivery replaces repeated scans of each capture
+slot's reader list with an analysis-local index of exact source/reader slot
+pairs. Slot creation contexts remain part of their identities. The ordered
+reader list still determines notifications; no capture, evidence or owner
+authority comes from the index. Both retained entries are charged and reserved
+before insertion. Duplicate visits retain their original notification position.
+
+Focused regression cases cover distinct creation contexts, notification order,
+wide repeated visits, exact work and one-short refusal with prefilled ledgers.
+The selected Type work limit remains 327680. This does not add a runtime limit
+or complete the pending contextual control and generic codec changes. All 65
+pending common paths remain in immutable source copies and a retained stash;
+SQLite independently preserves its adapter and library files. Fresh common verification passes all-targets compilation, 1,541 library
+cases with one inherited ignore, and 183 connected public/architecture cases.
+Unsigned original-branch integration and fresh integrated checks remain the
+delivery gate. The unrelated inherited baseline warnings remain visible; the
+pending B3 cleanup is not included in this isolated delivery.
