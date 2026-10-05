@@ -4138,7 +4138,9 @@ impl EvidenceSelector {
                 }
                 Type::Tuple(elements) => pending.extend(elements.iter().rev()),
                 Type::Forall(_, body) => pending.push(body),
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -4394,7 +4396,8 @@ fn validate_candidate_scope(
             Type::Tuple(_) | Type::Inference(_) | Type::Forall(_, _) => {
                 return Err(SelectionFailure::InvalidState);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
         }
     }
     Ok(())
@@ -4781,7 +4784,13 @@ fn type_is_inference_free(
                 pending.push(domain);
             }
             Type::Forall(_, _) => return Err(SelectionFailure::InvalidState),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_) => {}
         }
     }
     Ok(true)
@@ -4942,6 +4951,8 @@ struct GoalKey {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum GoalCell {
     Argument(usize),
+    Bytes,
+    String,
     Int,
     Bool,
     Unit,
@@ -5066,6 +5077,8 @@ fn goal_key(
                 pending.extend(instance.arguments().iter().rev().map(Task::Argument));
             }
             Task::Type(ty) => match ty {
+                Type::Bytes => cells.push(GoalCell::Bytes),
+                Type::String => cells.push(GoalCell::String),
                 Type::Int => cells.push(GoalCell::Int),
                 Type::Bool => cells.push(GoalCell::Bool),
                 Type::Unit => cells.push(GoalCell::Unit),
@@ -9546,6 +9559,26 @@ mod tests {
         assert_eq!(selector.pending_determined_count, marker.determined_count);
         assert_eq!(selector.pending_method_rigidity_count, 0);
         assert_eq!(selector.method_rigidity_count(), 1);
+    }
+
+    #[test]
+    fn packed_builtin_evidence_goals_keep_distinct_keys() {
+        let interface = InterfaceId::new(ModuleId::new(10), 0);
+        let mut keys = Vec::new();
+        for ty in [Type::Bytes, Type::String, Type::Int, Type::Bool, Type::Unit] {
+            keys.push(
+                goal_key(
+                    &test_application(interface, Box::new([ty])),
+                    &mut InterfaceConstraintBudget::default(),
+                )
+                .expect("builtin evidence goal"),
+            );
+        }
+        for (index, key) in keys.iter().enumerate() {
+            for other in &keys[index + 1..] {
+                assert_ne!(key, other);
+            }
+        }
     }
 
     #[test]

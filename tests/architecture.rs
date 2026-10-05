@@ -2641,7 +2641,9 @@ fn kind_inventory_is_closed() {
 
     fn exhaust_type_variants(ty: &Type) {
         match ty {
-            Type::Int
+            Type::Bytes
+            | Type::String
+            | Type::Int
             | Type::Bool
             | Type::Unit
             | Type::Tuple(_)
@@ -9313,6 +9315,8 @@ enum ShadowExprKind {
 }
 
 enum ShadowValue {
+    String(ash::core::packed::StringNode),
+    Intrinsic(ash::core::packed::IntrinsicNode),
     Integer(IntegerNode),
     Boolean(BooleanNode),
     Unit(UnitNode),
@@ -9336,6 +9340,8 @@ enum ShadowPureComputation {
 fn assemble_shadow(expression: &TypedExpr) -> ShadowTypedExpr {
     let kind = match &expression.kind {
         PureExprKind::Value(value) => ShadowExprKind::Value(match value {
+            PureValue::String(node) => ShadowValue::String(node.clone()),
+            PureValue::Intrinsic(node) => ShadowValue::Intrinsic(*node),
             PureValue::Integer(node) => ShadowValue::Integer(node.clone()),
             PureValue::Boolean(node) => ShadowValue::Boolean(*node),
             PureValue::Unit(node) => ShadowValue::Unit(*node),
@@ -9405,6 +9411,10 @@ fn validate_shadow(expression: &ShadowTypedExpr, facts: &ShadowFacts<'_>) -> boo
 
 fn validate_shadow_value(ty: &Type, value: &ShadowValue, facts: &ShadowFacts<'_>) -> bool {
     match value {
+        ShadowValue::String(node) => {
+            *ty == Type::String && std::str::from_utf8(node.bytes()).is_ok()
+        }
+        ShadowValue::Intrinsic(node) => *ty == node.expected_type(),
         ShadowValue::Integer(node) => {
             let _ = node.value();
             *ty == Type::Int
@@ -9512,7 +9522,9 @@ fn traverse_shadow(expression: &ShadowTypedExpr) -> Vec<NodeId> {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
             ShadowValue::Function(node) => vec![node.body()],
-            ShadowValue::Integer(_)
+            ShadowValue::String(_)
+            | ShadowValue::Intrinsic(_)
+            | ShadowValue::Integer(_)
             | ShadowValue::Boolean(_)
             | ShadowValue::Unit(_)
             | ShadowValue::Constructor(_) => Vec::new(),
@@ -9550,7 +9562,9 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
             ShadowValue::Function(node) => ShadowTransformPlan::Preserve(vec![node.body()]),
-            ShadowValue::Integer(_)
+            ShadowValue::String(_)
+            | ShadowValue::Intrinsic(_)
+            | ShadowValue::Integer(_)
             | ShadowValue::Boolean(_)
             | ShadowValue::Unit(_)
             | ShadowValue::Constructor(_) => ShadowTransformPlan::Preserve(Vec::new()),
@@ -9601,6 +9615,8 @@ fn transform_shadow(expression: &ShadowTypedExpr) -> ShadowTransformPlan {
 fn consume_shadow(expression: &ShadowTypedExpr) -> &'static str {
     match &expression.kind {
         ShadowExprKind::Value(value) => match value {
+            ShadowValue::String(_) => "string",
+            ShadowValue::Intrinsic(_) => "intrinsic",
             ShadowValue::Integer(_) => "integer",
             ShadowValue::Boolean(_) => "boolean",
             ShadowValue::Unit(_) => "unit",

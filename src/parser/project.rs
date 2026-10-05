@@ -829,6 +829,7 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                     matches!(
                         kind,
                         TokenKind::Integer(_)
+                            | TokenKind::StringLiteral(_)
                             | TokenKind::Discard
                             | TokenKind::True
                             | TokenKind::False
@@ -993,6 +994,8 @@ fn validate_shallow_shape(node: &ConcreteNode, tokens: &[Token]) -> Result<(), P
                         matches!(
                             kind,
                             TokenKind::IntType
+                                | TokenKind::BytesType
+                                | TokenKind::StringType
                                 | TokenKind::BoolType
                                 | TokenKind::UnitType
                                 | TokenKind::UpperIdentifier(_)
@@ -2770,6 +2773,7 @@ fn project_primitive(
     let token = only_direct_token(node, tokens)?;
     let kind = match &token.kind {
         TokenKind::Integer(value) => SurfaceExprKind::Integer(value.clone()),
+        TokenKind::StringLiteral(value) => SurfaceExprKind::String(value.clone()),
         TokenKind::True => SurfaceExprKind::Boolean(true),
         TokenKind::False => SurfaceExprKind::Boolean(false),
         TokenKind::Discard => SurfaceExprKind::Discard,
@@ -3366,6 +3370,8 @@ fn project_atomic_primitive(
     let token = only_direct_token(node, tokens)?;
     let kind = match token.kind {
         TokenKind::IntType => SurfaceTypeKind::Int,
+        TokenKind::BytesType => SurfaceTypeKind::Bytes,
+        TokenKind::StringType => SurfaceTypeKind::String,
         TokenKind::BoolType => SurfaceTypeKind::Bool,
         TokenKind::UnitType => SurfaceTypeKind::Unit,
         TokenKind::UpperIdentifier(ref text) => {

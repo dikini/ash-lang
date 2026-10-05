@@ -22,6 +22,8 @@ pub enum TokenKind {
     Wildcard,
     /// An arbitrary-precision decimal integer literal.
     Integer(Integer),
+    /// An experimental UTF-8 string literal with decoded escapes.
+    StringLiteral(String),
     /// The `true` reserved word.
     True,
     /// The `false` reserved word.
@@ -76,6 +78,10 @@ pub enum TokenKind {
     Where,
     /// The `Int` type name.
     IntType,
+    /// The experimental `Bytes` type name.
+    BytesType,
+    /// The experimental `String` type name.
+    StringType,
     /// The `Bool` type name.
     BoolType,
     /// The `Unit` type name.

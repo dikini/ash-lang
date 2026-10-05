@@ -182,6 +182,8 @@ fn pure_core_type_from_precharged(ty: &Type) -> Result<Type, ()> {
     let mut rebuilt = OwnedTypeBuffer(Vec::new());
     while let Some(task) = work.pop() {
         match task {
+            Task::Visit(Type::Bytes) => rebuilt.push(Type::Bytes),
+            Task::Visit(Type::String) => rebuilt.push(Type::String),
             Task::Visit(Type::Int) => rebuilt.push(Type::Int),
             Task::Visit(Type::Bool) => rebuilt.push(Type::Bool),
             Task::Visit(Type::Unit) => rebuilt.push(Type::Unit),
@@ -322,7 +324,9 @@ fn requires_pure_core_projection(
                 }
                 schedule(&mut work, body, &mut budget)?;
             }
-            Type::Int
+            Type::Bytes
+            | Type::String
+            | Type::Int
             | Type::Bool
             | Type::Unit
             | Type::Nominal(_)
@@ -1447,7 +1451,9 @@ impl TypeProvenance {
                     });
                     roots.push(nodes.len() - 1);
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Tuple(_)
@@ -1548,7 +1554,9 @@ impl TypeProvenance {
             match cursor {
                 Cursor::Built(nodes, node) => match (current, nodes.get(node)) {
                     (
-                        Type::Int
+                        Type::Bytes
+                        | Type::String
+                        | Type::Int
                         | Type::Bool
                         | Type::Unit
                         | Type::Tuple(_)
@@ -1669,7 +1677,9 @@ impl TypeProvenance {
                             ));
                         }
                         (
-                            Type::Int
+                            Type::Bytes
+                            | Type::String
+                            | Type::Int
                             | Type::Bool
                             | Type::Unit
                             | Type::Nominal(_)
@@ -8822,7 +8832,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                                     inserted,
                                 )?;
                             }
-                            (Type::Int, Type::Int)
+                            (Type::Bytes, Type::Bytes)
+                            | (Type::String, Type::String)
+                            | (Type::Int, Type::Int)
                             | (Type::Bool, Type::Bool)
                             | (Type::Unit, Type::Unit) => {}
                             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
@@ -10256,6 +10268,54 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         })
     }
 
+    fn builtin_intrinsic(
+        &self,
+        name: &crate::resolved::Binder,
+        ty: &Type,
+    ) -> Result<Option<crate::core::packed::Intrinsic>, TypeError> {
+        use crate::core::packed::Intrinsic;
+        let Some(module) = name.id.module() else {
+            return Ok(None);
+        };
+        if !module.is_builtin_bytes() && !module.is_builtin_string() {
+            return Ok(None);
+        }
+        let result_owner = || match ty.function_view().map(|f| f.value()) {
+            Some(Type::Nominal(owner)) if owner.module() == module => Ok(*owner),
+            _ => Err(invalid_state()),
+        };
+        let operation = if module.is_builtin_bytes() {
+            match name.spelling.as_str() {
+                "empty" => Intrinsic::BytesEmpty,
+                "append_byte" => {
+                    let owner = result_owner()?;
+                    Intrinsic::BytesAppendByte {
+                        appended: crate::types::ConstructorId::new(owner, 0),
+                        invalid: crate::types::ConstructorId::new(owner, 1),
+                    }
+                }
+                "length" => Intrinsic::BytesLength,
+                "equal" => Intrinsic::BytesEqual,
+                _ => return Err(invalid_state()),
+            }
+        } else {
+            match name.spelling.as_str() {
+                "to_utf8" => Intrinsic::StringToUtf8,
+                "from_utf8" => {
+                    let owner = result_owner()?;
+                    Intrinsic::StringFromUtf8 {
+                        decoded: crate::types::ConstructorId::new(owner, 0),
+                        invalid: crate::types::ConstructorId::new(owner, 1),
+                    }
+                }
+                "byte_length" => Intrinsic::StringByteLength,
+                "equal" => Intrinsic::StringEqual,
+                _ => return Err(invalid_state()),
+            }
+        };
+        Ok(Some(operation))
+    }
+
     fn elaborate_prepared_definition<D>(
         &mut self,
         definition: &D,
@@ -10305,12 +10365,38 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     }
                     (
                         &equational.interface.name,
-                        self.elaborate_equation_group(
-                            equational,
-                            function_type.into_inner(),
-                            &mut prepared.context,
-                            definition.span(),
-                        )?,
+                        if let Some(intrinsic) =
+                            self.builtin_intrinsic(&equational.interface.name, &function_type.ty)?
+                        {
+                            let ty = self.clone_type(&function_type.ty)?;
+                            let core_ty = self.clone_type(&ty)?;
+                            let node = self.builder.intrinsic(
+                                intrinsic,
+                                equational
+                                    .interface
+                                    .name
+                                    .id
+                                    .module()
+                                    .ok_or_else(invalid_state)?,
+                                core_ty,
+                                equational.interface.name.origin.clone(),
+                            )?;
+                            TypedNode {
+                                node,
+                                ty,
+                                effects: EffectRow::empty(),
+                                provenance: TypeProvenance::Resolved(
+                                    equational.interface.annotation.provenance.clone(),
+                                ),
+                            }
+                        } else {
+                            self.elaborate_equation_group(
+                                equational,
+                                function_type.into_inner(),
+                                &mut prepared.context,
+                                definition.span(),
+                            )?
+                        },
                     )
                 }
                 ResolvedDefinitionKind::InlineOperational(operational) => {
@@ -13318,6 +13404,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             } => match &current.kind {
                 ResolvedExprKind::ProviderResource(resource) => {
                     self.schedule_provider_instance(resource, current.span, tasks)?;
+                }
+                ResolvedExprKind::String(value) => {
+                    let node = self.builder.string(
+                        value.as_bytes(),
+                        Type::String,
+                        Origin::Source(current.span),
+                    )?;
+                    values.push(TypedNode {
+                        node,
+                        ty: Type::String,
+                        effects: EffectRow::empty(),
+                        provenance: TypeProvenance::atom(Some(current.span)),
+                    });
                 }
                 ResolvedExprKind::Integer(value) => {
                     let ty = Type::Int;
@@ -20107,7 +20206,12 @@ fn check_newtype_representation_cycles(
                             .map(|(element, provenance)| (Value::Type(element), *provenance)),
                     );
                 }
-                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) => {}
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Variable(_) => {}
                 Type::Inference(_) | Type::Forall(_, _) => {
                     return Err(TypeError::Internal(ElaborationFailure::InvalidState));
                 }
@@ -23392,7 +23496,9 @@ fn validate_recursive_member(
             }
             Ok(())
         }
-        Type::Int
+        Type::Bytes
+        | Type::String
+        | Type::Int
         | Type::Bool
         | Type::Unit
         | Type::Tuple(_)
@@ -23526,7 +23632,8 @@ fn contains_recursive_occurrence(expression: &ResolvedExpr, recursive: &HashSet<
             }
             ResolvedExprKind::Resume(resume) => work.push(&resume.value),
             ResolvedExprKind::Discard(_) => {}
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_)
@@ -23838,8 +23945,19 @@ fn validate_and_charge_public_monotype(
                     return Err(PublicTypeAdmissionError::Invalid);
                 }
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) if applied_arguments == 0 => {}
-            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) => {
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+                if applied_arguments == 0 => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_) => {
                 return Err(PublicTypeAdmissionError::Invalid);
             }
         }
@@ -24011,9 +24129,11 @@ fn compare_concrete_types(
             | (_, Type::Inference(_) | Type::Forall(_, _))
             | (Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _), _)
             | (_, Type::EffectfulFunction(_, _) | Type::ResourceApply(_, _)) => Some(None),
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {
-                Some(Some(true))
-            }
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => Some(Some(true)),
             (Type::Nominal(left), Type::Nominal(right)) => Some(Some(left == right)),
             (Type::Variable(left), Type::Variable(right)) => Some(Some(left == right)),
             (Type::Tuple(left), Type::Tuple(right)) if left.len() == right.len() => None,
@@ -24313,6 +24433,8 @@ fn zonk_root_with_status_and_inference_and_rows<E>(
                 return Ok((OwnedZonkRoot::Type(Type::Inference(*identity)), true, false));
             }
             let leaf = match ty {
+                Type::Bytes => Some(Type::Bytes),
+                Type::String => Some(Type::String),
                 Type::Int => Some(Type::Int),
                 Type::Bool => Some(Type::Bool),
                 Type::Unit => Some(Type::Unit),
@@ -24518,6 +24640,12 @@ fn zonk_compound_root_with_status_and_inference_and_rows<E>(
                         &mut work_charge,
                     )?;
                 }
+            }
+            Task::Type(Type::Bytes) => {
+                retain(&mut values, Value::ty(Type::Bytes), &mut work_charge)?
+            }
+            Task::Type(Type::String) => {
+                retain(&mut values, Value::ty(Type::String), &mut work_charge)?
             }
             Task::Type(Type::Int) => retain(&mut values, Value::ty(Type::Int), &mut work_charge)?,
             Task::Type(Type::Bool) => retain(&mut values, Value::ty(Type::Bool), &mut work_charge)?,
@@ -25054,7 +25182,9 @@ fn zonk_owned_root_with_rows<B: crate::types::TypeWorkMeter>(
                     schedule(&mut work, Task::Forall(parameters), budget)?;
                     schedule(&mut work, Task::Visit(body), budget)?;
                 }
-                leaf @ (Type::Int
+                leaf @ (Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -25425,7 +25555,13 @@ fn inference_occurs_in_owner_graph(
                 schedule!(Task::Visit(domain));
             }
             Type::Forall(_, _) => return Err(UnificationFailure::Invariant),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Variable(_) => {}
         }
     }
     Ok(false)
@@ -25528,7 +25664,13 @@ fn collect_unsolved_inference(
             }
             Task::Type(Type::Forall(_, body)) => schedule(&mut work, Task::Type(body), budget)?,
             Task::Type(
-                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_),
             ) => {}
             Task::Argument(_) => unreachable!("argument tasks normalize before retention"),
         }
@@ -25616,7 +25758,9 @@ fn type_contains_unsolved_row_inference(
             }
             Task::Type(Type::Forall(_, body)) => schedule(&mut work, Task::Type(body), budget)?,
             Task::Type(
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -25825,7 +25969,8 @@ fn resume_usage_with_budget(
     while let Some(task) = tasks.pop() {
         match task {
             Task::Visit(expression) => match &expression.kind {
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
@@ -26190,7 +26335,8 @@ fn contains_resume_owner_with_budget(
                     schedule(&mut pending, &clause.body, budget)?;
                 }
             }
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Occurrence(_)
@@ -26408,7 +26554,8 @@ pub(crate) fn checked_program_contains_effect_syntax(
                 }
                 schedule(&mut work, &matched.scrutinee, budget)?;
             }
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Occurrence(_)
@@ -26605,7 +26752,8 @@ fn collect_expression_binders(
             }
             ResolvedExprKind::Resume(resume) => expressions.push(&resume.value),
             ResolvedExprKind::Discard(_) => {}
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Occurrence(_)

@@ -144,7 +144,13 @@ fn contains_inference(root: &Type) -> bool {
             }
             Task::Type(Type::Forall(_, body)) => pending.push(Task::Type(body)),
             Task::Type(
-                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_),
             ) => {}
         }
     }

@@ -792,6 +792,8 @@ fn rebuild_with_initial_type_work<F: TransformFamily>(
             Some(
                 PureExprKind::Value(
                     PureValue::Integer(_)
+                    | PureValue::String(_)
+                    | PureValue::Intrinsic(_)
                     | PureValue::Boolean(_)
                     | PureValue::Unit(_)
                     | PureValue::Constructor(_),
@@ -922,6 +924,18 @@ fn rebuild_nonfold_node_with_context<F: TransformFamily>(
     };
     let origin = copy_origin(builder, expression.origin()?, context)?;
     match kind {
+        PureExprKind::Value(PureValue::String(node)) => {
+            let ty = copy_type(builder, expression.ty(), context)?;
+            builder
+                .string(Arc::clone(node.bytes()), ty, origin)
+                .map_err(TransformError::from)
+        }
+        PureExprKind::Value(PureValue::Intrinsic(node)) => {
+            let ty = copy_type(builder, expression.ty(), context)?;
+            builder
+                .intrinsic(node.operation(), node.module(), ty, origin)
+                .map_err(TransformError::from)
+        }
         PureExprKind::Value(PureValue::Integer(node)) => {
             let ty = copy_type(builder, expression.ty(), context)?;
             builder

@@ -30,6 +30,12 @@ pub enum LexReason {
     InvalidIntegerLiteral,
     /// An ASCII word does not match a reserved word or identifier grammar.
     InvalidIdentifier,
+    /// An experimental string contains an unsupported escape.
+    InvalidStringEscape,
+    /// An experimental string has no closing double quote.
+    UnterminatedString,
+    /// An experimental string contains a physical newline or ASCII control.
+    InvalidStringCharacter,
     /// No Ash token begins with the source character.
     UnknownCharacter,
 }
@@ -46,6 +52,9 @@ impl LexReason {
             Self::NegativeLiteral => Message::lex_negative_literal(),
             Self::InvalidIntegerLiteral => Message::lex_invalid_integer_literal(),
             Self::InvalidIdentifier => Message::lex_invalid_identifier(),
+            Self::InvalidStringEscape => Message::lex_invalid_string_escape(),
+            Self::UnterminatedString => Message::lex_unterminated_string(),
+            Self::InvalidStringCharacter => Message::lex_invalid_string_character(),
             Self::UnknownCharacter => Message::lex_unknown_character(),
         }
     }
@@ -59,6 +68,9 @@ impl LexReason {
             Self::NegativeLiteral => "negative integer literals are not available in Ash",
             Self::InvalidIntegerLiteral => "integer literal does not match the decimal grammar",
             Self::InvalidIdentifier => "word is not an ASCII identifier or reserved word",
+            Self::InvalidStringEscape => "string escape is not supported",
+            Self::UnterminatedString => "string has no closing double quote",
+            Self::InvalidStringCharacter => "string contains an unescaped ASCII control character",
             Self::UnknownCharacter => "character does not begin an Ash token",
         }
     }
@@ -71,6 +83,11 @@ impl LexReason {
             }
             Self::NegativeLiteral => Some("a nonnegative decimal integer"),
             Self::InvalidIntegerLiteral => Some("0 or a nonzero digit followed by ASCII digits"),
+            Self::InvalidStringEscape => {
+                Some("a quote, backslash, n, r, t, or 0 after the backslash")
+            }
+            Self::UnterminatedString => Some("a closing double quote"),
+            Self::InvalidStringCharacter => Some("an escaped control character"),
             Self::ByteOrderMark | Self::Comment | Self::UnknownCharacter => None,
         }
     }
@@ -86,6 +103,9 @@ impl fmt::Display for LexReason {
             Self::NegativeLiteral => "lex.negative-literal",
             Self::InvalidIntegerLiteral => "lex.invalid-integer-literal",
             Self::InvalidIdentifier => "lex.invalid-identifier",
+            Self::InvalidStringEscape => "lex.invalid-string-escape",
+            Self::UnterminatedString => "lex.unterminated-string",
+            Self::InvalidStringCharacter => "lex.invalid-string-character",
             Self::UnknownCharacter => "lex.unknown-character",
         })
     }
@@ -276,6 +296,24 @@ pub(crate) fn lex_with_budget(
         }
 
         let kind = match bytes[offset] {
+            b'"' => {
+                let (end, decoded) = scan_string(text, start);
+                offset = end;
+                match decoded {
+                    Ok(value) => TokenKind::StringLiteral(value),
+                    Err(reason) => {
+                        record_diagnostic(
+                            source,
+                            &mut diagnostics,
+                            reason,
+                            start,
+                            offset,
+                            &text[start..offset],
+                        )?;
+                        continue;
+                    }
+                }
+            }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 offset = scan_identifier_like(text, start);
                 let word = &text[start..offset];
@@ -388,6 +426,50 @@ pub(crate) fn lex_with_budget(
     })
 }
 
+// Source admission already guarantees UTF-8. Scan on character boundaries and
+// retain at most one diagnostic per literal, under the caller's syntax charge.
+fn scan_string(text: &str, start: usize) -> (usize, Result<String, LexReason>) {
+    let mut characters = text[start + 1..].char_indices();
+    let mut decoded = String::new();
+    let mut failure = None;
+    while let Some((relative, character)) = characters.next() {
+        let end = start + 1 + relative + character.len_utf8();
+        match character {
+            '"' => return (end, failure.map_or(Ok(decoded), Err)),
+            '\\' => {
+                let Some((_, escaped)) = characters.next() else {
+                    return (text.len(), Err(LexReason::UnterminatedString));
+                };
+                let value = match escaped {
+                    '"' => Some('"'),
+                    '\\' => Some('\\'),
+                    'n' => Some('\n'),
+                    'r' => Some('\r'),
+                    't' => Some('\t'),
+                    '0' => Some('\0'),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    if failure.is_none() {
+                        decoded.push(value);
+                    }
+                } else {
+                    failure.get_or_insert(LexReason::InvalidStringEscape);
+                }
+            }
+            character if character.is_ascii_control() => {
+                failure.get_or_insert(LexReason::InvalidStringCharacter);
+            }
+            character => {
+                if failure.is_none() {
+                    decoded.push(character);
+                }
+            }
+        }
+    }
+    (text.len(), Err(LexReason::UnterminatedString))
+}
+
 fn record_diagnostic(
     source: &SourceFile,
     diagnostics: &mut Vec<Diagnostic<LexReason>>,
@@ -477,6 +559,8 @@ fn classify_word(word: &str) -> Option<TokenKind> {
         "where" => Some(TokenKind::Where),
         "_" => Some(TokenKind::Wildcard),
         "Int" => Some(TokenKind::IntType),
+        "Bytes" => Some(TokenKind::BytesType),
+        "String" => Some(TokenKind::StringType),
         "Bool" => Some(TokenKind::BoolType),
         "Unit" => Some(TokenKind::UnitType),
         _ => None,

@@ -443,7 +443,8 @@ fn source_imports<'a>(
                     pending.push(Task::Expression(&resource.initializer));
                     pending.push(Task::Expression(&resource.body));
                 }
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Constructor(_)

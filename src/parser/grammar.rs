@@ -23,6 +23,7 @@ pub(super) enum ExpressionPrefixForm {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PrimaryForm {
     Integer,
+    String,
     Boolean,
     Identifier,
     Qualified,
@@ -38,6 +39,8 @@ pub(super) enum PrimaryForm {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AtomicTypeForm {
     Int,
+    Bytes,
+    String,
     Bool,
     Unit,
     Nominal,
@@ -144,6 +147,7 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
     expression: ExpressionDialect {
         primary_forms: &[
             PrimaryForm::Integer,
+            PrimaryForm::String,
             PrimaryForm::Boolean,
             PrimaryForm::Identifier,
             PrimaryForm::Qualified,
@@ -190,6 +194,8 @@ const CURRENT_ASH_DIALECT: ParserDialect = ParserDialect {
     ],
     atomic_types: &[
         AtomicTypeForm::Int,
+        AtomicTypeForm::Bytes,
+        AtomicTypeForm::String,
         AtomicTypeForm::Bool,
         AtomicTypeForm::Unit,
         AtomicTypeForm::Nominal,
@@ -2469,7 +2475,13 @@ fn atomic_type(parser: &mut Parser<'_>) {
         reject_lowercase_qualification(parser);
     } else {
         match atomic_type_form(parser) {
-            Some(AtomicTypeForm::Int | AtomicTypeForm::Bool | AtomicTypeForm::Unit) => {
+            Some(
+                AtomicTypeForm::Int
+                | AtomicTypeForm::Bytes
+                | AtomicTypeForm::String
+                | AtomicTypeForm::Bool
+                | AtomicTypeForm::Unit,
+            ) => {
                 let _ = parser.bump();
                 if parser.at(&TokenKind::Less) {
                     parser.error_at_current(ParseReason::UnexpectedToken);
@@ -2528,6 +2540,8 @@ fn atomic_type_form(parser: &Parser<'_>) -> Option<AtomicTypeForm> {
             matches!(
                 (form, parser.current()),
                 (AtomicTypeForm::Int, Some(TokenKind::IntType))
+                    | (AtomicTypeForm::Bytes, Some(TokenKind::BytesType))
+                    | (AtomicTypeForm::String, Some(TokenKind::StringType))
                     | (AtomicTypeForm::Bool, Some(TokenKind::BoolType))
                     | (AtomicTypeForm::Unit, Some(TokenKind::UnitType))
                     | (AtomicTypeForm::Nominal, Some(TokenKind::UpperIdentifier(_)))

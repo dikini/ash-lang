@@ -7,6 +7,7 @@ pub mod dialect;
 pub mod effect;
 pub mod function;
 pub mod literal;
+pub mod packed;
 pub mod primitive;
 pub(crate) mod provider;
 pub mod recursion;

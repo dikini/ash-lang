@@ -164,19 +164,19 @@ The library maps native operation results into these constructors in its checked
 handlers; it cannot add constructors to the native error nominal. Thus the S-01
 fixture's `MissingRow` and `UnexpectedRow` branches have type `Error`.
 `OpenConfig` initially has `InMemory` and `File(Bytes)` cases. `SqlText` wraps
-independent `Bytes`. `Bytes` is an ordinary immutable list of integers; native
-conversion checks `[0,255]`, length, UTF-8 where required, and embedded zero
-rules. No string syntax or silent integer truncation is needed. The malformed
-SQL, empty SQL and file paths are real byte inputs, not native operation IDs
-standing in for SQL text.
+independent `Bytes`. The shared copying-value batch replaces the initial
+integer-list representation with the built-in packed type described
+[below](#selected-copying-values-and-literals-sqlite-workstream). At that batch
+boundary SQL and paths still use checked UTF-8 bytes; the following SQLite batch
+migrates them to `String`. Malformed SQL, empty SQL and paths are actual inputs,
+not native operation IDs standing in for SQL text. Neither boundary silently
+narrows integers.
 
 The first registered SQLite module has the following complete ordinary data
 shapes. Constructor identities and field order are manifest facts; codec
 dispatch uses those identities rather than searching for spellings at each call.
 
 ```text
-pub type Bytes = EmptyBytes
-| MoreBytes(Int, Bytes)
 pub type OpenConfig = InMemory
 | File(Bytes)
 pub type InputFault = BadIndex
@@ -236,9 +236,9 @@ codec. Empty SQL maps to `Refused(EmptySql)`; malformed SQL maps to a
 state token. These wrappers keep the error families distinct without duplicate
 constructor names in the registered module.
 
-The codec folds `MoreBytes`/`EmptyBytes` with checked byte/range/length work,
-rejects cyclic or malformed byte inputs, and produces the same ordinary list
-from copied native diagnostics/output. `File` requires a valid owned UTF-8 path
+The shared-batch codec admits bounded packed bytes and produces independent
+packed copies from native diagnostics/output. The initial `MoreBytes`/
+`EmptyBytes` family is removed from the manifest and source re-exports. `File` requires a valid owned UTF-8 path
 with no embedded zero; `InMemory` supplies the native `:memory:` filename.
 `SqlText` remains a source newtype over these bytes; preparation passes their
 checked explicit length and rejects multiple statements. Empty `BlobBytes` is a
@@ -246,9 +246,10 @@ BLOB and `NullBytes` is SQL null. Neither turns into the other through a null
 host slice pointer. Source error mapping adds only the library protocol cases
 shown above.
 
-Registered native modules define canonical `OpenConfig`, `Bytes`, error,
-`Result`, `StepResult`, `Acquire` and `Finish` families independently of the
-resource library. The SQLite source module re-exports configuration, bytes and
+Registered native modules define canonical `OpenConfig`, error, `Result`,
+`StepResult`, `Acquire` and `Finish` families independently of the resource
+library. `Bytes` is a built-in type. The SQLite source module re-exports
+configuration and
 lifecycle-error families, maps native operation results into source result
 families, and wraps SQL bytes in its own `SqlText`. The native module does not
 import the SQLite source module. Exact first signatures are:
@@ -261,7 +262,7 @@ Native.Connection<R>.diagnostic:
 Native.Connection<R>.close:
   Native.ConnectionState<R> -> Native.Finish<Native.ConnectionState<R>, Native.CloseError>
 Native.Statement<S,C>.prepare:
-  (Native.ConnectionState<C>, Native.Bytes) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
+  (Native.ConnectionState<C>, Bytes) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
 Native.Statement<S,C>.bind_int:
   (Native.StatementState<S,C>, Int, Int) -> Native.Result<Unit>
 Native.Statement<S,C>.step:
@@ -2348,3 +2349,87 @@ motivating cases.
 Any proposed change to current surface syntax, elaboration, or Core operational
 semantics belongs in the later semantic delta and accepted product proposal.
 Until then, the normative specification remains the comparison baseline.
+
+## Selected copying values and literals (SQLite workstream)
+
+This candidate extends P-1 only on the experiment branch. Current `spec/`
+excludes these values and literals; integration into the experiment is not a
+product transition.
+
+`Bytes` and `String` are distinct built-in types of kind `Type`. Bytes denotes
+an immutable finite sequence of arbitrary bytes. String denotes immutable valid
+UTF-8, including NUL, without normalization or replacement. Ordinary aliases
+and captures may share packed immutable evaluator storage. Neither type carries
+resource dependencies, native addresses, or completion authority.
+
+A double-quoted expression literal has fixed type String. Its raw content is
+UTF-8 and its escapes are quote, backslash, `\n`, `\r`, `\t`, and `\0`.
+Unknown escapes, unterminated literals, physical line breaks, and unescaped
+ASCII control characters are lexical failures. The ASCII identifier grammar is unchanged; Bytes and String join
+the reserved builtin type spellings. String patterns and byte literals are excluded.
+
+Compiler-owned passive modules expose ordinary pure function values:
+
+| Module | Function | Type |
+| --- | --- | --- |
+| `@builtin.bytes` | `empty` | `Unit -> Bytes` |
+| `@builtin.bytes` | `append_byte` | `(Bytes, Int) -> AppendResult` |
+| `@builtin.bytes` | `length` | `Bytes -> Int` |
+| `@builtin.bytes` | `equal` | `(Bytes, Bytes) -> Bool` |
+| `@builtin.string` | `to_utf8` | `String -> Bytes` |
+| `@builtin.string` | `from_utf8` | `Bytes -> DecodeResult` |
+| `@builtin.string` | `byte_length` | `String -> Int` |
+| `@builtin.string` | `equal` | `(String, String) -> Bool` |
+
+AppendResult has `BytesAppended(Bytes)` and `InvalidByte`; DecodeResult has
+`Decoded(String)` and `InvalidUtf8`. Append accepts exactly integers 0 through
+255 and preserves the input. Length counts bytes. Equality compares exact
+contents. Decoding rejects invalid UTF-8 as an ordinary alternative. No
+concatenation, indexing, slicing, character type, interpolation, multiline
+literal, formatting, ordering, normalization or overloaded operator is added.
+
+### Core and operational correspondence
+
+String constants retain decoded bytes and source provenance. Independent Core
+validation checks UTF-8 and the fixed String annotation. Intrinsic nodes retain
+an inspectable first-order operation, compiler-owned module identity and exact
+constructor identities when their result is a sum. Their signatures are
+reconstructed independently; matching source spelling grants no authority.
+Ordinary application invokes these callable values in Pure and Effect Core.
+
+Literal evaluation establishes immutable UTF-8 contents. Function evaluation
+precedes argument evaluation; tuple operands evaluate left to right according
+to the existing application and tuple rules. Construction, comparison, length
+and conversion produce exactly the declared result type. Invalid byte and
+invalid UTF-8 results are source alternatives; work and storage refusal remain
+structured internal failures. Foreign outputs become independent Ash storage
+before publication and no later native invalidation changes their contents.
+
+Typing preservation requires constants to have String, packed values to remain
+distinct, callable signatures to agree with authenticated constructors, and
+every operation result to inhabit its declared codomain. Progress admits a
+value, the next strict operand transition, an ordinary result alternative, or
+a structured resource failure. Source literals correspond to their decoded
+Core payload; compiler-owned exports correspond to authenticated intrinsic
+nodes. Transforms preserve those identities and contents and their output is
+independently revalidated. Public programs and independent malformed-Core
+cases check agreement with the evaluator; these are bounded experimental
+evidence, not a mechanized extension of the current Ash proofs.
+
+The storage-failure claim covers detectable work-limit and fallible payload
+reservation refusals, following the existing evaluator failure policy. The
+current Rust packed implementation reserves a buffer fallibly before immutable
+`Arc` publication. `Arc` publication itself uses the host allocator without a
+fallible stable API, as existing evaluator environment sharing does. A concrete
+counterexample is host allocation termination during that publication after a
+successful buffer reservation: it produces no Ash failure report. The progress
+account assumes those host allocations return; it does not prove containment
+of global host OOM or termination. Retaining this implementation for product
+adoption requires revisiting that assumption with the ordinary storage policy.
+
+Packed foreign-data admission bounds cumulative node, edge and byte payload
+work, including each arbitrary-integer copy through tuple edges, constructor
+payloads and the published root. Repeated scalar references cannot amplify copy
+work beyond that bound. The copying adapter admits byte-copy work before reserving the output
+buffer. Sharing an already immutable payload does not require a bytewise copy,
+but it does not permit a binding to publish an unbounded codec graph.

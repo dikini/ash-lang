@@ -13,7 +13,7 @@ use ash::{
     },
     types::{ConstructorId, TYPE_WORK_LIMIT},
 };
-use std::{any::Any, borrow::Cow, cell::RefCell, sync::Arc};
+use std::{any::Any, cell::RefCell, sync::Arc};
 
 /// Binds the exact SQLite registration retained by the source loader.
 ///
@@ -87,18 +87,32 @@ impl NativeResourceOwner for StatementOwner {
 struct Codec<'a> {
     module: &'a ForeignModuleFact,
     nodes: Vec<ForeignDataNode>,
+    work: usize,
 }
 impl<'a> Codec<'a> {
     fn new(module: &'a ForeignModuleFact) -> Self {
         Self {
             module,
             nodes: Vec::new(),
+            work: 0,
         }
     }
     fn push(&mut self, node: ForeignDataNode) -> Result<usize, ForeignExecutionError> {
-        if self.nodes.len() == TYPE_WORK_LIMIT {
-            return Err(ForeignExecutionError("SQLite codec work exhausted"));
-        }
+        let payload_work = match &node {
+            ForeignDataNode::Integer(integer) => usize::try_from(integer.magnitude_byte_length())
+                .map_err(|_| ForeignExecutionError("SQLite integer codec work exhausted"))?
+                .max(1),
+            ForeignDataNode::Bytes(bytes) => bytes.len(),
+            ForeignDataNode::String(text) => text.len(),
+            ForeignDataNode::Tuple(children) => children.len(),
+            _ => 0,
+        };
+        self.work = self
+            .work
+            .checked_add(1)
+            .and_then(|work| work.checked_add(payload_work))
+            .filter(|work| *work <= TYPE_WORK_LIMIT)
+            .ok_or(ForeignExecutionError("SQLite codec work exhausted"))?;
         self.nodes
             .try_reserve(1)
             .map_err(|_| ForeignExecutionError("SQLite codec allocation failed"))?;
@@ -128,18 +142,23 @@ impl<'a> Codec<'a> {
         self.push(ForeignDataNode::Tuple(children.into_boxed_slice()))
     }
     fn bytes(&mut self, bytes: &[u8]) -> Result<usize, ForeignExecutionError> {
-        let mut tail = self.constructor("EmptyBytes", None)?;
-        for byte in bytes.iter().rev() {
-            let byte = self.push(ForeignDataNode::Integer(i64::from(*byte)))?;
-            let payload = self.tuple(&[byte, tail])?;
-            tail = self.constructor("MoreBytes", Some(payload))?;
+        if bytes.len() >= TYPE_WORK_LIMIT.saturating_sub(self.work) {
+            return Err(ForeignExecutionError("SQLite byte copy work exhausted"));
         }
-        Ok(tail)
+
+        let mut copied = Vec::new();
+        copied
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| ForeignExecutionError("SQLite byte copy allocation failed"))?;
+        copied.extend_from_slice(bytes);
+        self.push(ForeignDataNode::Bytes(Arc::from(copied)))
     }
     fn error(&mut self, error: &Error) -> Result<usize, ForeignExecutionError> {
         match error {
             Error::Native(native) => {
-                let code = self.push(ForeignDataNode::Integer(i64::from(native.code)))?;
+                let code = self.push(ForeignDataNode::Integer(ash::integer::Integer::from_i64(
+                    i64::from(native.code),
+                )))?;
                 let message = self.bytes(native.message.as_bytes())?;
                 let payload = self.tuple(&[code, message])?;
                 self.constructor("NativeFailure", Some(payload))
@@ -214,7 +233,9 @@ fn tuple(input: &ForeignData, index: usize) -> Result<&[usize], ForeignExecution
 }
 fn integer(input: &ForeignData, index: usize) -> Result<i64, ForeignExecutionError> {
     match node(input, index)? {
-        ForeignDataNode::Integer(value) => Ok(*value),
+        ForeignDataNode::Integer(value) => value
+            .to_i64()
+            .ok_or(ForeignExecutionError("SQLite integer outside native range")),
         _ => Err(ForeignExecutionError("SQLite input expected integer")),
     }
 }
@@ -228,36 +249,11 @@ fn constructor(
         .copied()
         .ok_or(ForeignExecutionError("SQLite constructor absent"))
 }
-fn bytes(
-    module: &ForeignModuleFact,
-    input: &ForeignData,
-    mut index: usize,
-) -> Result<Vec<u8>, ForeignExecutionError> {
-    let empty = constructor(module, "EmptyBytes")?;
-    let more = constructor(module, "MoreBytes")?;
-    let mut output = Vec::new();
-    for _ in 0..TYPE_WORK_LIMIT {
-        match node(input, index)? {
-            ForeignDataNode::Constructor(id, None) if *id == empty => return Ok(output),
-            ForeignDataNode::Constructor(id, Some(payload)) if *id == more => {
-                let fields = tuple(input, *payload)?;
-                if fields.len() != 2 {
-                    return Err(ForeignExecutionError("SQLite bytes tuple arity"));
-                }
-                let byte = u8::try_from(integer(input, fields[0])?)
-                    .map_err(|_| ForeignExecutionError("SQLite byte outside ABI range"))?;
-                output
-                    .try_reserve(1)
-                    .map_err(|_| ForeignExecutionError("SQLite byte copy allocation failed"))?;
-                output.push(byte);
-                index = fields[1];
-            }
-            _ => return Err(ForeignExecutionError("SQLite bytes constructor mismatch")),
-        }
+fn bytes(input: &ForeignData, index: usize) -> Result<&[u8], ForeignExecutionError> {
+    match node(input, index)? {
+        ForeignDataNode::Bytes(bytes) => Ok(bytes),
+        _ => Err(ForeignExecutionError("SQLite input expected packed bytes")),
     }
-    Err(ForeignExecutionError(
-        "SQLite byte conversion work exhausted",
-    ))
 }
 fn connection<'a>(
     states: &[&'a dyn NativeResourceOwner],
@@ -287,8 +283,6 @@ impl ExecutableForeignModule for SqliteBinding {
             return Err(ForeignExecutionError("SQLite executable contract mismatch"));
         }
         for name in [
-            "EmptyBytes",
-            "MoreBytes",
             "InMemory",
             "File",
             "OpenFailure",
@@ -333,13 +327,13 @@ impl ExecutableForeignModule for SqliteBinding {
                     ForeignDataNode::Constructor(id, None)
                         if *id == constructor(module, "InMemory")? =>
                     {
-                        Cow::Borrowed(":memory:")
+                        ":memory:"
                     }
                     ForeignDataNode::Constructor(id, Some(payload))
                         if *id == constructor(module, "File")? =>
                     {
-                        match String::from_utf8(bytes(module, input, *payload)?) {
-                            Ok(path) => Cow::Owned(path),
+                        match std::str::from_utf8(bytes(input, *payload)?) {
+                            Ok(path) => path,
                             Err(_) => {
                                 return Ok(ForeignAcquisition::Refused(
                                     Codec::new(module).input_error("OpenFailure", "BadPath")?,
@@ -354,7 +348,7 @@ impl ExecutableForeignModule for SqliteBinding {
                         Codec::new(module).input_error("OpenFailure", "BadPath")?,
                     ));
                 }
-                match Connection::open_observed(&path, self.observations.clone()) {
+                match Connection::open_observed(path, self.observations.clone()) {
                     Ok(owner) => Ok(ForeignAcquisition::Acquired(Box::new(ConnectionOwner(
                         RefCell::new(Some(owner)),
                     )))),
@@ -368,7 +362,7 @@ impl ExecutableForeignModule for SqliteBinding {
                 if fields.len() != 2 || states.len() != 1 {
                     return Err(ForeignExecutionError("SQLite prepare operand arity"));
                 }
-                let sql = match String::from_utf8(bytes(module, input, fields[1])?) {
+                let sql = match std::str::from_utf8(bytes(input, fields[1])?) {
                     Ok(sql) => sql,
                     Err(_) => {
                         return Ok(ForeignAcquisition::Refused(
@@ -388,7 +382,7 @@ impl ExecutableForeignModule for SqliteBinding {
                 let result = owner
                     .as_mut()
                     .ok_or(ForeignExecutionError("SQLite connection already consumed"))?
-                    .prepare(&sql);
+                    .prepare(sql);
                 match result {
                     Ok(Some(owner)) => Ok(ForeignAcquisition::Acquired(Box::new(StatementOwner(
                         RefCell::new(Some(owner)),
@@ -485,9 +479,9 @@ impl ExecutableForeignModule for SqliteBinding {
                 let index = usize::try_from(integer(input, fields[1])?)
                     .map_err(|_| ForeignExecutionError("SQLite column outside ABI"))?;
                 let value = match owner.column_copy(index) {
-                    Ok(Column::Integer(value)) if key.operation == 3 => {
-                        codec.push(ForeignDataNode::Integer(value))?
-                    }
+                    Ok(Column::Integer(value)) if key.operation == 3 => codec.push(
+                        ForeignDataNode::Integer(ash::integer::Integer::from_i64(value)),
+                    )?,
                     Ok(Column::Blob(bytes)) if key.operation == 6 => {
                         let bytes = codec.bytes(&bytes)?;
                         codec.constructor("BlobBytes", Some(bytes))?
@@ -517,7 +511,7 @@ impl ExecutableForeignModule for SqliteBinding {
                     ForeignDataNode::Constructor(id, Some(payload))
                         if *id == constructor(module, "BlobBytes")? =>
                     {
-                        owner.bind_blob_copy(index, &bytes(module, input, *payload)?)
+                        owner.bind_blob_copy(index, bytes(input, *payload)?)
                     }
                     _ => return Err(ForeignExecutionError("SQLite bytes-or-null codec mismatch")),
                 };

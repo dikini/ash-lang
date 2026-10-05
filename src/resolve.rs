@@ -5624,7 +5624,13 @@ impl Resolver {
                     pending.push(Task::Type(domain));
                 }
                 Type::Forall(_, body) => pending.push(Task::Type(body)),
-                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Variable(_)
+                | Type::Inference(_) => {}
             }
         }
         for id in seen {
@@ -8749,6 +8755,14 @@ impl Resolver {
                             tasks.push(Task::Row(row, count));
                             tasks.push(Task::EffectInstances(row.effects.iter()));
                         }
+                        SurfaceTypeKind::Bytes => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::Bytes, provenance.len() - 1));
+                        }
+                        SurfaceTypeKind::String => {
+                            provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
+                            completed.push((Type::String, provenance.len() - 1));
+                        }
                         SurfaceTypeKind::Int => {
                             provenance.push(ResolvedTypeProvenanceNode::Fact(current.span));
                             completed.push((Type::Int, provenance.len() - 1));
@@ -11658,6 +11672,10 @@ impl Resolver {
                 });
                 tasks.push(ResolveTask::VisitExpr(&source.initializer));
             }
+            SurfaceExprKind::String(value) => expressions.push(ResolvedExpr {
+                kind: ResolvedExprKind::String(value.clone()),
+                span: expression.span,
+            }),
             SurfaceExprKind::Integer(value) => expressions.push(ResolvedExpr {
                 kind: ResolvedExprKind::Integer(value.clone()),
                 span: expression.span,
@@ -12883,7 +12901,11 @@ fn collect_free_type_names<'a>(
                 work.push(Task::Visit(&function.codomain));
                 work.push(Task::Visit(&function.domain));
             }
-            SurfaceTypeKind::Int | SurfaceTypeKind::Bool | SurfaceTypeKind::Unit => {}
+            SurfaceTypeKind::Bytes
+            | SurfaceTypeKind::String
+            | SurfaceTypeKind::Int
+            | SurfaceTypeKind::Bool
+            | SurfaceTypeKind::Unit => {}
         }
     }
     Ok(())

@@ -70,7 +70,8 @@ where
             .charge(1)
             .map_err(|()| EvidenceAuditFailure::ConstraintResource)?;
         match &expression.kind {
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}

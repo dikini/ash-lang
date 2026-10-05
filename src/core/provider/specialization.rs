@@ -160,6 +160,8 @@ impl ProviderFreshening<'_> {
             Atom::Tag(tag) => Atom::Tag(*tag),
             Atom::Count(count) => Atom::Count(*count),
             Atom::Boolean(value) => Atom::Boolean(*value),
+            Atom::Packed(value) => Atom::Packed(std::sync::Arc::clone(value)),
+            Atom::Intrinsic(value) => Atom::Intrinsic(*value),
             Atom::Literal(value) => {
                 super::charge(work, value.len())?;
                 let mut copy = String::new();

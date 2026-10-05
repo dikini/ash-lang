@@ -339,7 +339,9 @@ fn visit_structural_components<B: TypeWorkMeter>(
                         charge_kinded_type_parameters(parameters, budget)?;
                         push(&mut pending, StructuralRoot::Type(body), budget)?;
                     }
-                    Type::Int
+                    Type::Bytes
+                    | Type::String
+                    | Type::Int
                     | Type::Bool
                     | Type::Unit
                     | Type::Nominal(_)
@@ -1442,6 +1444,8 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
 
     fn type_tag(ty: &Type) -> u8 {
         match ty {
+            Type::Bytes => 11,
+            Type::String => 12,
             Type::Int => 0,
             Type::Bool => 1,
             Type::Unit => 2,
@@ -1519,7 +1523,9 @@ fn compare_structural_with_charge<B: TypeWorkMeter>(
                     tags
                 } else {
                     match (left, right) {
-                        (Type::Int, Type::Int)
+                        (Type::Bytes, Type::Bytes)
+                        | (Type::String, Type::String)
+                        | (Type::Int, Type::Int)
                         | (Type::Bool, Type::Bool)
                         | (Type::Unit, Type::Unit) => Ordering::Equal,
                         (Type::Nominal(left), Type::Nominal(right)) => left.cmp(right),
@@ -1853,6 +1859,10 @@ impl NominalTypeId {
 
 /// A structural Ash type.
 pub enum Type {
+    /// Immutable packed arbitrary bytes.
+    Bytes,
+    /// Immutable packed valid UTF-8.
+    String,
     /// Arbitrary-precision integers.
     Int,
     /// Boolean values.
@@ -2136,7 +2146,9 @@ pub fn discard_type_iteratively(root: Type) {
                         .sum::<usize>()
                 }
                 Type::Forall(_, _) => 1,
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -2177,7 +2189,9 @@ pub fn discard_type_iteratively(root: Type) {
             }
             Task::Visit(Type::Forall(_, body)) => work.push(Task::Visit(*body)),
             Task::Visit(
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -2346,6 +2360,8 @@ fn write_structural_inner(
                     work.push(Task::Visit(next));
                 }
             }
+            Task::Visit(Type::Bytes) => formatter.write_str("Bytes")?,
+            Task::Visit(Type::String) => formatter.write_str("String")?,
             Task::Visit(Type::Int) => formatter.write_str("Int")?,
             Task::Visit(Type::Bool) => formatter.write_str("Bool")?,
             Task::Visit(Type::Unit) => formatter.write_str("Unit")?,
@@ -2546,7 +2562,11 @@ pub fn same_type(left: &Type, right: &Type) -> bool {
             continue;
         };
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
@@ -2776,7 +2796,11 @@ pub(crate) fn same_type_with_budget(
             continue;
         };
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::Variable(left), Type::Variable(right)) if left == right => {}
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
@@ -2916,6 +2940,8 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
                 instance.arguments.len().hash(state);
                 work.push(TypeHashTask::Arguments(instance.arguments.iter()));
             }
+            TypeHashTask::Visit(Type::Bytes) => 11_u8.hash(state),
+            TypeHashTask::Visit(Type::String) => 12_u8.hash(state),
             TypeHashTask::Visit(Type::Int) => 0_u8.hash(state),
             TypeHashTask::Visit(Type::Bool) => 1_u8.hash(state),
             TypeHashTask::Visit(Type::Unit) => 2_u8.hash(state),
@@ -3367,7 +3393,9 @@ fn substitute_structural_type_and_row_variables<E>(
                 return Err(invalid_source.as_mut().expect("strict source policy")());
             }
             Task::Visit(
-                ty @ (Type::Int
+                ty @ (Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -6370,7 +6398,9 @@ pub(crate) fn qualify_scheme_row_replacements_with_budget(
     let atomic = |ty: &Type| {
         matches!(
             ty,
-            Type::Int
+            Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -6461,6 +6491,8 @@ pub(crate) fn qualify_scheme_row_replacements_with_budget(
             // Nested schemes bind their own variables.
             Task::Type(
                 Type::Forall(_, _)
+                | Type::Bytes
+                | Type::String
                 | Type::Int
                 | Type::Bool
                 | Type::Unit

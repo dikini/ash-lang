@@ -1,6 +1,7 @@
+import @builtin.string as TextOps
 import @foreign.sqlite as Native
 import provider as Provider
-pub import @foreign.sqlite (Bytes, EmptyBytes, MoreBytes, OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)
+pub import @foreign.sqlite (OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)
 
 pub newtype SqlText = SqlText(Bytes)
 
@@ -81,18 +82,7 @@ pub memory : Unit -> OpenConfig
 memory () = InMemory
 
 pub select_parameter : Unit -> SqlText
-select_parameter () = {
-let byte8 = MoreBytes (49, EmptyBytes)
-let byte7 = MoreBytes (63, byte8)
-let byte6 = MoreBytes (32, byte7)
-let byte5 = MoreBytes (84, byte6)
-let byte4 = MoreBytes (67, byte5)
-let byte3 = MoreBytes (69, byte4)
-let byte2 = MoreBytes (76, byte3)
-let byte1 = MoreBytes (69, byte2)
-let byte0 = MoreBytes (83, byte1)
-SqlText byte0
-}
+select_parameter () = SqlText (TextOps.to_utf8 "SELECT ?1")
 
 main : Unit -> Provider.Scope<OpenError, CloseError, Provider.Scope<PrepareError, FinalizeError, Result<Int>>>
 main () = resource Connection<C> db = (memory ()) {

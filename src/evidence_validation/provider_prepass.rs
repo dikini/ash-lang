@@ -287,7 +287,8 @@ pub(crate) fn source_provider_occurrences<'a>(
                     work,
                     expression.span,
                 )?,
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)

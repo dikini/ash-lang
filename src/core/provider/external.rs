@@ -1018,7 +1018,7 @@ fn closed_data_type(
     while let Some(ty) = pending.pop() {
         charge(work, 1)?;
         match &*ty {
-            Type::Int | Type::Bool | Type::Unit => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
             Type::Tuple(elements) => {
                 charge(work, elements.len())?;
                 pending
@@ -3292,7 +3292,17 @@ pub(crate) fn put_state_access_in_local_callable_for_test(
             )
         })
         .unwrap();
-    let target = program.nodes.iter().position(|node| matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) if function.parameter().ty().outer_nominal().is_some_and(|id| program.registry.foreign_state(id).is_none()))).unwrap();
+    let target = program
+        .nodes
+        .iter()
+        .position(|node| {
+            matches!(
+                &node.kind,
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function)))
+                    if function.parameter().ty() == &Type::Bytes
+            )
+        })
+        .expect("the constrained statement fixture has a packed Bytes forwarder");
     let dialect = program.nodes[target].dialect;
     let origin = program.nodes[target].origin.clone().unwrap();
     let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =

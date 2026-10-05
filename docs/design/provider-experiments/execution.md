@@ -6,6 +6,60 @@
 > This record assigns work and evidence. It has no independent semantic or
 > architectural authority and leaves the current tree when this work finishes.
 
+## SQLite copying workstream (2026-10-05)
+
+Authorized implementation starts from integration commit `53db4eb` in
+`.worktree/sqlite-provider`, branch `codex/sqlite-provider`. Completed batches
+merge with both histories into `codex/provider-experiments`; `main` is excluded.
+Unrelated integration and root drafts remain outside this workstream.
+
+The shared capability batch connects distinct packed `Bytes` and UTF-8 `String`,
+string literals, compiler-owned pure callables, independent Core validation,
+transforms, evaluation and observation. The frontend owns literal admission;
+Core/runtime owns constants and intrinsic execution; the coordinator owns shared
+types, builtin module authentication, checking and convergence. Native TEXT
+support is independent adapter work until the shared batch is delivered.
+
+The shared batch also removes the experiment's integer-list byte family: its
+Bytes import conflicts with the built-in type spelling, demonstrated by nine
+old SQLite source failures in the first connected run. Codec and fixtures must
+migrate together before shared integration. SQL/path migration follows in the
+copying batch, which admits
+String SQL/paths/diagnostics, and adds TEXT/BLOB/null operations and statement
+reuse. The session batch exercises imported helpers, multiple rows, ordinary
+transaction SQL, completion and file persistence. The handoff batch records
+reusable modules, embedding instructions, observed evidence and adoption gates.
+
+One coordinator runs heavy Cargo checks with one build job. Each batch requires
+public-program evidence, required negative Core/source cases, independent
+contract/ownership review, unsigned commit and merge, then integrated checks.
+Receipts and limits are recorded here as those gates complete. This execution
+record has no language authority; candidate contracts belong in `semantics.md`.
+
+### Shared copying-value batch verification
+
+The implementation checkpoint passes `CARGO_BUILD_JOBS=1 cargo test --locked
+-p ash --lib`: 1,537 cases pass, and the inherited advanced callback case remains
+ignored. `CARGO_BUILD_JOBS=1 cargo check --locked -p ash --all-targets` passes.
+The selected public command passes 203 cases across architecture, Bytes/String,
+Core validation, foreign admission, polymorphism, SQLite, resource scope and
+literal suites. The ordinary `examples/bytes-string.ash` entry returns
+`(true, 14, 14) : (Bool, Int, Int)` through the CLI.
+
+Independent reviews cover canonical intrinsic signatures, immutable sharing,
+transformed Core, native ownership and cumulative codec work. They found and
+verified repairs for packed-payload admission and repeated large-integer copy
+amplification. Fresh library checks also found two migration regressions: a
+Core test helper assumed a nominal Bytes family, and invalid built-in operands
+to `state_of` reported an internal error. The helper now selects the packed
+type; the checker reports the existing argument diagnostic while preserving
+resource failures and pending-evidence rollback. No ownership assertion changed.
+
+Formatting, changed relative links and candidate authority labels pass review.
+The host-allocation assumption remains explicit in candidate semantics. Existing
+compiler dead-code warnings remain visible. Unsigned integration and its checks
+are recorded by the coordinating task after this implementation checkpoint.
+
 ## Current checkpoint
 
 The 2026-10-04 common-support workstream supersedes the paused task below.

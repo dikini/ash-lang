@@ -1111,6 +1111,48 @@ impl Graph {
                     captures,
                 }
             }
+            Some(PureExprKind::Value(PureValue::String(_))) => Expr::Scalar,
+            Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) => {
+                self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                self.targets.insert(id, id);
+                let parameter = self.push(Expr::Slot, source, budget)?;
+                let scalar = self.push(Expr::Scalar, source, budget)?;
+                let constructors = match intrinsic.operation() {
+                    crate::core::packed::Intrinsic::BytesAppendByte { appended, invalid } => {
+                        Some((appended, invalid))
+                    }
+                    crate::core::packed::Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                        Some((decoded, invalid))
+                    }
+                    _ => None,
+                };
+                let body = if let Some((success, invalid)) = constructors {
+                    let function = self.push(Expr::Constructor(success), source, budget)?;
+                    let success = self.push(
+                        Expr::Call {
+                            function,
+                            arguments: copy_slice(&[scalar], budget)?,
+                            scalar: false,
+                            type_application: false,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let invalid = self.push(Expr::Constructor(invalid), source, budget)?;
+                    self.push(
+                        Expr::Merge(copy_slice(&[success, invalid], budget)?),
+                        source,
+                        budget,
+                    )?
+                } else {
+                    scalar
+                };
+                Expr::Function {
+                    parameters: copy_slice(&[parameter], budget)?,
+                    body,
+                    captures: Vec::new(),
+                }
+            }
             Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 Expr::Constructor(constructor.constructor())
             }
@@ -1915,7 +1957,10 @@ impl Graph {
 }
 
 fn scalar(ty: &Type) -> bool {
-    matches!(ty, Type::Int | Type::Bool | Type::Unit)
+    matches!(
+        ty,
+        Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

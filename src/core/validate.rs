@@ -4870,7 +4870,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Type::ResourceApply(_, arguments) => {
                     self.schedule_owner_type_scan_children(&mut pending, arguments, None, false)?;
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -6163,7 +6165,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         return Ok(true);
                     }
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -8243,7 +8247,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 }
 
                 (
-                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_),
+                    Type::Bytes
+                    | Type::String
+                    | Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Nominal(_)
+                    | Type::Variable(_),
                     ResolvedTypeProvenanceNode::Fact(_),
                 ) => {}
                 (
@@ -8367,7 +8377,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     }
                     self.charge_type_work(1)?;
                     match ty {
-                        Type::Int | Type::Bool | Type::Unit => {}
+                        Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
                         Type::Nominal(id) => {
                             if self.program.registry.nominal_parameters(*id).is_none()
                                 && !((self.contextual_registry.is_some()
@@ -8512,7 +8522,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             }
             self.charge_type_work(1)?;
             match ty {
-                Type::Int | Type::Bool | Type::Unit => {}
+                Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
                 Type::Nominal(id) => {
                     if self.program.registry.nominal_parameters(*id).is_none()
                         && !((self.contextual_registry.is_some()
@@ -9143,7 +9153,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         let mut completed = Vec::new();
         while let Some(task) = work.pop() {
             match task {
-                Task::Visit(Type::Int | Type::Bool | Type::Unit) => {
+                Task::Visit(Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit) => {
                     self.charge_type_work(1)?;
                     completed.try_reserve(1).map_err(|_| resource())?;
                     completed.push(Kind::Type);
@@ -9878,7 +9888,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     self.charge_kinded_parameters(parameters)?;
                     work.push(Task::Visit(body));
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -10218,6 +10230,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 Some(
                     PureExprKind::Value(
                         PureValue::Integer(_)
+                        | PureValue::String(_)
+                        | PureValue::Intrinsic(_)
                         | PureValue::Boolean(_)
                         | PureValue::Unit(_)
                         | PureValue::Constructor(_),
@@ -10602,6 +10616,73 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         value: &PureValue,
     ) -> Result<(), ValidationError> {
         let expected = match value {
+            PureValue::String(string) => {
+                self.charge_type_work(string.bytes().len())?;
+                if std::str::from_utf8(string.bytes()).is_err() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, Some(id)));
+                }
+                Type::String
+            }
+            PureValue::Intrinsic(intrinsic) => {
+                if !intrinsic.authentic_module() {
+                    return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                }
+                use super::packed::Intrinsic;
+                let result = match intrinsic.operation() {
+                    Intrinsic::BytesAppendByte { appended, invalid } => {
+                        Some((appended, invalid, Type::Bytes))
+                    }
+                    Intrinsic::StringFromUtf8 { decoded, invalid } => {
+                        Some((decoded, invalid, Type::String))
+                    }
+                    _ => None,
+                };
+                if let Some((success, invalid, payload)) = result {
+                    let owner = crate::types::NominalTypeId::new(intrinsic.module(), 0);
+                    if success != ConstructorId::new(owner, 0)
+                        || invalid != ConstructorId::new(owner, 1)
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                    let nominal = self.program.registry.nominal(owner).ok_or_else(|| {
+                        ValidationError::new(ValidationReason::Registry, Some(id))
+                    })?;
+                    if nominal.declaration_kind
+                        != crate::resolved::ResolvedNominalDeclarationKind::Data
+                        || !self
+                            .program
+                            .registry
+                            .nominal_parameters(owner)
+                            .is_some_and(<[_]>::is_empty)
+                        || nominal.representation.is_some()
+                        || nominal.constructors.as_ref() != [success, invalid]
+                    {
+                        return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                    }
+                    for (constructor, expected_payload) in
+                        [(success, Some(payload)), (invalid, None)]
+                    {
+                        let fact =
+                            self.program
+                                .registry
+                                .constructor(constructor)
+                                .ok_or_else(|| {
+                                    ValidationError::new(ValidationReason::Registry, Some(id))
+                                })?;
+                        let payload_matches = match (&fact.payload, &expected_payload) {
+                            (Some(actual), Some(expected)) => {
+                                self.same_type_charged(actual, expected)?
+                            }
+                            (None, None) => true,
+                            _ => false,
+                        };
+                        if !payload_matches || fact.owner != owner {
+                            return Err(ValidationError::new(ValidationReason::Registry, Some(id)));
+                        }
+                    }
+                }
+                intrinsic.expected_type()
+            }
             PureValue::Integer(integer) => integer.expected_type(),
             PureValue::Boolean(boolean) => boolean.expected_type(),
             PureValue::Unit(unit) => unit.expected_type(),
@@ -10707,12 +10788,16 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     let failure = match member.binder().ty() {
                         Type::Function(_, _) => (!matches!(
                             F::pure(&initializer.kind),
-                            Some(PureExprKind::Value(PureValue::Function(_)))
+                            Some(PureExprKind::Value(
+                                PureValue::Function(_) | PureValue::Intrinsic(_)
+                            ))
                         ))
                         .then_some(ValidationCause::RecursiveFunctionInitializer),
                         Type::EffectfulFunction(_, _) if F::ALLOWS_EFFECTFUL_TYPES => (!matches!(
                             F::pure(&initializer.kind),
-                            Some(PureExprKind::Value(PureValue::Function(_)))
+                            Some(PureExprKind::Value(
+                                PureValue::Function(_) | PureValue::Intrinsic(_)
+                            ))
                         ))
                         .then_some(ValidationCause::RecursiveFunctionInitializer),
                         ty if ty.outer_nominal().is_some() => match ty.outer_nominal() {
@@ -10748,7 +10833,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                                 .then_some(ValidationCause::RecursiveFunctionBody)
                             }
                         }
-                        Type::Int
+                        Type::Bytes
+                        | Type::String
+                        | Type::Int
                         | Type::Bool
                         | Type::Unit
                         | Type::Tuple(_)
@@ -11938,6 +12025,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         Some(
                             PureExprKind::Value(
                                 PureValue::Integer(_)
+                                | PureValue::String(_)
+                                | PureValue::Intrinsic(_)
                                 | PureValue::Boolean(_)
                                 | PureValue::Unit(_)
                                 | PureValue::Constructor(_),
@@ -12187,7 +12276,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     work.push(Task::Visit(body));
                 }
                 Task::Visit(
-                    Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_),
+                    Type::Bytes
+                    | Type::String
+                    | Type::Int
+                    | Type::Bool
+                    | Type::Unit
+                    | Type::Nominal(_)
+                    | Type::Inference(_),
                 ) => {}
                 Task::Sequence(mut remaining) => {
                     if let Some(ty) = remaining.next() {
@@ -12487,6 +12582,8 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         ))) => self.requirements_for(&requirements, operation.function())?,
                         Some(PureExprKind::Value(
                             PureValue::Integer(_)
+                            | PureValue::String(_)
+                            | PureValue::Intrinsic(_)
                             | PureValue::Boolean(_)
                             | PureValue::Unit(_)
                             | PureValue::Constructor(_),
@@ -14307,6 +14404,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             PureExprKind::Value(PureValue::Function(_))
             | PureExprKind::Value(
                 PureValue::Integer(_)
+                | PureValue::String(_)
+                | PureValue::Intrinsic(_)
                 | PureValue::Boolean(_)
                 | PureValue::Unit(_)
                 | PureValue::Constructor(_),
@@ -24078,6 +24177,8 @@ mod tests {
         let mut output = Vec::new();
         while let Some(task) = pending.pop() {
             match task {
+                Task::Visit(Type::Bytes) => output.push(Type::Bytes),
+                Task::Visit(Type::String) => output.push(Type::String),
                 Task::Visit(Type::Int) => output.push(Type::Bool),
                 Task::Visit(Type::Bool) => output.push(Type::Bool),
                 Task::Visit(Type::Unit) => output.push(Type::Unit),
@@ -24633,7 +24734,13 @@ mod tests {
                     }
                     work.push(body);
                 }
-                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Inference(_) => {}
             }
         }
     }
@@ -24703,6 +24810,8 @@ mod tests {
                 }
                 PureExprKind::Value(
                     PureValue::Integer(_)
+                    | PureValue::String(_)
+                    | PureValue::Intrinsic(_)
                     | PureValue::Boolean(_)
                     | PureValue::Unit(_)
                     | PureValue::Constructor(_),
@@ -26839,7 +26948,13 @@ mod tests {
                     }
                     work.push(body);
                 }
-                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Inference(_) => {}
             }
         }
     }
@@ -26869,7 +26984,9 @@ mod tests {
                     }
                     work.push(body);
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -26918,7 +27035,9 @@ mod tests {
                     }
                     work.push(body);
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -26986,6 +27105,8 @@ mod tests {
                 .any(|argument| type_mentions(argument, sought)),
             PureExprKind::Value(
                 PureValue::Integer(_)
+                | PureValue::String(_)
+                | PureValue::Intrinsic(_)
                 | PureValue::Boolean(_)
                 | PureValue::Unit(_)
                 | PureValue::Constructor(_),
@@ -27139,6 +27260,8 @@ mod tests {
             }
             PureExprKind::Value(
                 PureValue::Integer(_)
+                | PureValue::String(_)
+                | PureValue::Intrinsic(_)
                 | PureValue::Boolean(_)
                 | PureValue::Unit(_)
                 | PureValue::Constructor(_),

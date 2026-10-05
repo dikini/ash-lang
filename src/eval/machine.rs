@@ -98,6 +98,7 @@ struct RecursiveMemberTemplate {
 }
 
 enum RecursiveMemberKind {
+    Intrinsic(crate::core::packed::IntrinsicNode),
     Function {
         parameter: BinderId,
         body: NodeId,
@@ -242,6 +243,9 @@ impl Environment {
                                     environment,
                                     origin: origin.clone(),
                                 })
+                            }
+                            RecursiveMemberKind::Intrinsic(intrinsic) => {
+                                Value::Intrinsic(*intrinsic)
                             }
                             RecursiveMemberKind::Data { location } => Value::Location(*location),
                         });
@@ -953,6 +957,15 @@ impl<'runtime> Machine<'runtime> {
                         // when the acquired body boundary is installed.
                         self.trace_effect(EffectTraceEvent::HandlerActivated(handler.id()));
                     }
+                    if let Ok(PureExprKind::Value(PureValue::String(string))) =
+                        pure_expression(&self.program, node)
+                    {
+                        charge_runtime_work(
+                            &mut self.instantiation_work,
+                            string.bytes().len(),
+                            RuntimePhase::Evaluation,
+                        )?;
+                    }
                     let transition =
                         dispatch_entry(&self.program, node, environment, &mut self.heap)?;
                     disposal::check()?;
@@ -1167,6 +1180,17 @@ impl<'runtime> Machine<'runtime> {
                 }
                 self.trace_effect(EffectTraceEvent::ClauseReturned(handler));
                 self.control = Some(Control::Return(value));
+            }
+            Frame::ApplyArgument {
+                function: Value::Intrinsic(intrinsic),
+            } => {
+                let result = apply_intrinsic(
+                    intrinsic,
+                    value,
+                    &mut self.heap,
+                    &mut self.instantiation_work,
+                )?;
+                self.control = Some(Control::Return(result));
             }
             frame => {
                 let transition = dispatch_return(frame, value, &mut self.heap)?;
@@ -2715,6 +2739,14 @@ fn dispatch_entry(
         },
     };
     Ok(match kind {
+        PureExprKind::Value(PureValue::String(string)) => {
+            let text = std::str::from_utf8(string.bytes())
+                .map_err(|_| RuntimeFailure::InvalidControlState)?;
+            Transition::direct(Control::Return(Value::String(packed_string(text)?)))
+        }
+        PureExprKind::Value(PureValue::Intrinsic(intrinsic)) => {
+            Transition::direct(Control::Return(Value::Intrinsic(*intrinsic)))
+        }
         PureExprKind::Value(PureValue::Integer(integer)) => enter_integer(integer),
         PureExprKind::Value(PureValue::Boolean(boolean)) => enter_boolean(*boolean),
         PureExprKind::Value(PureValue::Unit(unit)) => enter_unit(*unit),
@@ -2903,6 +2935,9 @@ fn enter_recursive_binding(
         }
         let erased = pure_expression(program, erased_initializer)?;
         let kind = match erased {
+            PureExprKind::Value(PureValue::Intrinsic(intrinsic)) => {
+                RecursiveMemberKind::Intrinsic(*intrinsic)
+            }
             PureExprKind::Value(PureValue::Function(function)) => RecursiveMemberKind::Function {
                 parameter: function.parameter().id(),
                 body: function.body(),
@@ -3168,7 +3203,10 @@ fn return_application_function(
     caller_environment: Environment,
     function: Value,
 ) -> Result<Transition, RuntimeFailure> {
-    if !matches!(function, Value::Function(_) | Value::ConstructorFunction(_)) {
+    if !matches!(
+        function,
+        Value::Function(_) | Value::ConstructorFunction(_) | Value::Intrinsic(_)
+    ) {
         return Err(RuntimeFailure::UnexpectedFunctionValue);
     }
     Ok(Transition::suspend(
@@ -3195,6 +3233,154 @@ fn return_application_argument(
         }
         _ => Err(RuntimeFailure::UnexpectedFunctionValue),
     }
+}
+
+fn packed_storage_failure(requested: usize) -> RuntimeFailure {
+    resource_failure(
+        ResourceFailureCause::StorageReservationFailed,
+        RuntimePhase::Evaluation,
+        RuntimeResource::PackedBytes,
+        Some(requested),
+        None,
+    )
+}
+
+fn packed_string(text: &str) -> Result<Arc<str>, RuntimeFailure> {
+    let mut output = String::new();
+    output
+        .try_reserve_exact(text.len())
+        .map_err(|_| packed_storage_failure(text.len()))?;
+    output.push_str(text);
+    Ok(Arc::from(output))
+}
+
+fn packed_bytes(bytes: &[u8], append: Option<u8>) -> Result<Arc<[u8]>, RuntimeFailure> {
+    let len = bytes
+        .len()
+        .checked_add(usize::from(append.is_some()))
+        .ok_or_else(|| packed_storage_failure(usize::MAX))?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(len)
+        .map_err(|_| packed_storage_failure(len))?;
+    output.extend_from_slice(bytes);
+    if let Some(byte) = append {
+        output.push(byte);
+    }
+    Ok(Arc::from(output))
+}
+
+fn packed_tuple_location(
+    heap: &[HeapCell],
+    mut location: Location,
+    work: &mut TypeWorkBudget,
+) -> Result<Location, RuntimeFailure> {
+    for _ in 0..=heap.len() {
+        charge_runtime_work(work, 1, RuntimePhase::Evaluation)?;
+        match heap.get(location) {
+            Some(HeapCell::Alias(next)) => location = *next,
+            Some(HeapCell::Uninitialized) => return Err(RuntimeFailure::UninitializedLocation),
+            Some(_) => return Ok(location),
+            None => return Err(RuntimeFailure::InvalidLocation),
+        }
+    }
+    Err(RuntimeFailure::AliasLoop)
+}
+
+fn apply_intrinsic(
+    intrinsic: crate::core::packed::IntrinsicNode,
+    argument: Value,
+    heap: &mut Vec<HeapCell>,
+    work: &mut TypeWorkBudget,
+) -> Result<Value, RuntimeFailure> {
+    use crate::core::packed::Intrinsic;
+    let operation = intrinsic.operation();
+    if !intrinsic.authentic_module() {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    let result = match (operation, argument) {
+        (Intrinsic::BytesEmpty, Value::Unit) => Value::Bytes(Arc::from([])),
+        (Intrinsic::BytesLength, Value::Bytes(bytes)) => {
+            Value::Integer(crate::integer::Integer::from_usize(bytes.len()))
+        }
+        (Intrinsic::StringByteLength, Value::String(text)) => {
+            Value::Integer(crate::integer::Integer::from_usize(text.len()))
+        }
+        (Intrinsic::StringToUtf8, Value::String(text)) => {
+            charge_runtime_work(work, text.len(), RuntimePhase::Evaluation)?;
+            Value::Bytes(packed_bytes(text.as_bytes(), None)?)
+        }
+        (Intrinsic::StringFromUtf8 { decoded, invalid }, Value::Bytes(bytes)) => {
+            charge_runtime_work(work, bytes.len(), RuntimePhase::Evaluation)?;
+            let (constructor, payload) = match std::str::from_utf8(&bytes) {
+                Ok(text) => (decoded, Some(Value::String(packed_string(text)?))),
+                Err(_) => (invalid, None),
+            };
+            Value::Location(allocate_heap(
+                heap,
+                HeapCell::Constructor(constructor, payload),
+            )?)
+        }
+        (
+            operation @ (Intrinsic::BytesAppendByte { .. }
+            | Intrinsic::BytesEqual
+            | Intrinsic::StringEqual),
+            Value::Location(location),
+        ) => {
+            let location = packed_tuple_location(heap, location, work)?;
+            let Some(HeapCell::Tuple(fields)) = heap.get(location) else {
+                return Err(RuntimeFailure::InvalidControlState);
+            };
+            if fields.len() != 2 {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            match (operation, &fields[0], &fields[1]) {
+                (
+                    Intrinsic::BytesAppendByte { appended, invalid },
+                    Value::Bytes(bytes),
+                    Value::Integer(integer),
+                ) => {
+                    let byte = integer.to_i64().and_then(|value| u8::try_from(value).ok());
+                    let (constructor, payload) = if let Some(byte) = byte {
+                        let requested = bytes
+                            .len()
+                            .checked_add(1)
+                            .ok_or_else(|| packed_storage_failure(usize::MAX))?;
+                        charge_runtime_work(work, requested, RuntimePhase::Evaluation)?;
+                        (
+                            appended,
+                            Some(Value::Bytes(packed_bytes(bytes, Some(byte))?)),
+                        )
+                    } else {
+                        (invalid, None)
+                    };
+                    Value::Location(allocate_heap(
+                        heap,
+                        HeapCell::Constructor(constructor, payload),
+                    )?)
+                }
+                (Intrinsic::BytesEqual, Value::Bytes(left), Value::Bytes(right)) => {
+                    charge_runtime_work(
+                        work,
+                        left.len().min(right.len()),
+                        RuntimePhase::Evaluation,
+                    )?;
+                    Value::Boolean(left == right)
+                }
+                (Intrinsic::StringEqual, Value::String(left), Value::String(right)) => {
+                    charge_runtime_work(
+                        work,
+                        left.len().min(right.len()),
+                        RuntimePhase::Evaluation,
+                    )?;
+                    Value::Boolean(left == right)
+                }
+                _ => return Err(RuntimeFailure::InvalidControlState),
+            }
+        }
+        _ => return Err(RuntimeFailure::InvalidControlState),
+    };
+    Ok(result)
 }
 
 fn allocate_heap(heap: &mut Vec<HeapCell>, cell: HeapCell) -> Result<Location, RuntimeFailure> {
@@ -3420,6 +3606,32 @@ mod tests {
         source::{ByteRange, Origin, SourceFile},
         types::{ConstructorId, NominalTypeId, Type, TypeVariableId},
     };
+
+    #[test]
+    fn packed_literal_copy_reports_low_work_without_panicking() {
+        let source = SourceFile::new("packed-limit.ash", "()").unwrap();
+        let origin = Origin::Source(source.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let mut builder = CoreBuilder::new();
+        let root = builder
+            .string(b"packed".as_slice(), Type::String, origin)
+            .unwrap();
+        let program = validate(builder.finish(root).unwrap(), &[&source]).unwrap();
+        let mut machine = Machine::new(&program);
+        machine.instantiation_work = TypeWorkBudget::with_limit(0);
+        let RuntimeFailure::Report(report) = machine.run().unwrap_err() else {
+            panic!("structured resource report")
+        };
+        assert_eq!(
+            report.primary.reason_code(),
+            "runtime.work-budget-exhausted"
+        );
+        let resource = report.primary.resource().unwrap();
+        assert_eq!(resource.cause, ResourceFailureCause::WorkBudgetExhausted);
+        assert_eq!(resource.phase, RuntimePhase::Evaluation);
+        assert_eq!(resource.resource, RuntimeResource::WorkUnits);
+        assert_eq!(resource.requested, Some(6));
+        assert_eq!(resource.available, Some(0));
+    }
 
     fn sequential_effect_program() -> ValidatedEffectProgram {
         effect_program(concat!(

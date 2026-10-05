@@ -17,6 +17,8 @@ pub enum ResourceFailureCause {
 /// The storage or ledger whose additional units were requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeResource {
+    /// Ordinary immutable packed byte storage.
+    PackedBytes,
     /// Pending structural type destruction tasks.
     TypeDisposal,
     /// Pending kind destruction tasks.
@@ -66,6 +68,7 @@ impl RuntimeResource {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::PackedBytes => "packed bytes",
             Self::TypeDisposal => "type disposal tasks",
             Self::KindDisposal => "kind disposal tasks",
             Self::EnvironmentDisposal => "environment disposal entries",

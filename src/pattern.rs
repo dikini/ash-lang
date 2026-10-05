@@ -662,7 +662,9 @@ fn charge_types(types: &[Type], budget: &mut UsefulnessBudget) -> Result<(), Use
                         work.push(Task::Type(argument));
                         work.push(Task::Type(function));
                     }
-                    Type::Int
+                    Type::Bytes
+                    | Type::String
+                    | Type::Int
                     | Type::Bool
                     | Type::Unit
                     | Type::Nominal(_)
@@ -735,7 +737,9 @@ fn heads_for_type<'a>(ty: &Type, registry: &'a ResolvedRegistry) -> Option<Heads
         Type::Application(_, _) => Some(Heads::Constructors(
             &registry.nominal(ty.outer_nominal()?)?.constructors,
         )),
-        Type::Int
+        Type::Bytes
+        | Type::String
+        | Type::Int
         | Type::Function(_, _)
         | Type::EffectfulFunction(_, _)
         | Type::Variable(_)
@@ -968,6 +972,35 @@ mod tests {
 
     fn wildcard(ty: Type, origin: &Origin) -> CorePattern {
         CorePattern::new(ty, origin.clone(), CorePatternKind::Wildcard)
+    }
+
+    #[test]
+    fn packed_builtin_patterns_require_a_wildcard_to_cover_the_domain() {
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        for ty in [Type::Bytes, Type::String] {
+            assert_eq!(
+                usefulness_shapes(
+                    &[],
+                    &[WitnessPattern::Wildcard],
+                    &[ty.clone()],
+                    &registry,
+                    USEFULNESS_STATE_LIMIT,
+                    &mut UsefulnessBudget::default()
+                ),
+                Ok(Some(vec![WitnessPattern::Wildcard])),
+            );
+            assert_eq!(
+                usefulness_shapes(
+                    &[vec![WitnessPattern::Wildcard]],
+                    &[WitnessPattern::Wildcard],
+                    &[ty],
+                    &registry,
+                    USEFULNESS_STATE_LIMIT,
+                    &mut UsefulnessBudget::default()
+                ),
+                Ok(None),
+            );
+        }
     }
 
     #[test]

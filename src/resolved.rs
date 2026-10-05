@@ -3515,7 +3515,8 @@ impl ResolvedModuleProgram {
             })
             .and_then(|equation| match &mut equation.body.kind {
                 ResolvedExprKind::Occurrence(occurrence) => Some(occurrence),
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Tuple(_)
@@ -8067,7 +8068,9 @@ fn visit_summary_variables<'a>(
                 pending.push(SummaryRoot::Type(computation.value()));
                 pending.push(SummaryRoot::Row(computation.effects()));
             }
-            SummaryRoot::Type(Type::Int | Type::Bool | Type::Unit | Type::Nominal(_)) => {}
+            SummaryRoot::Type(
+                Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_),
+            ) => {}
         }
     }
     Ok(())
@@ -17047,7 +17050,13 @@ fn visit_type_identity_references(
             }
             Task::Type(Type::Forall(_, body)) => schedule(&mut work, Task::Type(body), budget)?,
             Task::Type(
-                Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_),
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Variable(_)
+                | Type::Inference(_),
             ) => {}
             Task::Argument(_) => unreachable!("argument tasks normalize before retention"),
         }
@@ -21287,6 +21296,8 @@ impl ResolvedRegistry {
                         }
                     }
                 }
+                Task::Type(Type::Bytes) => output.push_str("Bytes"),
+                Task::Type(Type::String) => output.push_str("String"),
                 Task::Type(Type::Int) => output.push_str("Int"),
                 Task::Type(Type::Bool) => output.push_str("Bool"),
                 Task::Type(Type::Unit) => output.push_str("Unit"),
@@ -22571,7 +22582,8 @@ pub(crate) fn lexical_method_capture_occurrences<'a>(
             }
             ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
             ResolvedExprKind::Discard(_) => {}
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
@@ -22631,6 +22643,8 @@ pub struct ResolvedExpr {
 /// The closed resolved expression family.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedExprKind {
+    /// A decoded UTF-8 string literal.
+    String(String),
     /// A cleanup owner around a body and its ordinary completion call.
     Cleanup(Box<ResolvedCleanupExpr>),
     /// An arbitrary-precision integer literal.
@@ -23218,7 +23232,8 @@ fn discard_resolved_body_work(
 ) {
     while let Some(expression) = expressions.pop() {
         match expression.kind {
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit => {}
             ResolvedExprKind::Occurrence(occurrence) => {
@@ -23354,6 +23369,20 @@ pub(crate) fn discard_resolved_local_declaration_iteratively(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn packed_builtin_type_diagnostics_preserve_their_spellings() {
+        let registry = ResolvedRegistry::new(Vec::new(), Vec::new());
+        assert_eq!(registry.display_type(&Type::Bytes), "Bytes");
+        assert_eq!(registry.display_type(&Type::String), "String");
+        assert_eq!(
+            registry.display_type(&Type::Function(
+                Box::new(Type::Bytes),
+                Box::new(Type::String)
+            )),
+            "Bytes -> String"
+        );
+    }
+
     use crate::types::KindedArgument;
     #[test]
     fn body_free_resource_kind_authenticates_canonical_category_and_identity_slot() {
