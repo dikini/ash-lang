@@ -1,5 +1,16 @@
 //! Authentication of linked checked interface evidence before Core synthesis.
 
+mod provider_sources;
+use provider_sources::{
+    LinkedLexicalSource, authenticate_provider_source, retain_provider_lexical_owners,
+};
+mod provider_prepass;
+pub(crate) use provider_prepass::{SourceProviderOccurrence, source_provider_occurrences};
+mod provider_occurrences;
+pub(crate) use provider_occurrences::{
+    CopiedProviderOccurrenceCatalog, build_catalog_with_provider_copies, copy_provider_occurrences,
+};
+
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -2623,6 +2634,7 @@ struct MethodEvidenceAuthentication;
 pub struct ValidatedInterfaceProgram {
     source: ResolvedModuleProgram,
     method_evidence: Arc<MethodEvidenceCatalog>,
+    provider_preparation: Option<Arc<crate::elaborate::FinalProviderPreparation>>,
     _method_evidence: MethodEvidenceAuthentication,
 }
 
@@ -2635,6 +2647,12 @@ impl ValidatedInterfaceProgram {
 
     pub(crate) const fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
         &self.method_evidence
+    }
+
+    pub(crate) fn provider_preparation(
+        &self,
+    ) -> Option<&Arc<crate::elaborate::FinalProviderPreparation>> {
+        self.provider_preparation.as_ref()
     }
 
     /// Returns dependency-ordered checked module groups.
@@ -2767,27 +2785,31 @@ pub(crate) fn validate_interface_evidence_with_budget(
     drop(kind_environments);
     if has_contextual_parameters {
         for owner in method_evidence.lexical_owners() {
-            if let Some(acquisition) = owner.acquisition
+            let resource_identity = match owner.resource.as_ref() {
+                Some(crate::core::dialect::MethodEvidenceResourceOwner::Builtin(acquisition)) => {
+                    Some((acquisition.identity, acquisition.provider, acquisition.span))
+                }
+                Some(crate::core::dialect::MethodEvidenceResourceOwner::Provider(resource)) => {
+                    Some((resource.identity, owner.source, program.result().span))
+                }
+                None => None,
+            };
+            if let Some((identity, provider, span)) = resource_identity
                 && owner.method.declaration() == 0
             {
-                charge(constraint_work, 1, acquisition.span)?;
+                charge(constraint_work, 1, span)?;
                 let canonical = program
                     .registry()
-                    .type_variable(acquisition.identity)
-                    .ok_or_else(|| unknown(acquisition.span))?;
-                binder_owners
-                    .try_reserve(1)
-                    .map_err(|_| resource(acquisition.span))?;
+                    .type_variable(identity)
+                    .ok_or_else(|| unknown(span))?;
+                binder_owners.try_reserve(1).map_err(|_| resource(span))?;
                 if canonical.kind != Kind::Type
-                    || acquisition.identity.module() != Some(acquisition.provider.module())
+                    || identity.module() != Some(provider.module())
                     || binder_owners
-                        .insert(
-                            acquisition.identity,
-                            LinkedBinderOwner::Resource(acquisition.provider),
-                        )
+                        .insert(identity, LinkedBinderOwner::Resource(provider))
                         .is_some()
                 {
-                    return Err(unknown(acquisition.span));
+                    return Err(unknown(span));
                 }
             }
             let method = method_evidence
@@ -2826,10 +2848,59 @@ pub(crate) fn validate_interface_evidence_with_budget(
         }
         finalize_linked_registry_authentication(&program, &binder_owners, constraint_work)?;
     }
-    charge(constraint_work, 1, program.result().span)?;
+    let inventory = if method_evidence.lexical_owners().is_empty() {
+        Vec::new()
+    } else {
+        source_provider_occurrences(&program, type_work)?
+    };
+    let (method_evidence, provider_preparation) = if inventory.is_empty() {
+        // Preserve the ordinary authentication and allocation ledger exactly.
+        charge(constraint_work, 1, program.result().span)?;
+        (Arc::new(method_evidence), None)
+    } else {
+        type_work.charge(1).map_err(|()| type_resource(span))?;
+        let base_catalog = Arc::new(method_evidence);
+        let preparation = crate::elaborate::prepare_final_provider_program(
+            &program,
+            base_catalog,
+            &inventory,
+            type_work,
+            constraint_work,
+        )
+        .map_err(|failure| provider_sources::preparation_failure(failure, span))?
+        .ok_or_else(|| invalid_root(span))?;
+        if !Arc::ptr_eq(preparation.registry(), program.registry())
+            || preparation.plans().len() != inventory.len()
+        {
+            return Err(invalid_root(span));
+        }
+        for source in &inventory {
+            type_work
+                .charge(1)
+                .map_err(|()| type_resource(source.span))?;
+            if preparation.plan(source.resource.provider).is_none() {
+                return Err(invalid_root(source.span));
+            }
+        }
+        let catalog = build_catalog_with_provider_copies(
+            &program,
+            inventory.iter().flat_map(|source| {
+                preparation
+                    .plan(source.resource.provider)
+                    .expect("inventory coverage authenticated above")
+                    .copies
+                    .iter()
+            }),
+            constraint_work,
+            type_work,
+        )?;
+        charge(constraint_work, 1, span)?;
+        (Arc::new(catalog), Some(preparation))
+    };
     Ok(ValidatedInterfaceProgram {
         source: program,
-        method_evidence: Arc::new(method_evidence),
+        method_evidence,
+        provider_preparation,
         _method_evidence: MethodEvidenceAuthentication,
     })
 }
@@ -3487,13 +3558,21 @@ fn build_method_evidence_catalog_from_inputs(
     }
     let mut lexical_owners = Vec::new();
     let mut occurrences = if let Some(program) = inputs.linked() {
-        collect_method_evidence_occurrences(
+        let mut collected = collect_method_evidence_occurrences(
             program,
             &methods,
             &mut lexical_owners,
             constraint_work,
             type_work,
-        )?
+        )?;
+        if !supplied_occurrences.is_empty() {
+            charge(constraint_work, supplied_occurrences.len(), inputs.span())?;
+            collected
+                .try_reserve(supplied_occurrences.len())
+                .map_err(|_| resource(inputs.span()))?;
+            collected.extend(supplied_occurrences);
+        }
+        collected
     } else {
         supplied_occurrences
     };
@@ -5017,7 +5096,9 @@ fn retain_lexical_owners(
                 .map(|parameter| parameter.id),
         );
         owners.push(crate::core::dialect::MethodEvidenceLexicalOwner {
-            acquisition: source.acquisition,
+            resource: source
+                .acquisition
+                .map(crate::core::dialect::MethodEvidenceResourceOwner::Builtin),
             source_parameters: source_parameters.into_boxed_slice(),
             source: source.id,
             method,
@@ -5179,7 +5260,20 @@ fn collect_method_evidence_expression_occurrences(
     while let Some(expression) = pending.pop() {
         charge(constraint_work, 1, expression.span)?;
         match &expression.kind {
-            ResolvedExprKind::ProviderResource(_) => return Err(invalid_root(expression.span)),
+            ResolvedExprKind::ProviderResource(resource) => {
+                retain_provider_lexical_owners(
+                    program,
+                    resource,
+                    expression.span,
+                    methods,
+                    lexical_owners,
+                    constraint_work,
+                    type_work,
+                )?;
+                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
+                pending.push(&resource.body);
+                pending.push(&resource.initializer);
+            }
             ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
                 ResolvedTermName::Global(binder) => {
                     let mut scheme = None;
@@ -6358,12 +6452,16 @@ fn validate_pending_expressions<'a, 'body>(
                     .get(index)
                     .ok_or_else(|| invalid_root(expression.span))?;
                 charge(budget, usize::from(headers_only), expression.span)?;
-                if let LinkedLocalScope::Resource(resource_scope) = local {
+                if let Some(identity) = match local {
+                    LinkedLocalScope::Resource(resource) => Some(resource.identity.id),
+                    LinkedLocalScope::ProviderResource(resource) => Some(resource.identity.id),
+                    _ => None,
+                } {
                     charge(budget, 1, expression.span)?;
                     variables
                         .try_reserve(1)
                         .map_err(|_| resource(expression.span))?;
-                    variables.push(resource_scope.identity.id);
+                    variables.push(identity);
                 }
                 if let LinkedLocalScope::Method(method) = local {
                     charge(budget, method.contextual_parameters.len(), expression.span)?;
@@ -6401,7 +6499,41 @@ fn validate_pending_expressions<'a, 'body>(
         };
         charge(budget, 1, expression.span)?;
         match &expression.kind {
-            ResolvedExprKind::ProviderResource(_) => return Err(invalid_root(expression.span)),
+            ResolvedExprKind::ProviderResource(resource_scope) => {
+                authenticate_provider_source(
+                    program,
+                    registry,
+                    resource_scope,
+                    scope,
+                    kind_environments,
+                    budget,
+                    type_work,
+                    expression.span,
+                )?;
+                reserve_expressions(pending, 2, budget, expression.span)?;
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+                charge(budget, 2, expression.span)?;
+                sources
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                method_scopes
+                    .try_reserve(1)
+                    .map_err(|_| resource(expression.span))?;
+                let lexical_head = Some(sources.len());
+                sources.push((LinkedLexicalSource::Provider(resource_scope), head.0));
+                let body_scope = Some(method_scopes.len());
+                method_scopes.push((LinkedLocalScope::ProviderResource(resource_scope), head.1));
+                pending.push(&resource_scope.body);
+                resize_lexical_heads(
+                    &mut heads,
+                    pending.len(),
+                    (lexical_head, body_scope),
+                    budget,
+                    expression.span,
+                )?;
+                pending.push(&resource_scope.initializer);
+                resize_lexical_heads(&mut heads, pending.len(), head, budget, expression.span)?;
+            }
             ResolvedExprKind::Occurrence(occurrence) => {
                 if !headers_only {
                     validate_occurrence(
@@ -6722,7 +6854,7 @@ fn validate_occurrence<'a>(
 struct EvidenceScope<'a> {
     owner: Option<RequirementOwner>,
     variables: &'a [TypeVariableId],
-    lexical_sources: &'a [(&'a crate::resolved::ResolvedLexicalEvidence, Option<usize>)],
+    lexical_sources: &'a [(LinkedLexicalSource<'a>, Option<usize>)],
     lexical_head: Option<usize>,
 }
 
@@ -6953,13 +7085,27 @@ fn validate_evidence_node(
                     .lexical_sources
                     .get(index)
                     .ok_or_else(|| invalid_root(span))?;
-                if candidate.id == source {
+                if candidate.id() == source {
                     found = Some(*candidate);
                     break;
                 }
                 head = *parent;
             }
             let source = found.ok_or_else(|| invalid_root(span))?;
+            if let LinkedLexicalSource::Provider(resource) = source {
+                return provider_sources::validate_provider_selection(
+                    resource,
+                    group.module(),
+                    interface,
+                    methods,
+                    expected_application,
+                    budget,
+                    span,
+                );
+            }
+            let LinkedLexicalSource::Declared(source) = source else {
+                unreachable!()
+            };
             charge(budget, methods.len(), span)?;
             if source.id.module() != group.module()
                 || source.application.interface.id != expected_application.interface()
@@ -7248,8 +7394,8 @@ fn identity_equal_lexical_source(
             .lexical_sources
             .get(index)
             .ok_or_else(|| invalid_root(span))?;
-        if same_source_application_charged(application, &source.application, budget, span)?
-            && found.replace(source.id).is_some()
+        if source.same_application(application, budget, span)?
+            && found.replace(source.id()).is_some()
         {
             return Err(invalid_root(span));
         }
@@ -8015,6 +8161,7 @@ enum LinkedLocalScope<'a> {
     Method(&'a crate::resolved::ResolvedImplementationMethodGroup),
     Nominal(NominalTypeId),
     Resource(&'a crate::resolved::ResolvedResourceExpr),
+    ProviderResource(&'a crate::resolved::ResolvedProviderResourceExpr),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8112,17 +8259,10 @@ fn authenticate_lexical_header(
             .lexical_sources
             .get(index)
             .ok_or_else(|| invalid_root(source.span))?;
-        let earlier = earlier
-            .checked
-            .get()
-            .ok_or_else(|| invalid_root(source.span))?;
-        if earlier.application.interface() == interface.id {
-            let earlier_keys = linked_selection_key_types(
-                interface,
-                earlier.application.arguments(),
-                budget,
-                source.span,
-            )?;
+        let earlier = earlier.application(source.span)?;
+        if earlier.interface() == interface.id {
+            let earlier_keys =
+                linked_selection_key_types(interface, earlier.arguments(), budget, source.span)?;
             let mut equal = true;
             for (key, earlier) in keys.iter().zip(earlier_keys) {
                 if !same_argument_charged(key, earlier, budget, source.span)? {
@@ -8143,7 +8283,7 @@ fn authenticate_lexical_header(
 fn schedule_lexical_block<'a>(
     pending: &mut Vec<&'a ResolvedExpr>,
     heads: &mut Vec<(Option<usize>, Option<usize>)>,
-    sources: &mut Vec<(&'a crate::resolved::ResolvedLexicalEvidence, Option<usize>)>,
+    sources: &mut Vec<(LinkedLexicalSource<'a>, Option<usize>)>,
     method_scopes: &mut Vec<(LinkedLocalScope<'a>, Option<usize>)>,
     mut head: (Option<usize>, Option<usize>),
     block: &'a ResolvedBlock,
@@ -8211,7 +8351,7 @@ fn schedule_lexical_block<'a>(
                     }
                 }
                 let next = sources.len();
-                sources.push((source, head.0));
+                sources.push((LinkedLexicalSource::Declared(source), head.0));
                 head.0 = Some(next);
             }
             ResolvedLocalDeclaration::Binding(binding) => {
@@ -9799,7 +9939,13 @@ mod tests {
                 .method_evidence()
                 .lexical_owners()
                 .iter()
-                .filter_map(|owner| owner.acquisition.map(|acquisition| (owner, acquisition)))
+                .filter_map(|owner| {
+                    owner
+                        .resource
+                        .as_ref()
+                        .and_then(crate::core::dialect::MethodEvidenceResourceOwner::builtin)
+                        .map(|acquisition| (owner, acquisition))
+                })
                 .collect();
             assert_eq!(
                 owners.len(),
@@ -10220,7 +10366,7 @@ mod tests {
             )
             .expect("plan node");
         let selection = builder.finish(root, application.clone()).expect("plan");
-        let sources = [(source, None)];
+        let sources = [(LinkedLexicalSource::Declared(source), None)];
         let scope = EvidenceScope {
             owner: None,
             variables: &[],
@@ -10419,7 +10565,7 @@ mod tests {
             };
             let read = &group.implementation_facts()[0];
             let need = &group.implementation_facts()[1];
-            let sources = [(source, None)];
+            let sources = [(LinkedLexicalSource::Declared(source), None)];
             let scope = EvidenceScope {
                 owner: None,
                 variables: &[],
@@ -10551,7 +10697,7 @@ mod tests {
             for equation in &mut method.equations {
                 equation.name.binder = method.binder.id;
             }
-            let sources = [(&source, None)];
+            let sources = [(LinkedLexicalSource::Declared(&source), None)];
             let mut scope = EvidenceScope {
                 owner: None,
                 variables: &variables,
@@ -10644,7 +10790,7 @@ mod tests {
         let source = first_lexical_source(&program);
         let application = &source.checked.get().expect("checked source").application;
         let methods = &group.interface_facts()[0].methods;
-        let sources = [(source, None)];
+        let sources = [(LinkedLexicalSource::Declared(source), None)];
         let scope = EvidenceScope {
             owner: None,
             variables: &[],
@@ -13083,6 +13229,7 @@ mod tests {
         let ValidatedInterfaceProgram {
             source,
             method_evidence: _,
+            provider_preparation: _,
             _method_evidence: _,
         } = validate_interface_evidence(local_program())
             .expect("the local fixture should validate");

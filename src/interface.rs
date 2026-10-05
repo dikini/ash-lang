@@ -3518,12 +3518,150 @@ pub enum EvidenceNode<'a> {
 pub struct EvidenceSelection {
     plan: Arc<EvidencePlan>,
     root: EvidenceNodeId,
+    original: Option<OriginalEvidenceOwner>,
+}
+
+/// A fixed-level pin to the original selected plan. It never retains another
+/// specialized selection or grants authority to its reconstructed payloads.
+#[derive(Clone, Debug)]
+struct OriginalEvidenceOwner {
+    plan: Arc<EvidencePlan>,
+    root: EvidenceNodeId,
 }
 
 impl EvidenceSelection {
+    fn canonical_original(&self) -> (&Arc<EvidencePlan>, EvidenceNodeId) {
+        self.original
+            .as_ref()
+            .map_or((&self.plan, self.root), |original| {
+                (&original.plan, original.root)
+            })
+    }
+
     /// Preserves the exact independently checked immutable selection owner.
+    /// Specialized payload equality is checked separately by final admission.
     pub(crate) fn same_original_owner(&self, other: &Self) -> bool {
-        self.root == other.root && Arc::ptr_eq(&self.plan, &other.plan)
+        let (left, left_root) = self.canonical_original();
+        let (right, right_root) = other.canonical_original();
+        left_root == right_root && Arc::ptr_eq(left, right)
+    }
+
+    pub(crate) fn original_interface(&self) -> InterfaceId {
+        self.canonical_original().0.application.interface()
+    }
+
+    pub(crate) fn original_arguments(&self) -> &[KindedArgument] {
+        self.canonical_original().0.application.arguments()
+    }
+
+    pub(crate) fn original_root(&self) -> EvidenceNodeId {
+        self.canonical_original().1
+    }
+
+    pub(crate) fn original_node_count(&self) -> usize {
+        self.canonical_original().0.nodes.len()
+    }
+
+    pub(crate) fn original_node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
+        evidence_node(self.canonical_original().0, id)
+    }
+
+    /// Reconstructs a complete view of the canonical original selection using
+    /// the caller's simultaneous template substitution and local relocation.
+    /// This projection never checks source or selects an implementation. Final
+    /// Core must compare every original node and rewritten payload independently.
+    pub(crate) fn specialize_with<E>(
+        &self,
+        types: &mut TypeWorkBudget,
+        constraints: &mut InterfaceConstraintBudget,
+        mut rewrite_type: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
+        mut rewrite_argument: impl FnMut(
+            &KindedArgument,
+            &mut TypeWorkBudget,
+        ) -> Result<KindedArgument, E>,
+        mut rewrite_lexical: impl FnMut(
+            LexicalEvidenceId,
+            &mut TypeWorkBudget,
+        ) -> Result<LexicalEvidenceId, E>,
+        mut type_resource: impl FnMut() -> E,
+        mut constraint_resource: impl FnMut() -> E,
+        mut invalid: impl FnMut() -> E,
+    ) -> Result<Self, E> {
+        let (original, root) = self.canonical_original();
+        // The additional immutable original owner is a retained Arc cell.
+        types.charge(1).map_err(|()| type_resource())?;
+        if root.index() >= original.nodes.len() {
+            return Err(invalid());
+        }
+        types
+            .charge(original.application.arguments().len())
+            .map_err(|()| type_resource())?;
+        let mut arguments = InterfaceArgumentBuffer(Vec::new());
+        arguments
+            .0
+            .try_reserve_exact(original.application.arguments().len())
+            .map_err(|_| type_resource())?;
+        for argument in original.application.arguments() {
+            arguments.0.push(rewrite_argument(argument, types)?);
+        }
+        let application = InterfaceApplication::new_kinded(
+            original.application.interface(),
+            arguments.into_boxed_slice(),
+        );
+        let mut builder = EvidenceSelectionBuilder::new();
+        for node in &original.nodes {
+            match node {
+                EvidenceNodeData::Lexical { source, methods } => {
+                    let source = rewrite_lexical(*source, types)?;
+                    builder
+                        .push_lexical(source, methods, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::Abstract {
+                    requirement,
+                    methods,
+                } => {
+                    builder
+                        .push_abstract(*requirement, methods, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::Implementation {
+                    implementation,
+                    substitution,
+                    prerequisites,
+                    methods,
+                } => {
+                    types
+                        .charge(substitution.len())
+                        .map_err(|()| type_resource())?;
+                    let mut replacements = Vec::new();
+                    replacements
+                        .try_reserve_exact(substitution.len())
+                        .map_err(|_| type_resource())?;
+                    for replacement in substitution {
+                        replacements.push(EvidenceSubstitution::new(
+                            replacement.parameter,
+                            rewrite_type(&replacement.argument, types)?,
+                        ));
+                    }
+                    builder
+                        .push_implementation(
+                            *implementation,
+                            replacements.into_boxed_slice(),
+                            prerequisites,
+                            methods,
+                            constraints,
+                        )
+                        .map_err(|()| constraint_resource())?;
+                }
+            }
+        }
+        let mut specialized = builder.finish(root, application).map_err(|()| invalid())?;
+        specialized.original = Some(OriginalEvidenceOwner {
+            plan: Arc::clone(original),
+            root,
+        });
+        Ok(specialized)
     }
 
     /// Returns the checked interface obligation authenticated by this selection.
@@ -3553,36 +3691,40 @@ impl EvidenceSelection {
     /// Inspects one node from this selection's plan.
     #[must_use]
     pub fn node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
-        match self.plan.nodes.get(id.0)? {
-            EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
-                source: *source,
-                methods,
-            }),
-            EvidenceNodeData::Abstract {
-                requirement,
-                methods,
-            } => Some(EvidenceNode::Abstract {
-                requirement: *requirement,
-                methods,
-            }),
-            EvidenceNodeData::Implementation {
-                implementation,
-                substitution,
-                prerequisites,
-                methods,
-            } => Some(EvidenceNode::Implementation {
-                implementation: *implementation,
-                substitution,
-                prerequisites,
-                methods,
-            }),
-        }
+        evidence_node(&self.plan, id)
     }
 
     /// Reports whether two selections share the same immutable flat plan.
     #[must_use]
     pub fn shares_plan_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.plan, &other.plan)
+    }
+}
+
+fn evidence_node(plan: &EvidencePlan, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
+    match plan.nodes.get(id.0)? {
+        EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
+            source: *source,
+            methods,
+        }),
+        EvidenceNodeData::Abstract {
+            requirement,
+            methods,
+        } => Some(EvidenceNode::Abstract {
+            requirement: *requirement,
+            methods,
+        }),
+        EvidenceNodeData::Implementation {
+            implementation,
+            substitution,
+            prerequisites,
+            methods,
+        } => Some(EvidenceNode::Implementation {
+            implementation: *implementation,
+            substitution,
+            prerequisites,
+            methods,
+        }),
     }
 }
 
@@ -3686,6 +3828,7 @@ impl EvidenceSelectionBuilder {
                 nodes: self.nodes.into_boxed_slice(),
             }),
             root,
+            original: None,
         })
     }
 
@@ -3719,6 +3862,42 @@ impl Drop for FilledEvidenceSlot {
         if let Some(ty) = self.checked_value_type.take() {
             discard_type_iteratively(ty);
         }
+    }
+}
+
+/// Readonly allocation identity for one copied final evidence occurrence.
+///
+/// This owner carries no selection, fill capability, or provider authority.
+/// Catalogs retain it so its key cannot be recycled while still referenced.
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct FinalOccurrenceOwner {
+    allocation: Arc<FinalOccurrenceAllocation>,
+}
+
+#[derive(Debug)]
+struct FinalOccurrenceAllocation {
+    // A non-zero-sized allocation gives every live owner a distinct address.
+    _identity: u8,
+}
+
+impl FinalOccurrenceOwner {
+    pub(crate) fn new_with_budget(work: &mut TypeWorkBudget) -> Result<Self, ()> {
+        work.charge(1)?;
+        Ok(Self {
+            allocation: Arc::new(FinalOccurrenceAllocation { _identity: 0 }),
+        })
+    }
+
+    pub(crate) fn clone_with_budget(&self, work: &mut TypeWorkBudget) -> Result<Self, ()> {
+        work.charge(1)?;
+        Ok(Self {
+            allocation: Arc::clone(&self.allocation),
+        })
+    }
+
+    pub(crate) fn storage_id(&self) -> usize {
+        Arc::as_ptr(&self.allocation) as usize
     }
 }
 

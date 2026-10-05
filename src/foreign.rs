@@ -2,6 +2,8 @@
 //!
 //! Registrations generate passive declarations for the ordinary frontend. They
 //! carry no dynamic symbol names and do not initialize or execute an adapter.
+pub mod runtime;
+
 use crate::{
     interface::{InterfaceId, MethodId},
     module::{ForeignModuleAdmission, ForeignOperationRole, ForeignRegistrationId},
@@ -545,7 +547,52 @@ impl Drop for ForeignModuleFact {
     }
 }
 
+/// Native self-proof cache confined to one independent admission. Entries can
+/// be retained only by authenticating the exact immutable original allocation.
+/// Shared ownership keeps that allocation alive across moved source drafts;
+/// these facts own declarations, never native resource guards.
+#[derive(Default)]
+pub(crate) struct NativeAuthenticationMemo {
+    facts: Vec<Arc<ForeignModuleFact>>,
+}
+
+pub(crate) type NativeAuthenticationSession = std::cell::RefCell<NativeAuthenticationMemo>;
+
+impl NativeAuthenticationMemo {
+    pub(crate) fn authenticate(
+        &mut self,
+        fact: &Arc<ForeignModuleFact>,
+        work: &mut crate::types::TypeWorkBudget,
+    ) -> Result<(), ForeignRegistrationError> {
+        charge(work, self.facts.len())?;
+        if self
+            .facts
+            .iter()
+            .any(|original| Arc::ptr_eq(original, fact))
+        {
+            return Ok(());
+        }
+        fact.authenticate(work)?;
+        // Retain one vector entry and one shared allocation handle.
+        charge(work, 2)?;
+        self.facts
+            .try_reserve_exact(1)
+            .map_err(|_| ForeignRegistrationError {
+                message: "foreign authentication memo allocation refused".into(),
+                resource: true,
+            })?;
+        self.facts.push(Arc::clone(fact));
+        Ok(())
+    }
+}
+
 impl ForeignModuleFact {
+    /// Borrows the exact immutable manifest entry admitted by the source loader.
+    #[must_use]
+    pub fn manifest(&self) -> &Arc<ForeignManifest> {
+        &self.manifest
+    }
+
     fn set_state_access(&mut self, access: ForeignStateAccessFact) {
         if let Some(displaced) = self.state_access.replace(access) {
             crate::source::discard_origin_iteratively(displaced.origin);

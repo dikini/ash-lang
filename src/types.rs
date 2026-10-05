@@ -3014,6 +3014,164 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     )
 }
 
+/// Applies the same simultaneous substitution to conditional template rows.
+/// Inference-row replacements are already solved in the caller's scope; like
+/// rigid-row actuals, their payloads are not substituted a second time.
+pub(crate) fn substitute_type_and_template_rows_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Type(ty),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: None,
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+pub(crate) fn substitute_effect_and_template_rows_with<E>(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<EffectRow, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Row(row),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: None,
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+pub(crate) fn substitute_argument_and_template_rows_with<E>(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: None,
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
+/// Renames copied local declarations, including binders underneath `forall`.
+/// Canonical external declarations and actual substitution payloads retain
+/// their identities. These maps express a claim; Core checks their freshness.
+pub(crate) struct TemplateIdentityRenaming<'a> {
+    pub(crate) nominals: &'a HashMap<NominalTypeId, NominalTypeId>,
+    pub(crate) variables: &'a HashMap<TypeVariableId, TypeVariableId>,
+}
+
+#[derive(Clone, Copy)]
+struct TemplateRowReplacements<'a> {
+    inference_rows: &'a HashMap<InferenceVariableId, EffectRow>,
+    renaming: Option<&'a TemplateIdentityRenaming<'a>>,
+}
+
+pub(crate) fn substitute_type_for_template_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Type(ty),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(StructuralValue::into_inner))
+}
+
+pub(crate) fn substitute_row_for_template_with<E>(
+    row: &EffectRow,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<EffectRow, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Row(row),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
+}
+
+pub(crate) fn substitute_argument_for_template_with<E>(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
+    renaming: &TemplateIdentityRenaming<'_>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<KindedArgument, EffectRowError>, E> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        Some(TemplateRowReplacements {
+            inference_rows,
+            renaming: Some(renaming),
+        }),
+        &mut charge,
+        &mut allocation_error,
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
 /// Substitute an implementation's complete source type after requiring every
 /// free source binder to have a checked replacement. Replacement values retain
 /// the caller's scope. Missing bindings fail inside the shared reconstruction,
@@ -3030,6 +3188,7 @@ pub(crate) fn substitute_type_and_row_variables_strict_source_with<E>(
         SubstitutionRoot::Type(ty),
         replacements,
         row_replacements,
+        None,
         &mut charge,
         &mut allocation_error,
         Some(&mut invalid_source),
@@ -3051,6 +3210,7 @@ pub(crate) fn substitute_kinded_argument_strict_source_with<E>(
         SubstitutionRoot::Argument(argument),
         replacements,
         row_replacements,
+        None,
         &mut charge,
         &mut allocation_error,
         Some(&mut invalid_source),
@@ -3074,6 +3234,7 @@ pub(crate) fn substitute_kinded_argument_with(
         SubstitutionRoot::Argument(argument),
         replacements,
         row_replacements,
+        None,
         &mut charge,
         &mut || (),
         None,
@@ -3091,6 +3252,7 @@ pub(crate) fn substitute_effect_row_with(
         SubstitutionRoot::Row(row),
         replacements,
         row_replacements,
+        None,
         &mut charge,
         &mut || (),
         None,
@@ -3109,6 +3271,7 @@ fn substitute_type_and_row_variables<E>(
         SubstitutionRoot::Type(ty),
         replacements,
         row_replacements,
+        None,
         charge,
         allocation_error,
         None,
@@ -3124,6 +3287,7 @@ fn substitute_structural_type_and_row_variables<E>(
     root: SubstitutionRoot<'_>,
     replacements: &HashMap<TypeVariableId, Type>,
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    template: Option<TemplateRowReplacements<'_>>,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
     allocation_error: &mut impl FnMut() -> E,
     mut invalid_source: Option<&mut dyn FnMut() -> E>,
@@ -3168,7 +3332,13 @@ fn substitute_structural_type_and_row_variables<E>(
         rebuilt.try_reserve(1).map_err(|_| allocation_error())?;
         match task {
             Task::Visit(Type::Variable(identity), true) => {
-                if active_shadows
+                if let Some(renamed) = template
+                    .and_then(|template| template.renaming)
+                    .and_then(|renaming| renaming.variables.get(identity))
+                {
+                    charge(1)?;
+                    rebuilt.push(StructuralValue::type_value(Type::Variable(*renamed)));
+                } else if active_shadows
                     .get(identity)
                     .is_some_and(|count| *count != 0)
                 {
@@ -3182,6 +3352,14 @@ fn substitute_structural_type_and_row_variables<E>(
                     charge(1)?;
                     rebuilt.push(StructuralValue::type_value(Type::Variable(*identity)));
                 }
+            }
+            Task::Visit(Type::Nominal(identity), true) => {
+                charge(1)?;
+                let identity = template
+                    .and_then(|template| template.renaming)
+                    .and_then(|renaming| renaming.nominals.get(identity))
+                    .unwrap_or(identity);
+                rebuilt.push(StructuralValue::type_value(Type::Nominal(*identity)));
             }
             Task::Visit(Type::Inference(_) | Type::Forall(_, _), true)
                 if invalid_source.is_some() =>
@@ -3294,6 +3472,9 @@ fn substitute_structural_type_and_row_variables<E>(
                 let replacement = row.tail.as_ref().and_then(|tail| match tail.variable {
                     EffectRowVariable::Rigid(identity)
                         if substitute
+                            && template.and_then(|template| template.renaming).is_none_or(
+                                |renaming| !renaming.variables.contains_key(&identity),
+                            )
                             && !active_shadows
                                 .get(&identity)
                                 .is_some_and(|count| *count != 0) =>
@@ -3302,6 +3483,9 @@ fn substitute_structural_type_and_row_variables<E>(
                             .get(&identity)
                             .map(|row| (tail.variable, row))
                     }
+                    EffectRowVariable::Inference(identity) if substitute => template
+                        .and_then(|template| template.inference_rows.get(&identity))
+                        .map(|row| (tail.variable, row)),
                     _ => None,
                 });
                 let tail = if let Some(tail) = &row.tail {
@@ -3314,7 +3498,20 @@ fn substitute_structural_type_and_row_variables<E>(
                             .iter()
                             .map(|instance| (instance.effect, instance.arguments.len())),
                     );
-                    Some((tail.variable, lacks.into_boxed_slice()))
+                    let variable = if substitute {
+                        match tail.variable {
+                            EffectRowVariable::Rigid(identity) => template
+                                .and_then(|template| template.renaming)
+                                .and_then(|renaming| renaming.variables.get(&identity))
+                                .map_or(tail.variable, |identity| {
+                                    EffectRowVariable::Rigid(*identity)
+                                }),
+                            _ => tail.variable,
+                        }
+                    } else {
+                        tail.variable
+                    };
+                    Some((variable, lacks.into_boxed_slice()))
                 } else {
                     None
                 };
@@ -3341,6 +3538,14 @@ fn substitute_structural_type_and_row_variables<E>(
                     .try_reserve_exact(parameters.len())
                     .map_err(|_| allocation_error())?;
                 for (identity, kind) in parameters {
+                    let identity = if substitute {
+                        template
+                            .and_then(|template| template.renaming)
+                            .and_then(|renaming| renaming.variables.get(identity))
+                            .unwrap_or(identity)
+                    } else {
+                        identity
+                    };
                     retained.push((
                         *identity,
                         clone_kind_precharged(kind, charge, &mut |_| allocation_error())?,
@@ -4079,6 +4284,138 @@ mod tests {
         collections::hash_map::DefaultHasher,
         hash::{Hash, Hasher},
     };
+
+    #[test]
+    fn copied_templates_freshen_local_schemes_and_solve_nested_owner_rows_once() {
+        let module = ModuleId::new(71);
+        let formal = TypeVariableId::resolved(module, 0);
+        let local = TypeVariableId::resolved(module, 1);
+        let local_row = TypeVariableId::resolved(module, 2);
+        let fresh = TypeVariableId::generated(91);
+        let fresh_row = TypeVariableId::generated(92);
+        let pending = InferenceVariableId::new(3);
+        let nominal = NominalTypeId::new(module, 0);
+        let copied_nominal = NominalTypeId::new(module, 1);
+        let effect = EffectId::new(module, 0);
+        let excluded = EffectId::new(module, 1);
+        let instance = |id, argument| EffectInstance::new(id, vec![argument].into_boxed_slice());
+        let source = IterativeTypeOwner::new(Type::Forall(
+            vec![(local, Kind::Type), (local_row, Kind::EffectRow)].into_boxed_slice(),
+            Box::new(Type::Tuple(
+                vec![
+                    Type::Variable(local),
+                    Type::Nominal(nominal),
+                    Type::ResourceApply(
+                        ResourceDefinitionId::new(module, 0),
+                        vec![
+                            KindedArgument::TypeArg(Type::Variable(formal)),
+                            KindedArgument::RowArg(EffectRow::with_tail(
+                                Box::new([]),
+                                EffectRowVariable::Inference(pending),
+                                vec![instance(excluded, Type::Variable(formal))].into_boxed_slice(),
+                            )),
+                            KindedArgument::RowArg(EffectRow::with_tail(
+                                Box::new([]),
+                                EffectRowVariable::Rigid(local_row),
+                                vec![instance(excluded, Type::Variable(local))].into_boxed_slice(),
+                            )),
+                        ]
+                        .into_boxed_slice(),
+                    ),
+                ]
+                .into_boxed_slice(),
+            )),
+        ));
+        let types = HashMap::from([(formal, Type::Nominal(nominal))]);
+        let rows = HashMap::new();
+        let solved = HashMap::from([(
+            pending,
+            EffectRow::singleton(instance(effect, Type::Variable(formal))),
+        )]);
+        let nominals = HashMap::from([(nominal, copied_nominal)]);
+        let variables = HashMap::from([(local, fresh), (local_row, fresh_row)]);
+        let renaming = TemplateIdentityRenaming {
+            nominals: &nominals,
+            variables: &variables,
+        };
+        let mut work = TypeWorkBudget::unbounded();
+        let copied = IterativeTypeOwner::new(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &solved,
+                &renaming,
+                |units| work.charge(units),
+                || (),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let Type::Forall(parameters, body) = &*copied else {
+            panic!("scheme preserved")
+        };
+        assert_eq!(
+            parameters.as_ref(),
+            &[(fresh, Kind::Type), (fresh_row, Kind::EffectRow)]
+        );
+        let Type::Tuple(fields) = &**body else {
+            panic!("tuple preserved")
+        };
+        assert_eq!(fields[0], Type::Variable(fresh));
+        assert_eq!(fields[1], Type::Nominal(copied_nominal));
+        let Type::ResourceApply(_, arguments) = &fields[2] else {
+            panic!("owner application preserved")
+        };
+        assert_eq!(
+            arguments[0],
+            KindedArgument::TypeArg(Type::Nominal(nominal))
+        );
+        let KindedArgument::RowArg(solved_row) = &arguments[1] else {
+            panic!("row tag preserved")
+        };
+        assert_eq!(
+            solved_row.known(),
+            &[instance(effect, Type::Variable(formal))]
+        );
+        assert!(solved_row.tail().is_none());
+        let KindedArgument::RowArg(bound_row) = &arguments[2] else {
+            panic!("bound row tag preserved")
+        };
+        let tail = bound_row.tail().unwrap();
+        assert_eq!(tail.variable(), EffectRowVariable::Rigid(fresh_row));
+        assert_eq!(tail.lacks(), &[instance(excluded, Type::Variable(fresh))]);
+        let mut short = TypeWorkBudget::with_limit(work.used() - 1);
+        assert!(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &solved,
+                &renaming,
+                |units| short.charge(units),
+                || (),
+            )
+            .is_err()
+        );
+        let forbidden = HashMap::from([(
+            pending,
+            EffectRow::singleton(instance(excluded, Type::Nominal(nominal))),
+        )]);
+        assert!(
+            substitute_type_for_template_with(
+                &source,
+                &types,
+                &rows,
+                &forbidden,
+                &renaming,
+                |units| work.charge(units),
+                || (),
+            )
+            .unwrap()
+            .is_err()
+        );
+    }
 
     #[test]
     fn direct_owner_row_substitution_is_simultaneous_and_checks_substituted_lacks() {

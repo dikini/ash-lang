@@ -6,6 +6,9 @@ use std::{error::Error, fmt, sync::Arc};
 mod instantiation;
 use instantiation::Instantiation;
 
+#[path = "foreign.rs"]
+mod foreign;
+
 #[path = "native_buffer.rs"]
 mod native_buffer;
 
@@ -39,7 +42,8 @@ mod native_buffer_tests;
 
 use super::disposal::{self, Pending};
 use super::{
-    Closure, ResourceFailureCause, RuntimePhase, RuntimeResource, Value,
+    CleanupStatus, Closure, ResourceFailure, ResourceFailureCause, RuntimePhase, RuntimeResource,
+    Value,
     failure::{charge_runtime_work, resource_failure},
     value::{
         ActivationKey, ExecutableNode, ExecutableProgram, HeapCell, Location, ObservedHeap,
@@ -330,13 +334,13 @@ pub enum TraceEvent {
 /// Observational effect-boundary transitions, absent from pure evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EffectTraceEvent {
-    /// A scope acquired one cell under a fresh activation key.
+    /// A scope published owned access under a fresh activation key.
     ResourceAcquired(u32),
     /// The trusted interpreter copied a cell's current integer.
     ResourceRead(u32),
     /// The trusted interpreter replaced a cell's integer.
     ResourceWritten(u32),
-    /// Normal completion released one scope-owned cell.
+    /// Completion ended source access. Native disposition is tracked separately.
     ResourceReleased(u32),
     /// A lexical handler boundary became active.
     HandlerActivated(HandlerId),
@@ -409,6 +413,8 @@ pub enum RuntimeFailure {
     EnvironmentCapacity,
     /// Machine control completed without exactly one final value.
     InvalidControlState,
+    /// An executable foreign binding or codec violated its admitted contract.
+    ForeignBinding,
     /// The per-evaluation heap cannot represent another cell.
     HeapCapacity,
     /// A captured continuation cannot retain another control frame.
@@ -495,6 +501,7 @@ impl RuntimeFailure {
             Self::UnexpectedRecursiveBinding => "runtime.unexpected-recursive-binding",
             Self::EnvironmentCapacity => "runtime.environment-capacity",
             Self::InvalidControlState => "runtime.invalid-control-state",
+            Self::ForeignBinding => "runtime.foreign-binding",
             Self::HeapCapacity => "runtime.heap-capacity",
             Self::CapturedControlCapacity => "runtime.captured-control-capacity",
             Self::ResourceCapacity => "runtime.resource-capacity",
@@ -546,6 +553,7 @@ impl fmt::Display for RuntimeFailure {
             }
             Self::EnvironmentCapacity => "runtime lexical environment capacity is exhausted",
             Self::InvalidControlState => "runtime machine control state is inconsistent",
+            Self::ForeignBinding => "executable foreign binding or conversion contract failed",
             Self::HeapCapacity => "runtime heap capacity is exhausted",
             Self::CapturedControlCapacity => "runtime captured-control capacity is exhausted",
             Self::ResourceCapacity => "runtime resource capacity is exhausted",
@@ -579,6 +587,15 @@ enum Frame {
         callback: Value,
         handler_active: bool,
         pending_invocations: usize,
+    },
+    ProviderInitializer {
+        node: NodeId,
+        environment: Environment,
+    },
+    ProviderBoundary(Box<ProviderBoundary>),
+    ProviderStateAccess {
+        node: NodeId,
+        instantiation: Instantiation,
     },
     ResourceInitializer {
         node: NodeId,
@@ -648,6 +665,32 @@ enum Frame {
         continuation: Option<CapturedContinuation>,
         registration: Option<RegistrationKey>,
     },
+}
+
+#[derive(Debug)]
+struct ProviderBoundary {
+    node: NodeId,
+    key: ActivationKey,
+    environment: Environment,
+    owner: Option<crate::foreign::runtime::NativeOwnerGuard>,
+    quarantined_owner: Option<u64>,
+    phase: ProviderPhase,
+    finished: Option<ProviderFinish>,
+    saved: Option<Value>,
+    discarded: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderPhase {
+    Acquire,
+    Body,
+    Finish,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProviderFinish {
+    Closed,
+    ConsumedError,
+    RetainedError,
 }
 
 #[derive(Debug)]
@@ -723,7 +766,8 @@ type WorkTrace = Arc<std::sync::Mutex<Vec<(NodeId, usize)>>>;
 
 /// The retained explicit evaluator machine shared by pure and effect Core.
 #[derive(Debug)]
-pub struct Machine {
+pub struct Machine<'runtime> {
+    foreign_runtime: Option<&'runtime mut crate::foreign::runtime::ForeignRuntime>,
     cleanup_limit: usize,
     live_cleanups: usize,
     program: ExecutableProgram,
@@ -746,9 +790,10 @@ pub struct Machine {
     work_trace: Option<WorkTrace>,
 }
 
-impl Machine {
+impl<'runtime> Machine<'runtime> {
     fn new(program: &ValidatedProgram) -> Self {
         Self {
+            foreign_runtime: None,
             program: ExecutableProgram::Pure(program.shared()),
             cleanup_limit: 0,
             live_cleanups: 0,
@@ -781,6 +826,7 @@ impl Machine {
         capture_limit: usize,
     ) -> Self {
         Self {
+            foreign_runtime: None,
             program: ExecutableProgram::Effect(program.shared()),
             cleanup_limit: MAX_CAPTURED_FRAME_CELLS,
             live_cleanups: 0,
@@ -804,12 +850,74 @@ impl Machine {
         }
     }
 
-    fn run(self) -> Result<Evaluation, RuntimeFailure> {
+    fn run(mut self) -> Result<Evaluation, RuntimeFailure> {
         let scope = disposal::Scope::enter();
-        scope.finish(self.run_loop())
+        let result = self.run_loop();
+        let result = match result {
+            Err(primary) => match self.quarantine_abandoned_providers() {
+                Ok(()) => Err(primary),
+                Err(secondary) => {
+                    Err(primary.with_teardown_failure(secondary, CleanupStatus::Incomplete))
+                }
+            },
+            result => result,
+        };
+        // Disposal remains within the observation scope on both paths.
+        drop(self);
+        scope.finish(result)
     }
 
-    fn run_loop(mut self) -> Result<Evaluation, RuntimeFailure> {
+    fn quarantine_abandoned_providers(&mut self) -> Result<(), ResourceFailure> {
+        if self.foreign_runtime.is_none() {
+            return Ok(());
+        }
+        // Captured-cell accounting already includes every nested continuation.
+        // Reserve the complete flattening workspace before detaching any owner.
+        if self.frames.try_reserve(self.captured_cells).is_err() {
+            // Releasing an enclosing owner while an inaccessible retained child
+            // remains would violate the host contract. Preserve the entire
+            // forest on a teardown-allocation refusal, as disposal does.
+            std::mem::forget(std::mem::take(&mut self.frames));
+            return Err(ResourceFailure::new(
+                ResourceFailureCause::StorageReservationFailed,
+                RuntimePhase::Teardown,
+                RuntimeResource::FrameStorage,
+                Some(self.captured_cells),
+                None,
+            ));
+        }
+        while let Some(mut frame) = self.frames.pop() {
+            match &mut frame {
+                Frame::ProviderBoundary(boundary) => {
+                    if let Some(owner) = boundary.owner.take() {
+                        // Acquisition reserved capacity for every live owner.
+                        self.foreign_runtime
+                            .as_mut()
+                            .expect("runtime checked above")
+                            .quarantine(owner)
+                            .map_err(|_| {
+                                ResourceFailure::new(
+                                    ResourceFailureCause::StorageReservationFailed,
+                                    RuntimePhase::Teardown,
+                                    RuntimeResource::FrameStorage,
+                                    Some(1),
+                                    None,
+                                )
+                            })?;
+                    }
+                }
+                Frame::ClauseBoundary { continuation, .. } => {
+                    if let Some(mut continuation) = continuation.take() {
+                        self.frames.extend(continuation.frames.drain(..));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn run_loop(&mut self) -> Result<Evaluation, RuntimeFailure> {
         loop {
             disposal::check()?;
             let control = self
@@ -837,7 +945,12 @@ impl Machine {
                         self.acquire_registration(node, environment)?;
                         continue;
                     }
-                    if let Some(handler) = self.handler(node) {
+                    if let Some(ExecutableNode::Effect(expression)) = self.program.node(node)
+                        && let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
+                            &expression.kind
+                    {
+                        // Provider handlers activate only after acquisition,
+                        // when the acquired body boundary is installed.
                         self.trace_effect(EffectTraceEvent::HandlerActivated(handler.id()));
                     }
                     let transition =
@@ -854,8 +967,10 @@ impl Machine {
                         {
                             return Err(RuntimeFailure::InvalidControlState);
                         }
-                        let heap =
-                            ObservedHeap::new(Arc::clone(self.program.registry()), self.heap);
+                        let heap = ObservedHeap::new(
+                            Arc::clone(self.program.registry()),
+                            std::mem::take(&mut self.heap),
+                        );
                         let value = match value {
                             Value::Location(root) => {
                                 Value::Data(ObservedValue::new(Arc::clone(&heap), root))
@@ -864,7 +979,7 @@ impl Machine {
                         };
                         return Ok(Evaluation {
                             value,
-                            trace: self.trace,
+                            trace: std::mem::take(&mut self.trace),
                             max_frame_depth: self.max_frame_depth,
                             effect_trace: self.effect_trace.take().map(Vec::into_boxed_slice),
                             heap,
@@ -873,7 +988,10 @@ impl Machine {
                             #[cfg(test)]
                             runtime_work: self.instantiation_work.used(),
                             #[cfg(test)]
-                            work_trace: self.work_trace.map(|trace| trace.lock().unwrap().clone()),
+                            work_trace: self
+                                .work_trace
+                                .take()
+                                .map(|trace| trace.lock().unwrap().clone()),
                         });
                     };
                     self.return_from(frame, value)?;
@@ -951,6 +1069,18 @@ impl Machine {
                 disposal::check()?;
                 self.live_registrations = live;
                 self.control = Some(Control::Return(value));
+            }
+            Frame::ProviderInitializer { node, environment } => {
+                self.enter_provider(node, environment, value)?;
+            }
+            Frame::ProviderBoundary(boundary) => {
+                self.return_provider(boundary, value)?;
+            }
+            Frame::ProviderStateAccess {
+                node,
+                instantiation,
+            } => {
+                self.return_provider_state(node, &instantiation, value)?;
             }
             Frame::ResourceInitializer { node, environment } => {
                 self.acquire_resource(node, environment, value)?;
@@ -1601,6 +1731,9 @@ impl Machine {
             Some(RuntimePhase::Access),
         )?;
         let mut selected = None;
+        // Keep immutable program authority borrowed independently of the mutable
+        // runtime work ledger; retaining the admitted arena copies no payloads.
+        let handler_program = self.program.clone();
         for (index, frame) in self.frames.iter().enumerate().rev() {
             charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
             if let Frame::ResourceBoundary { node, key, .. } = frame {
@@ -1628,12 +1761,15 @@ impl Machine {
             else {
                 continue;
             };
-            let Some(ExecutableNode::Effect(expression)) = self.program.node(*node) else {
-                return Err(RuntimeFailure::InvalidControlState);
-            };
-            let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &expression.kind
-            else {
-                return Err(RuntimeFailure::InvalidControlState);
+            let handler = match handler_program.node(*node) {
+                Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+                    EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+                    EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                        scope.handler()
+                    }
+                    _ => return Err(RuntimeFailure::InvalidControlState),
+                },
+                _ => return Err(RuntimeFailure::InvalidControlState),
             };
             if handler.effect().effect() != effect.effect() {
                 continue;
@@ -1649,7 +1785,9 @@ impl Machine {
             }
         }
         disposal::check()?;
-        let selected = selected.ok_or(RuntimeFailure::InvalidControlState)?;
+        let Some(selected) = selected else {
+            return self.interpret_foreign(&effect, operation, value);
+        };
         let registration = match &self.frames[selected] {
             Frame::HandlerBoundary {
                 node,
@@ -2123,10 +2261,13 @@ impl Machine {
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
+        let selected_handler_present = matches!(captured.frames.first(),Some(Frame::HandlerBoundary{node,..}) if self.handler(*node).is_some_and(|boundary|boundary.id()==handler));
         let mut pending = Vec::new();
         let mut count = 0usize;
         let mut owners = 0usize;
+        let mut enclosing_handlers = 0usize;
         let mut registrations = Vec::new();
+        let mut retained_registration_handlers = Vec::new();
         let mut associated = Vec::new();
         charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Capture)?;
         reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
@@ -2145,7 +2286,7 @@ impl Machine {
                     Some(usize::MAX - count),
                 )
             })?;
-            for frame in &capture.frames {
+            for (frame_index, frame) in capture.frames.iter().enumerate() {
                 match frame {
                     Frame::CleanupCompletion { .. } | Frame::CloseCompletion => {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -2186,6 +2327,40 @@ impl Machine {
                         owners += 1;
                     }
                     Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => owners += 1,
+                    Frame::HandlerBoundary {
+                        node, registration, ..
+                    } => {
+                        self.handler(*node)
+                            .ok_or(RuntimeFailure::InvalidControlState)?;
+                        let selected = selected_handler_present
+                            && std::ptr::eq(capture, captured)
+                            && frame_index == 0;
+                        if !selected {
+                            enclosing_handlers = enclosing_handlers
+                                .checked_add(1)
+                                .ok_or(RuntimeFailure::InvalidControlState)?;
+                            if let Some(key) = registration {
+                                charge_effect_work(
+                                    &mut self.instantiation_work,
+                                    1,
+                                    RuntimePhase::Capture,
+                                )?;
+                                reserve_control(
+                                    &mut retained_registration_handlers,
+                                    1,
+                                    RuntimeResource::RegistrationIdentities,
+                                    false,
+                                )?;
+                                retained_registration_handlers.push(*key);
+                            }
+                        }
+                    }
+                    Frame::ProviderBoundary(boundary) => {
+                        if boundary.phase != ProviderPhase::Body {
+                            return Err(RuntimeFailure::InvalidControlState);
+                        }
+                        owners += 1;
+                    }
                     _ => {}
                 }
             }
@@ -2200,22 +2375,43 @@ impl Machine {
                 return Err(RuntimeFailure::InvalidControlState);
             }
         }
+        // Each retained registration handler is unwound before its exact owner.
+        // Admit all membership work before consuming the captured frame forest.
+        charge_effect_work(
+            &mut self.instantiation_work,
+            registrations
+                .len()
+                .checked_mul(retained_registration_handlers.len())
+                .ok_or(RuntimeFailure::InvalidControlState)?,
+            RuntimePhase::Capture,
+        )?;
         let retained = self
             .captured_cells
             .checked_sub(count)
             .ok_or(RuntimeFailure::InvalidControlState)?;
         charge_effect_work(
             &mut self.instantiation_work,
-            count.saturating_add(owners).saturating_add(1),
+            count
+                .saturating_add(owners)
+                .saturating_add(enclosing_handlers)
+                .saturating_add(1),
             RuntimePhase::Capture,
         )?;
+        let closing_cells = owners
+            .checked_add(enclosing_handlers)
+            .ok_or(RuntimeFailure::InvalidControlState)?;
         let mut work = Vec::new();
         let mut closing = Vec::new();
         reserve_control(&mut work, count, RuntimeResource::FrameStorage, true)?;
-        reserve_control(&mut closing, owners, RuntimeResource::FrameStorage, true)?;
+        reserve_control(
+            &mut closing,
+            closing_cells,
+            RuntimeResource::FrameStorage,
+            true,
+        )?;
         reserve_control(
             &mut self.frames,
-            owners.saturating_add(1),
+            closing_cells.saturating_add(1),
             RuntimeResource::FrameStorage,
             false,
         )?;
@@ -2231,18 +2427,22 @@ impl Machine {
             .ok_or(RuntimeFailure::InvalidControlState)?;
         work.append(&mut captured.frames);
         while let Some(mut frame) = work.pop() {
-            disposal::check()?;
+            // Inspection and every fallible reservation precede ownership transfer.
             match &mut frame {
                 Frame::ClauseBoundary {
                     continuation: Some(nested),
                     ..
                 } => work.append(&mut nested.frames),
                 Frame::RegistrationBoundary {
+                    key,
                     handler_active,
                     pending_invocations,
                     ..
                 } => {
-                    *handler_active = false;
+                    // The original retained handler boundary clears this flag
+                    // when it structurally unwinds; discarded invocations do
+                    // not retain their resumptions or abandoned body results.
+                    *handler_active = retained_registration_handlers.contains(key);
                     *pending_invocations = 0;
                     closing.push(frame);
                 }
@@ -2252,11 +2452,25 @@ impl Machine {
                     }
                     closing.push(frame)
                 }
+                Frame::ProviderBoundary(boundary) => {
+                    debug_assert_eq!(boundary.phase, ProviderPhase::Body);
+                    boundary.discarded = true;
+                    boundary.saved = None;
+                    closing.push(frame)
+                }
                 Frame::CleanupBoundary { .. } => closing.push(frame),
+                Frame::HandlerBoundary { .. } => {
+                    // These are the original non-owning handler frames. Keep
+                    // their structural order and environments for completion,
+                    // including user handlers nearer than provider handlers.
+                    let selected = selected_handler_present && work.is_empty();
+                    if !selected {
+                        closing.push(frame);
+                    }
+                }
                 _ => {}
             }
         }
-        disposal::check()?;
         self.captured_cells = retained;
         if owners != 0 {
             self.frames.push(Frame::CloseCompletion);
@@ -2272,10 +2486,23 @@ impl Machine {
         let ExecutableNode::Effect(expression) = self.program.node(node)? else {
             return None;
         };
-        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &expression.kind else {
+        match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                Some(scope.handler())
+            }
+            _ => None,
+        }
+    }
+
+    fn provider_scope(&self, node: NodeId) -> Option<&crate::core::provider::ProviderScopeNode> {
+        let ExecutableNode::Effect(expression) = self.program.node(node)? else {
             return None;
         };
-        Some(handler)
+        match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => Some(scope),
+            _ => None,
+        }
     }
 
     fn resource(&self, node: NodeId) -> Option<&crate::core::effect::ResourceScopeNode> {
@@ -2442,9 +2669,17 @@ fn dispatch_entry(
             EffectExprKind::Pure(kind) => (kind, &expression.origin),
             EffectExprKind::Operation(operation) => {
                 return Ok(match operation {
-                    EffectOperation::ProviderStateAccess(_) => {
-                        return Err(RuntimeFailure::InvalidControlState);
-                    }
+                    EffectOperation::ProviderStateAccess(access) => Transition::suspend(
+                        Control::Evaluate(access.operand(), environment.clone()),
+                        Frame::ProviderStateAccess {
+                            node,
+                            instantiation: environment.instantiation,
+                        },
+                    ),
+                    EffectOperation::ProviderScope(scope) => Transition::suspend(
+                        Control::Evaluate(scope.initializer(), environment.clone()),
+                        Frame::ProviderInitializer { node, environment },
+                    ),
                     EffectOperation::Registration(_) => {
                         return Err(RuntimeFailure::InvalidControlState);
                     }
@@ -2800,6 +3035,9 @@ fn dispatch_return(
         | Frame::CleanupBoundary { .. }
         | Frame::CleanupCompletion { .. }
         | Frame::ResourceInitializer { .. }
+        | Frame::ProviderInitializer { .. }
+        | Frame::ProviderBoundary(_)
+        | Frame::ProviderStateAccess { .. }
         | Frame::ResourceBoundary { .. }
         | Frame::Request { .. }
         | Frame::TypeApplication { .. }
@@ -3093,6 +3331,22 @@ pub fn evaluate(program: &ValidatedProgram) -> Result<Evaluation, RuntimeFailure
 /// Evaluates one independently validated effect Core program.
 pub fn evaluate_effect(program: &ValidatedEffectProgram) -> Result<Evaluation, RuntimeFailure> {
     Machine::new_effect(program).run()
+}
+
+/// Evaluates validated Effect Core using identity-bound executable host bindings.
+///
+/// Retained native owners stay in the borrowed host runtime after source return.
+///
+/// # Errors
+/// Rejects changed manifest facts, absent bindings, malformed codecs or runtime
+/// ownership failures before the corresponding native acquisition.
+pub fn evaluate_effect_with_foreign_runtime(
+    program: &ValidatedEffectProgram,
+    runtime: &mut crate::foreign::runtime::ForeignRuntime,
+) -> Result<Evaluation, RuntimeFailure> {
+    let mut machine = Machine::new_effect(program);
+    machine.foreign_runtime = Some(runtime);
+    machine.run()
 }
 
 fn apply_primitive(
@@ -4823,7 +5077,7 @@ mod tests {
         assert_eq!(evaluation.heap.cell_count(), 0);
     }
 
-    fn capture_machine(limit: usize) -> Machine {
+    fn capture_machine(limit: usize) -> Machine<'static> {
         let source = SourceFile::new("capture-budget.ash", "()").expect("test source");
         let origin = Origin::Source(
             source

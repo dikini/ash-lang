@@ -869,6 +869,8 @@ pub struct SurfaceProviderResourceExpr {
     pub family: SurfaceReference,
     /// Fresh body-local identity binder.
     pub identity: SurfaceName,
+    /// Complete explicit remaining owner arguments, or deferred row-free inference.
+    pub arguments: Option<Vec<SurfaceType>>,
     /// Body-local access binder.
     pub handle: SurfaceName,
     /// Initializer in the preceding scope.

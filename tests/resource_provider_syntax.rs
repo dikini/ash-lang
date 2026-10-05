@@ -44,12 +44,25 @@ fn missing_and_duplicate_provider_fields_are_rejected() {
 }
 
 #[test]
-fn provider_instances_require_one_fresh_uppercase_identity_binder() {
-    for arguments in ["Int", "C, D", "C -> C"] {
+fn provider_instances_require_a_fresh_identity_before_retained_arguments() {
+    for arguments in ["Int", "C -> C", "C,"] {
         let source = SourceFile::new("bad-instance.ash", format!("main : Unit -> Int\nmain () = resource Lib.Connection<{arguments}> db = 0 {{\n42\n}}\n")).unwrap();
         let tree = parse(lex(&source).unwrap());
         assert!(!tree.parse_diagnostics().is_empty(), "{arguments}");
         assert!(project_module(&source, &tree).is_err());
+    }
+    for arguments in ["C, D", "C, Int, { | Delta }"] {
+        let source = SourceFile::new(
+            "retained-instance.ash",
+            format!("main : Unit -> Int\nmain () = resource Lib.Connection<{arguments}> db = 0 {{\n42\n}}\n"),
+        ).unwrap();
+        let tree = parse(lex(&source).unwrap());
+        assert!(
+            tree.parse_diagnostics().is_empty(),
+            "{arguments}: {:?}",
+            tree.parse_diagnostics()
+        );
+        assert!(project_module(&source, &tree).is_ok());
     }
 }
 

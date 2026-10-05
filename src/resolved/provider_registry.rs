@@ -178,6 +178,21 @@ impl ResolvedRegistry {
         canonical: &Self,
         work: &mut TypeWorkBudget,
     ) -> Result<bool, ()> {
+        self.same_provider_metadata_with_native_memo(
+            canonical,
+            &mut crate::foreign::NativeAuthenticationMemo::default(),
+            work,
+        )
+    }
+
+    /// Reuses only native self-proof within the caller's exact admission.
+    /// Actual registry metadata and its canonical correspondence are always checked.
+    pub(crate) fn same_provider_metadata_with_native_memo(
+        &self,
+        canonical: &Self,
+        native_authentication: &mut crate::foreign::NativeAuthenticationMemo,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
         let widths = [
             self.nominals.len(),
             self.constructors.len(),
@@ -408,7 +423,7 @@ impl ResolvedRegistry {
                 return Ok(false);
             };
             for fact in [fact, expected] {
-                match fact.authenticate(work) {
+                match native_authentication.authenticate(fact, work) {
                     Ok(()) => {}
                     Err(error) if error.is_resource_exhaustion() => return Err(()),
                     Err(_) => return Ok(false),

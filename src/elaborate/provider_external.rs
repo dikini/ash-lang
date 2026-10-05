@@ -16,6 +16,15 @@ impl LifecycleTemplateDraft {
         module: &crate::resolved::ResolvedModule,
         work: &mut TypeWorkBudget,
     ) -> Result<provider::CheckedLifecycleTemplate, LifecycleDraftCheckError> {
+        self.admit_from_defining_module_with_native_memo(module, None, work)
+    }
+
+    pub(super) fn admit_from_defining_module_with_native_memo(
+        self,
+        module: &crate::resolved::ResolvedModule,
+        native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<provider::CheckedLifecycleTemplate, LifecycleDraftCheckError> {
         let retained = module.defining_sources();
         work.charge(
             retained
@@ -36,7 +45,13 @@ impl LifecycleTemplateDraft {
             sources.push(&**source);
             module_sources.push((*id, source.id()));
         }
-        self.admit(module, &sources, &module_sources, work)
+        self.admit_with_native_memo(
+            module,
+            &sources,
+            &module_sources,
+            native_authentication,
+            work,
+        )
     }
 
     pub(super) fn check_staged_externals(
@@ -80,6 +95,8 @@ impl LifecycleTemplateDraft {
             module_sources,
             canonical,
             associations,
+            true,
+            None,
             work,
         )
         .map(drop)
@@ -90,6 +107,17 @@ impl LifecycleTemplateDraft {
         module: &crate::resolved::ResolvedModule,
         sources: &[&crate::source::SourceFile],
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
+        work: &mut TypeWorkBudget,
+    ) -> Result<provider::CheckedLifecycleTemplate, LifecycleDraftCheckError> {
+        self.admit_with_native_memo(module, sources, module_sources, None, work)
+    }
+
+    pub(super) fn admit_with_native_memo(
+        self,
+        module: &crate::resolved::ResolvedModule,
+        sources: &[&crate::source::SourceFile],
+        module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
+        native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
         work: &mut TypeWorkBudget,
     ) -> Result<provider::CheckedLifecycleTemplate, LifecycleDraftCheckError> {
         work.charge(module.resources().len())
@@ -156,6 +184,8 @@ impl LifecycleTemplateDraft {
             module_sources,
             &canonical,
             &borrowed,
+            false,
+            native_authentication,
             work,
         )?;
 
@@ -178,6 +208,30 @@ impl LifecycleTemplateDraft {
                 return Err(LifecycleDraftCheckError::InvalidEntry);
             }
         }
+        let phase = match self.phase {
+            Phase::Acquire => crate::core::provider::LifecyclePhase::Acquire,
+            Phase::Finish => crate::core::provider::LifecyclePhase::Finish,
+            _ => return Err(LifecycleDraftCheckError::InvalidEntry),
+        };
+        let original = crate::core::provider::admit_lifecycle_original(
+            &self.core,
+            &crate::core::provider::LifecycleEntryContext {
+                definition: crate::core::provider::LifecycleDefinitionView::source(
+                    definition, phase,
+                ),
+                template: self.id,
+                phase,
+                body: self.body,
+                parameter: self.parameter,
+                hidden_answer: self.hidden_answer,
+                hidden_row: self.hidden_row,
+                formal_parameters: &self.formal_parameters,
+            },
+            &authenticated,
+            &borrowed,
+            work,
+        )
+        .map_err(LifecycleDraftCheckError::Core)?;
         let externals = authenticated
             .retain_lifecycle(&self.core, &originals, work)
             .map_err(LifecycleDraftCheckError::Core)?;
@@ -193,6 +247,7 @@ impl LifecycleTemplateDraft {
             crate::core::provider::RetainedHandlerOrigin::copy(&parameter.origin, work)
                 .map_err(LifecycleDraftCheckError::Core)?;
         Ok(provider::CheckedLifecycleTemplate {
+            original,
             parameter_origin: Arc::new(parameter_origin),
             draft: self,
             canonical,
@@ -213,6 +268,8 @@ impl LifecycleTemplateDraft {
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
         canonical: &crate::resolved::ResolvedRegistry,
         associations: &[crate::core::provider::DraftStateAssociation<'_>],
+        check_flow: bool,
+        native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
         work: &mut TypeWorkBudget,
     ) -> Result<crate::core::provider::AuthenticatedProviderExternals<'a>, LifecycleDraftCheckError>
     {
@@ -307,11 +364,19 @@ impl LifecycleTemplateDraft {
             canonical,
             associations,
             definition.id.module(),
+            native_authentication,
             work,
         )
         .map_err(LifecycleDraftCheckError::Core)?;
 
-        self.check_flow_with_external_context(definition, associations, Some(&externals), work)?;
+        if check_flow {
+            self.check_flow_with_external_context(
+                definition,
+                associations,
+                Some(&externals),
+                work,
+            )?;
+        }
 
         Ok(externals)
     }
@@ -412,6 +477,17 @@ impl provider::CompiledHandlerDraft {
         module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
         work: &mut TypeWorkBudget,
     ) -> Result<provider::CheckedConditionalHandler, provider::LifecycleDraftCheckError> {
+        self.admit_with_native_memo(module, sources, module_sources, None, work)
+    }
+
+    pub(super) fn admit_with_native_memo(
+        self,
+        module: &crate::resolved::ResolvedModule,
+        sources: &[&crate::source::SourceFile],
+        module_sources: &[(crate::module::ModuleId, crate::source::SourceId)],
+        native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<provider::CheckedConditionalHandler, provider::LifecycleDraftCheckError> {
         let staged = self
             .staged_externals
             .ok_or(provider::LifecycleDraftCheckError::InvalidEntry)?;
@@ -437,6 +513,7 @@ impl provider::CompiledHandlerDraft {
             sources,
             module_sources,
             Some((&staged.publication, &occurrences)),
+            native_authentication,
             work,
         )
         .map_err(provider::LifecycleDraftCheckError::Core)?;

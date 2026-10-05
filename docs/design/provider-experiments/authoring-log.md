@@ -2501,3 +2501,77 @@ carriers with ordered Type/row owner arguments and original owner signatures.
 Library compilation alone is preparation; declaration publication, deep-input
 regressions, independent review and integration must pass before Batch 0 is
 reported as delivered. SQLite and arena execution remain pending at this point.
+
+On 2026-10-04, Batch 0 passed its compiler, declaration/publication, deep-input,
+independent Core and architecture checks and was merged into the original
+experimental branch at `c38b9d2f8c34077353be8d0a0a94b117867ce737`. The
+[execution record](execution.md#current-checkpoint) distinguishes that delivery
+from the unfinished instance bridge. Batch 1 preparation separates original
+checked template code from body-free imported authority and stages immutable
+instance plans and evidence for joint publication. These source changes do not
+establish a working SQLite session or arena lifecycle.
+
+The selected callback exposes a row-ordering boundary during this preparation.
+Its diagnostic handler contributes the formal open row and makes no native
+request. Unioning native acquisition or completion demands with that handler
+output before interpreting the lifecycle phases would demand an additional
+native exclusion on `Delta`. The recorded contract supplies only `Delta lacks
+H`. The implementation must preserve the recorded phase interpretation and
+principal handler union; adding an exclusion to admit the fixture would change
+the design. Execution and independent final Core evidence for this case remain
+pending.
+
+Batch 1 final preparation now retains one reusable set of fresh template
+identities and copied evidence occurrence keys before constructing the complete
+final catalogue. Executable lowering uses that catalogue and independent Core
+admission; it does not replay template source checking or reselect an
+implementation. Fresh focused regressions pass for simultaneous Type/row
+substitution, the Scope tuple result's body capture, and phase interpretation
+under the recorded formal callback exclusions. These tests establish those
+boundaries only. The first public S-01 execution attempt fails during kind
+checking: the instance checker looks for an imported defining owner in a
+local-only registry. No native SQLite call or completed session is established
+by that attempt. The repair must use the authenticated original imported owner
+inventory rather than inventing a use-site owner signature.
+
+The later public SQLite receipt `batch-1-sqlite-public-suite-02.log` executes
+all nine cases in that receipt on the common branch, including S-01. It observes the nested
+`Completed(Completed(Ok(42), Closed), Closed)` result and actual statement
+finalization before connection close. Separate repeated and overlapping scopes
+observe distinct activations; the initializer counter advances once, and refused
+statement acquisition executes no statement body or finisher. Original manifest
+registrations without executable bindings still refuse before acquisition.
+These receipts replace the earlier failed kind-check attempt as current evidence
+for those programs, without establishing the remaining open-row or control cases.
+
+The minimal arena source trial uses the same public API and generic scope engine.
+`batch-2-arena-public-02.log` observes actual usage `(0, 64, 0, 4)`, native
+release exactly once, repeated and nested scopes, zero capacities and acquisition
+refusal. The fixtures required parentheses around constructor application in the
+existing initializer grammar; no depth limit or grammar change admitted them.
+Typed allocation, Layout, references and storage families remain later arena work.
+These execution receipts are moving-branch evidence; review and original-branch
+integration are still required by the execution record.
+
+The 2026-10-05 full library receipt passes 1,528 cases with one explicitly
+ignored advanced callback. The constrained-template regression was caused by
+repeated self-proof of the same immutable native declaration during one source
+admission. A bounded, fallibly allocated memo retains only successful proof for
+that exact original allocation; fresh final Core admission does not inherit it.
+The positive and all eleven mutation negatives pass without raising limits.
+Two transform owners now expose consuming APIs instead of raw storage transfer.
+Connected public, architecture and original-branch integration checks remain the
+Batch 1 delivery gate.
+
+The broad public regression gate also exposed accumulated fixed debug frames in
+ordinary cell checking on the existing 256-KiB child stack. Debugger measurements
+identified an 89-KiB expression dispatcher retained during equation evidence and
+expression checking. Direct worklist dispatch preserves those operations while
+avoiding the unrelated frame. Independent review preserves ownership, ordering,
+checks and accounting; fresh regression06 passes at the original limit.
+
+Receipt `batch-1-connected-gate-12.log` passes all 1,528 library cases (one
+advanced callback remains explicitly ignored), the repaired syntax expectation,
+public resource stack regression and connected SQLite/resource/Core suites.
+Architecture41 passed in receipt10. These common-branch gates precede the
+unsigned delivery commit and fresh original-worktree integration verification.

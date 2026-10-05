@@ -1,6 +1,8 @@
 //! Name-resolved, source-spanned syntax passed to typed elaboration.
 
+mod provider_instance;
 mod provider_registry;
+pub(crate) use provider_instance::{PendingProviderInstancePublication, ProviderInstanceSlot};
 
 use std::{
     cmp::Ordering,
@@ -1459,6 +1461,14 @@ pub(crate) struct CheckedModuleParts {
 }
 
 impl CheckedModule {
+    /// Borrows the immutable defining code for temporary compiler preparation.
+    /// This is not executable descriptor or body-free export authority.
+    pub(crate) fn provider_code(
+        &self,
+    ) -> Option<&Arc<crate::elaborate::provider::CheckedProviderGroup>> {
+        self.providers.as_ref()
+    }
+
     #[cfg(test)]
     pub(crate) fn take_provider_code_for_test(
         &mut self,
@@ -4593,6 +4603,15 @@ fn discard_canonical_representation_fact(fact: CanonicalRepresentationFact) {
 }
 
 impl ImportedFacts {
+    /// Borrows the original admitted provider certificate for compiler-only
+    /// preparation. Availability does not grant executable Core authority.
+    pub(crate) fn provider_contract(
+        &self,
+        module: ModuleId,
+    ) -> Option<&Arc<crate::elaborate::provider::CheckedProviderContracts>> {
+        self.provider_groups.get(&module)
+    }
+
     pub(crate) fn foreign_state_access_interface(&self, id: crate::interface::InterfaceId) -> bool {
         self.foreign_modules
             .values()
@@ -10139,7 +10158,14 @@ impl ExportSummary {
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
-        self.authenticate_foreign_facts(type_work, constraint_work)?;
+        // Scope this proof memo to one independent summary admission. It
+        // records exact immutable native allocations, never current metadata.
+        let mut authenticated_native_facts = crate::foreign::NativeAuthenticationMemo::default();
+        self.authenticate_foreign_facts(
+            &mut authenticated_native_facts,
+            type_work,
+            constraint_work,
+        )?;
 
         type_work
             .charge(self.provider_groups.len())
@@ -10148,7 +10174,11 @@ impl ExportSummary {
             if *module != contracts.module() {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            contracts.authenticate(committed || *module != self.module, type_work)?;
+            contracts.authenticate_with_native_memo(
+                committed || *module != self.module,
+                &mut authenticated_native_facts,
+                type_work,
+            )?;
         }
         if self.resource_types.len() != self.resource_type_order.len() {
             return Err(ResolvedBuildFailure::InvalidState);
@@ -12835,6 +12865,108 @@ impl ExportSummary {
             }
         }
 
+        // A resource report is a typed codec dependency even when its family
+        // names are not re-exported. Retain transparent report constructors
+        // and their payload families without adding any source name routes.
+        if !summary.resource_types.is_empty() {
+            let mut report_nominals = HashSet::new();
+            for fact in summary.resource_types.values() {
+                collect_nominal_identities(&fact.result.ty, &mut report_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            type_work
+                .charge(report_nominals.len())
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            let mut reports = Vec::new();
+            reports
+                .try_reserve(report_nominals.len())
+                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+            reports.extend(report_nominals.iter().copied());
+            let mut cursor = 0;
+            while let Some(owner) = reports.get(cursor).copied() {
+                cursor += 1;
+                type_work
+                    .charge(1)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                let family = if owner.module() == resolved.module {
+                    summary
+                        .nominal_names_by_id
+                        .get(&owner)
+                        .and_then(|name| summary.nominals.get(name))
+                        .filter(|fact| fact.access == ExportedTypeAccess::Transparent)
+                        .and_then(|_| resolved.registry.nominal(owner))
+                        .map(|fact| fact.constructors.as_ref())
+                } else {
+                    resolved
+                        .imported
+                        .nominal(owner)
+                        .filter(|fact| fact.access == ImportedTypeAccess::Transparent)
+                        .map(|fact| fact.constructors.as_ref())
+                };
+                let Some(family) = family else {
+                    continue;
+                };
+                if !constructor_owners.contains(&owner) {
+                    type_work
+                        .charge(2)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    constructor_owners
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    constructor_owner_order
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    constructor_owners.insert(owner);
+                    constructor_owner_order.push(owner);
+                }
+                type_work
+                    .charge(family.len())
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for constructor in family {
+                    let payload = if owner.module() == resolved.module {
+                        resolved
+                            .registry
+                            .constructor(*constructor)
+                            .ok_or(ResolvedBuildFailure::InvalidState)?
+                            .payload
+                            .as_ref()
+                    } else {
+                        resolved
+                            .imported
+                            .constructor(*constructor)
+                            .ok_or(ResolvedBuildFailure::InvalidState)?
+                            .payload
+                            .as_ref()
+                    };
+                    let Some(payload) = payload else {
+                        continue;
+                    };
+                    let mut dependencies = HashSet::new();
+                    collect_nominal_identities(payload, &mut dependencies, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    for dependency in dependencies {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        if report_nominals.contains(&dependency) {
+                            continue;
+                        }
+                        type_work
+                            .charge(2)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        report_nominals
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        reports
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        report_nominals.insert(dependency);
+                        reports.push(dependency);
+                    }
+                }
+            }
+        }
+
         type_work
             .charge(constructor_owner_order.len())
             .map_err(|()| ResolvedBuildFailure::TypeResource)?;
@@ -13001,7 +13133,222 @@ impl ExportSummary {
             summary.hidden_constructor_order.push(constructor_id);
         }
 
+        // Freeze the complete retained effect inventory before selecting hidden
+        // nominal kinds. Capture summaries can introduce a previously hidden
+        // effect whose operation signatures name additional native types.
+        if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
+            let mut referenced_effects = HashSet::new();
+            for fact in summary.resource_types.values() {
+                for instance in [&fact.provided.instance, &fact.interpreted.instance] {
+                    type_work
+                        .charge(1)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects
+                        .try_reserve(1)
+                        .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                    referenced_effects.insert(instance.effect());
+                }
+                for ty in [&fact.input.ty, &fact.state.ty, &fact.result.ty] {
+                    collect_effect_identities(ty, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                for argument in fact
+                    .provider_application
+                    .arguments()
+                    .iter()
+                    .chain(fact.provided.instance.arguments())
+                    .chain(fact.interpreted.instance.arguments())
+                {
+                    collect_argument_effect_identities(
+                        argument,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            let mut effect_capture_visits = crate::core::capture::CaptureGraphVisits::default();
+            for exported in summary.terms.values() {
+                if effect_capture_visits
+                    .visit(&exported.capture, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                {
+                    for effect in exported
+                        .capture
+                        .effects(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        type_work
+                            .charge(1)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects
+                            .try_reserve(1)
+                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                        referenced_effects.insert(effect);
+                    }
+                    for ty in exported
+                        .capture
+                        .types(type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        collect_effect_identities(ty, &mut referenced_effects, type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+                collect_effect_identities(
+                    &exported.scheme.value_type,
+                    &mut referenced_effects,
+                    type_work,
+                )
+                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                for requirement in &exported.scheme.requirements {
+                    for argument in requirement.arguments() {
+                        collect_argument_effect_identities(
+                            argument,
+                            &mut referenced_effects,
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+            }
+            for exported in summary.constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for exported in summary.hidden_constructors.values() {
+                if let Some(payload) = &exported.payload {
+                    collect_effect_identities(payload, &mut referenced_effects, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for interface in summary.interfaces.iter().chain(&summary.hidden_interfaces) {
+                for method in &interface.methods {
+                    collect_effect_identities(
+                        &method.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in &summary.effects {
+                for operation in &effect.operations {
+                    collect_effect_identities(
+                        &operation.annotation.ty,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for implementation in &summary.implementations {
+                for argument in implementation.fact.arguments() {
+                    collect_argument_effect_identities(
+                        argument,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+                for prerequisite in &implementation.fact.prerequisites {
+                    for argument in prerequisite.arguments() {
+                        collect_argument_effect_identities(
+                            argument,
+                            &mut referenced_effects,
+                            type_work,
+                        )
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                    }
+                }
+                for method in &implementation.fact.methods {
+                    if effect_capture_visits
+                        .visit(&method.capture, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                    {
+                        for effect in method
+                            .capture
+                            .effects(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        {
+                            type_work
+                                .charge(1)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                            referenced_effects
+                                .try_reserve(1)
+                                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                            referenced_effects.insert(effect);
+                        }
+                        for ty in method
+                            .capture
+                            .types(type_work)
+                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
+                        {
+                            collect_effect_identities(ty, &mut referenced_effects, type_work)
+                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                        }
+                    }
+                    collect_effect_identities(
+                        &method.scheme.value_type,
+                        &mut referenced_effects,
+                        type_work,
+                    )
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                }
+            }
+            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
+                if !referenced_effects.contains(&effect.id)
+                    || summary.effect_positions.contains_key(&effect.id)
+                {
+                    continue;
+                }
+                type_work
+                    .charge(2)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effects
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                summary
+                    .effect_positions
+                    .try_reserve(1)
+                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
+                let position = summary.effects.len();
+                summary.effects.push(
+                    clone_resolved_effect_with_budget(effect, type_work)
+                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
+                );
+                if summary
+                    .effect_positions
+                    .insert(effect.id, position)
+                    .is_some()
+                {
+                    {
+                        return Err(ResolvedBuildFailure::InvalidState);
+                    }
+                }
+            }
+        }
+
         let mut referenced_nominals = HashSet::new();
+        for fact in summary.resource_types.values() {
+            for ty in [&fact.input.ty, &fact.state.ty, &fact.result.ty] {
+                collect_nominal_identities(ty, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+            for argument in fact
+                .provider_application
+                .arguments()
+                .iter()
+                .chain(fact.provided.instance.arguments())
+                .chain(fact.interpreted.instance.arguments())
+            {
+                collect_argument_nominal_identities(argument, &mut referenced_nominals, type_work)
+                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+            }
+        }
         // Public effect schemes need hidden nominal kinds even when a facade
         // does not select the result-family names or their constructors.
         for effect in &summary.effects {
@@ -13255,173 +13602,6 @@ impl ExportSummary {
             summary.hidden_nominal_order.push(imported.id);
         }
 
-        if !resolved.effects.is_empty() || resolved.imported.effects().next().is_some() {
-            let mut referenced_effects = HashSet::new();
-            let mut effect_capture_visits = crate::core::capture::CaptureGraphVisits::default();
-            for exported in summary.terms.values() {
-                if effect_capture_visits
-                    .visit(&exported.capture, type_work)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                {
-                    for effect in exported
-                        .capture
-                        .effects(type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                    {
-                        type_work
-                            .charge(1)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                        referenced_effects
-                            .try_reserve(1)
-                            .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                        referenced_effects.insert(effect);
-                    }
-                    for ty in exported
-                        .capture
-                        .types(type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                    {
-                        collect_effect_identities(ty, &mut referenced_effects, type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                    }
-                }
-                collect_effect_identities(
-                    &exported.scheme.value_type,
-                    &mut referenced_effects,
-                    type_work,
-                )
-                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                for requirement in &exported.scheme.requirements {
-                    for argument in requirement.arguments() {
-                        collect_argument_effect_identities(
-                            argument,
-                            &mut referenced_effects,
-                            type_work,
-                        )
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                    }
-                }
-            }
-            for exported in summary.constructors.values() {
-                if let Some(payload) = &exported.payload {
-                    collect_effect_identities(payload, &mut referenced_effects, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-            }
-            for exported in summary.hidden_constructors.values() {
-                if let Some(payload) = &exported.payload {
-                    collect_effect_identities(payload, &mut referenced_effects, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-            }
-            for interface in summary.interfaces.iter().chain(&summary.hidden_interfaces) {
-                for method in &interface.methods {
-                    collect_effect_identities(
-                        &method.value_type,
-                        &mut referenced_effects,
-                        type_work,
-                    )
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-            }
-            for effect in &summary.effects {
-                for operation in &effect.operations {
-                    collect_effect_identities(
-                        &operation.annotation.ty,
-                        &mut referenced_effects,
-                        type_work,
-                    )
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-            }
-            for implementation in &summary.implementations {
-                for argument in implementation.fact.arguments() {
-                    collect_argument_effect_identities(
-                        argument,
-                        &mut referenced_effects,
-                        type_work,
-                    )
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-                for prerequisite in &implementation.fact.prerequisites {
-                    for argument in prerequisite.arguments() {
-                        collect_argument_effect_identities(
-                            argument,
-                            &mut referenced_effects,
-                            type_work,
-                        )
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                    }
-                }
-                for method in &implementation.fact.methods {
-                    if effect_capture_visits
-                        .visit(&method.capture, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                    {
-                        for effect in method
-                            .capture
-                            .effects(type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                        {
-                            type_work
-                                .charge(1)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                            referenced_effects
-                                .try_reserve(1)
-                                .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                            referenced_effects.insert(effect);
-                        }
-                        for ty in method
-                            .capture
-                            .types(type_work)
-                            .map_err(|()| ResolvedBuildFailure::TypeResource)?
-                        {
-                            collect_effect_identities(ty, &mut referenced_effects, type_work)
-                                .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                        }
-                    }
-                    collect_effect_identities(
-                        &method.scheme.value_type,
-                        &mut referenced_effects,
-                        type_work,
-                    )
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                }
-            }
-            for effect in resolved.effects.iter().chain(resolved.imported.effects()) {
-                if !referenced_effects.contains(&effect.id)
-                    || summary.effect_positions.contains_key(&effect.id)
-                {
-                    continue;
-                }
-                type_work
-                    .charge(2)
-                    .map_err(|()| ResolvedBuildFailure::TypeResource)?;
-                summary
-                    .effects
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                summary
-                    .effect_positions
-                    .try_reserve(1)
-                    .map_err(|_| ResolvedBuildFailure::TypeResource)?;
-                let position = summary.effects.len();
-                summary.effects.push(
-                    clone_resolved_effect_with_budget(effect, type_work)
-                        .map_err(|()| ResolvedBuildFailure::TypeResource)?,
-                );
-                if summary
-                    .effect_positions
-                    .insert(effect.id, position)
-                    .is_some()
-                {
-                    {
-                        return Err(ResolvedBuildFailure::InvalidState);
-                    }
-                }
-            }
-        }
-
         summary.authenticate_with_provider_commit(false, type_work, constraint_work)?;
         Ok(summary)
     }
@@ -13430,8 +13610,9 @@ impl ExportSummary {
         self.terms.get(spelling)
     }
 
-    fn authenticate_foreign_facts(
-        &self,
+    fn authenticate_foreign_facts<'a>(
+        &'a self,
+        authenticated_native_facts: &mut crate::foreign::NativeAuthenticationMemo,
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
     ) -> Result<(), ResolvedBuildFailure> {
@@ -13442,7 +13623,8 @@ impl ExportSummary {
             if *id != fact.admission.module_id {
                 return Err(ResolvedBuildFailure::InvalidState);
             }
-            fact.authenticate(type_work)
+            authenticated_native_facts
+                .authenticate(fact, type_work)
                 .map_err(foreign_build_failure)?;
         }
         for effect in &self.effects {
@@ -23084,6 +23266,11 @@ fn discard_resolved_body_work(
                 }
             }
             ResolvedExprKind::ProviderResource(resource) => {
+                if let Some(arguments) = resource.arguments {
+                    for argument in arguments.into_vec() {
+                        argument.discard_iteratively();
+                    }
+                }
                 for forwarding in resource.forwarding.into_vec() {
                     discard_binder(forwarding.binder);
                     discard_binder(forwarding.parameter);
@@ -35846,6 +36033,8 @@ pub struct ResolvedResourceDefinition {
 /// A resolved instance whose outer parameters await initializer type inference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedProviderResourceExpr {
+    /// One-shot checked compiler preparation; empty source copies freshen it.
+    pub(crate) prepared: ProviderInstanceSlot,
     /// Resolver-reserved sealed forwarding evidence identity.
     pub provider: crate::interface::LexicalEvidenceId,
     /// Resolver-reserved forwarding binders, in interface method order.
@@ -35856,6 +36045,8 @@ pub struct ResolvedProviderResourceExpr {
     pub family: NominalTypeId,
     /// Fresh body-local identity.
     pub identity: ResolvedTypeVariable,
+    /// Complete preceding-scope remaining actuals, or deferred row-free inference.
+    pub arguments: Option<Box<[ResolvedOwnerArgument]>>,
     /// Access binder scoped over the body.
     pub handle: Binder,
     /// Input resolved before either fresh binder.

@@ -15,6 +15,7 @@ use crate::{
 };
 
 mod demand;
+mod realize;
 
 #[derive(Debug)]
 pub(crate) enum PendingRowEquation {
@@ -180,6 +181,7 @@ pub(in crate::core) enum RowEquationOperation {
     Discard { capture: CaptureInputId },
     Cleanup,
     Resource,
+    ProviderScope { output: HandlerOutputId },
     Registration,
 }
 
@@ -245,6 +247,19 @@ fn primary_span_with_work(origin: &Origin, work: &mut TypeWorkBudget) -> Result<
 }
 
 impl HandlerRowRecipeDraft {
+    pub(in crate::core) fn realize_direct(
+        &self,
+        types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+        rows: &std::collections::HashMap<crate::types::TypeVariableId, EffectRow>,
+        captures: &std::collections::HashMap<CaptureInputId, EffectRow>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(EffectRow, Vec<EffectRow>), crate::core::ValidationError> {
+        self.direct
+            .as_ref()
+            .ok_or_else(super::resource)?
+            .realize(types, rows, captures, work)
+    }
+
     pub(in crate::core) fn discards(&self) -> &[ConditionalDiscardPort] {
         &self.discards
     }
@@ -346,9 +361,14 @@ impl HandlerRowRecipeDraft {
         // resume in a nested body keeps its enclosing output identity.
         for id in &order {
             charge(work, 1)?;
-            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
-                &node(program, *id)?.kind
-            {
+            let handler = match &node(program, *id)?.kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    Some(&scope.handler)
+                }
+                _ => None,
+            };
+            if let Some(handler) = handler {
                 charge(
                     work,
                     handler
@@ -440,6 +460,11 @@ impl HandlerRowRecipeDraft {
                 EffectExprKind::Operation(EffectOperation::Resource(_)) => {
                     RowEquationOperation::Resource
                 }
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    RowEquationOperation::ProviderScope {
+                        output: *owners.get(&scope.handler.id()).ok_or_else(|| invalid(id))?,
+                    }
+                }
                 EffectExprKind::Operation(EffectOperation::Registration(_)) => {
                     RowEquationOperation::Registration
                 }
@@ -504,10 +529,12 @@ impl HandlerRowRecipeDraft {
             let roots: &[super::super::effect::EffectClause] = match output.owner {
                 HandlerOutputOwner::ProviderEntry { .. } => &entry.draft.clauses,
                 HandlerOutputOwner::Nested { node: id, .. } => {
-                    let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
-                        &node(program, id)?.kind
-                    else {
-                        return Err(invalid(id));
+                    let handler = match &node(program, id)?.kind {
+                        EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                            &scope.handler
+                        }
+                        _ => return Err(invalid(id)),
                     };
                     output.body = Some(
                         recipe.node_equations[handler.body().index().map_err(|_| invalid(id))?]

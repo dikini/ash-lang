@@ -74,6 +74,7 @@ pub(crate) struct MethodEvidenceCatalog {
     implementation_owners: Vec<MethodEvidenceImplementationOwner>,
     domains: Vec<MethodEvidenceDomain>,
     occurrences: Vec<MethodEvidenceOccurrence>,
+    final_occurrence_owners: Vec<crate::interface::FinalOccurrenceOwner>,
     adapters: Vec<MethodEvidenceAdapter>,
     concrete_sources: Vec<MethodEvidenceConcreteSource>,
     expectations: Vec<MethodEvidenceExpectation>,
@@ -82,13 +83,84 @@ pub(crate) struct MethodEvidenceCatalog {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Clone))]
 pub(crate) struct MethodEvidenceLexicalOwner {
-    pub(crate) acquisition: Option<crate::resolved::ResourceAcquisition>,
+    pub(crate) resource: Option<MethodEvidenceResourceOwner>,
     pub(crate) source_parameters: Box<[TypeVariableId]>,
     pub(crate) source: crate::interface::LexicalEvidenceId,
     pub(crate) method: MethodId,
     pub(crate) binder: BinderId,
     pub(crate) application: InterfaceApplication,
     pub(crate) captures: Box<[BinderId]>,
+}
+
+/// Lexical dictionary ownership is distinct from native resource policy.
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) enum MethodEvidenceResourceOwner {
+    Builtin(crate::resolved::ResourceAcquisition),
+    Provider(ProviderEvidenceOwner),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Clone))]
+pub(crate) struct ProviderEvidenceOwner {
+    pub(crate) definition: crate::resolved::ResourceDefinitionId,
+    pub(crate) family: crate::types::NominalTypeId,
+    pub(crate) identity: TypeVariableId,
+    pub(crate) arguments: Box<[crate::types::KindedArgument]>,
+}
+
+impl ProviderEvidenceOwner {
+    pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
+        budget.charge(1)?;
+        Ok(Self {
+            definition: self.definition,
+            family: self.family,
+            identity: self.identity,
+            arguments: crate::types::clone_kinded_arguments_with_budget(
+                self.arguments.iter(),
+                budget,
+            )?,
+        })
+    }
+
+    pub(crate) fn same_with_budget(
+        &self,
+        other: &Self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, ()> {
+        budget.charge(1)?;
+        if self.definition != other.definition
+            || self.family != other.family
+            || self.identity != other.identity
+            || self.arguments.len() != other.arguments.len()
+        {
+            return Ok(false);
+        }
+        budget.charge(self.arguments.len())?;
+        for (left, right) in self.arguments.iter().zip(&other.arguments) {
+            if !crate::types::same_kinded_argument_with_budget(left, right, budget)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+impl Drop for ProviderEvidenceOwner {
+    fn drop(&mut self) {
+        for argument in std::mem::take(&mut self.arguments).into_vec() {
+            crate::types::discard_kinded_argument_iteratively(argument);
+        }
+    }
+}
+
+impl MethodEvidenceResourceOwner {
+    pub(crate) fn builtin(&self) -> Option<crate::resolved::ResourceAcquisition> {
+        match self {
+            Self::Builtin(acquisition) => Some(*acquisition),
+            Self::Provider(_) => None,
+        }
+    }
 }
 
 impl Default for MethodEvidenceCatalog {
@@ -385,6 +457,7 @@ impl MethodEvidenceCatalog {
             implementation_owners,
             domains,
             occurrences,
+            final_occurrence_owners: Vec::new(),
             adapters,
             concrete_sources,
             expectations,
@@ -447,6 +520,68 @@ impl MethodEvidenceCatalog {
 
     pub(crate) fn occurrences(&self) -> &[MethodEvidenceOccurrence] {
         &self.occurrences
+    }
+
+    /// Attaches readonly allocation pins for the complete supplied fresh-key
+    /// set. This checks storage coverage only: independent specialization
+    /// validation must derive those keys from original occurrence certificates.
+    pub(crate) fn attach_final_occurrence_owners(
+        &mut self,
+        owners: Vec<crate::interface::FinalOccurrenceOwner>,
+        fresh_keys: &[usize],
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::core::ValidationError> {
+        let invalid =
+            || crate::core::ValidationError::new(crate::core::ValidationReason::Registry, None);
+        let resource =
+            || crate::core::ValidationError::new(crate::core::ValidationReason::Resource, None);
+        if !self.final_occurrence_owners.is_empty() || owners.len() != fresh_keys.len() {
+            return Err(invalid());
+        }
+        if owners.is_empty() {
+            return Ok(());
+        }
+        work.charge(
+            fresh_keys
+                .len()
+                .checked_mul(4)
+                .and_then(|cells| cells.checked_add(self.occurrences.len()))
+                .ok_or_else(resource)?,
+        )
+        .map_err(|()| resource())?;
+        let mut coverage = HashMap::new();
+        coverage
+            .try_reserve(fresh_keys.len())
+            .map_err(|_| resource())?;
+        for key in fresh_keys {
+            if coverage.insert(*key, 0u8).is_some() {
+                return Err(invalid());
+            }
+        }
+        for owner in &owners {
+            let seen = coverage.get_mut(&owner.storage_id()).ok_or_else(invalid)?;
+            if *seen != 0 {
+                return Err(invalid());
+            }
+            *seen = 1;
+        }
+        for occurrence in &self.occurrences {
+            if let Some(seen) = coverage.get_mut(&occurrence.slot) {
+                if *seen != 1 {
+                    return Err(invalid());
+                }
+                *seen = 3;
+            }
+        }
+        if coverage.values().any(|seen| *seen != 3) {
+            return Err(invalid());
+        }
+        self.final_occurrence_owners = owners;
+        Ok(())
+    }
+
+    pub(crate) fn final_occurrence_owners(&self) -> &[crate::interface::FinalOccurrenceOwner] {
+        &self.final_occurrence_owners
     }
 
     pub(crate) fn adapters(&self) -> &[MethodEvidenceAdapter] {
@@ -1900,6 +2035,15 @@ impl UnvalidatedProgram {
 }
 
 impl<F: CoreOperationFamily> UnvalidatedCoreProgram<F> {
+    pub(crate) fn method_evidence(&self) -> &Arc<MethodEvidenceCatalog> {
+        &self.method_evidence
+    }
+
+    /// Borrows recorded anchor claims; original admission authenticates them.
+    pub(crate) fn method_evidence_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
+    }
+
     pub(super) fn discard_iteratively(mut self) {
         self.discard_contents();
     }
@@ -2761,6 +2905,101 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         }
         self.requires_type_rewrite |= requires_type_rewrite;
         Ok(TypedBinder::new(arena, id, ty, origin))
+    }
+
+    /// Reads the compiler preparation allocator position.
+    pub(crate) const fn provider_copy_binder_cursor(&self) -> u32 {
+        self.next_binder
+    }
+
+    /// Transfers an allocation cursor to a fresh final builder. Reserved source
+    /// names are allowed; no term declaration or executable authority is copied.
+    pub(crate) fn seed_provider_copy_binder_cursor(
+        &mut self,
+        cursor: u32,
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        if cursor < self.next_binder
+            || !self.nodes.is_empty()
+            || !self.materialized_resolved.is_empty()
+            || !self.generated_binders.is_empty()
+            || !self.inference_binders.is_empty()
+            || !self.method_evidence_anchors.is_empty()
+        {
+            return Err(BuildError::InvalidPayload);
+        }
+        self.next_binder = cursor;
+        Ok(())
+    }
+
+    /// Allocates an occurrence's generated identities without materializing
+    /// declarations. The copied forest subsequently reserves them atomically.
+    /// Advancing the allocator prevents ordinary binder allocation reusing them.
+    pub(crate) fn allocate_provider_copy_binders(
+        &mut self,
+        count: usize,
+    ) -> Result<Vec<BinderId>, BuildError> {
+        self.type_work
+            .charge(count)
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut identities = Vec::new();
+        identities
+            .try_reserve_exact(count)
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        let mut next = self.next_binder;
+        for _ in 0..count {
+            loop {
+                self.type_work
+                    .charge(1)
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                let identity = BinderId::new(next);
+                next = next.checked_add(1).ok_or(BuildError::BinderIdExhausted)?;
+                if !self.reserved_resolved.contains(&identity)
+                    && !self.materialized_resolved.contains(&identity)
+                    && !self.generated_binders.contains(&identity)
+                {
+                    identities.push(identity);
+                    break;
+                }
+            }
+        }
+        self.next_binder = next;
+        Ok(identities)
+    }
+
+    /// Appends one copied occurrence's fresh namespace without changing the
+    /// public reservation phase. Final validation checks exact local coverage.
+    pub(crate) fn reserve_provider_copy_binders(
+        &mut self,
+        ids: &[BinderId],
+    ) -> Result<(), BuildError> {
+        self.type_work
+            .charge(
+                ids.len()
+                    .checked_mul(2)
+                    .ok_or(BuildError::TypeWorkExceeded)?,
+            )
+            .map_err(|()| BuildError::TypeWorkExceeded)?;
+        let mut pending = HashSet::new();
+        pending
+            .try_reserve(ids.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        for id in ids {
+            if self.reserved_resolved.contains(id)
+                || self.generated_binders.contains(id)
+                || self.materialized_resolved.contains(id)
+                || !pending.insert(*id)
+            {
+                return Err(BuildError::DuplicateBinderReservation);
+            }
+        }
+        self.reserved_resolved
+            .try_reserve(pending.len())
+            .map_err(|_| BuildError::TypeWorkExceeded)?;
+        self.reserved_resolved.extend(pending);
+        Ok(())
     }
 
     /// Materializes an upfront-reserved resolver identity in a typed binder.
@@ -3660,6 +3899,37 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             root.arena(),
             u32::try_from(ordinal).map_err(|_| BuildError::InvalidNodeId)?,
         ))
+    }
+
+    pub(in crate::core) fn provider_projection_parts(
+        &self,
+    ) -> Result<(ArenaId, &[StoredNode<F>], &Arc<MethodEvidenceCatalog>), BuildError> {
+        Ok((
+            self.arena.ok_or(BuildError::InvalidNodeId)?,
+            &self.nodes,
+            &self.method_evidence,
+        ))
+    }
+
+    pub(in crate::core) fn provider_projection_anchors(&self) -> &[MethodEvidenceAnchor] {
+        &self.method_evidence_anchors
+    }
+
+    /// Borrows a preparation node. The caller charges node and edge traversal;
+    /// this view grants no validation or executable admission.
+    pub(crate) fn compiler_node_kind(&self, node: NodeId) -> Result<&F::Kind, BuildError> {
+        if self.arena != Some(node.arena()) {
+            return Err(BuildError::InvalidNodeId);
+        }
+        self.nodes
+            .get(node.index()?)
+            .map(|stored| &stored.kind)
+            .ok_or(BuildError::InvalidNodeId)
+    }
+
+    /// Borrows the immutable final catalogue; this view grants no admission.
+    pub(crate) fn provider_method_catalog(&self) -> &Arc<MethodEvidenceCatalog> {
+        &self.method_evidence
     }
 
     /// Finishes unchecked construction at `root`.
@@ -5011,7 +5281,7 @@ mod tests {
             .collect(),
         );
         catalog.set_lexical_owners(vec![MethodEvidenceLexicalOwner {
-            acquisition: None,
+            resource: None,
             source_parameters: Box::new([]),
             source: crate::interface::LexicalEvidenceId::new(ModuleId::new(0), 0),
             method,

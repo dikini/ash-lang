@@ -12,6 +12,14 @@ pub struct Integer(num_bigint::BigInt);
 pub struct InvalidInteger;
 
 impl Integer {
+    pub(crate) fn to_i64(&self) -> Option<i64> {
+        i64::try_from(&self.0).ok()
+    }
+
+    pub(crate) fn from_i64(value: i64) -> Self {
+        Self(num_bigint::BigInt::from(value))
+    }
+
     pub(crate) fn to_usize(&self) -> Option<usize> {
         usize::try_from(&self.0).ok()
     }

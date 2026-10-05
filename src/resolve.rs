@@ -2260,6 +2260,7 @@ struct Resolver {
     builtin_cell: Option<ModuleId>,
     builtin_native_buffer: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
+    row_resource_families: HashSet<NominalTypeId>,
     resource_provider_interfaces: HashMap<NominalTypeId, InterfaceId>,
     resource_origins: HashMap<NominalTypeId, Origin>,
     next_binder: u32,
@@ -2622,6 +2623,7 @@ impl Resolver {
         Self {
             module,
             resource_families: HashMap::new(),
+            row_resource_families: HashSet::new(),
             resource_provider_interfaces: HashMap::new(),
             resource_origins: HashMap::new(),
             next_binder: 0,
@@ -3590,6 +3592,11 @@ impl Resolver {
                                 std::sync::Arc::clone(resource),
                                 *span,
                             )?;
+                            self.retain_resource_contract_dependencies(
+                                resource,
+                                dependency.summary,
+                                *span,
+                            )?;
                             if import.public {
                                 self.public_import_candidate.try_insert_resource(local.text.clone(), resource.id, &mut self.type_work)
                                     .map_err(|()| export_candidate_resource_error(*span,
@@ -4142,6 +4149,7 @@ impl Resolver {
                 std::sync::Arc::clone(resource),
                 import_span,
             )?;
+            self.retain_resource_contract_dependencies(resource, summary, import_span)?;
         }
 
         for (spelling, interface) in summary.interface_names() {
@@ -7141,6 +7149,20 @@ impl Resolver {
             );
             self.resource_origins
                 .insert(family, Origin::Source(resource.name.span));
+            let mut has_row_parameter = false;
+            for parameter in &resource.parameters {
+                self.type_work.charge(1).map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        resource.span,
+                        "resource instance slot classification exceeded its budget",
+                    )
+                })?;
+                has_row_parameter |= parameter.kind.as_ref().is_some_and(|kind| {
+                    matches!(kind.kind, crate::surface::SurfaceKindKind::EffectRow)
+                });
+            }
+            self.retain_row_resource_family(family, has_row_parameter, resource.span)?;
         }
         let interface_identities = self.install_interface_identities(&surface.interfaces)?;
         let effect_identities = self.install_effect_identities(&surface.effects)?;
@@ -10242,6 +10264,61 @@ impl Resolver {
         })
     }
 
+    fn resolve_provider_resource_arguments(
+        &mut self,
+        source: &crate::surface::SurfaceProviderResourceExpr,
+        family: NominalTypeId,
+        span: Span,
+    ) -> Result<Option<ResolvedOwnerOccurrenceBuffer>, ResolveError> {
+        let Some(written) = source.arguments.as_ref() else {
+            if self.row_resource_families.contains(&family) {
+                return Err(error(
+                    ResolveReason::TypeKind,
+                    span,
+                    "a row-bearing resource instance requires every remaining owner argument",
+                ));
+            }
+            return Ok(None);
+        };
+        let count = self
+            .nominal_parameter_counts
+            .get(&family)
+            .copied()
+            .ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "resource instance slots are missing",
+                )
+            })?;
+        if count.checked_sub(1) != Some(written.len()) {
+            return Err(error(
+                ResolveReason::TypeKind,
+                span,
+                "explicit resource instance arguments must saturate the defining owner",
+            ));
+        }
+        self.type_work.charge(written.len()).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource instance arguments exceeded their budget",
+            )
+        })?;
+        let mut arguments = ResolvedOwnerOccurrenceBuffer(Vec::new());
+        arguments.0.try_reserve_exact(written.len()).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource instance arguments could not reserve storage",
+            )
+        })?;
+        for argument in written {
+            arguments.0.push(self.resolve_owner_argument(argument)?);
+        }
+        Ok(Some(arguments))
+    }
+
     fn start_provider_resource<'a>(
         &mut self,
         source: &'a crate::surface::SurfaceProviderResourceExpr,
@@ -10258,6 +10335,7 @@ impl Resolver {
                 "provider initializer is missing",
             )
         })?;
+        let arguments = self.resolve_provider_resource_arguments(source, family, span)?;
         let (provider, forwarding) = self.reserve_resource_forwarding(family, span)?;
         let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
         let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
@@ -10336,6 +10414,7 @@ impl Resolver {
                 family,
                 family_span: source.family.span(),
                 identity,
+                arguments,
                 handle,
                 provider,
                 forwarding,
@@ -10359,6 +10438,7 @@ impl Resolver {
             family,
             family_span,
             identity,
+            arguments,
             handle,
             provider,
             forwarding,
@@ -10376,6 +10456,16 @@ impl Resolver {
         })?;
         self.scopes.truncate(scope_checkpoint);
         self.type_scopes.truncate(type_scope_checkpoint);
+        let prepared = crate::resolved::ProviderInstanceSlot::empty_with_budget(
+            &mut self.type_work,
+        )
+        .map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource instance preparation exceeded its type-work budget",
+            )
+        })?;
         let origin = Origin::Related {
             primary: Box::new(self.resource_origins[&family].clone()),
             related: vec![family_span],
@@ -10383,11 +10473,13 @@ impl Resolver {
         expressions.push(ResolvedExpr {
             kind: ResolvedExprKind::ProviderResource(Box::new(
                 crate::resolved::ResolvedProviderResourceExpr {
+                    prepared,
                     provider,
                     forwarding,
                     definition,
                     family,
                     identity,
+                    arguments: arguments.map(|arguments| arguments.into_vec().into_boxed_slice()),
                     handle,
                     initializer: Box::new(initializer.into_inner()),
                     body: Box::new(body.into_inner()),
@@ -11885,6 +11977,7 @@ struct PendingProviderResource {
     family: NominalTypeId,
     family_span: Span,
     identity: ResolvedTypeVariable,
+    arguments: Option<ResolvedOwnerOccurrenceBuffer>,
     handle: Binder,
     provider: crate::interface::LexicalEvidenceId,
     forwarding: Box<[crate::resolved::ResourceForwardingBinder]>,
@@ -19142,6 +19235,186 @@ impl Resolver {
 }
 
 impl Resolver {
+    fn retain_resource_contract_dependencies(
+        &mut self,
+        resource: &crate::resolved::ResourceTypeFact,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource contract dependency retention exceeded its work budget",
+            )
+        };
+        match summary.resource_family_by_id(resource.id) {
+            Some(family) if family == resource.family => {}
+            Some(_) => {
+                return Err(error(
+                    ResolveReason::InternalState,
+                    span,
+                    "resource dependency metadata disagrees with its original contract",
+                ));
+            }
+            // Resolver-only metadata fixtures may deliberately omit code and
+            // its certificate. This path retains no executable authority.
+            None => return Ok(()),
+        }
+        let mut seen = HashSet::new();
+        self.collect_resource_contract_dependencies(resource, summary, span, &mut seen)?;
+        self.type_work
+            .charge(seen.len())
+            .map_err(|()| exhausted())?;
+        let mut pending = Vec::new();
+        pending.try_reserve(seen.len()).map_err(|_| exhausted())?;
+        pending.extend(seen.iter().copied());
+        let mut cursor = 0;
+        while let Some(identity) = pending.get(cursor).copied() {
+            cursor += 1;
+            self.type_work.charge(1).map_err(|()| exhausted())?;
+            let mut dependencies = HashSet::new();
+            if let Some((_, fact)) = summary
+                .resource_by_family(identity, &mut self.type_work)
+                .map_err(|_| exhausted())?
+            {
+                self.collect_resource_contract_dependencies(
+                    fact,
+                    summary,
+                    span,
+                    &mut dependencies,
+                )?;
+            } else {
+                let owner = Self::scheme_nominal_fact(summary, identity, span)?;
+                self.retain_scheme_nominal_fact(owner, span)?;
+                // Constructor metadata is retained without a constructor-name
+                // route. Opaque state representations remain inaccessible.
+                if owner.access == ImportedTypeAccess::Transparent {
+                    self.retain_imported_constructor_family(owner, summary, span)?;
+                    self.type_work
+                        .charge(owner.constructors.len())
+                        .map_err(|()| exhausted())?;
+                    for constructor in owner.constructors {
+                        let exported =
+                            summary.constructor_by_id(*constructor).ok_or_else(|| {
+                                error(
+                                    ResolveReason::InternalState,
+                                    span,
+                                    "resource report constructor metadata is missing",
+                                )
+                            })?;
+                        if let Some(payload) = &exported.payload {
+                            crate::resolved::collect_nominal_identities(
+                                payload,
+                                &mut dependencies,
+                                &mut self.type_work,
+                            )
+                            .map_err(|()| exhausted())?;
+                        }
+                    }
+                }
+            }
+            for dependency in dependencies {
+                self.type_work.charge(1).map_err(|()| exhausted())?;
+                if seen.contains(&dependency) {
+                    continue;
+                }
+                self.type_work.charge(2).map_err(|()| exhausted())?;
+                seen.try_reserve(1).map_err(|_| exhausted())?;
+                pending.try_reserve(1).map_err(|_| exhausted())?;
+                seen.insert(dependency);
+                pending.push(dependency);
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_resource_contract_dependencies(
+        &mut self,
+        resource: &crate::resolved::ResourceTypeFact,
+        summary: &ExportSummary,
+        span: crate::source::Span,
+        output: &mut HashSet<NominalTypeId>,
+    ) -> Result<(), ResolveError> {
+        let exhausted = || {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource contract dependency traversal exceeded its work budget",
+            )
+        };
+        for ty in [&resource.input.ty, &resource.state.ty, &resource.result.ty] {
+            self.retain_type_nominals(ty, summary, span)?;
+            crate::resolved::collect_nominal_identities(ty, output, &mut self.type_work)
+                .map_err(|()| exhausted())?;
+        }
+        for argument in resource
+            .provider_application
+            .arguments()
+            .iter()
+            .chain(resource.provided.instance.arguments())
+            .chain(resource.interpreted.instance.arguments())
+        {
+            self.retain_argument_nominals(argument, summary, span)?;
+            crate::resolved::collect_argument_nominal_identities(
+                argument,
+                output,
+                &mut self.type_work,
+            )
+            .map_err(|()| exhausted())?;
+        }
+        for instance in [&resource.provided.instance, &resource.interpreted.instance] {
+            let effect = summary.effect_by_id(instance.effect()).ok_or_else(|| {
+                error(
+                    ResolveReason::InternalState,
+                    span,
+                    "resource contract effect metadata is missing",
+                )
+            })?;
+            self.retain_imported_effect(effect, span)?;
+            self.type_work
+                .charge(effect.operations.len())
+                .map_err(|()| exhausted())?;
+            for operation in &effect.operations {
+                self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
+                crate::resolved::collect_nominal_identities(
+                    &operation.annotation.ty,
+                    output,
+                    &mut self.type_work,
+                )
+                .map_err(|()| exhausted())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn retain_row_resource_family(
+        &mut self,
+        family: NominalTypeId,
+        has_row_parameter: bool,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        if !has_row_parameter || self.row_resource_families.contains(&family) {
+            return Ok(());
+        }
+        self.type_work.charge(1).map_err(|()| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource row-slot metadata exceeded its budget",
+            )
+        })?;
+        self.row_resource_families.try_reserve(1).map_err(|_| {
+            error(
+                ResolveReason::TypeResourceExhausted,
+                span,
+                "resource row-slot metadata could not reserve storage",
+            )
+        })?;
+        self.row_resource_families.insert(family);
+        Ok(())
+    }
+
     fn retain_resource_type(
         &mut self,
         spelling: String,
@@ -19194,6 +19467,11 @@ impl Resolver {
         self.resource_families.insert(fact.family, fact.id);
         self.nominal_parameter_counts
             .insert(fact.family, fact.parameters.len());
+        let has_row_parameter = fact
+            .parameters
+            .iter()
+            .any(|parameter| matches!(parameter.kind, Kind::EffectRow));
+        self.retain_row_resource_family(fact.family, has_row_parameter, span)?;
         self.imported
             .retain_resource_type(spelling, fact, &mut self.type_work)
             .map_err(|failure| {

@@ -173,6 +173,15 @@ pub(crate) struct LifecycleDefinitionView<'a> {
     parameter_origin: &'a crate::source::Origin,
 }
 impl<'a> LifecycleDefinitionView<'a> {
+    pub(super) fn interpreted(&self) -> &crate::types::EffectInstance {
+        &self.interpreted.instance
+    }
+    pub(super) fn state(&self) -> &Type {
+        &self.state.ty
+    }
+    pub(super) fn family(&self) -> NominalTypeId {
+        self.family
+    }
     pub(crate) fn source(
         definition: &'a ResolvedResourceDefinition,
         phase: LifecyclePhase,

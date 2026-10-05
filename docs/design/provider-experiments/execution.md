@@ -15,39 +15,92 @@ changes and DN-0038 drafts remain unstaged in the original worktree. Historical
 proof links below name their recorded main revision. Fresh checks govern every
 new delivery; the paused task is not a concurrent writer.
 
-Batch 0 has passed its common-branch checks on
-`codex/common-resource-support`, based on recovery commit `167bd8c`. Fresh48 builds every workspace test target.
-Ordered Type and row arguments reach source checking, publication, evidence,
-capture, Core validation and transforms. Public owner-argument and SQLite
-declaration checks pass; SQLite client execution still reaches the pending
-instance-admission guard.
+Batch 0 is complete on the original `codex/provider-experiments` branch at
+unsigned merge `c38b9d2f8c34077353be8d0a0a94b117867ce737`, integrating common
+commit `38898f385c98d09a35412a31c05d783bea9b5b1e` from recovery checkpoint
+`167bd8c`. Both histories and unrelated working changes are preserved.
+Ordered Type and row arguments reach source checking, publication, inference,
+evidence, capture, Core validation and transforms. The original worktree passes
+the explicit all-targets compiler check, the full library suite and selected
+public/module/independent-validation/deep regression suites.
 
 Fresh receipts are kept under
 `~/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`.
-Fresh48 passes all 1,523 library cases, with one callback case still ignored,
-and all 99 additional workspace binaries outside the architecture suite.
-All six original interface resource regressions and all four method resource
-cases pass with their fixtures and limits unchanged. The original 24-scope
-256-KiB regression also passes in a fresh child process after summary ownership
-metadata was restricted to declared kind facts. Synthesis and inference facts
-no longer copy this metadata. Authority checks and work accounting are unchanged.
+The common checkpoint passes 1,523 library cases, with one advanced callback case
+still ignored, and all 99 additional workspace binaries outside architecture.
+All six original interface resource regressions, all four method resource cases,
+and the 24-scope 256-KiB fresh-child regression pass at unchanged limits.
+Architecture has forty full fresh48 passes plus the repaired token-only
+prerequisite assertion passing fresh49. Original-worktree receipts are
+`batch-0-integrated-check.log` and `batch-0-integrated-tests.log`; integration
+identity, commands, source pins and limitations are recorded in
+`batch-0-integration.md` and its companion JSON. Formatting and independent
+contract, source quality and changed-documentation reviews pass.
 
-The full fresh48 architecture run passes 40 of 41 cases. Its remaining new
-assertion used the wrong punctuation tokens for the scanner. After correcting
-only that fixture, the rebuilt fresh49 prerequisite-owner case passes. The
-other 40 cases, including bidirectional physical inventory and ownership APIs,
-are unchanged. Both receipts remain available. Independent contract, source
-quality and changed-documentation reviews found no remaining Batch 0 blocker.
-Formatting and the explicit all-targets compiler check pass. Unsigned commit,
-merge and original-worktree verification remain pending; the original branch
-still names the recovery checkpoint.
+Batch 1 is awaiting final connected verification and integration on the common
+worktree, starting from that integrated merge. The public SQLite driver executes
+`Completed(Completed(Ok(42), Closed), Closed)` with actual statement finalization
+before connection close. The ten public cases include imported and local
+resource definitions, repeated and simultaneous activations, initializer-once,
+acquisition refusal without body or finish, static registrations without
+executable bindings, and inferred hidden report dependencies.
 
-These checks establish no executed library-defined provider instance. Generic scope admission,
-immutable template specialization, executable native bindings, lifecycle
-ownership and the selected open-row callback and captured-control witness
-remain later delivery obligations. One conditional handler callback test is
+Fresh `batch-1-connected-gate-09.log` passes all 1,528 library cases, with one
+explicitly ignored advanced callback. The constrained positive case and eleven
+authority mutations pass at unchanged work limits. Both the 64-KiB discard and
+256-KiB deep-drain regressions pass. Original declaration authentication now
+shares successful native self-proof only for an exact immutable allocation
+within one source admission. Registry comparisons and independent final Core
+admission remain active. The independent memo review found no authority or
+ownership blocker.
+
+Fresh `batch-1-connected-gate-10.log` passes all forty-one architecture checks,
+all ten SQLite public cases and the affected cleanup, native-buffer, module,
+effect, Core and owner-argument suites preceding its stale syntax expectation.
+The syntax regression now admits retained arguments after the fresh identity.
+Receipt `batch-1-connected-gate-11.log` passes that correction and resource Core
+and module cases, then exposes a 256-KiB public pipeline stack overflow.
+Debugger receipts locate an unnecessary 89-KiB expression-dispatch frame on the
+ordinary equation/lexical-evidence path before evaluation. The repair dispatches
+equation work and the unchanged expression-check body directly from the existing
+iterative work loop. Fresh `batch-1-public-stack-regression-06.log` passes the
+unchanged 256-KiB child regression. The fixture and all work and depth limits
+remain unchanged. Fresh `batch-1-connected-gate-12.log` passes the complete library suite and
+connected resource, syntax, SQLite, Core and runtime-diagnostic follow-up. Final
+all-targets compilation, unsigned commit and original-worktree integration remain
+the delivery gate.
+
+Batch 2 has executed evidence in `batch-2-arena-public-02.log`: all four public
+cases pass, including actual usage `(0, 64, 0, 4)`, zero capacity, repeated and
+nested native activations, release exactly once, native configuration refusal
+without body or release, and dependent access escape rejection. The adapter
+uses the existing arena backing through the common engine. Arena source remains
+uncommitted and unintegrated; typed allocation and references are excluded.
+
+The imported S-01 receipt establishes executed library-defined scopes within
+that program. It does not establish the selected open-row callback,
+capture-dependent discard, retained dependency quarantine or complete copied
+local dictionaries and nominals. One conditional handler callback test is
 still explicitly ignored until those obligations are implemented. Existing
 native adapter tests observe native backing separately from an Ash session.
+
+Batch 3 public receipts now establish capture/resume without native
+reacquisition, genuine SQLite consumed completion failure, separately injected
+consumed and retained reports, and safe retained-owner host destruction. Six of
+ten cases pass in `batch-3-control-public-01.log`; the formal open-row callback,
+its lacks-condition negative, owned discard, and the distinct captured-demand
+witness remain failing. The latter fixture initially used a source-effectful
+finish forbidden by the selected synchronous lifecycle; it must instead observe
+a valid source cleanup obligation without changing that profile.
+
+Both cases in `batch-3-retention-public-01.log` pass. A test-only generic native
+binding owns unique Rust storage and explicitly injects retained dispositions.
+The receipt establishes the same retained guard identities, transitive dependency
+quarantine, revoked ordinary source access, no source retry and dependency-ordered
+host destruction. Bindings receive retained-dependency obligations before native
+transition and must retain or refuse safely; that contract remains a foreign
+assumption. The test is separate from genuine SQLite behavior and does not prove
+capture-dependent handler specialization. No Batch 3 delivery is integrated.
 
 ## Historical paused checkpoint (2026-10-03)
 

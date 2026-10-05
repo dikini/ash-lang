@@ -3116,7 +3116,7 @@ fn check_provider_handler_context(
     )>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
-    reconstruct_provider_handler_context(draft, module, sources, module_sources, staged, work)
+    reconstruct_provider_handler_context(draft, module, sources, module_sources, staged, None, work)
         .map(drop)
 }
 
@@ -3125,6 +3125,8 @@ fn check_provider_handler_context(
 pub(crate) struct CheckedHandlerTemplate {
     draft: super::provider::HandlerFragmentDraft,
     admission: ConditionalHandlerAdmission,
+    original_nodes: Vec<super::provider::projection::NodeProjection>,
+    original_clauses: Vec<super::provider::projection::NodeProjection>,
 }
 struct ConditionalHandlerAdmission {
     rows: super::provider::HandlerRowRecipeDraft,
@@ -3163,6 +3165,115 @@ impl CheckedHandlerContractCertificate {
 }
 
 impl CheckedHandlerTemplate {
+    /// Borrowed original code is compiler preparation input only. The checked
+    /// token retains its independent authority; this view grants no execution.
+    pub(crate) fn authenticate_source(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        if !std::sync::Arc::ptr_eq(
+            self.admission.externals.original_catalog(),
+            &self.draft.program.method_evidence,
+        ) || self.original_nodes.len() != self.draft.program.nodes.len()
+            || self.original_clauses.len() != self.draft.clauses.len()
+        {
+            return Err(ValidationError::new(
+                ValidationReason::NodeType,
+                Some(self.draft.program.root),
+            ));
+        }
+        for expected in &self.original_nodes {
+            expected.authenticate_source_node(&self.draft.program, work)?;
+        }
+        for (expected, clause) in self.original_clauses.iter().zip(&self.draft.clauses) {
+            if !expected.same(
+                &super::provider::projection::project_clause(clause, work)?,
+                work,
+            )? {
+                return Err(ValidationError::new(
+                    ValidationReason::NodeType,
+                    Some(expected.node()),
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub(in crate::core) fn authenticate_definition(
+        &self,
+        fact: &crate::resolved::ResourceTypeFact,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        super::provider::authenticate_definition_contract(&self.admission.contract, fact, work)
+    }
+    pub(crate) fn original_program(&self) -> &super::UnvalidatedEffectProgram {
+        &self.draft.program
+    }
+    pub(crate) fn original_state(&self) -> &super::TypedBinder {
+        &self.draft.state
+    }
+    pub(crate) fn original_clauses(&self) -> &[super::EffectClause] {
+        &self.draft.clauses
+    }
+    pub(crate) fn original_hidden(&self) -> &[(crate::types::TypeVariableId, Kind); 2] {
+        &self.draft.hidden
+    }
+    pub(crate) fn original_handler(&self) -> super::HandlerId {
+        self.draft.handler
+    }
+    pub(crate) fn original_template(&self) -> crate::resolved::ProviderTemplateId {
+        self.draft.template
+    }
+    pub(in crate::core) fn original_nodes(&self) -> &[super::provider::projection::NodeProjection] {
+        &self.original_nodes
+    }
+    pub(in crate::core) fn original_clause_projections(
+        &self,
+    ) -> &[super::provider::projection::NodeProjection] {
+        &self.original_clauses
+    }
+    pub(in crate::core) fn original_externals(
+        &self,
+    ) -> &std::sync::Arc<super::provider::RetainedHandlerExternals> {
+        &self.admission.externals
+    }
+    pub(in crate::core) fn original_recipe(&self) -> &super::provider::HandlerRowRecipeDraft {
+        &self.admission.rows
+    }
+    pub(in crate::core) fn original_pending_rows(&self) -> &[super::provider::PendingRowRecord] {
+        &self.draft.pending_rows.equations
+    }
+    pub(crate) fn authenticate_pending(
+        &self,
+        publication: &crate::evidence::PendingEvidencePublication,
+        facts: crate::resolved::ProviderExternalFacts<'_>,
+        canonical: &crate::resolved::ResolvedRegistry,
+        module: ModuleId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        self.admission
+            .externals
+            .authenticate_pending(publication, facts, canonical, module, work)
+    }
+    pub(crate) fn prepare_rows(
+        &self,
+        types: &HashMap<crate::types::TypeVariableId, Type>,
+        rows: &HashMap<crate::types::TypeVariableId, EffectRow>,
+        body_answer: &Type,
+        body_effects: &EffectRow,
+        provided: &EffectInstance,
+        work: &mut TypeWorkBudget,
+    ) -> Result<super::provider::ResolvedProviderHandlerRows, ValidationError> {
+        super::provider::specialization::prepare_handler_rows(
+            self,
+            types,
+            rows,
+            body_answer,
+            body_effects,
+            provided,
+            work,
+        )
+    }
+
     pub(crate) fn authenticates_certificate(
         &self,
         certificate: &CheckedHandlerContractCertificate,
@@ -3208,6 +3319,7 @@ pub(crate) fn admit_provider_handler_template(
         &crate::evidence::PendingEvidencePublication,
         &[super::provider::ProviderExternalOccurrence<'_>],
     )>,
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<CheckedHandlerTemplate, ValidationError> {
     let admission = reconstruct_provider_handler_context(
@@ -3216,9 +3328,38 @@ pub(crate) fn admit_provider_handler_template(
         sources,
         module_sources,
         staged,
+        native_authentication,
         work,
     )?;
-    Ok(CheckedHandlerTemplate { draft, admission })
+    work.charge(draft.program.nodes.len())
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    let mut original_nodes = Vec::new();
+    original_nodes
+        .try_reserve_exact(draft.program.nodes.len())
+        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+    for (ordinal, stored) in draft.program.nodes.iter().enumerate() {
+        let id = NodeId::new(
+            draft.program.arena,
+            u32::try_from(ordinal)
+                .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?,
+        );
+        original_nodes.push(super::provider::projection::project(id, stored, work)?);
+    }
+    work.charge(draft.clauses.len())
+        .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
+    let mut original_clauses = Vec::new();
+    original_clauses
+        .try_reserve_exact(draft.clauses.len())
+        .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+    for clause in &draft.clauses {
+        original_clauses.push(super::provider::projection::project_clause(clause, work)?);
+    }
+    Ok(CheckedHandlerTemplate {
+        draft,
+        admission,
+        original_nodes,
+        original_clauses,
+    })
 }
 
 fn reconstruct_provider_handler_context(
@@ -3230,6 +3371,7 @@ fn reconstruct_provider_handler_context(
         &crate::evidence::PendingEvidencePublication,
         &[super::provider::ProviderExternalOccurrence<'_>],
     )>,
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<ConditionalHandlerAdmission, ValidationError> {
     let mut entry = super::provider::HandlerFragmentEntry::reconstruct(draft, module, work)?;
@@ -3245,6 +3387,7 @@ fn reconstruct_provider_handler_context(
             sources,
             module_sources,
             &associations,
+            native_authentication,
             work,
         )?,
         None => super::provider::authenticate_handler_externals(
@@ -3288,6 +3431,7 @@ pub(in crate::core) fn check_provider_external_structure(
     accesses: &super::provider::AuthenticatedProviderStateAccesses<'_>,
     method_evidence: Option<&super::provider::AuthenticatedProviderMethodEvidence<'_>>,
     entry: Option<&super::provider::HandlerFragmentEntry<'_>>,
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     work.charge(
@@ -3307,6 +3451,7 @@ pub(in crate::core) fn check_provider_external_structure(
     let prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - allowance;
     validator.type_work.set(prefix);
     validator.contextual_registry = Some(canonical);
+    validator.contextual_native_authentication = native_authentication;
     validator.provider_external_types = Some(types);
     validator.provider_state_accesses = Some(accesses);
     validator.provider_method_evidence = method_evidence;
@@ -3461,6 +3606,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     sources: HashMap<SourceId, &'source SourceFile>,
     module_sources: Option<HashMap<ModuleId, SourceId>>,
     contextual_registry: Option<&'program crate::resolved::ResolvedRegistry>,
+    contextual_native_authentication: Option<&'program crate::foreign::NativeAuthenticationSession>,
     binders: HashMap<BinderId, &'program TypedBinder>,
     provider_external_types: Option<&'program HashMap<BinderId, crate::types::IterativeTypeOwner>>,
     provider_method_evidence:
@@ -3496,6 +3642,9 @@ pub(super) trait ScopeFamily: CoreOperationFamily {
     fn resource_scope(_kind: &Self::Kind) -> Option<&super::effect::ResourceScopeNode> {
         None
     }
+    fn provider_scope(_kind: &Self::Kind) -> Option<&super::provider::ProviderScopeNode> {
+        None
+    }
     fn resume_capability(
         _kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3528,6 +3677,14 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
             _ => None,
         }
     }
+    fn provider_scope(kind: &Self::Kind) -> Option<&super::provider::ProviderScopeNode> {
+        match kind {
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::ProviderScope(scope),
+            ) => Some(scope),
+            _ => None,
+        }
+    }
     fn resume_capability(
         kind: &Self::Kind,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
@@ -3547,14 +3704,17 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         kind: &Self::Kind,
         child: usize,
     ) -> Option<(super::effect::HandlerId, crate::resolved::ResumeId)> {
-        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
-            handler,
-        )) = kind
-        else {
-            return None;
+        let (handler, offset) = match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
+                handler,
+            )) => (handler, 1),
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::ProviderScope(scope),
+            ) => (&scope.handler, 4),
+            _ => return None,
         };
         child
-            .checked_sub(1)
+            .checked_sub(offset)
             .and_then(|index| handler.clauses().get(index))
             .map(|clause| (handler.id(), clause.resume()))
     }
@@ -3569,20 +3729,31 @@ impl ScopeFamily for super::effect::EffectOperationFamily {
         {
             visit(resource.handle.id());
         }
-        let super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
-            handler,
-        )) = kind
-        else {
-            return;
+        let (handler, offset) = match kind {
+            super::effect::EffectExprKind::Operation(super::effect::EffectOperation::Handler(
+                handler,
+            )) => (handler, 1),
+            super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::ProviderScope(scope),
+            ) => {
+                match child {
+                    1 => visit(scope.acquire.parameter.id()),
+                    2 => visit(scope.finish.parameter.id()),
+                    3 => visit(scope.handle.id()),
+                    4.. => visit(scope.handler_state.id()),
+                    _ => {}
+                }
+                (&scope.handler, 4)
+            }
+            _ => return,
         };
-        let Some(clause) = child
-            .checked_sub(1)
+        if let Some(clause) = child
+            .checked_sub(offset)
             .and_then(|index| handler.clauses().get(index))
-        else {
-            return;
-        };
-        for binder in clause.pattern().binder_iter() {
-            visit(binder.id());
+        {
+            for binder in clause.pattern().binder_iter() {
+                visit(binder.id());
+            }
         }
     }
 }
@@ -3597,6 +3768,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 .collect(),
             module_sources: None,
             contextual_registry: None,
+            contextual_native_authentication: None,
             binders: HashMap::new(),
             provider_external_types: None,
             provider_method_evidence: None,
@@ -4423,7 +4595,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         for owner in catalog.lexical_owners() {
             if owner.application.interface().module().is_builtin_resource() {
                 let acquisition = owner
-                    .acquisition
+                    .resource
+                    .as_ref()
+                    .and_then(super::dialect::MethodEvidenceResourceOwner::builtin)
                     .ok_or_else(|| ValidationError::new(ValidationReason::NodeType, None))?;
                 let api = acquisition
                     .api()
@@ -4454,8 +4628,57 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 if !found {
                     return Err(ValidationError::new(ValidationReason::NodeType, None));
                 }
-            } else if owner.acquisition.is_some() {
-                return Err(ValidationError::new(ValidationReason::NodeType, None));
+            } else if let Some(resource) = &owner.resource {
+                let super::dialect::MethodEvidenceResourceOwner::Provider(evidence) = resource
+                else {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                };
+                if !owner.source_parameters.is_empty() || !owner.captures.is_empty() {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
+                let mut found = false;
+                for node in &self.program.nodes {
+                    self.charge_type_work(1)?;
+                    let Some(scope) = F::provider_scope(&node.kind) else {
+                        continue;
+                    };
+                    if scope.lexical != owner.source {
+                        continue;
+                    }
+                    let descriptor = scope.descriptor();
+                    self.charge_type_work(scope.forwardings.len())?;
+                    if found
+                        || evidence.definition != descriptor.definition().id
+                        || evidence.family != descriptor.definition().family
+                        || evidence.identity != descriptor.identity()
+                        || evidence.arguments.len() != descriptor.arguments().len()
+                        || !scope.forwardings.iter().any(|method| {
+                            method.method == owner.method && method.binder == owner.binder
+                        })
+                    {
+                        return Err(ValidationError::new(ValidationReason::NodeType, None));
+                    }
+                    for (left, right) in evidence.arguments.iter().zip(descriptor.arguments()) {
+                        let mut budget = TypeWorkBudget::with_limit(
+                            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+                        );
+                        let equal = crate::types::same_kinded_argument_with_budget(
+                            left,
+                            right,
+                            &mut budget,
+                        );
+                        self.charge_type_work(budget.used())?;
+                        if !equal
+                            .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?
+                        {
+                            return Err(ValidationError::new(ValidationReason::NodeType, None));
+                        }
+                    }
+                    found = true;
+                }
+                if !found {
+                    return Err(ValidationError::new(ValidationReason::NodeType, None));
+                }
             }
             self.charge_type_work(catalog.methods().len())?;
             validate_application(
@@ -5322,6 +5545,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         Ok(false)
     }
 
+    fn is_provider_instance_parameter(
+        &self,
+        id: crate::types::TypeVariableId,
+    ) -> Result<bool, ValidationError> {
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            if let Some(scope) = F::provider_scope(&node.kind)
+                && let Some(admitted) = scope.descriptor.admitted_arc()
+                && admitted.identity() == id
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn is_lexical_source_parameter(
         &self,
         id: crate::types::TypeVariableId,
@@ -5333,6 +5572,13 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     .ok_or_else(|| ValidationError::new(ValidationReason::Resource, None))?,
             )?;
             if owner.source_parameters.contains(&id) {
+                return Ok(true);
+            }
+            if let Some(super::dialect::MethodEvidenceResourceOwner::Provider(resource)) =
+                &owner.resource
+                && resource.identity == id
+                && self.is_provider_instance_parameter(id)?
+            {
                 return Ok(true);
             }
         }
@@ -6925,10 +7171,22 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             let mut work = TypeWorkBudget::with_limit(
                 CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
             );
-            let result = self
-                .program
-                .registry
-                .same_provider_metadata(canonical, &mut work);
+            let result = if let Some(session) = self.contextual_native_authentication {
+                let mut native_authentication = session
+                    .try_borrow_mut()
+                    .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+                self.program
+                    .registry
+                    .same_provider_metadata_with_native_memo(
+                        canonical,
+                        &mut native_authentication,
+                        &mut work,
+                    )
+            } else {
+                self.program
+                    .registry
+                    .same_provider_metadata(canonical, &mut work)
+            };
             self.charge_type_work(work.used())?;
             if !result.map_err(|()| ValidationError::new(ValidationReason::Resource, None))? {
                 return Err(ValidationError::new(ValidationReason::Registry, None));
@@ -8591,6 +8849,24 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         }
     }
 
+    fn provider_body_outward_row(
+        &self,
+        row: &EffectRow,
+        effect: &EffectInstance,
+        node: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let removed = row.remove_exact_with_budget(effect, &mut budget);
+        self.charge_type_work(budget.used())?;
+        match removed.map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))? {
+            Ok(row) => Ok(row),
+            Err(crate::types::EffectRowError::Missing) => self.clone_effect_row_charged(row),
+            Err(error) => Err(ValidationError::row_removal_failure(error, node)),
+        }
+    }
+
     fn singleton_effect_row_charged(
         &self,
         effect: &EffectInstance,
@@ -10051,10 +10327,12 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 
         let mut consumed_rows = 0_usize;
         for (index, node) in self.program.nodes.iter().enumerate() {
-            if let Some(resource) = F::resource_scope(&node.kind) {
+            if let Some(parameter) = F::resource_scope(&node.kind)
+                .map(|resource| resource.acquisition.identity)
+                .or_else(|| F::provider_scope(&node.kind).map(|scope| scope.descriptor.identity()))
+            {
                 let id = node_id(self.program.arena, index)?;
                 self.charge_type_work(1)?;
-                let parameter = resource.acquisition.identity;
                 let canonical = self
                     .program
                     .registry
@@ -11533,6 +11811,15 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         F::effect_row(&node.effects),
                         &mut free,
                     )?;
+                    if let Some(scope) = F::provider_scope(&node.kind) {
+                        self.charge_type_work(1)?;
+                        if free.contains(&scope.descriptor.identity()) {
+                            return Err(ValidationError::new(
+                                ValidationReason::ResourceEscape,
+                                Some(id),
+                            ));
+                        }
+                    }
                     self.charge_type_work(F::operation_extra_edge_count(&node.kind))?;
                     for child_index in 0..F::child_count(&node.kind) {
                         let child = F::child_at(&node.kind, child_index).ok_or_else(|| {
@@ -11551,6 +11838,19 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                             && let Some(resource) = F::resource_scope(&node.kind)
                         {
                             child_free.remove(&resource.acquisition.identity);
+                        }
+                        if let Some(scope) = F::provider_scope(&node.kind) {
+                            self.charge_type_work(1)?;
+                            if child_index == 0 && child_free.contains(&scope.descriptor.identity())
+                            {
+                                return Err(ValidationError::new(
+                                    ValidationReason::ResourceEscape,
+                                    Some(id),
+                                ));
+                            }
+                            if child_index > 0 {
+                                child_free.remove(&scope.descriptor.identity());
+                            }
                         }
                         self.merge_type_scope_requirements(&mut free, child_free)?;
                     }
@@ -11683,6 +11983,10 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                     });
                     if let Some(error) = metadata_error {
                         return Err(error);
+                    }
+                    if let Some(scope) = F::provider_scope(&node.kind) {
+                        self.charge_type_work(1)?;
+                        free.remove(&scope.descriptor.identity());
                     }
                     requirements[self.index(id)?] = Some(free);
                 }
@@ -12636,6 +12940,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
 #[derive(Clone, Copy)]
 enum EffectClauseContract {
     Ordinary { handler: NodeId, clause: usize },
+    Scoped { scope: NodeId, clause: usize },
     Provider { clause: usize },
 }
 
@@ -13115,6 +13420,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 &node.kind,
                 super::effect::EffectExprKind::Operation(
                     super::effect::EffectOperation::Resource(_)
+                        | super::effect::EffectOperation::ProviderScope(_)
                         | super::effect::EffectOperation::Cleanup(_)
                         | super::effect::EffectOperation::Registration(_)
                 )
@@ -13430,7 +13736,11 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             self.charge_type_work(self.program.method_evidence.lexical_owners().len())?;
             let mut owner_count = 0;
             for owner in self.program.method_evidence.lexical_owners() {
-                if owner.acquisition == Some(authority)
+                if owner
+                    .resource
+                    .as_ref()
+                    .and_then(super::dialect::MethodEvidenceResourceOwner::builtin)
+                    == Some(authority)
                     && owner.binder == *binder
                     && owner.method
                         == crate::interface::MethodId::new(api.provider(), ordinal as u32)
@@ -13487,11 +13797,201 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         Ok(())
     }
 
+    // Keep provider-only reconstruction storage outside the ordinary node
+    // validation frame. This preserves the existing small-stack Core path.
+    #[inline(never)]
+    fn validate_provider_scope_node(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        scope: &super::provider::ProviderScopeNode,
+        type_binders: &CoreTypeBinders<'_>,
+        handler_ids: &mut HashSet<super::effect::HandlerId>,
+        clause_contracts: &mut HashMap<
+            (super::effect::HandlerId, crate::resolved::ResumeId),
+            EffectClauseContract,
+        >,
+    ) -> Result<(), ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let admitted = scope
+            .authenticate_structure(self.program, id, &mut budget)
+            .and_then(|()| scope.authenticate_protocol(self.program, id, &mut budget))
+            .and_then(|()| {
+                scope
+                    .descriptor
+                    .specialization()
+                    .ok_or_else(|| {
+                        ValidationError::new(ValidationReason::ResourceEscape, Some(id))
+                    })?
+                    .authenticate(self.program, id, scope, &mut budget)
+            });
+        self.charge_type_work(budget.used())?;
+        admitted?;
+        self.validate_effect_instance(scope.descriptor.native_effect(), type_binders, id)?;
+        self.validate_effect_type_rows(scope.handler_output.value(), type_binders, id)?;
+        self.validate_effect_row(scope.handler_output.effects(), type_binders, id)?;
+        self.validate_effect_handler(
+            id,
+            node,
+            &scope.handler,
+            Some(&scope.handler_output),
+            type_binders,
+            handler_ids,
+            clause_contracts,
+        )?;
+        let mut row = self.remove_provider_native_row(
+            scope.handler_output.effects(),
+            scope.descriptor.native_effect(),
+            id,
+        )?;
+        for root in [scope.acquire.body, scope.finish.body] {
+            let phase = self.remove_provider_native_row(
+                &self.node(root)?.effects,
+                scope.descriptor.native_effect(),
+                id,
+            )?;
+            row = self.union_effect_rows_charged(&row, &phase, id)?;
+        }
+        row = self.union_effect_rows_charged(&self.node(scope.initializer)?.effects, &row, id)?;
+        if !self.same_effect_row_charged(&row, &node.effects, id)? {
+            return Err(ValidationError::with_cause(
+                ValidationCause::HandlerOutputRow,
+                Some(id),
+            ));
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn validate_effect_node_kind(
+        &self,
+        id: NodeId,
+        node: &StoredNode<super::effect::EffectOperationFamily>,
+        type_binders: &CoreTypeBinders<'_>,
+        handler_ids: &mut HashSet<super::effect::HandlerId>,
+        clause_contracts: &mut HashMap<
+            (super::effect::HandlerId, crate::resolved::ResumeId),
+            EffectClauseContract,
+        >,
+    ) -> Result<bool, ValidationError> {
+        use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
+        let mut has_discard = false;
+        match &node.kind {
+            EffectExprKind::Operation(EffectOperation::ProviderStateAccess(_)) => {
+                if !self
+                    .provider_state_accesses
+                    .is_some_and(|proof| proof.contains(self.program, id))
+                    && !self.provider_scope_state_access(id)?
+                {
+                    return Err(ValidationError::new(
+                        ValidationReason::ResourceEscape,
+                        Some(id),
+                    ));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
+                self.validate_cleanup_owner(id, node, scope)?
+            }
+            EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
+                self.validate_registration_owner(id, node, scope)?;
+            }
+            EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                application,
+            ))) => {
+                self.charge_type_work(application.arguments().len())?;
+                for argument in application.arguments() {
+                    self.validate_effect_type_rows(argument, type_binders, id)?;
+                }
+                for row in application.row_arguments() {
+                    self.validate_effect_row(row, type_binders, id)?;
+                }
+                self.validate_pure_effect_row(id, node, type_binders)?;
+            }
+            EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node, type_binders)?,
+            EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
+                self.validate_resource_node(id, node, resource)?;
+            }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                self.validate_provider_scope_node(
+                    id,
+                    node,
+                    scope,
+                    type_binders,
+                    handler_ids,
+                    clause_contracts,
+                )?;
+            }
+            EffectExprKind::Operation(EffectOperation::Request(request)) => {
+                self.validate_effect_instance(&request.effect, type_binders, id)?;
+                let (domain, result) =
+                    self.effect_signature(&request.effect, request.operation, id, type_binders)?;
+                let operand = self.node(request.operand)?;
+                if !self.same_type_charged(&operand.ty, &domain)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::RequestArgumentType,
+                        Some(id),
+                    ));
+                }
+                let requested = self.singleton_effect_row_charged(&request.effect, id)?;
+                let expected = self.union_effect_rows_charged(&operand.effects, &requested, id)?;
+                if !self.same_type_charged(&node.ty, &result)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::RequestResultType,
+                        Some(id),
+                    ));
+                }
+                if !self.same_effect_row_charged(&node.effects, &expected, id)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::RequestEffectRow,
+                        Some(id),
+                    ));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
+                if resume.use_state != ResumeUse::Consumed {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::ResumeUseState,
+                        Some(id),
+                    ));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
+                has_discard = true;
+                if discard.use_state() != ResumeUse::Consumed {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::DiscardUseState,
+                        Some(id),
+                    ));
+                }
+                if !self.same_type_charged(&node.ty, &Type::Unit)? {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::DiscardResultType,
+                        Some(id),
+                    ));
+                }
+            }
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
+                self.validate_effect_handler(
+                    id,
+                    node,
+                    handler,
+                    None,
+                    type_binders,
+                    handler_ids,
+                    clause_contracts,
+                )?;
+            }
+        }
+        Ok(has_discard)
+    }
+
     fn validate_effect_nodes(
         &mut self,
         type_binders: &CoreTypeBinders<'_>,
     ) -> Result<bool, ValidationError> {
-        use super::effect::{EffectExprKind, EffectOperation, ResumeUse};
+        use super::effect::{EffectExprKind, EffectOperation};
 
         let mut handler_ids = HashSet::new();
         let mut clause_contracts = HashMap::new();
@@ -13507,105 +14007,13 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             let node = self.node(id)?;
             self.validate_effect_type_rows(&node.ty, type_binders, id)?;
             self.validate_effect_row(&node.effects, type_binders, id)?;
-            match &node.kind {
-                EffectExprKind::Operation(EffectOperation::ProviderStateAccess(_)) => {
-                    if !self
-                        .provider_state_accesses
-                        .is_some_and(|proof| proof.contains(self.program, id))
-                    {
-                        return Err(ValidationError::new(
-                            ValidationReason::ResourceEscape,
-                            Some(id),
-                        ));
-                    }
-                }
-                EffectExprKind::Operation(EffectOperation::Cleanup(scope)) => {
-                    self.validate_cleanup_owner(id, node, scope)?
-                }
-                EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
-                    self.validate_registration_owner(id, node, scope)?;
-                }
-                EffectExprKind::Pure(PureExprKind::Computation(
-                    PureComputation::TypeApplication(application),
-                )) => {
-                    self.charge_type_work(application.arguments().len())?;
-                    for argument in application.arguments() {
-                        self.validate_effect_type_rows(argument, type_binders, id)?;
-                    }
-                    for row in application.row_arguments() {
-                        self.validate_effect_row(row, type_binders, id)?;
-                    }
-                    self.validate_pure_effect_row(id, node, type_binders)?;
-                }
-                EffectExprKind::Pure(_) => self.validate_pure_effect_row(id, node, type_binders)?,
-                EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
-                    self.validate_resource_node(id, node, resource)?;
-                }
-                EffectExprKind::Operation(EffectOperation::Request(request)) => {
-                    self.validate_effect_instance(&request.effect, type_binders, id)?;
-                    let (domain, result) = self.effect_signature(
-                        &request.effect,
-                        request.operation,
-                        id,
-                        type_binders,
-                    )?;
-                    let operand = self.node(request.operand)?;
-                    if !self.same_type_charged(&operand.ty, &domain)? {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::RequestArgumentType,
-                            Some(id),
-                        ));
-                    }
-                    let requested = self.singleton_effect_row_charged(&request.effect, id)?;
-                    let expected =
-                        self.union_effect_rows_charged(&operand.effects, &requested, id)?;
-                    if !self.same_type_charged(&node.ty, &result)? {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::RequestResultType,
-                            Some(id),
-                        ));
-                    }
-                    if !self.same_effect_row_charged(&node.effects, &expected, id)? {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::RequestEffectRow,
-                            Some(id),
-                        ));
-                    }
-                }
-                EffectExprKind::Operation(EffectOperation::Resume(resume)) => {
-                    if resume.use_state != ResumeUse::Consumed {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::ResumeUseState,
-                            Some(id),
-                        ));
-                    }
-                }
-                EffectExprKind::Operation(EffectOperation::Discard(discard)) => {
-                    has_discard = true;
-                    if discard.use_state() != ResumeUse::Consumed {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::DiscardUseState,
-                            Some(id),
-                        ));
-                    }
-                    if !self.same_type_charged(&node.ty, &Type::Unit)? {
-                        return Err(ValidationError::with_cause(
-                            ValidationCause::DiscardResultType,
-                            Some(id),
-                        ));
-                    }
-                }
-                EffectExprKind::Operation(EffectOperation::Handler(handler)) => {
-                    self.validate_effect_handler(
-                        id,
-                        node,
-                        handler,
-                        type_binders,
-                        &mut handler_ids,
-                        &mut clause_contracts,
-                    )?;
-                }
-            }
+            has_discard |= self.validate_effect_node_kind(
+                id,
+                node,
+                type_binders,
+                &mut handler_ids,
+                &mut clause_contracts,
+            )?;
         }
         for (index, node) in self.program.nodes.iter().enumerate() {
             match &node.kind {
@@ -13937,6 +14345,65 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         }
     }
 
+    fn provider_scope_state_access(&self, id: NodeId) -> Result<bool, ValidationError> {
+        for node in &self.program.nodes {
+            self.charge_type_work(1)?;
+            let super::effect::EffectExprKind::Operation(
+                super::effect::EffectOperation::ProviderScope(scope),
+            ) = &node.kind
+            else {
+                continue;
+            };
+            let mut budget = TypeWorkBudget::with_limit(
+                CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+            );
+            let authenticated = scope
+                .descriptor
+                .specialization()
+                .ok_or_else(|| ValidationError::new(ValidationReason::ResourceEscape, Some(id)))?
+                .authenticates_state_access(self.program, scope, id, &mut budget);
+            self.charge_type_work(budget.used())?;
+            if authenticated? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn remove_provider_native_row(
+        &self,
+        row: &EffectRow,
+        native: &EffectInstance,
+        id: NodeId,
+    ) -> Result<EffectRow, ValidationError> {
+        let mut budget = TypeWorkBudget::with_limit(
+            CORE_VALIDATION_TYPE_WORK_LIMIT.saturating_sub(self.type_work.get()),
+        );
+        let removed = super::provider::interpret_native_phase_row(row, native, &mut budget);
+        self.charge_type_work(budget.used())?;
+        removed.map_err(|error| ValidationError::new(error.reason(), Some(id)))
+    }
+
+    fn least_scoped_handler_output(
+        &self,
+        id: NodeId,
+        handler: &super::effect::HandlerNode,
+        type_binders: &CoreTypeBinders<'_>,
+    ) -> Result<EffectRow, ValidationError> {
+        let body =
+            self.least_handler_output_with_owner(handler.body(), type_binders, Some(handler.id()))?;
+        let mut row = self.provider_body_outward_row(&body, &handler.effect, id)?;
+        for clause in handler.clauses() {
+            let demand = self.least_handler_output_with_owner(
+                clause.body(),
+                type_binders,
+                Some(handler.id()),
+            )?;
+            row = self.union_effect_rows_charged(&row, &demand, id)?;
+        }
+        Ok(row)
+    }
+
     fn least_handler_output(
         &self,
         root: NodeId,
@@ -13983,7 +14450,14 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                 .map_err(|_| ValidationError::new(ValidationReason::Resource, Some(root)))?;
             discovered.insert(id);
             let node = self.node(id)?;
-            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) = &node.kind
+            let discovered_handler = match &node.kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    Some(&scope.handler)
+                }
+                _ => None,
+            };
+            if let Some(handler) = discovered_handler
                 && !handlers.contains(&handler.id())
             {
                 self.charge_type_work(1)?;
@@ -14090,6 +14564,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                             if !self
                                 .provider_state_accesses
                                 .is_some_and(|proof| proof.contains(self.program, id))
+                                && !self.provider_scope_state_access(id)?
                             {
                                 return Err(ValidationError::new(
                                     ValidationReason::ResourceEscape,
@@ -14097,6 +14572,34 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                                 ));
                             }
                             self.clone_effect_row_charged(child_row(access.operand())?)?
+                        }
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                            let mut row = self.provider_body_outward_row(
+                                child_row(scope.handler.body())?,
+                                &scope.handler.effect,
+                                id,
+                            )?;
+                            for clause in scope.handler.clauses() {
+                                row = self.union_effect_rows_charged(
+                                    &row,
+                                    child_row(clause.body())?,
+                                    id,
+                                )?;
+                            }
+                            row = self.remove_provider_native_row(
+                                &row,
+                                scope.descriptor.native_effect(),
+                                id,
+                            )?;
+                            for root in [scope.acquire.body, scope.finish.body] {
+                                let phase = self.remove_provider_native_row(
+                                    child_row(root)?,
+                                    scope.descriptor.native_effect(),
+                                    id,
+                                )?;
+                                row = self.union_effect_rows_charged(&row, &phase, id)?;
+                            }
+                            self.union_effect_rows_charged(child_row(scope.initializer)?, &row, id)?
                         }
                         EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                             let outward = self.resource_outward_row(
@@ -14171,6 +14674,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         id: NodeId,
         node: &StoredNode<super::effect::EffectOperationFamily>,
         handler: &super::effect::HandlerNode,
+        scoped_output: Option<&crate::types::ComputationType>,
         type_binders: &CoreTypeBinders<'_>,
         handler_ids: &mut HashSet<super::effect::HandlerId>,
         clause_contracts: &mut HashMap<
@@ -14178,6 +14682,8 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             EffectClauseContract,
         >,
     ) -> Result<(), ValidationError> {
+        let answer = scoped_output.map_or(&node.ty, |output| output.value());
+        let output = scoped_output.map_or(&node.effects, |output| output.effects());
         self.charge_type_work(1)?;
         handler_ids
             .try_reserve(1)
@@ -14313,16 +14819,20 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         let remainder = if conditional {
             None
         } else {
-            Some(self.handler_outward_row(&body.effects, handler, id)?)
+            Some(if scoped_output.is_some() {
+                self.provider_body_outward_row(&body.effects, &handler.effect, id)?
+            } else {
+                self.handler_outward_row(&body.effects, handler, id)?
+            })
         };
-        if !self.same_type_charged(&body.ty, &node.ty)? {
+        if !self.same_type_charged(&body.ty, answer)? {
             return Err(ValidationError::with_cause(
                 ValidationCause::HandlerBodyType,
                 Some(id),
             ));
         }
         if let Some(remainder) = &remainder
-            && !self.effect_row_subset_charged(remainder, &node.effects, id)?
+            && !self.effect_row_subset_charged(remainder, output, id)?
         {
             return Err(ValidationError::with_cause(
                 ValidationCause::HandlerBodyEffects,
@@ -14343,9 +14853,16 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             if clause_contracts
                 .insert(
                     (handler.id, clause.resume),
-                    EffectClauseContract::Ordinary {
-                        handler: id,
-                        clause: clause_index,
+                    if scoped_output.is_some() {
+                        EffectClauseContract::Scoped {
+                            scope: id,
+                            clause: clause_index,
+                        }
+                    } else {
+                        EffectClauseContract::Ordinary {
+                            handler: id,
+                            clause: clause_index,
+                        }
                     },
                 )
                 .is_some()
@@ -14375,16 +14892,21 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             }
             let clause_body = self.node(clause.body())?;
             let view = self.borrowed_clause_contract(
-                EffectClauseContract::Ordinary {
-                    handler: id,
-                    clause: clause_index,
+                if scoped_output.is_some() {
+                    EffectClauseContract::Scoped {
+                        scope: id,
+                        clause: clause_index,
+                    }
+                } else {
+                    EffectClauseContract::Ordinary {
+                        handler: id,
+                        clause: clause_index,
+                    }
                 },
                 id,
             )?;
             self.validate_clause_pattern_and_answer(&view, id, type_binders)?;
-            if !conditional
-                && !self.effect_row_subset_charged(&clause_body.effects, &node.effects, id)?
-            {
+            if !conditional && !self.effect_row_subset_charged(&clause_body.effects, output, id)? {
                 return Err(ValidationError::with_cause(
                     ValidationCause::HandlerClauseEffects,
                     Some(id),
@@ -14394,8 +14916,12 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
         if conditional {
             return Ok(());
         }
-        let least = self.least_handler_output(id, type_binders)?;
-        if !self.same_effect_row_charged(&node.effects, &least, id)? {
+        let least = if scoped_output.is_some() {
+            self.least_scoped_handler_output(id, handler, type_binders)?
+        } else {
+            self.least_handler_output(id, type_binders)?
+        };
+        if !self.same_effect_row_charged(output, &least, id)? {
             return Err(ValidationError::with_cause(
                 ValidationCause::HandlerOutputRow,
                 Some(id),
@@ -14429,6 +14955,27 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
                     clause,
                     answer: std::borrow::Cow::Borrowed(&node.ty),
                     output: ClauseOutput::Ordinary(&node.effects),
+                })
+            }
+            EffectClauseContract::Scoped { scope, clause } => {
+                let node = self.node(scope)?;
+                let super::effect::EffectExprKind::Operation(
+                    super::effect::EffectOperation::ProviderScope(scope),
+                ) = &node.kind
+                else {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::ResumeHandlerShape,
+                        Some(id),
+                    ));
+                };
+                let clause = scope.handler.clauses().get(clause).ok_or_else(|| {
+                    ValidationError::with_cause(ValidationCause::ResumeMissingClause, Some(id))
+                })?;
+                Ok(BorrowedClauseContract {
+                    effect: scope.handler.effect(),
+                    clause,
+                    answer: std::borrow::Cow::Borrowed(scope.handler_output.value()),
+                    output: ClauseOutput::Ordinary(scope.handler_output.effects()),
                 })
             }
             EffectClauseContract::Provider { clause } => {
@@ -18435,6 +18982,7 @@ mod tests {
                 id,
                 node,
                 handler,
+                None,
                 &HashMap::new(),
                 &mut HashSet::new(),
                 &mut HashMap::new(),
@@ -18659,7 +19207,9 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(ordinal, binder)| MethodEvidenceLexicalOwner {
-                acquisition: Some(authority),
+                resource: Some(crate::core::dialect::MethodEvidenceResourceOwner::Builtin(
+                    authority,
+                )),
                 source_parameters: Box::new([]),
                 source: authority.provider,
                 method: crate::interface::MethodId::new(interface.id, ordinal as u32),

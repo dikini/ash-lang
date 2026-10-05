@@ -1,9 +1,13 @@
 //! DN-0036 evidence for complete source owner arguments and imported closure.
 use ash::{
     driver::{PipelineFailure, RunConfiguration, run_path},
+    elaborate::check_module,
     foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
-    module::{ForeignRegistrationId, LoadGraphError, ModuleRoots},
+    module::{ForeignRegistrationId, LoadGraphError, ModuleRoots, load_module_graph},
     parser::{ResourceFailure, STRUCTURAL_DEPTH_LIMIT},
+    resolve::{DependencyExports, ResolveModuleError, ResolveReason, resolve_module},
+    resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind, ResolvedModule},
+    types::{EffectRowVariable, KindedArgument},
 };
 use std::{
     fs,
@@ -50,6 +54,37 @@ impl FixtureCopy {
             "fixture mutation must reach its source site"
         );
         fs::write(path, source.replacen(before, after, 1)).unwrap();
+    }
+    fn resolve_entry(&self, source: &str) -> Result<ResolvedModule, ResolveModuleError> {
+        fs::write(self.0.join("entry.ash"), source).unwrap();
+        let graph = load_module_graph(&self.0.join("entry.ash"), &roots()).unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let resolved = resolve_module(loaded, &dependencies)?;
+            if loaded.id() == graph.entry() {
+                return Ok(resolved);
+            }
+            checked.push(
+                check_module(resolved)
+                    .expect("the imported mixed-owner fixture must remain admitted"),
+            );
+        }
+        panic!("the loaded entry must occur in its graph")
     }
     fn run(&self) -> Result<ash::driver::Observation, ash::driver::FileFailure> {
         run_path(RunConfiguration {
@@ -194,4 +229,139 @@ fn nested_owner_rows_obey_the_existing_depth_limit_on_a_small_stack() {
             assert!(!failure.is_source_rejection(), "a replaceable implementation depth limit is not a language rejection");
         }
     }).unwrap().join().unwrap();
+}
+
+#[test]
+fn resource_instance_actuals_preserve_preceding_row_scope_and_order() {
+    let tree = FixtureCopy::new();
+    let module = tree.resolve_entry("import library as Library\nprobe<Delta : EffectRow> : (Unit -> Unit ! {| Delta}) -> Unit\nprobe callback = resource Library.Connection<C, {| Delta}> db = () {\n()\n}\nmain : Unit -> Unit\nmain () = ()\n").expect("the complete imported resource actual must resolve before fresh identity admission");
+    let ResolvedDefinitionKind::Equational(probe) = &module.definitions()[0].kind else {
+        panic!("equational probe")
+    };
+    let delta = probe.interface.type_parameters[0].id;
+    let ResolvedExprKind::ProviderResource(instance) = &probe.equations[0].body.kind else {
+        panic!("resource instance")
+    };
+    let arguments = instance.arguments.as_ref().expect("explicit remainder");
+    assert_eq!(arguments.len(), 1);
+    let KindedArgument::RowArg(row) = &arguments[0].ty else {
+        panic!("written row tag")
+    };
+    assert_eq!(
+        row.tail().unwrap().variable(),
+        EffectRowVariable::Rigid(delta)
+    );
+    assert_ne!(instance.identity.id, delta);
+    assert!(row.known().is_empty());
+    assert!(
+        row.tail().unwrap().lacks().is_empty(),
+        "instance resolution must not invent lacks conditions"
+    );
+}
+
+#[test]
+fn resource_instance_actuals_reject_omission_wrong_tags_and_fresh_scope_dependencies() {
+    for (name, application, initializer) in [
+        ("omitted row slot", "C", "()"),
+        ("extra actual", "C, {}, Int", "()"),
+        ("bare Type tag", "C, Delta", "()"),
+        ("fresh row tail", "C, {| C}", "()"),
+        (
+            "fresh nested identity",
+            "C, {Library.ConnectionOps<C, {}>}",
+            "()",
+        ),
+        ("fresh initializer access", "C, {}", "db"),
+    ] {
+        let tree = FixtureCopy::new();
+        let source = format!(
+            "import library as Library\nprobe<Delta : EffectRow> : (Unit -> Unit ! {{| Delta}}) -> Unit\nprobe callback = resource Library.Connection<{application}> db = {initializer} {{\n()\n}}\nmain : Unit -> Unit\nmain () = ()\n"
+        );
+        let failure = tree.resolve_entry(&source).expect_err(name);
+        let rejected = match &failure {
+            ResolveModuleError::Resolution(error) => matches!(
+                error.reason,
+                ResolveReason::TypeKind | ResolveReason::UnknownType | ResolveReason::UnknownName
+            ),
+            ResolveModuleError::Kind(ash::kind::KindFailure::Source(error)) => {
+                name == "bare Type tag" && error.reason == ash::kind::KindReason::Argument
+            }
+            _ => false,
+        };
+        assert!(
+            rejected,
+            "{name} must reject at a source boundary: {failure:?}"
+        );
+    }
+}
+
+#[test]
+fn resource_instance_rows_use_the_existing_depth_limit() {
+    std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+        for depth in [STRUCTURAL_DEPTH_LIMIT + 1, 1_024] {
+            let tree = FixtureCopy::new();
+            let row = format!("{}{{Library.Inner}}{}", "{Library.Outer<".repeat(depth - 1), ">}".repeat(depth - 1));
+            tree.replace("entry.ash", "main () = ()", &format!("main () = resource Library.Connection<C, {row}> db = () {{\n()\n}}"));
+            let failure = tree.run().expect_err("resource instance actual rows must consume the existing structural depth budget");
+            let Some(LoadGraphError::Syntax(syntax)) = failure.graph_failure() else { panic!("depth must reject before source checking: {failure:?}") };
+            assert_eq!(syntax.resource, Some(ResourceFailure::StructuralDepth { limit: STRUCTURAL_DEPTH_LIMIT }));
+            assert!(syntax.lexical.is_empty());
+            assert!(syntax.parser.is_empty());
+        }
+    }).unwrap().join().unwrap();
+}
+
+#[test]
+fn row_free_resource_instances_preserve_explicit_and_deferred_retained_arguments() {
+    for explicit in [false, true] {
+        let tree = FixtureCopy::new();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/provider-experiments/sqlite-copying/sqlite.ash"),
+            tree.0.join("sqlite.ash"),
+        )
+        .unwrap();
+        let statement_parameters = if explicit { "S, C" } else { "S" };
+        let source = format!(
+            "import sqlite as Sqlite\nmain : Unit -> Unit\nmain () = resource Sqlite.Connection<C> db = (Sqlite.memory ()) {{\nresource Sqlite.Statement<{statement_parameters}> stmt = (db, (Sqlite.select_parameter ())) {{\n()\n}}\n}}\n"
+        );
+        let module = tree
+            .resolve_entry(&source)
+            .expect("both row-free source forms should resolve through the same owner carrier");
+        let ResolvedDefinitionKind::Equational(main) = &module.definitions()[0].kind else {
+            panic!("equational entry")
+        };
+        let ResolvedExprKind::ProviderResource(connection) = &main.equations[0].body.kind else {
+            panic!("connection")
+        };
+        let ResolvedExprKind::Block(body) = &connection.body.kind else {
+            panic!("connection body")
+        };
+        let ResolvedExprKind::ProviderResource(statement) = &body.result.kind else {
+            panic!("statement")
+        };
+        // Kind admission must use the imported defining inventory, while the
+        // source registry and both fresh identities remain in the client.
+        assert_ne!(connection.definition.module(), module.module());
+        assert_ne!(statement.definition.module(), module.module());
+        assert_eq!(connection.identity.id.module(), Some(module.module()));
+        assert_eq!(statement.identity.id.module(), Some(module.module()));
+        assert_ne!(connection.identity.id, statement.identity.id);
+        assert!(connection.arguments.is_none());
+        if explicit {
+            let arguments = statement
+                .arguments
+                .as_ref()
+                .expect("explicit retained owner");
+            assert_eq!(arguments.len(), 1);
+            assert!(
+                matches!(arguments[0].ty, KindedArgument::TypeArg(ash::types::Type::Variable(identity)) if identity == connection.identity.id)
+            );
+        } else {
+            assert!(
+                statement.arguments.is_none(),
+                "initializer inference remains deferred to typing"
+            );
+        }
+    }
 }

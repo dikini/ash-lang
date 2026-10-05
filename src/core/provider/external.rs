@@ -300,6 +300,7 @@ fn authenticate_plain_externals_context<'a>(
         &accesses,
         None,
         entry,
+        None,
         work,
     )?;
     Ok(AuthenticatedProviderExternals {
@@ -318,6 +319,9 @@ fn authenticate_plain_externals_context<'a>(
 }
 
 impl AuthenticatedProviderExternals<'_> {
+    pub(super) fn authenticates_program(&self, program: &UnvalidatedEffectProgram) -> bool {
+        std::ptr::eq(self.program, program)
+    }
     fn facts(&self) -> ProviderExternalFacts<'_> {
         ProviderExternalFacts {
             imported: self.imported,
@@ -1534,6 +1538,7 @@ pub(crate) fn authenticate_staged_externals<'a>(
         associations,
         occurrence_module,
         None,
+        None,
         work,
     )
 }
@@ -1550,6 +1555,7 @@ pub(crate) fn authenticate_staged_externals_with_defining<'a>(
     canonical: &crate::resolved::ResolvedRegistry,
     associations: &[DraftStateAssociation<'_>],
     occurrence_module: ModuleId,
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
     authenticate_staged_externals_context(
@@ -1564,6 +1570,7 @@ pub(crate) fn authenticate_staged_externals_with_defining<'a>(
         associations,
         occurrence_module,
         None,
+        native_authentication,
         work,
     )
 }
@@ -1575,6 +1582,7 @@ pub(in crate::core) fn authenticate_handler_staged_externals<'a>(
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
     associations: &[DraftStateAssociation<'_>],
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
     if occurrences.len() != entry.imports.len() {
@@ -1645,6 +1653,7 @@ pub(in crate::core) fn authenticate_handler_staged_externals<'a>(
         associations,
         entry.module.module(),
         Some(entry),
+        native_authentication,
         work,
     )
 }
@@ -1665,6 +1674,7 @@ fn authenticate_staged_externals_context<'a>(
     associations: &[DraftStateAssociation<'_>],
     occurrence_module: ModuleId,
     entry: Option<&'a super::HandlerFragmentEntry<'a>>,
+    native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
     let facts = ProviderExternalFacts { imported, defining };
@@ -2098,6 +2108,7 @@ fn authenticate_staged_externals_context<'a>(
         &accesses,
         Some(&method_evidence),
         entry,
+        native_authentication,
         work,
     )?;
 
@@ -3483,6 +3494,11 @@ struct RetainedHandlerEvidenceAnchor {
 }
 
 impl RetainedHandlerExternals {
+    pub(in crate::core) fn original_catalog(
+        &self,
+    ) -> &std::sync::Arc<super::super::dialect::MethodEvidenceCatalog> {
+        &self.catalog
+    }
     pub(crate) fn authenticate_publication(
         &self,
         committed: bool,
@@ -3514,6 +3530,73 @@ impl RetainedHandlerExternals {
                 for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
                     require_same_argument(expected, actual, occurrence.node, work)?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Revalidates the frozen original selections against their exact pending
+    /// publication. This borrows preparation evidence and creates no authority.
+    pub(crate) fn authenticate_pending(
+        &self,
+        publication: &crate::evidence::PendingEvidencePublication,
+        facts: ProviderExternalFacts<'_>,
+        canonical: &crate::resolved::ResolvedRegistry,
+        module: ModuleId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        charge(work, self.occurrences.len())?;
+        for occurrence in &self.occurrences {
+            charge(work, occurrence.slots.len())?;
+            if occurrence.slots.len() != occurrence.checked_evidence.len() {
+                return Err(invalid(occurrence.node));
+            }
+            for (slot, (expected, selected)) in
+                occurrence.slots.iter().zip(&occurrence.checked_evidence)
+            {
+                if slot.selection().is_some() {
+                    return Err(invalid(occurrence.node));
+                }
+                let pending = publication
+                    .occurrence(slot.storage_id(), None, work)
+                    .map_err(|failure| match failure {
+                        crate::evidence::SelectionFailure::TypeResource => resource(),
+                        _ => invalid(occurrence.node),
+                    })?;
+                if pending.method.is_some()
+                    || pending.value_type.is_some()
+                    || !pending.method_arguments.is_empty()
+                    || !pending.selection.same_original_owner(selected)
+                    || pending.application.interface() != expected.interface()
+                    || pending.application.arguments().len() != expected.arguments().len()
+                {
+                    return Err(invalid(occurrence.node));
+                }
+                for (expected, actual) in expected
+                    .arguments()
+                    .iter()
+                    .zip(pending.application.arguments())
+                {
+                    require_same_argument(expected, actual, occurrence.node, work)?;
+                }
+                let mut constraints =
+                    crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
+                let result = crate::evidence_validation::validate_provider_closed_selection(
+                    facts,
+                    canonical,
+                    module,
+                    pending.selection,
+                    pending.application,
+                    &mut constraints,
+                    work,
+                    occurrence.origin.as_origin().primary_span(),
+                );
+                charge(work, constraints.used())?;
+                result.map_err(|failure| match failure.reason() {
+                    crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted
+                    | crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => resource(),
+                    _ => invalid(occurrence.node),
+                })?;
             }
         }
         Ok(())
@@ -3556,12 +3639,17 @@ impl RetainedHandlerExternals {
         occurrences: impl IntoIterator<Item = (NodeId, &'a crate::resolved::ResolvedOccurrence)>,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
-        if !super::super::dialect::same_imported_method_evidence_catalog(
-            &self.catalog,
-            &program.method_evidence,
-            work,
-        )
-        .map_err(|()| resource())?
+        // Retention already authenticated this immutable catalogue. Exact
+        // allocation identity proves equality; actual graph and authority
+        // reconstruction below still run for every owning occurrence.
+        charge(work, 1)?;
+        if !std::sync::Arc::ptr_eq(&self.catalog, &program.method_evidence)
+            && !super::super::dialect::same_imported_method_evidence_catalog(
+                &self.catalog,
+                &program.method_evidence,
+                work,
+            )
+            .map_err(|()| resource())?
         {
             return Err(invalid(program.root));
         }
@@ -3732,10 +3820,9 @@ impl RetainedHandlerExternals {
     }
 }
 
+// Source type/capture relations are retained in their authenticated occurrence
+// records. The global inventory contributes only original source origins here.
 struct RetainedHandlerGlobal {
-    binder: BinderId,
-    scheme: crate::interface::ConstrainedScheme,
-    capture: super::super::capture::CaptureValueSummary,
     origin: RetainedHandlerOrigin,
 }
 
@@ -3907,12 +3994,6 @@ impl AuthenticatedProviderExternals<'_> {
             charge(work, 1)?;
             globals.try_reserve(1).map_err(|_| resource())?;
             globals.push(RetainedHandlerGlobal {
-                binder: global.binder(),
-                scheme: retain_handler_scheme(global.scheme(), work)?,
-                capture: global
-                    .capture()
-                    .clone_with_budget(work)
-                    .map_err(|()| resource())?,
                 origin: RetainedHandlerOrigin::copy(global.origin(), work)?,
             });
         }

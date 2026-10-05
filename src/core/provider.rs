@@ -22,7 +22,28 @@ use crate::{
     },
 };
 
+pub(in crate::core) mod copy;
+pub(crate) use copy::{
+    ProviderCatalogRelocation, ProviderCopiedForest, ProviderCopyContext,
+    copy_prepared_provider_forest, copy_provider_forest,
+};
 mod access;
+pub(in crate::core) mod projection;
+mod scope;
+pub(in crate::core) mod specialization;
+pub(crate) use scope::{
+    AdmittedProviderScope, ProviderForwardingMethod, ProviderLifecycleEntry,
+    ProviderScopeAuthority, ProviderScopeNode, ProviderScopeProtocol,
+    derive_provider_scope_protocol, interpret_native_phase_row,
+};
+pub(crate) use specialization::{
+    LifecycleOriginal, ResolvedProviderHandlerRows, admit_lifecycle_original,
+};
+pub(crate) use specialization::{
+    ProviderCopiedTemplate, ProviderFreshening, ProviderOccurrenceRelocation,
+    ProviderOriginalTemplate, ProviderScopeAdmission, ProviderSpecializationEntries,
+    ProviderTemplateSubstitution,
+};
 mod external;
 mod handler;
 mod row;
