@@ -661,25 +661,56 @@ pub(crate) struct MethodUse {
     pub(crate) arguments: usize,
 }
 
+/// Original method records and their immutable lexical-reference projection.
+#[derive(Default)]
+struct MethodUseGroup<'a> {
+    records: Vec<&'a MethodUse>,
+    free_binders: Vec<BinderId>,
+    replaces_node: bool,
+}
+
 /// Analysis-local ordered method records indexed by their exact Core node.
 struct MethodUses<'a> {
-    by_node: HashMap<usize, Vec<&'a MethodUse>>,
+    by_node: HashMap<usize, MethodUseGroup<'a>>,
 }
 
 impl<'a> MethodUses<'a> {
     fn new(methods: &'a [MethodUse], budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
         // One input visit, at most one hash entry, and one retained reference
-        // per record. Repeated-node records retain their original order.
+        // per record. Additional lexical descriptors and binder entries pay
+        // once while deriving them from those same original records.
         let work = methods.len().checked_mul(3).ok_or(Failure::Resource)?;
         charge(budget, work)?;
-        let mut by_node = HashMap::<usize, Vec<&MethodUse>>::new();
+        let mut by_node = HashMap::<usize, MethodUseGroup<'a>>::new();
         by_node
             .try_reserve(methods.len())
             .map_err(|_| Failure::Resource)?;
         for method in methods {
-            let records = by_node.entry(index(method.node)).or_default();
-            records.try_reserve(1).map_err(|_| Failure::Resource)?;
-            records.push(method);
+            let group = match by_node.entry(index(method.node)) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    charge(budget, 1)?;
+                    entry.insert(MethodUseGroup::default())
+                }
+            };
+            group
+                .records
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+            if method.requirement.is_none() {
+                if let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
+                    method.target
+                {
+                    charge(budget, 1)?;
+                    group
+                        .free_binders
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    group.free_binders.push(binder);
+                }
+                group.replaces_node = true;
+            }
+            group.records.push(method);
         }
         Ok(Self { by_node })
     }
@@ -689,9 +720,35 @@ impl<'a> MethodUses<'a> {
             return Ok(&[]);
         }
         charge(budget, 1)?;
-        let records = self.by_node.get(&node).map_or(&[][..], Vec::as_slice);
+        let records = self
+            .by_node
+            .get(&node)
+            .map_or(&[][..], |group| group.records.as_slice());
         charge(budget, records.len())?;
         Ok(records)
+    }
+
+    fn lexical_at(
+        &self,
+        node: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(bool, &[BinderId]), Failure> {
+        if self.by_node.is_empty() {
+            return Ok((false, &[]));
+        }
+        charge(budget, 1)?;
+        let Some(group) = self.by_node.get(&node) else {
+            return Ok((false, &[]));
+        };
+        charge(
+            budget,
+            group
+                .free_binders
+                .len()
+                .checked_add(1)
+                .ok_or(Failure::Resource)?,
+        )?;
+        Ok((group.replaces_node, &group.free_binders))
     }
 }
 
@@ -939,23 +996,15 @@ fn free_values_with_methods<F: CoreOperationFamily>(
                 continue;
             }
         }
-        let node_methods = methods.at(id, budget)?;
-        for method in node_methods {
-            if method.requirement.is_none()
-                && let MethodTarget::Binder(binder) | MethodTarget::Adapter { binder, .. } =
-                    method.target
-            {
-                references.try_reserve(1).map_err(|_| Failure::Resource)?;
-                references.push(binder);
-            }
+        let (replaces_node, free_binders) = methods.lexical_at(id, budget)?;
+        for &binder in free_binders {
+            references.try_reserve(1).map_err(|_| Failure::Resource)?;
+            references.push(binder);
         }
         // A selected source method occurrence is replaced by its authenticated
         // route in the value graph. Its obsolete placeholder children are not
         // lexical dependencies of the selected callable.
-        if node_methods
-            .iter()
-            .any(|method| method.requirement.is_none())
-        {
+        if replaces_node {
             continue;
         }
         let mut binders = Vec::new();
@@ -1161,11 +1210,96 @@ fn retain_metadata_variables(
     Ok(())
 }
 
+// Created and discarded within one Graph::build_in_domain over its fixed
+// borrowed original nodes, operation family and operation projection. Keys are
+// original node coordinates in that slice, never names, spans or copied shapes.
+#[derive(Default)]
+struct NodeMetadataHeaders {
+    variables: HashMap<usize, Vec<TypeVariableId>>,
+}
+
+impl NodeMetadataHeaders {
+    fn retain<F: CoreOperationFamily>(
+        &mut self,
+        value: &mut MetadataVariables,
+        nodes: &[StoredNode<F>],
+        id: usize,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if let Some(variables) = self.variables.get(&id) {
+            charge(budget, variables.len())?;
+            for &variable in variables {
+                value.retain(variable, budget)?;
+            }
+            return Ok(());
+        }
+        let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        let mut header = MetadataVariables::default();
+        retain_type_variables(&mut header, &node.ty, budget)?;
+        retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        match operation(&node.kind) {
+            Some(EffectOperation::ProviderScope(scope)) => {
+                for argument in scope
+                    .descriptor
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
+            Some(EffectOperation::Handler(handler)) => {
+                for argument in handler.effect().arguments() {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+            }
+            _ => {}
+        }
+        if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+            F::pure(&node.kind)
+        {
+            for argument in application.arguments() {
+                retain_type_variables(&mut header, argument, budget)?;
+            }
+            for row in application.row_arguments() {
+                retain_row_variables(&mut header, row, budget)?;
+            }
+        }
+        // Admit the complete retained scalar projection and its index before
+        // publication. The ordinary structural readers above retain their own
+        // per-root Forall filtering and original first-discovery order.
+        charge(
+            budget,
+            header
+                .variables
+                .len()
+                .checked_add(1)
+                .ok_or(Failure::Resource)?,
+        )?;
+        self.variables
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        charge(budget, header.variables.len())?;
+        for &variable in &header.variables {
+            value.retain(variable, budget)?;
+        }
+        // A refused derivation or output merge cannot expose a completed entry.
+        // No allocation or fallible work follows this publication.
+        self.variables.insert(id, header.variables);
+        Ok(())
+    }
+}
+
 fn retain_function_metadata<F: CoreOperationFamily>(
     value: &mut MetadataVariables,
     nodes: &[StoredNode<F>],
     root: usize,
     operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    headers: &mut NodeMetadataHeaders,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
     let mut pending = copy_slice(&[root], budget)?;
@@ -1178,8 +1312,9 @@ fn retain_function_metadata<F: CoreOperationFamily>(
             continue;
         }
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
-        retain_type_variables(value, &node.ty, budget)?;
-        retain_row_variables(value, F::effect_row(&node.effects), budget)?;
+        headers.retain(value, nodes, id, operation, budget)?;
+        // These are subtree bindings, not header facts: collect them for every
+        // reader and preserve the original final whole-subtree exclusion.
         match operation(&node.kind) {
             Some(EffectOperation::Resource(resource)) => {
                 bound.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1189,21 +1324,6 @@ fn retain_function_metadata<F: CoreOperationFamily>(
                 charge(budget, 1)?;
                 bound.try_reserve(1).map_err(|_| Failure::Resource)?;
                 bound.push(scope.descriptor.identity());
-                for argument in scope
-                    .descriptor
-                    .arguments()
-                    .iter()
-                    .chain(scope.handler.effect().arguments())
-                {
-                    retain_metadata_variables(value, Metadata::Argument(argument), budget)?;
-                }
-                retain_type_variables(value, scope.handler_output.value(), budget)?;
-                retain_row_variables(value, scope.handler_output.effects(), budget)?;
-            }
-            Some(EffectOperation::Handler(handler)) => {
-                for argument in handler.effect().arguments() {
-                    retain_metadata_variables(value, Metadata::Argument(argument), budget)?;
-                }
             }
             _ => {}
         }
@@ -1220,16 +1340,6 @@ fn retain_function_metadata<F: CoreOperationFamily>(
                     .iter()
                     .map(|(variable, _)| *variable),
             );
-        }
-        if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
-            F::pure(&node.kind)
-        {
-            for argument in application.arguments() {
-                retain_type_variables(value, argument, budget)?;
-            }
-            for row in application.row_arguments() {
-                retain_row_variables(value, row, budget)?;
-            }
         }
         charge(budget, F::child_count(&node.kind))?;
         pending
@@ -4053,6 +4163,368 @@ mod tests {
         types::EffectRow,
     };
 
+    // Metadata extraction reads these original typed envelopes; this fixture
+    // does not claim independent executable admission for its scalar payloads.
+    fn metadata_header_nodes() -> Vec<StoredNode<super::super::effect::EffectOperationFamily>> {
+        use super::super::{
+            TypedBinder,
+            dialect::{ArenaId, DialectId},
+            effect::{EffectExprKind, EffectOperationFamily, ResourceScopeNode},
+            literal::UnitNode,
+            type_ops::{TypeAbstractionNode, TypeApplicationNode},
+        };
+        use crate::{
+            interface::LexicalEvidenceId,
+            module::ModuleId,
+            resolved::{ResourceAcquisition, ResourceMethods},
+            source::Origin,
+            types::{
+                ComputationType, EffectId, EffectRowVariable, Kind, KindedArgument,
+                ResourceDefinitionId,
+            },
+        };
+        let module = ModuleId::new(0);
+        let arena = ArenaId::new(0);
+        let file = SourceFile::new("metadata-original", "()").unwrap();
+        let origin = Origin::Source(file.span(ByteRange::new(0, 2).unwrap()).unwrap());
+        let variable = |id| TypeVariableId::generated(id);
+        let node_id = |id| NodeId::new(arena, id);
+        let row = EffectRow::with_tail(
+            Box::new([EffectInstance::new(
+                EffectId::new(module, 0),
+                Box::new([Type::Variable(variable(900))]),
+            )]),
+            EffectRowVariable::Rigid(variable(901)),
+            Box::new([EffectInstance::new(
+                EffectId::new(module, 1),
+                Box::new([Type::Variable(variable(902))]),
+            )]),
+        );
+        let metadata = Type::ResourceApply(
+            ResourceDefinitionId::new(module, 0),
+            Box::new([
+                KindedArgument::TypeArg(Type::EffectfulFunction(
+                    Box::new(Type::Variable(variable(903))),
+                    Box::new(ComputationType::new(
+                        Type::Forall(
+                            Box::new([
+                                (variable(904), Kind::Type),
+                                (variable(911), Kind::EffectRow),
+                            ]),
+                            Box::new(Type::EffectfulFunction(
+                                Box::new(Type::Variable(variable(904))),
+                                Box::new(ComputationType::new(
+                                    Type::Unit,
+                                    EffectRow::open(
+                                        EffectRowVariable::Rigid(variable(911)),
+                                        Box::new([]),
+                                    ),
+                                )),
+                            )),
+                        ),
+                        row.clone(),
+                    )),
+                )),
+                KindedArgument::RowArg(row),
+            ]),
+        );
+        let unit = |ty, effects, kind| StoredNode::<EffectOperationFamily> {
+            dialect: DialectId::named(EffectOperationFamily::DIALECT_NAME),
+            ty,
+            effects,
+            origin: Some(origin.clone()),
+            kind,
+        };
+        vec![
+            unit(
+                metadata,
+                EffectRow::open(EffectRowVariable::Rigid(variable(905)), Box::new([])),
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(UnitNode))),
+            ),
+            unit(
+                Type::Unit,
+                EffectRow::empty(),
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeApplication(
+                    TypeApplicationNode::new_with_row_arguments(
+                        node_id(0),
+                        vec![Type::Variable(variable(906))],
+                        vec![EffectRow::open(
+                            EffectRowVariable::Rigid(variable(907)),
+                            Box::new([EffectInstance::new(
+                                EffectId::new(module, 2),
+                                Box::new([Type::Variable(variable(908))]),
+                            )]),
+                        )],
+                    ),
+                ))),
+            ),
+            unit(
+                Type::Unit,
+                EffectRow::empty(),
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::TypeAbstraction(
+                    TypeAbstractionNode::new(vec![(variable(901), Kind::EffectRow)], node_id(1)),
+                ))),
+            ),
+            unit(
+                Type::Unit,
+                EffectRow::empty(),
+                EffectExprKind::Operation(EffectOperation::Resource(Box::new(
+                    ResourceScopeNode::new(
+                        ResourceAcquisition {
+                            builtin: module,
+                            identity: variable(900),
+                            handle: BinderId::generated(900),
+                            provider: LexicalEvidenceId::new(module, 0),
+                            methods: ResourceMethods::Cell([
+                                BinderId::generated(901),
+                                BinderId::generated(902),
+                            ]),
+                            span: origin.primary_span(),
+                        },
+                        TypedBinder::new(
+                            arena,
+                            BinderId::generated(900),
+                            Type::Int,
+                            origin.clone(),
+                        ),
+                        node_id(0),
+                        node_id(2),
+                    ),
+                ))),
+            ),
+            // Same diagnostic origin and scalar operation; exact original node
+            // identity still names different metadata and a separate entry.
+            unit(
+                Type::Variable(variable(909)),
+                EffectRow::empty(),
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Unit(UnitNode))),
+            ),
+        ]
+    }
+
+    fn metadata_header_operation(kind: &super::super::EffectExprKind) -> Option<&EffectOperation> {
+        match kind {
+            super::super::EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn original_header_projection_keeps_rows_order_forall_and_reader_scope_bindings() {
+        let nodes = metadata_header_nodes();
+        let mut work = TypeWorkBudget::unbounded();
+        let mut headers = NodeMetadataHeaders::default();
+        let mut scoped = MetadataVariables::default();
+        retain_function_metadata(
+            &mut scoped,
+            &nodes,
+            3,
+            metadata_header_operation,
+            &mut headers,
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(headers.variables.len(), 4);
+        let generated = |id| TypeVariableId::generated(id);
+        assert!(
+            !scoped.variables.contains(&generated(900)),
+            "acquired identity stays reader-local"
+        );
+        assert!(
+            !scoped.variables.contains(&generated(901)),
+            "TypeAbstraction stays reader-local"
+        );
+        assert!(
+            !scoped.variables.contains(&generated(904)),
+            "Forall shielding is per type root"
+        );
+        assert!(
+            !scoped.variables.contains(&generated(911)),
+            "Forall shields its row parameter too"
+        );
+        for id in [902, 903, 905, 906, 907, 908] {
+            assert!(scoped.variables.contains(&generated(id)));
+        }
+        assert!(headers.variables[&0].contains(&generated(900)));
+        assert!(headers.variables[&0].contains(&generated(901)));
+        assert!(!headers.variables[&0].contains(&generated(904)));
+
+        let mut warm = MetadataVariables::default();
+        retain_function_metadata(
+            &mut warm,
+            &nodes,
+            3,
+            metadata_header_operation,
+            &mut headers,
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(warm.variables, scoped.variables);
+        assert_eq!(warm.identities, scoped.identities);
+        let mut outside = MetadataVariables::default();
+        retain_function_metadata(
+            &mut outside,
+            &nodes,
+            0,
+            metadata_header_operation,
+            &mut headers,
+            &mut work,
+        )
+        .unwrap();
+        assert!(outside.variables.contains(&generated(900)));
+        assert!(outside.variables.contains(&generated(901)));
+        let mut original = MetadataVariables::default();
+        retain_type_variables(&mut original, &nodes[0].ty, &mut work).unwrap();
+        retain_row_variables(&mut original, &nodes[0].effects, &mut work).unwrap();
+        assert_eq!(
+            outside.variables, original.variables,
+            "original header read order is retained"
+        );
+
+        let mut other = MetadataVariables::default();
+        retain_function_metadata(
+            &mut other,
+            &nodes,
+            4,
+            metadata_header_operation,
+            &mut headers,
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(other.variables, vec![generated(909)]);
+        assert_eq!(headers.variables.len(), 5);
+        // A new graph build starts empty even at the same original position.
+        let mut fresh = NodeMetadataHeaders::default();
+        let mut next_nodes = metadata_header_nodes();
+        next_nodes[0].ty = Type::Variable(generated(910));
+        next_nodes[0].effects = EffectRow::empty();
+        let mut next = MetadataVariables::default();
+        retain_function_metadata(
+            &mut next,
+            &next_nodes,
+            0,
+            metadata_header_operation,
+            &mut fresh,
+            &mut work,
+        )
+        .unwrap();
+        assert_eq!(next.variables, vec![generated(910)]);
+        assert_eq!(fresh.variables.len(), 1);
+    }
+
+    #[test]
+    fn original_header_projection_completion_and_merges_have_exact_refusal_boundaries() {
+        let nodes = metadata_header_nodes();
+        let mut measured = TypeWorkBudget::unbounded();
+        let mut complete = NodeMetadataHeaders::default();
+        let mut output = MetadataVariables::default();
+        complete
+            .retain(
+                &mut output,
+                &nodes,
+                0,
+                metadata_header_operation,
+                &mut measured,
+            )
+            .unwrap();
+        let exact = measured.used();
+        let expected = output.variables.clone();
+        for prefix in [0, 9] {
+            for available in 0..exact {
+                let mut headers = NodeMetadataHeaders::default();
+                let mut output = MetadataVariables::default();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    headers.retain(
+                        &mut output,
+                        &nodes,
+                        0,
+                        metadata_header_operation,
+                        &mut short
+                    ),
+                    Err(Failure::Resource)
+                ));
+                assert!(
+                    headers.variables.is_empty(),
+                    "partial derivation or output merge cannot complete a header"
+                );
+            }
+            for _ in 0..2 {
+                let mut headers = NodeMetadataHeaders::default();
+                let mut output = MetadataVariables::default();
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).unwrap();
+                headers
+                    .retain(
+                        &mut output,
+                        &nodes,
+                        0,
+                        metadata_header_operation,
+                        &mut retry,
+                    )
+                    .unwrap();
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(output.variables, expected);
+                assert_eq!(headers.variables[&0], expected);
+            }
+        }
+        let width = expected.len();
+        let mut warm = TypeWorkBudget::with_limit(1 + 2 * width);
+        complete
+            .retain(&mut output, &nodes, 0, metadata_header_operation, &mut warm)
+            .unwrap();
+        assert_eq!(warm.used(), 1 + 2 * width);
+        assert_eq!(output.variables, expected);
+        for prefix in [0, 9] {
+            for available in 0..1 + 4 * width {
+                let mut output = MetadataVariables::default();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    complete.retain(
+                        &mut output,
+                        &nodes,
+                        0,
+                        metadata_header_operation,
+                        &mut short
+                    ),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(
+                    complete.variables[&0], expected,
+                    "a completed immutable entry survives a refused reader merge"
+                );
+            }
+            let mut output = MetadataVariables::default();
+            let mut retry = TypeWorkBudget::with_limit(prefix + 1 + 4 * width);
+            retry.charge(prefix).unwrap();
+            complete
+                .retain(
+                    &mut output,
+                    &nodes,
+                    0,
+                    metadata_header_operation,
+                    &mut retry,
+                )
+                .unwrap();
+            assert_eq!(retry.used(), prefix + 1 + 4 * width);
+            assert_eq!(output.variables, expected);
+        }
+        let mut invalid = NodeMetadataHeaders::default();
+        assert!(matches!(
+            invalid.retain(
+                &mut MetadataVariables::default(),
+                &nodes,
+                nodes.len(),
+                metadata_header_operation,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+        assert!(invalid.variables.is_empty());
+    }
+
     #[test]
     fn stored_metadata_retains_row_tail_and_lacks_but_not_quantified_variables() {
         let row = TypeVariableId::generated(800);
@@ -4827,19 +5299,82 @@ mod tests {
                 &methods[1]
             ));
             assert!(indexed.at(usize::MAX, budget)?.is_empty());
+            assert_eq!(
+                indexed.lexical_at(index(first), budget)?,
+                (true, &[binder][..])
+            );
+            assert_eq!(indexed.lexical_at(index(second), budget)?, (false, &[][..]));
+            assert_eq!(indexed.lexical_at(usize::MAX, budget)?, (false, &[][..]));
             Ok::<(), Failure>(())
         };
-        // Three construction cells per record, then lookup + matching records.
-        const EXACT: usize = 3 * 4 + (1 + 3) + (1 + 1) + 1;
-        assert!(matches!(
-            run(&mut TypeWorkBudget::with_limit(EXACT - 1)),
-            Err(Failure::Resource)
-        ));
-        for _ in 0..2 {
-            let mut budget = TypeWorkBudget::with_limit(EXACT);
-            run(&mut budget).unwrap();
-            assert_eq!(budget.used(), EXACT);
+        // Original construction 3M, two descriptors and one retained lexical
+        // binder; unchanged full-record lookups, then exact lexical projection.
+        const EXACT: usize = 3 * 4 + 2 + 1 + (1 + 3) + (1 + 1) + 1 + (1 + 1 + 1) + (1 + 1) + 1;
+        for prefix in [0, 9] {
+            for allowance in 0..EXACT {
+                let mut short = TypeWorkBudget::with_limit(prefix + allowance);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            }
+            for _ in 0..2 {
+                let mut budget = TypeWorkBudget::with_limit(prefix + EXACT);
+                budget.charge(prefix).unwrap();
+                run(&mut budget).unwrap();
+                assert_eq!(budget.used(), prefix + EXACT);
+            }
         }
+        // An abstract direct method still prunes its placeholder, even though
+        // it contributes no ordinary binder reference. Dictionary arguments
+        // in the original records remain available to all graph consumers.
+        let mut abstract_only = methods;
+        abstract_only[1].requirement = None;
+        let indexed = MethodUses::new(&abstract_only, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(
+            indexed
+                .lexical_at(index(second), &mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            (true, &[][..])
+        );
+        let indexed = MethodUses::new(&methods, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(
+            free_values_with_methods(
+                &builder.nodes,
+                index(first),
+                &[],
+                &indexed,
+                &[],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap(),
+            vec![binder],
+            "the selected original binder remains a lexical dependency"
+        );
+        assert!(
+            free_values_with_methods(
+                &builder.nodes,
+                index(first),
+                &[binder],
+                &indexed,
+                &[],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap()
+            .is_empty(),
+            "ordinary local ownership still removes a bound binder"
+        );
+        assert!(
+            free_values_with_methods(
+                &builder.nodes,
+                index(second),
+                &[],
+                &indexed,
+                &[],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap()
+            .is_empty(),
+            "dictionary prerequisites are not ordinary lexical binders"
+        );
         let mut zero = TypeWorkBudget::with_limit(0);
         assert!(
             MethodUses::new(&[], &mut zero)
@@ -4847,6 +5382,13 @@ mod tests {
                 .at(0, &mut zero)
                 .unwrap()
                 .is_empty()
+        );
+        assert_eq!(
+            MethodUses::new(&[], &mut zero)
+                .unwrap()
+                .lexical_at(0, &mut zero)
+                .unwrap(),
+            (false, &[][..])
         );
     }
 

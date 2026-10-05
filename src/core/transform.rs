@@ -2351,6 +2351,14 @@ mod tests {
         // Constructor admission reserves both the E=4 consumed bitmap and
         // the E=4 anchor carrier, adding the second E term to prior totals.
         const CONSTRUCTOR_SECOND_CARRIER_WORK: usize = 4;
+        // Index construction adds two E-bounded tables plus one original
+        // expectation visit and retained position per row. Authentication
+        // replaces prior duplicate/whole-table scans with two key lookups,
+        // one retained key, and exact shortlisted original-position visits.
+        const CONSTRUCTOR_INDEX_WORK: usize = 4 * ANCHOR_REPLAY_WORK;
+        const PRIOR_ANCHOR_DUPLICATE_SCAN_WORK: usize = 1 + 2 + 3;
+        const PRIOR_EXPECTATION_SCAN_WORK: usize = 4 * ANCHOR_REPLAY_WORK;
+        const INDEXED_ANCHOR_KEY_WORK: usize = 3 * ANCHOR_REPLAY_WORK;
         // Complete tags add four anchor-clone visits, four retained tag
         // admissions, and two additional selected-application comparisons.
         const COMPLETE_TAG_REPLAY_WORK: usize = 4 + 4 + 2;
@@ -2378,6 +2386,26 @@ mod tests {
                 .count(),
             PRODUCER_REMAP_WORK,
         );
+        let expectations = fixture.program.method_evidence().expectations();
+        assert_eq!(expectations.len(), ANCHOR_REPLAY_WORK);
+        // The validated original anchor records its admitted expectation.
+        // Replay keeps that immutable catalog and order. Every same-key
+        // position through the admitted one is visited, including consumed
+        // positions; unrelated keys and the untouched full predicate add no
+        // new scan debit. Derive this count from coordinates, not measured
+        // transform work or a larger allowance chosen after refusal.
+        let mut indexed_candidate_work = 0;
+        for anchor in fixture.program.method_evidence_anchors() {
+            let expected = &expectations[anchor.expectation];
+            assert_eq!(expected.occurrence, anchor.occurrence);
+            assert_eq!(expected.method, anchor.method);
+            indexed_candidate_work += expectations[..=anchor.expectation]
+                .iter()
+                .filter(|candidate| {
+                    candidate.occurrence == anchor.occurrence && candidate.method == anchor.method
+                })
+                .count();
+        }
         // Fallible tuple/match carriers now charge each copied edge. Pattern
         // rebuilding additionally charges its initial queue, every visited
         // pattern/finish carrier, and tuple/constructor pending storage.
@@ -2426,7 +2454,13 @@ mod tests {
         let weak_catalog = Arc::downgrade(&catalog);
         let sources = fixture.sources();
         for (fold, exact_work) in [(false, IDENTITY_WORK), (true, FOLD_WORK)] {
-            let exact_work = exact_work + payload_carrier_work;
+            let exact_work = exact_work
+                + payload_carrier_work
+                + CONSTRUCTOR_INDEX_WORK
+                + INDEXED_ANCHOR_KEY_WORK
+                + indexed_candidate_work
+                - PRIOR_ANCHOR_DUPLICATE_SCAN_WORK
+                - PRIOR_EXPECTATION_SCAN_WORK;
             assert_eq!(
                 rebuild_with_initial_type_work(
                     &fixture.program,
