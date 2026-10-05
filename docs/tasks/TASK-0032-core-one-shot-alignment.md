@@ -3583,3 +3583,22 @@ is excluded. Final audit, actual documentation checks, independent review
 and unsigned commit verification are recorded separately.
 
 Evidence: [actual capture-only gate](../../target/core-capture-current-integration-20261005/root-capture1-gate-v1-evidence.json), [dependency supplement](../../target/core-capture-current-integration-20261005/root-dependency-supplement-v1/review.json) and [public acceptance](../../target/core-capture-current-integration-20261005/root-dependency-supplement-v1/acceptance.json).
+
+The additive Resume-only acceptance retains the full existing initial and
+causal-past resume outputs, full current contract/private plans/rows/root,
+consumed-owner caller restoration, rooted lifetime ledger and actual positive
+Core step. Current issued-ticket and registry provenance accompany the same
+returned Current; no desired successor or freshness premise is introduced.
+
+The exact accepted gate has 1067 modules and 13562 ordered trust reports,
+one validated receipt hit, no productive compilation and 1066 unchanged parent
+artifact/log pairs. Three actual dependency checks plus one version query are
+recorded; historical commands, raw outputs and original associations remain
+unchanged. The original 28 public checks, two retained original-parent failures
+and two generic negative proofs keep their scope. Three source checks for this
+leaf are separate. Whole C1–C5 completion counts remain unchanged; whole C3,
+Boolean and C2 repair acceptance are not claimed. Audit, actual documentation
+checks and unsigned commit verification are recorded separately.
+
+Evidence: [actual Resume-only gate](../../target/core-resume-ticket-integration-20261005/root-resume1-gate-v1-evidence.json), [dependency supplement](../../target/core-resume-ticket-integration-20261005/root-dependency-supplement-v1/review.json)
+and [public acceptance](../../target/core-resume-ticket-integration-20261005/root-dependency-supplement-v1/acceptance.json).
