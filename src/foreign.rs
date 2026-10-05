@@ -1060,7 +1060,12 @@ fn validate_independent_data(
                 pending.push(argument)
             }
             Type::Tuple(fields) => pending.extend(fields.iter()),
-            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_) => {}
             _ => return Err(invalid("independent foreign result is not ordinary data")),
         }
     }
@@ -1256,11 +1261,6 @@ pub fn sqlite_manifest(
     let types = vec![
         state("ConnectionState", &["R"]),
         state("StatementState", &["S", "C"]),
-        data(
-            "Bytes",
-            &[],
-            &[("EmptyBytes", None), ("MoreBytes", Some("Int, Bytes"))],
-        ),
         data(
             "OpenConfig",
             &[],

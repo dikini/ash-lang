@@ -7,7 +7,23 @@ use super::{
 };
 use crate::foreign::runtime::{ForeignData, ForeignDataNode};
 use crate::types::TypeWorkBudget;
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
+
+fn charge_integer_copy(
+    integer: &crate::integer::Integer,
+    work: &mut TypeWorkBudget,
+) -> Result<(), RuntimeFailure> {
+    let bytes = usize::try_from(integer.magnitude_byte_length())
+        .map_err(|_| super::effect_work_failure(work, None, RuntimePhase::Access))?;
+    charge_effect_work(work, bytes.max(1), RuntimePhase::Access)
+}
+
+fn clone_codec_value(value: &Value, work: &mut TypeWorkBudget) -> Result<Value, RuntimeFailure> {
+    if let Value::Integer(integer) = value {
+        charge_integer_copy(integer, work)?;
+    }
+    Ok(value.clone())
+}
 
 pub(super) fn encode_input(
     value: &Value,
@@ -78,8 +94,15 @@ pub(super) fn encode_input(
             }
             Task::Value(value) => match value {
                 Value::Integer(integer) => {
-                    let integer = integer.to_i64().ok_or(RuntimeFailure::ForeignBinding)?;
+                    charge_integer_copy(integer, work)?;
+                    let integer = integer.clone();
                     push_node(&mut nodes, ForeignDataNode::Integer(integer), work)?
+                }
+                Value::Bytes(value) => {
+                    push_node(&mut nodes, ForeignDataNode::Bytes(Arc::clone(value)), work)?
+                }
+                Value::String(value) => {
+                    push_node(&mut nodes, ForeignDataNode::String(Arc::clone(value)), work)?
                 }
                 Value::Boolean(value) => {
                     push_node(&mut nodes, ForeignDataNode::Boolean(*value), work)?
@@ -169,8 +192,11 @@ pub(super) fn decode_data(
         charge_effect_work(work, 1, RuntimePhase::Access)?;
         let value = match node {
             ForeignDataNode::Integer(value) => {
-                Value::Integer(crate::integer::Integer::from_i64(*value))
+                charge_integer_copy(value, work)?;
+                Value::Integer(value.clone())
             }
+            ForeignDataNode::Bytes(value) => Value::Bytes(Arc::clone(value)),
+            ForeignDataNode::String(value) => Value::String(Arc::clone(value)),
             ForeignDataNode::Boolean(value) => Value::Boolean(*value),
             ForeignDataNode::Unit => Value::Unit,
             ForeignDataNode::State(_) => return Err(RuntimeFailure::ForeignBinding),
@@ -181,12 +207,10 @@ pub(super) fn decode_data(
                     .try_reserve_exact(children.len())
                     .map_err(|_| RuntimeFailure::HeapCapacity)?;
                 for child in children {
-                    fields.push(
-                        values
-                            .get(*child)
-                            .ok_or(RuntimeFailure::ForeignBinding)?
-                            .clone(),
-                    );
+                    fields.push(clone_codec_value(
+                        values.get(*child).ok_or(RuntimeFailure::ForeignBinding)?,
+                        work,
+                    )?);
                 }
                 heap.try_reserve(1)
                     .map_err(|_| RuntimeFailure::HeapCapacity)?;
@@ -198,10 +222,10 @@ pub(super) fn decode_data(
             ForeignDataNode::Constructor(id, payload) => {
                 let payload = payload
                     .map(|child| {
-                        values
-                            .get(child)
-                            .cloned()
-                            .ok_or(RuntimeFailure::ForeignBinding)
+                        clone_codec_value(
+                            values.get(child).ok_or(RuntimeFailure::ForeignBinding)?,
+                            work,
+                        )
                     })
                     .transpose()?;
                 charge_effect_work(work, 1, RuntimePhase::Access)?;
@@ -212,10 +236,12 @@ pub(super) fn decode_data(
         };
         values.push(value);
     }
-    values
-        .get(data.root())
-        .cloned()
-        .ok_or(RuntimeFailure::ForeignBinding)
+    clone_codec_value(
+        values
+            .get(data.root())
+            .ok_or(RuntimeFailure::ForeignBinding)?,
+        work,
+    )
 }
 
 /// Checks codec shape against the original admitted operation scheme. Native
@@ -252,7 +278,9 @@ pub(super) fn validate_codec(
         charge_effect_work(work, 1, RuntimePhase::Access)?;
         let node = data.node(index).ok_or(RuntimeFailure::ForeignBinding)?;
         match (node, &*expected) {
-            (ForeignDataNode::Integer(_), Type::Int)
+            (ForeignDataNode::Bytes(_), Type::Bytes)
+            | (ForeignDataNode::String(_), Type::String)
+            | (ForeignDataNode::Integer(_), Type::Int)
             | (ForeignDataNode::Boolean(_), Type::Bool)
             | (ForeignDataNode::Unit, Type::Unit) => {}
             (ForeignDataNode::Tuple(children), Type::Tuple(types)) => {
@@ -1403,5 +1431,71 @@ fn provider_at_mut<'a>(
     match frames.get_mut(*last)? {
         Frame::ProviderBoundary(boundary) => Some(boundary),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod integer_codec_tests {
+    use super::*;
+
+    fn large_integer() -> crate::integer::Integer {
+        crate::integer::Integer::parse_decimal(
+            "999999999999999999999999999999999999999999999999999999999999999999",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn generic_codec_preserves_integers_beyond_native_range() {
+        let integer = large_integer();
+        assert_eq!(integer.to_i64(), None);
+        let expected = integer.to_string();
+        let encoded = encode_input(
+            &Value::Integer(integer),
+            &[],
+            &mut Vec::new(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        let decoded =
+            decode_data(&encoded, &mut Vec::new(), &mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(decoded.to_string(), expected);
+    }
+
+    #[test]
+    fn integer_codec_copy_work_refuses_before_native_range_conversion() {
+        let integer = large_integer();
+        let bytes = usize::try_from(integer.magnitude_byte_length())
+            .unwrap()
+            .max(1);
+        let encoded = ForeignData::new(vec![ForeignDataNode::Integer(integer.clone())], 0).unwrap();
+        for failure in [
+            encode_input(
+                &Value::Integer(integer),
+                &[],
+                &mut Vec::new(),
+                &mut TypeWorkBudget::with_limit(bytes + 1),
+            )
+            .unwrap_err(),
+            decode_data(
+                &encoded,
+                &mut Vec::new(),
+                &mut TypeWorkBudget::with_limit(bytes + 1),
+            )
+            .unwrap_err(),
+        ] {
+            let RuntimeFailure::Report(report) = failure else {
+                panic!("structured work failure")
+            };
+            let details = report.primary.resource().unwrap();
+            assert_eq!(
+                details.cause,
+                crate::eval::ResourceFailureCause::WorkBudgetExhausted
+            );
+            assert_eq!(details.phase, RuntimePhase::Access);
+            assert_eq!(details.resource, crate::eval::RuntimeResource::WorkUnits);
+            assert_eq!(details.requested, Some(bytes));
+            assert_eq!(details.available, Some(bytes - 1));
+        }
     }
 }

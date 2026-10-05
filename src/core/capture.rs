@@ -1381,6 +1381,14 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         charge(budget, 1)?;
         let source = node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span();
         let code = match F::pure(&node.kind) {
+            Some(PureExprKind::Value(PureValue::Intrinsic(_))) => {
+                graph.callables[id] = Callable {
+                    body: 0,
+                    ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
+                    result: Value::default(),
+                };
+                Control::Return
+            }
             Some(PureExprKind::Value(PureValue::Function(function))) => {
                 let result = values[index(function.body())].copy(budget)?;
                 graph.callables[id] = Callable {
@@ -2559,7 +2567,7 @@ fn solve_capture_values<F: CoreOperationFamily>(
             charge(budget, 1)?;
             let mut value = Value::default();
             match F::pure(&node.kind) {
-                Some(PureExprKind::Value(PureValue::Function(_))) => {
+                Some(PureExprKind::Value(PureValue::Function(_) | PureValue::Intrinsic(_))) => {
                     value
                         .targets
                         .try_reserve(1)
@@ -2625,6 +2633,12 @@ fn solve_capture_values<F: CoreOperationFamily>(
                                     budget,
                                 )?;
                                 value.join(&result, budget)?;
+                                continue;
+                            }
+                            if matches!(
+                                F::pure(&nodes[*target].kind),
+                                Some(PureExprKind::Value(PureValue::Intrinsic(_)))
+                            ) {
                                 continue;
                             }
                             let Some(PureExprKind::Value(PureValue::Function(function))) =

@@ -357,6 +357,8 @@ pub struct SurfaceExpr {
 pub enum SurfaceExprKind {
     /// An arbitrary-precision integer literal.
     Integer(Integer),
+    /// An experimental decoded UTF-8 string literal.
+    String(String),
     /// A Boolean literal.
     Boolean(bool),
     /// The unit value.
@@ -771,6 +773,10 @@ pub enum SurfaceTypeKind {
     RowArgument(SurfaceEffectRow),
     /// Arbitrary-precision integers.
     Int,
+    /// Experimental immutable byte sequences.
+    Bytes,
+    /// Experimental immutable UTF-8 strings.
+    String,
     /// Boolean values.
     Bool,
     /// The unit value.

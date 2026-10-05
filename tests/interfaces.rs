@@ -222,6 +222,7 @@ fn method_occurrences(definition: &CheckedDefinition, method: MethodId) -> Vec<&
                 slots.push(slot);
             }
             ResolvedExprKind::Occurrence(_)
+            | ResolvedExprKind::String(_)
             | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
@@ -1744,6 +1745,8 @@ fn higher_kinded_interface_erasure_adds_no_runtime_state_or_transition() {
                     .expect("an entered interface Core node should exist")
                     .kind
                 {
+                    PureExprKind::Value(PureValue::String(_)) => "string",
+                    PureExprKind::Value(PureValue::Intrinsic(_)) => "intrinsic",
                     PureExprKind::Value(PureValue::Integer(_)) => "integer",
                     PureExprKind::Value(PureValue::Boolean(_)) => "boolean",
                     PureExprKind::Value(PureValue::Unit(_)) => "unit",

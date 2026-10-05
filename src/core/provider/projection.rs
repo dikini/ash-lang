@@ -28,6 +28,8 @@ pub(super) enum Atom {
     Count(usize),
     Boolean(bool),
     Literal(String),
+    Packed(std::sync::Arc<[u8]>),
+    Intrinsic(crate::core::packed::IntrinsicNode),
     Binder(BinderId),
     Variable(TypeVariableId),
     Nominal(NominalTypeId),
@@ -300,6 +302,15 @@ pub(in crate::core) fn project(
             result.atom(Atom::Binder(variable.binder()), work)?;
         }
         EffectExprKind::Pure(PureExprKind::Value(value)) => match value {
+            PureValue::String(string) => {
+                result.atom(Atom::Tag(45), work)?;
+                work.charge(string.bytes().len()).map_err(|()| resource())?;
+                result.atom(Atom::Packed(std::sync::Arc::clone(string.bytes())), work)?;
+            }
+            PureValue::Intrinsic(intrinsic) => {
+                result.atom(Atom::Tag(46), work)?;
+                result.atom(Atom::Intrinsic(*intrinsic), work)?;
+            }
             PureValue::Integer(integer) => {
                 result.atom(Atom::Tag(1), work)?;
                 let text = literal(integer.value(), work)?;
@@ -473,6 +484,9 @@ impl NodeProjection {
         }
         for (left, right) in self.atoms.iter().zip(&other.atoms) {
             if let (Atom::Literal(left), Atom::Literal(right)) = (left, right) {
+                charge(work, left.len().max(right.len()))?;
+            }
+            if let (Atom::Packed(left), Atom::Packed(right)) = (left, right) {
                 charge(work, left.len().max(right.len()))?;
             }
             if left != right {

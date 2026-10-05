@@ -211,7 +211,9 @@ impl ExecutableForeignModule for ArenaBinding {
             return Err(ForeignExecutionError("arena configuration arity mismatch"));
         }
         let integer = |index| match input.node(index) {
-            Some(ForeignDataNode::Integer(value)) => Ok(*value),
+            Some(ForeignDataNode::Integer(value)) => value.to_i64().ok_or(ForeignExecutionError(
+                "arena configuration integer outside native range",
+            )),
             _ => Err(ForeignExecutionError(
                 "arena configuration integer mismatch",
             )),
@@ -289,9 +291,10 @@ impl ExecutableForeignModule for ArenaBinding {
             usage.object_count,
             usage.object_capacity,
         ] {
-            nodes.push(ForeignDataNode::Integer(i64::try_from(value).map_err(
-                |_| ForeignExecutionError("arena native usage exceeds Int codec"),
-            )?));
+            nodes.push(ForeignDataNode::Integer(ash::integer::Integer::from_i64(
+                i64::try_from(value)
+                    .map_err(|_| ForeignExecutionError("arena native usage exceeds Int codec"))?,
+            )));
         }
         let mut fields = Vec::new();
         fields

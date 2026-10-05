@@ -2595,3 +2595,18 @@ required invalidating only the differing foreign/export source inputs on return
 to the common worktree; compatible dependency caches were retained. The arena
 native test now asserts slice emptiness directly, avoiding an ambiguous empty
 array comparison introduced by the added workspace dependency.
+
+## 2026-10-05: packed copying values
+
+The SQLite authoring interface needs separate byte and UTF-8 values. The selected
+candidate now uses built-in Bytes and String with compiler-owned pure modules.
+The old integer-list Bytes export cannot coexist with the built-in spelling:
+the ordinary frontend rejects the old import selector before execution. The
+shared delivery therefore migrates that codec and its scalar SQLite fixtures
+before the complete text interface. No compatibility byte family is retained.
+
+[The ordinary value example](examples/bytes-string.ash) uses literals, captures,
+UTF-8 conversion and exact comparison. String literals remove the measured
+manual byte-constructor authoring burden. No generator or unrelated authoring
+tool is required for this copying checkpoint. The full String API remains out
+of scope. These are candidate experiment examples, not current `main` syntax.

@@ -40,6 +40,7 @@ parse-found =
     { $found ->
         [identifier] An identifier occurs here.
         [uppercase-identifier] An uppercase identifier occurs here.
+        [string-literal] A string literal occurs here.
         [integer] An integer literal occurs here.
         [line-end] A logical line ends here.
         [end-of-file] The input ends here.
@@ -1270,3 +1271,7 @@ resolve-work-state = The compiler's name-resolution state { $problem ->
 module-unknown-foreign = This import names no registered foreign module.
 
 foreign-privilege-unavailable = Controlled foreign calls require provider-phase admission.
+
+lex-invalid-string-escape = This escape is not supported in a string literal.
+lex-unterminated-string = This string literal has no closing double quote.
+lex-invalid-string-character = This string literal contains a physical newline or unescaped ASCII control character.

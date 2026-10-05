@@ -1586,6 +1586,12 @@ messages! {
     lex_invalid_integer_literal => "lex-invalid-integer-literal" {},
     /// An invalid identifier spelling.
     lex_invalid_identifier => "lex-invalid-identifier" {},
+    /// An unsupported string escape.
+    lex_invalid_string_escape => "lex-invalid-string-escape" {},
+    /// A string without its closing double quote.
+    lex_unterminated_string => "lex-unterminated-string" {},
+    /// A physical newline or unescaped ASCII control inside a string.
+    lex_invalid_string_character => "lex-invalid-string-character" {},
     /// A character with no token interpretation.
     lex_unknown_character => "lex-unknown-character" {},
 }

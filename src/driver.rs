@@ -876,6 +876,8 @@ where
         }
         Type::Function(_, _)
         | Type::EffectfulFunction(_, _)
+        | Type::Bytes
+        | Type::String
         | Type::Int
         | Type::Bool
         | Type::Unit

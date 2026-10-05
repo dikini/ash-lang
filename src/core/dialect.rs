@@ -39,6 +39,7 @@ use crate::{
         EvidenceNode, EvidenceNodeId, EvidenceSelection, ImplMethodId, InterfaceApplication,
         MethodId, RequirementId,
     },
+    module::ModuleId,
     resolved::{BinderId, ResolvedRegistry},
     source::{GeneratedReason, Origin, Span, discard_origin_iteratively},
     types::{
@@ -1746,7 +1747,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_count(node.children()),
                 PureValue::Unit(node) => fixed_child_count(node.children()),
                 PureValue::Function(node) => fixed_child_count(node.children()),
-                PureValue::Constructor(_) => 0,
+                PureValue::Constructor(_) | PureValue::String(_) | PureValue::Intrinsic(_) => 0,
             },
             Self::Variable(node) => fixed_child_count(node.children()),
             Self::Computation(computation) => match computation {
@@ -1773,7 +1774,7 @@ impl PureExprKind {
                 PureValue::Boolean(node) => fixed_child_at(node.children(), index),
                 PureValue::Unit(node) => fixed_child_at(node.children(), index),
                 PureValue::Function(node) => fixed_child_at(node.children(), index),
-                PureValue::Constructor(_) => None,
+                PureValue::Constructor(_) | PureValue::String(_) | PureValue::Intrinsic(_) => None,
             },
             Self::Variable(node) => fixed_child_at(node.children(), index),
             Self::Computation(computation) => match computation {
@@ -1817,6 +1818,10 @@ fn fixed_child_at<const N: usize>(children: [Option<NodeId>; N], index: usize) -
 /// The closed value families in the pure Ash dialect.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PureValue {
+    /// A packed UTF-8 string literal.
+    String(super::packed::StringNode),
+    /// A compiler-owned first-order pure callable.
+    Intrinsic(super::packed::IntrinsicNode),
     /// An arbitrary-precision integer.
     Integer(IntegerNode),
     /// A Boolean value.
@@ -3058,6 +3063,39 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         )
     }
 
+    /// Adds a raw string payload with an unchecked annotation and encoding.
+    pub fn string(
+        &mut self,
+        bytes: impl Into<Arc<[u8]>>,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Value(PureValue::String(super::packed::StringNode::new(
+                bytes.into(),
+            ))),
+        )
+    }
+
+    /// Adds an unchecked compiler-owned pure callable.
+    pub fn intrinsic(
+        &mut self,
+        operation: super::packed::Intrinsic,
+        module: ModuleId,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.push(
+            ty,
+            origin,
+            PureExprKind::Value(PureValue::Intrinsic(super::packed::IntrinsicNode::new(
+                operation, module,
+            ))),
+        )
+    }
+
     /// Adds a Boolean payload with an unchecked result annotation.
     pub fn boolean(&mut self, value: bool, ty: Type, origin: Origin) -> Result<NodeId, BuildError> {
         self.push(
@@ -3850,6 +3888,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 }
                 PureExprKind::Value(
                     PureValue::Integer(_)
+                    | PureValue::String(_)
+                    | PureValue::Intrinsic(_)
                     | PureValue::Boolean(_)
                     | PureValue::Unit(_)
                     | PureValue::Constructor(_),
@@ -4420,6 +4460,8 @@ pub(super) fn discard_pure_expr_kind_metadata(kind: PureExprKind) {
         }
         PureExprKind::Value(
             PureValue::Integer(_)
+            | PureValue::String(_)
+            | PureValue::Intrinsic(_)
             | PureValue::Boolean(_)
             | PureValue::Unit(_)
             | PureValue::Constructor(_),
@@ -4825,7 +4867,9 @@ fn admit_type_with_status(
     allow_effectful: bool,
 ) -> Result<(Type, bool), BuildError> {
     match ty {
-        ty @ (Type::Int
+        ty @ (Type::Bytes
+        | Type::String
+        | Type::Int
         | Type::Bool
         | Type::Unit
         | Type::Nominal(_)
@@ -4977,7 +5021,13 @@ fn scan_type_admission<'a>(
                     work.push(TypeAdmissionTask::Visit(computation.value(), child_depth));
                     work.push(TypeAdmissionTask::Visit(domain, child_depth));
                 }
-                Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Variable(_) => {}
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_) => {}
             },
             TypeAdmissionTask::VisitSequence(mut remaining, depth) => {
                 if let Some(ty) = remaining.next() {

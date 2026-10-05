@@ -45,6 +45,21 @@ const NATIVE_BUFFER_SOURCE: &str = concat!(
     "pub interface Provider<R> {\nlength : Handle<R> -> Int ! {Ops<R>}\nread : (Handle<R>, Int) -> Outcome<Int> ! {Ops<R>}\nwrite : (Handle<R>, Int, Int) -> Outcome<Unit> ! {Ops<R>}\n}\n",
 );
 
+const BYTES_SOURCE: &str = concat!(
+    "pub type AppendResult = BytesAppended(Bytes)\n| InvalidByte\n",
+    "pub empty : Unit -> Bytes\nempty value = empty value\n",
+    "pub append_byte : (Bytes, Int) -> AppendResult\nappend_byte value = append_byte value\n",
+    "pub length : Bytes -> Int\nlength value = length value\n",
+    "pub equal : (Bytes, Bytes) -> Bool\nequal value = equal value\n",
+);
+const STRING_SOURCE: &str = concat!(
+    "pub type DecodeResult = Decoded(String)\n| InvalidUtf8\n",
+    "pub to_utf8 : String -> Bytes\nto_utf8 value = to_utf8 value\n",
+    "pub from_utf8 : Bytes -> DecodeResult\nfrom_utf8 value = from_utf8 value\n",
+    "pub byte_length : String -> Int\nbyte_length value = byte_length value\n",
+    "pub equal : (String, String) -> Bool\nequal value = equal value\n",
+);
+
 /// A validated name for one configured module root.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ModuleRootName(String);
@@ -186,6 +201,8 @@ enum ModuleIdNamespace {
     Admitted,
     BuiltinCell,
     BuiltinNativeBuffer,
+    BuiltinBytes,
+    BuiltinString,
     DirectCoreSource,
 }
 
@@ -227,6 +244,13 @@ impl ModuleId {
         matches!(self.namespace, ModuleIdNamespace::BuiltinNativeBuffer)
     }
 
+    pub(crate) const fn is_builtin_bytes(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinBytes)
+    }
+    pub(crate) const fn is_builtin_string(self) -> bool {
+        matches!(self.namespace, ModuleIdNamespace::BuiltinString)
+    }
+
     pub(crate) const fn is_builtin_resource(self) -> bool {
         self.is_builtin_cell() || self.is_builtin_native_buffer()
     }
@@ -251,6 +275,12 @@ impl From<SourceId> for ModuleId {
 impl fmt::Display for ModuleId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.namespace {
+            ModuleIdNamespace::BuiltinBytes => {
+                write!(formatter, "builtin.bytes:{}:{}", self.graph, self.value)
+            }
+            ModuleIdNamespace::BuiltinString => {
+                write!(formatter, "builtin.string:{}:{}", self.graph, self.value)
+            }
             ModuleIdNamespace::Admitted => write!(formatter, "{}:{}", self.graph, self.value),
             ModuleIdNamespace::BuiltinCell => {
                 write!(formatter, "builtin.cell:{}:{}", self.graph, self.value)
@@ -1367,6 +1397,8 @@ pub fn load_module_graph(
         let mut dependency_order = Vec::new();
         let mut builtin_cell = None;
         let mut builtin_native_buffer = None;
+        let mut builtin_bytes = None;
+        let mut builtin_string = None;
 
         while let Some(frame) = frames.last() {
             let module = frame.module;
@@ -1469,7 +1501,10 @@ pub fn load_module_graph(
                 && root.text == "builtin"
             {
                 if segments.len() != 1
-                    || !matches!(segments[0].text.as_str(), "cell" | "native_buffer")
+                    || !matches!(
+                        segments[0].text.as_str(),
+                        "cell" | "native_buffer" | "bytes" | "string"
+                    )
                 {
                     return Err(ModuleFailure::source(
                         ModuleReason::UnknownBuiltin,
@@ -1479,7 +1514,12 @@ pub fn load_module_graph(
                     .into());
                 }
                 let native_buffer = segments[0].text == "native_buffer";
-                let cached = if native_buffer {
+                let packed = matches!(segments[0].text.as_str(), "bytes" | "string");
+                let cached = if segments[0].text == "bytes" {
+                    &mut builtin_bytes
+                } else if segments[0].text == "string" {
+                    &mut builtin_string
+                } else if native_buffer {
                     &mut builtin_native_buffer
                 } else {
                     &mut builtin_cell
@@ -1487,14 +1527,25 @@ pub fn load_module_graph(
                 let target = if let Some(id) = *cached {
                     id
                 } else {
-                    let id = admit_builtin_resource(
-                        native_buffer,
-                        graph_identity,
-                        import.span,
-                        &mut budget,
-                        &mut staged,
-                        &mut dependency_order,
-                    )?;
+                    let id = if packed {
+                        admit_builtin_packed(
+                            segments[0].text == "bytes",
+                            graph_identity,
+                            import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    } else {
+                        admit_builtin_resource(
+                            native_buffer,
+                            graph_identity,
+                            import.span,
+                            &mut budget,
+                            &mut staged,
+                            &mut dependency_order,
+                        )?
+                    };
                     *cached = Some(id);
                     id
                 };
@@ -1581,6 +1632,58 @@ pub fn load_module_graph(
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     })
+}
+
+fn admit_builtin_packed(
+    bytes: bool,
+    graph: u32,
+    import_span: Span,
+    budget: &mut GraphBudget,
+    staged: &mut Vec<StagedModule>,
+    dependency_order: &mut Vec<ModuleId>,
+) -> Result<ModuleId, LoadGraphError> {
+    budget.charge_sources()?;
+    staged
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    dependency_order
+        .try_reserve(1)
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let path = PathBuf::from(if bytes {
+        "@builtin.bytes"
+    } else {
+        "@builtin.string"
+    });
+    let (source, surface) = parse_surface_module(
+        &path,
+        if bytes { BYTES_SOURCE } else { STRING_SOURCE }.to_owned(),
+        Some(import_span),
+        &mut budget.syntax_work,
+    )?;
+    let value = u32::try_from(staged.len())
+        .map_err(|_| ModuleFailure::resource(ModuleResource::Sources))?;
+    let id = ModuleId {
+        namespace: if bytes {
+            ModuleIdNamespace::BuiltinBytes
+        } else {
+            ModuleIdNamespace::BuiltinString
+        },
+        graph,
+        value,
+    };
+    staged.push(StagedModule {
+        id,
+        canonical_path: path,
+        owners: OwnerSet::from_paths(&[], budget)?,
+        source,
+        surface,
+        dependencies: Vec::new(),
+        relative_edges: Vec::new(),
+        state: VisitState::Finished,
+        foreign: None,
+    });
+    dependency_order.push(id);
+    Ok(id)
 }
 
 fn admit_builtin_resource(

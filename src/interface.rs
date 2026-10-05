@@ -156,7 +156,9 @@ impl InterfaceConstraintBudget {
                             pending.try_reserve(1).map_err(|_| ())?;
                             pending.push(Task::Type(body));
                         }
-                        Type::Int
+                        Type::Bytes
+                        | Type::String
+                        | Type::Int
                         | Type::Bool
                         | Type::Unit
                         | Type::Nominal(_)
@@ -319,7 +321,11 @@ impl InterfaceConstraintBudget {
             };
             self.charge(1)?;
             match (left, right) {
-                (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+                (Type::Bytes, Type::Bytes)
+                | (Type::String, Type::String)
+                | (Type::Int, Type::Int)
+                | (Type::Bool, Type::Bool)
+                | (Type::Unit, Type::Unit) => {}
                 (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
                 (Type::Variable(left), Type::Variable(right)) if left == right => {}
                 (Type::Inference(left), Type::Inference(right)) if left == right => {}
@@ -549,7 +555,13 @@ fn type_contains_any_variable(
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push(body);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) | Type::Inference(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Inference(_) => {}
         }
     }
     Ok(false)
@@ -602,7 +614,9 @@ fn schedule_type_children<'a>(
             pending.try_reserve(1).map_err(|_| ())?;
             pending.push(body);
         }
-        Type::Int
+        Type::Bytes
+        | Type::String
+        | Type::Int
         | Type::Bool
         | Type::Unit
         | Type::Nominal(_)
@@ -696,7 +710,13 @@ pub(crate) fn collect_type_nominal_identities_with_constraint_budget(
                 pending.try_reserve(1).map_err(|_| ())?;
                 pending.push(body);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Variable(_) | Type::Inference(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Variable(_)
+            | Type::Inference(_) => {}
         }
     }
     Ok(())
@@ -912,7 +932,11 @@ fn same_type_with_constraint_budget_inner(
             continue;
         }
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {
                 if let Some(nominal_identities) = nominal_identities.as_deref_mut() {
                     nominal_identities.observe(*left, budget)?;
@@ -1412,7 +1436,11 @@ where
             continue;
         }
         match (candidate, goal) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(candidate), Type::Nominal(goal)) if candidate == goal => {}
             (Type::ResourceApply(candidate_id, candidate), Type::ResourceApply(goal_id, goal))
                 if candidate_id == goal_id =>
@@ -1557,7 +1585,8 @@ fn validate_match_type(
             Type::Forall(_, _) | Type::Inference(_) => {
                 return Err(HeadMatchFailure::InvalidState);
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
         }
     }
     Ok(())
@@ -1652,7 +1681,11 @@ fn match_types_equal(
             continue;
         }
         match (left, right) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (Type::ResourceApply(left_id, left), Type::ResourceApply(right_id, right))
                 if left_id == right_id =>
@@ -2100,7 +2133,11 @@ where
             continue;
         }
         match (left.ty, right.ty) {
-            (Type::Int, Type::Int) | (Type::Bool, Type::Bool) | (Type::Unit, Type::Unit) => {}
+            (Type::Bytes, Type::Bytes)
+            | (Type::String, Type::String)
+            | (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::Unit, Type::Unit) => {}
             (Type::Nominal(left), Type::Nominal(right)) if left == right => {}
             (
                 Type::ResourceApply(left_id, left_arguments),
@@ -2396,7 +2433,8 @@ fn overlap_occurs<'a>(
             Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
             Type::Variable(_) => return Err(OverlapFailure::InvalidState),
             Type::Forall(_, _) | Type::Inference(_) => return Err(OverlapFailure::InvalidState),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
         }
     }
     Ok(false)

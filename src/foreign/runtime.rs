@@ -23,7 +23,11 @@ impl std::error::Error for ForeignExecutionError {}
 #[derive(Debug)]
 pub enum ForeignDataNode {
     /// An ABI integer converted without narrowing an Ash integer silently.
-    Integer(i64),
+    Integer(crate::integer::Integer),
+    /// Independent immutable packed bytes.
+    Bytes(Arc<[u8]>),
+    /// Independent immutable UTF-8 contents.
+    String(Arc<str>),
     /// A Boolean value.
     Boolean(bool),
     /// Unit.
@@ -53,9 +57,50 @@ impl ForeignData {
                 "invalid foreign codec root or work bound",
             ));
         }
-        let mut work = nodes.len();
+        fn scalar_copy_work(node: &ForeignDataNode) -> Result<usize, ForeignExecutionError> {
+            match node {
+                ForeignDataNode::Integer(integer) => {
+                    usize::try_from(integer.magnitude_byte_length())
+                        .map(|bytes| bytes.max(1))
+                        .map_err(|_| ForeignExecutionError("foreign codec integer work exhausted"))
+                }
+                _ => Ok(0),
+            }
+        }
+        let mut work = nodes
+            .len()
+            .checked_add(scalar_copy_work(&nodes[root])?)
+            .filter(|work| *work <= TYPE_WORK_LIMIT)
+            .ok_or(ForeignExecutionError("foreign codec copy work exhausted"))?;
         for (index, node) in nodes.iter().enumerate() {
             match node {
+                ForeignDataNode::Integer(integer) => {
+                    let bytes = usize::try_from(integer.magnitude_byte_length())
+                        .map_err(|_| ForeignExecutionError("foreign codec integer work exhausted"))?
+                        .max(1);
+                    work = work
+                        .checked_add(bytes)
+                        .filter(|work| *work <= TYPE_WORK_LIMIT)
+                        .ok_or(ForeignExecutionError(
+                            "foreign codec integer work exhausted",
+                        ))?;
+                }
+                ForeignDataNode::Bytes(bytes) => {
+                    work = work
+                        .checked_add(bytes.len())
+                        .filter(|work| *work <= TYPE_WORK_LIMIT)
+                        .ok_or(ForeignExecutionError(
+                            "foreign codec packed byte work exhausted",
+                        ))?;
+                }
+                ForeignDataNode::String(text) => {
+                    work = work
+                        .checked_add(text.len())
+                        .filter(|work| *work <= TYPE_WORK_LIMIT)
+                        .ok_or(ForeignExecutionError(
+                            "foreign codec packed byte work exhausted",
+                        ))?;
+                }
                 ForeignDataNode::Tuple(children) => {
                     work = work
                         .checked_add(children.len())
@@ -66,11 +111,27 @@ impl ForeignData {
                             "foreign codec tuple has a forward edge",
                         ));
                     }
+                    for child in children {
+                        work = work
+                            .checked_add(scalar_copy_work(&nodes[*child])?)
+                            .filter(|work| *work <= TYPE_WORK_LIMIT)
+                            .ok_or(ForeignExecutionError(
+                                "foreign codec expanded copy work exhausted",
+                            ))?;
+                    }
                 }
                 ForeignDataNode::Constructor(_, Some(child)) if *child >= index => {
                     return Err(ForeignExecutionError(
                         "foreign codec constructor has a forward edge",
                     ));
+                }
+                ForeignDataNode::Constructor(_, Some(child)) => {
+                    work = work
+                        .checked_add(scalar_copy_work(&nodes[*child])?)
+                        .filter(|work| *work <= TYPE_WORK_LIMIT)
+                        .ok_or(ForeignExecutionError(
+                            "foreign codec expanded copy work exhausted",
+                        ))?;
                 }
                 _ => {}
             }
@@ -436,5 +497,41 @@ impl ForeignRuntimeBinding {
     }
     pub(crate) fn executable(&self) -> &dyn ExecutableForeignModule {
         self.executable.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod packed_codec_tests {
+    use super::*;
+    #[test]
+    fn repeated_integer_edges_cannot_expand_beyond_codec_copy_work() {
+        let integer = crate::integer::Integer::parse_decimal(&"9".repeat(1024)).unwrap();
+        let nodes = vec![
+            ForeignDataNode::Integer(integer),
+            ForeignDataNode::Tuple(vec![0; 1000].into_boxed_slice()),
+        ];
+        assert!(ForeignData::new(nodes, 1).is_err());
+    }
+    #[test]
+    fn packed_codec_rejects_single_and_cumulative_excess_payload_work() {
+        assert!(
+            ForeignData::new(
+                vec![ForeignDataNode::Bytes(Arc::from(vec![0; TYPE_WORK_LIMIT]))],
+                0
+            )
+            .is_err()
+        );
+        let text: Arc<str> = Arc::from("x".repeat(TYPE_WORK_LIMIT / 2));
+        assert!(
+            ForeignData::new(
+                vec![
+                    ForeignDataNode::String(Arc::clone(&text)),
+                    ForeignDataNode::String(text)
+                ],
+                1
+            )
+            .is_err()
+        );
+        assert!(ForeignData::new(vec![ForeignDataNode::Bytes(Arc::from([0, 255]))], 0).is_ok());
     }
 }

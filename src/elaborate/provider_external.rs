@@ -1079,7 +1079,8 @@ fn walk_provider_source_occurrences<'a>(
                 ResolvedExprKind::Perform(request) => {
                     pending.push(Item::Expression(&request.operand))
                 }
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Constructor(_) => {}

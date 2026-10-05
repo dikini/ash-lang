@@ -12,11 +12,22 @@ pub struct Integer(num_bigint::BigInt);
 pub struct InvalidInteger;
 
 impl Integer {
-    pub(crate) fn to_i64(&self) -> Option<i64> {
+    /// Returns the byte length of the unsigned magnitude encoding.
+    /// This is a codec work metric, not a native ABI or memory-layout promise.
+    #[must_use]
+    pub fn magnitude_byte_length(&self) -> u64 {
+        self.0.bits().div_ceil(8)
+    }
+
+    /// Converts to the signed native 64-bit range without narrowing.
+    #[must_use]
+    pub fn to_i64(&self) -> Option<i64> {
         i64::try_from(&self.0).ok()
     }
 
-    pub(crate) fn from_i64(value: i64) -> Self {
+    /// Constructs an Ash integer from a native signed 64-bit value.
+    #[must_use]
+    pub fn from_i64(value: i64) -> Self {
         Self(num_bigint::BigInt::from(value))
     }
 

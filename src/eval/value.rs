@@ -137,6 +137,9 @@ impl ObservedValue {
                 Task::Value(value) => match value {
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::NativeStateView(_) => output.push_str("<native-state-view>"),
+                    Value::Bytes(value) => output.push_str(&format!("{value:?}")),
+                    Value::String(value) => output.push_str(&format!("{value:?}")),
+                    Value::Intrinsic(_) => output.push_str("<function>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -273,6 +276,12 @@ impl fmt::Debug for Closure {
 /// have no equality operation or observable identity.
 #[derive(Clone, Debug)]
 pub enum Value {
+    /// Immutable finite bytes in ordinary shared storage.
+    Bytes(Arc<[u8]>),
+    /// Immutable UTF-8 text, including embedded NUL.
+    String(Arc<str>),
+    /// An authenticated compiler-owned first-order pure callable.
+    Intrinsic(crate::core::packed::IntrinsicNode),
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
     /// An opaque borrowed native state view with no native ownership edge.
@@ -305,6 +314,9 @@ impl fmt::Display for Value {
         match self {
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::NativeStateView(_) => formatter.write_str("<native-state-view>"),
+            Self::Bytes(value) => write!(formatter, "{value:?}"),
+            Self::String(value) => write!(formatter, "{value:?}"),
+            Self::Intrinsic(_) => formatter.write_str("<function>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

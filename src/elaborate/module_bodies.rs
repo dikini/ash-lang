@@ -1118,7 +1118,8 @@ pub(super) fn declaration_has_local_provider_instance(
                     work,
                     expression.span,
                 )?,
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)

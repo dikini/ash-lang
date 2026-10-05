@@ -108,6 +108,8 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
         .expect("an entered Core node should exist")
         .kind
     {
+        PureExprKind::Value(ash::core::PureValue::String(_)) => "string",
+        PureExprKind::Value(ash::core::PureValue::Intrinsic(_)) => "intrinsic",
         PureExprKind::Value(ash::core::PureValue::Integer(_)) => "integer",
         PureExprKind::Value(ash::core::PureValue::Boolean(_)) => "boolean",
         PureExprKind::Value(ash::core::PureValue::Unit(_)) => "unit",
@@ -139,6 +141,9 @@ fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
         Value::NativeStateView(_) => "native-state-view",
+        Value::Bytes(_) => "bytes",
+        Value::String(_) => "string",
+        Value::Intrinsic(_) => "intrinsic",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
@@ -780,7 +785,9 @@ fn eligible_local_relay_generalizes_higher_kinded_parameters() {
                         .map(|element| (Payload::Type(element), below_function)),
                 ),
                 Payload::Type(
-                    ash::types::Type::Int
+                    ash::types::Type::Bytes
+                    | ash::types::Type::String
+                    | ash::types::Type::Int
                     | ash::types::Type::Bool
                     | ash::types::Type::Unit
                     | ash::types::Type::Nominal(_)

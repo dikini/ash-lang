@@ -3629,7 +3629,9 @@ impl<'a> KindEnvironments<'a> {
                     })?;
                     pending.push((body, None));
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Variable(_)
@@ -4346,11 +4348,13 @@ impl<'a> KindEnvironments<'a> {
                     };
                     let span = node.map_or(fallback_span, provenance_node_span);
                     match ty {
-                        Type::Int | Type::Bool | Type::Unit => {
+                        Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {
                             charge_synthesis_cell(span, budget)?;
                             let mirror_matches = matches!(
                                 (ty, type_mirror),
-                                (Type::Int, None | Some(Type::Int))
+                                (Type::Bytes, None | Some(Type::Bytes))
+                                    | (Type::String, None | Some(Type::String))
+                                    | (Type::Int, None | Some(Type::Int))
                                     | (Type::Bool, None | Some(Type::Bool))
                                     | (Type::Unit, None | Some(Type::Unit))
                             );
@@ -5167,7 +5171,7 @@ pub(crate) fn canonical_body_free_environments<'a>(
             .charge(1)
             .map_err(|()| CanonicalEnvironmentFailure::ConstraintResource)?;
         match ty {
-            Type::Int | Type::Bool | Type::Unit => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
             Type::Variable(identity) => {
                 discovery_budget
                     .charge(1)
@@ -6665,7 +6669,13 @@ fn collect_type_variables(
                     KindInternalCause::SchemeInDetermination,
                 ));
             }
-            Type::Int | Type::Bool | Type::Unit | Type::Inference(_) | Type::Nominal(_) => {}
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Inference(_)
+            | Type::Nominal(_) => {}
         }
     }
     Ok(())
@@ -7424,7 +7434,8 @@ fn check_expression_work<'a>(
                     resume.value.span,
                     budget,
                 )?,
-                ResolvedExprKind::Integer(_)
+                ResolvedExprKind::String(_)
+                | ResolvedExprKind::Integer(_)
                 | ResolvedExprKind::Boolean(_)
                 | ResolvedExprKind::Unit
                 | ResolvedExprKind::Occurrence(_)
@@ -7890,6 +7901,36 @@ fn require_fact_node(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn packed_builtin_kinds_authenticate_exact_mirrors() {
+        let source = crate::source::SourceFile::new("packed-kind.ash", "String").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 6).unwrap())
+            .unwrap();
+        let environments = KindEnvironments::new();
+        for ty in [Type::Bytes, Type::String] {
+            assert_eq!(
+                environments
+                    .synthesize_body_free_kind(&ty, span, &mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                &Kind::Type
+            );
+            for mirror in [Type::Bytes, Type::String, Type::Int] {
+                let mut budget = TypeWorkBudget::unbounded();
+                let result = environments.synthesize_with_ledger(
+                    &ty,
+                    None,
+                    Some(&mirror),
+                    None,
+                    &mut KindVariableObserver::separate(None, None),
+                    span,
+                    &mut SynthesisLedger::Resolved(&mut budget),
+                );
+                assert_eq!(result.is_ok(), ty == mirror);
+            }
+        }
+    }
+
     #[test]
     fn canonical_retention_preserves_kind_cause() {
         let source = crate::source::SourceFile::new("cause.ash", "binder").unwrap();

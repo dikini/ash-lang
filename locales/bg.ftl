@@ -41,6 +41,7 @@ parse-found =
     { $found ->
         [identifier] Тук има име.
         [uppercase-identifier] Тук има име с начална главна буква.
+        [string-literal] Тук има низов литерал.
         [integer] Тук има целочислен литерал.
         [line-end] Тук свършва логически ред.
         [end-of-file] Входът свършва тук.
@@ -1271,3 +1272,7 @@ resolve-work-state = Вътрешното състояние на компила
 module-unknown-foreign = Този импорт не посочва регистриран чужд модул.
 
 foreign-privilege-unavailable = Контролираните чужди извиквания изискват проверка в контекста на доставчик.
+
+lex-invalid-string-escape = Това екраниране не е позволено в низ.
+lex-unterminated-string = Низът няма затваряща двойна кавичка.
+lex-invalid-string-character = Низът съдържа нов ред или неекраниран контролен ASCII символ.

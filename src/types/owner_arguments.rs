@@ -156,7 +156,9 @@ pub(super) fn charge_structural<B: TypeWorkMeter>(
                     charge_kinded_type_parameters(parameters, budget)?;
                     schedule(&mut pending, StructuralRoot::Type(body), budget)?;
                 }
-                Type::Int
+                Type::Bytes
+                | Type::String
+                | Type::Int
                 | Type::Bool
                 | Type::Unit
                 | Type::Nominal(_)
@@ -250,6 +252,12 @@ fn clone_compound_structural_with_failure<B: TypeWorkMeter>(
         values.try_reserve(1).map_err(|_| storage_error(budget))?;
         match task {
             Task::Visit(StructuralRoot::Type(ty)) => match ty {
+                Type::Bytes => {
+                    values.push(StructuralValue::new(StructuralOwned::Type(Type::Bytes)))
+                }
+                Type::String => {
+                    values.push(StructuralValue::new(StructuralOwned::Type(Type::String)))
+                }
                 Type::Int => values.push(StructuralValue::new(StructuralOwned::Type(Type::Int))),
                 Type::Bool => values.push(StructuralValue::new(StructuralOwned::Type(Type::Bool))),
                 Type::Unit => values.push(StructuralValue::new(StructuralOwned::Type(Type::Unit))),

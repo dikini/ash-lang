@@ -273,7 +273,7 @@ fn sqlite_and_provider_passive_imports_check_and_construct_canonical_configurati
         "provider.ash",
         "pub import @foreign.provider (StateAccess, state_of)\n",
     );
-    let entry=tree.write("entry.ash","import provider as Provider\nimport @foreign.sqlite as Native\nmain : Unit -> Native.OpenConfig\nmain () = Native.File (Native.MoreBytes (65, Native.EmptyBytes))\n");
+    let entry=tree.write("entry.ash","import provider as Provider\nimport @foreign.sqlite as Native\nimport @builtin.string as TextOps\nmain : Unit -> Native.OpenConfig\nmain () = Native.File (TextOps.to_utf8 \"A\")\n");
     let roots = ModuleRoots::empty().with_foreign_registrations(
         ForeignRegistrations::new([
             sqlite_manifest(ForeignRegistrationId::new(1)).unwrap(),

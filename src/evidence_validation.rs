@@ -2343,7 +2343,8 @@ fn collect_linked_constraint_variables(
                 pending.push(function);
             }
             Type::Function(_, _) | Type::EffectfulFunction(_, _) => unreachable!(),
-            Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {}
+            Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit | Type::Nominal(_) => {
+            }
             Type::Inference(_) | Type::Forall(_, _) => return Err(unknown(span)),
         }
     }
@@ -5381,7 +5382,8 @@ fn collect_method_evidence_expression_occurrences(
                     )?;
                 }
             },
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
@@ -6548,7 +6550,8 @@ fn validate_pending_expressions<'a, 'body>(
                     )?;
                 }
             }
-            ResolvedExprKind::Integer(_)
+            ResolvedExprKind::String(_)
+            | ResolvedExprKind::Integer(_)
             | ResolvedExprKind::Boolean(_)
             | ResolvedExprKind::Unit
             | ResolvedExprKind::Constructor(_) => {}
@@ -7658,7 +7661,7 @@ fn validate_type_with_application_policy(
                     continue;
                 }
                 match ty {
-                    Type::Int | Type::Bool | Type::Unit => {}
+                    Type::Bytes | Type::String | Type::Int | Type::Bool | Type::Unit => {}
                     Type::Nominal(id) => {
                         if registry.nominal_kind(*id).is_none() {
                             return Err(invalid_root(span));
