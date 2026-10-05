@@ -28,7 +28,7 @@ then the authoring blueprint and adoption evidence.
 
 The plan covers the copying SQLite bridge, a fixed-capacity scoped arena, and
 their first borrowing comparison. Arena owner transport, foreign callback ABI, concurrency,
-reference counting, tracing, and processes remain outside these slices. A
+native-owner reference counting, tracing, and processes remain outside these slices. A
 semantic gap returns to the design documents before implementation continues.
 
 [DN-0037](../DN-0037-ash-authored-foreign-library-interfaces.md) records a separate
@@ -57,6 +57,12 @@ unsigned merge commit into `codex/provider-experiments`; main is excluded.
    separate same-sigma/same-epsilon different-c witness, resume, structural
    discard, outer cleanup, consumed and retained completion reports. Reject
    malformed source/Core authority and escape. Run integrated `cargo xtask verify`.
+
+Deliveries 1–3 above are integrated. Batch 0 merged at `c38b9d2`, SQLite S-01
+at `7c97a45`, and the basic arena lifecycle at `53db4eb`. Independent SQLite
+and arena work starts from those original-branch integration commits. Delivery
+4 remains active; passing moving-source cases are recorded separately from
+integration in [execution](execution.md#current-checkpoint).
 
 Root owns serial Cargo commands, tracking, unsigned commits and merges.
 Independent agents own disjoint Core, evidence and owner metadata files during
@@ -124,10 +130,13 @@ substitute for source-to-Core execution.
 The [selected complete owner row arguments](semantics.md#selected-complete-owner-row-arguments)
 extend DN-0036 experimental P-1 after independent contract and prose approval.
 Selection remains informative and off `main`; it is not current Ash, product
-adoption or executed source proof. The reviewed module-publication baseline
-remains Type-only. The active M1 slice migrates compiler representation and
-consumers for complete arguments; mixed source instances, specialization and
-execution remain pending.
+adoption or executed source proof. The earlier module-publication baseline
+was Type-only. Common Batch 0 integrates the complete argument migration, and
+Batch 3 moving-source evidence executes the formal open-row callback. The
+finite per-request capture witness and required row/control cases pass connected
+common verification. The original-branch merge and its fresh final gate are
+recorded separately.
+[Execution](execution.md#current-checkpoint) records the precise evidence.
 The callback exclusion above means foreign callback ABI; this pressure case executes an ordinary synchronous Ash
 function application within a provider clause.
 
@@ -142,7 +151,8 @@ The positive fixture must execute the clause callback, then resume pure
 MissingRow. Its client performs H and forwards the callback through the sealed
 method: actual body row is closed {E,H}, epsilon={H}, D={|Delta}, with existing
 Delta lacks H. Derive Omega={H|Delta}, K empty and rho=Omega without adding
-Delta lacks E<C,{|Delta}>. This source/type derivation is not executed evidence.
+Delta lacks E<C,{|Delta}>. The derivation supplies the comparison contract;
+the later public callback receipt is executed evidence for that topology.
 Exercise generic open and closed specializations, eligible local generalization,
 actual captures, surviving interpreters and linked execution.
 
@@ -157,14 +167,16 @@ linkage. Specialization must derive real epsilon and c, solve every affected
 handler/resume/descendant, and retain no unresolved recipe in ordinary Core.
 No new runtime reduction rule follows from type metadata or ordinary application.
 
-The same-sigma/same-epsilon different-c source witness remains mandatory and
-unproved; the open-D callback case does not replace it. Do not weaken capture,
+The same-sigma/same-epsilon different-c source witness is a separate mandatory
+obligation. The finite public witness has passing moving-source evidence; it is
+not a general mathematical proof. The open-D callback case does not replace it.
+Do not weaken capture,
 discard, completion or principal-row rules to admit either case. A separate
 native-request clause variant must preserve its known direct native demand
 until exact admitted interpretation discharges it.
 
-Independent reviews approve bounded selection; implementation evidence remains
-pending. Later adoption follows
+Independent reviews approve bounded selection and the required common checks
+pass. The original-branch merge and verification evidence are recorded separately. Later adoption follows
 [Step 7](#step-7-bring-successful-work-into-ash-and-its-standard-library): an
 accepted semantic proposal, any justified architectural decision and authorized
 tasks precede product implementation, tests and specification changes. Allocate

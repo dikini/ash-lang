@@ -6,8 +6,9 @@ use super::{
     ElaborationPurpose, ElaborationTask, ElaborationTaskBuffer, OwnedArgumentBuffer,
     OwnedTypeBuffer, OwnerReplacementBuffer, TypeContext, TypeError, TypeReason, TypedNode,
     TypedNodeBuffer, TypedNodeOwner, UnificationFailure, check_mismatch, constraint_resource,
-    inference_failure, invalid_state, provider, resolved_build_error, row_exclusion_error,
-    selection_failure, type_contains_variable, type_resource, unsupported_provider_resource,
+    effect_row_failure, inference_failure, invalid_state, provider, resolved_build_error,
+    row_exclusion_error, selection_failure, type_contains_variable, type_resource,
+    unsupported_provider_resource,
 };
 use crate::resolved::{ResolvedProviderResourceExpr, ResourceTypeFact};
 use crate::types::{KindedArgument, OperationId, TypeStructureNode};
@@ -36,9 +37,8 @@ pub(crate) use final_preparation::FinalProviderPreparation;
 /// is borrowed during specialization and is absent from executable descriptors.
 pub(crate) struct PreparedProviderInstance {
     pub(super) definition: Arc<ResourceTypeFact>,
-    pub(super) code: Arc<super::provider::CheckedProviderGroup>,
+    pub(super) code: super::provider::PreparedProviderCode,
     pub(super) actuals: ResourceActuals,
-    pub(super) native: NativeScopeActuals,
     pub(super) handler_rows: crate::core::provider::ResolvedProviderHandlerRows,
     pub(super) body: ProviderComputationOwner,
     pub(super) forwarding: ProviderForwardings,
@@ -54,9 +54,6 @@ impl PreparedProviderInstance {
     pub(crate) fn arguments(&self) -> &[KindedArgument] {
         self.actuals.arguments()
     }
-    pub(crate) fn body(&self) -> &ComputationType {
-        &self.body
-    }
     pub(crate) fn provider(&self) -> crate::interface::LexicalEvidenceId {
         self.provider
     }
@@ -68,43 +65,6 @@ impl PreparedProviderInstance {
             .methods
             .iter()
             .map(|method| (method.method, method.binder, &*method.ty))
-    }
-    pub(crate) fn provider_application(
-        &self,
-        work: &mut TypeWorkBudget,
-    ) -> Result<InterfaceApplication, TypeError> {
-        let original = &self.definition.provider_application;
-        work.charge(original.arguments().len())
-            .map_err(|()| type_resource())?;
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(original.arguments().len())
-            .map_err(|_| type_resource())?;
-        for original in original.arguments() {
-            let argument = crate::types::substitute_kinded_argument_with(
-                original,
-                self.actuals.replacements.types.as_map(),
-                &self.actuals.replacements.rows,
-                |units| work.charge(units),
-            )
-            .map_err(|()| type_resource())?
-            .map_err(|_| invalid_state())?;
-            arguments.push(crate::types::IterativeArgumentOwner::new(argument));
-        }
-        work.charge(arguments.len()).map_err(|()| type_resource())?;
-        let mut retained = Vec::new();
-        retained
-            .try_reserve_exact(arguments.len())
-            .map_err(|_| type_resource())?;
-        retained.extend(
-            arguments
-                .into_iter()
-                .map(crate::types::IterativeArgumentOwner::into_inner),
-        );
-        Ok(InterfaceApplication::new_kinded(
-            original.interface(),
-            retained.into_boxed_slice(),
-        ))
     }
 }
 
@@ -148,13 +108,72 @@ pub(super) struct ProviderInstanceProgress<'a> {
     pub(super) resource: &'a ResolvedProviderResourceExpr,
     pub(super) span: Span,
     pub(super) initializer: TypedNodeOwner,
-    pub(super) code: Arc<super::provider::CheckedProviderGroup>,
+    pub(super) code: super::provider::PreparedProviderCode,
     pub(super) actuals: ResourceActuals,
     pub(super) native: NativeScopeActuals,
     pub(super) forwarding: ProviderForwardings,
     pub(super) members: Vec<(TypedBinder, NodeId)>,
     pub(super) handle: TypedBinder,
     pub(super) previous: Option<usize>,
+    pub(super) evidence_marker: Option<crate::evidence::PendingObligationMarker>,
+}
+
+pub(super) struct DeferredSourceProviderInstance {
+    slot: crate::resolved::ProviderInstanceSlot,
+    definition: Arc<ResourceTypeFact>,
+    code: super::provider::PreparedProviderCode,
+    actuals: ResourceActuals,
+    body: ProviderComputationOwner,
+    body_node: NodeId,
+    scope_node: NodeId,
+    forwarding: ProviderForwardings,
+    native_effect: EffectInstance,
+    members: Vec<(BinderId, NodeId)>,
+    rows: crate::core::provider::DeferredProviderHandlerRows,
+    copy_plan: PreparedScopeCopyPlan,
+    marker: crate::evidence::PendingObligationMarker,
+    provider: crate::interface::LexicalEvidenceId,
+    span: Span,
+}
+
+impl std::fmt::Debug for DeferredSourceProviderInstance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeferredSourceProviderInstance")
+            .field("span", &self.span)
+            .field("provider", &self.provider)
+            .field("body_node", &self.body_node)
+            .field("scope_node", &self.scope_node)
+            .field("members", &self.members.len())
+            .finish_non_exhaustive()
+    }
+}
+
+enum SourceProviderRows {
+    Complete(crate::core::provider::ResolvedProviderHandlerRows),
+    Deferred(crate::core::provider::DeferredProviderHandlerRows),
+}
+impl SourceProviderRows {
+    fn output(&self) -> &EffectRow {
+        match self {
+            Self::Complete(rows) => rows.output(),
+            Self::Deferred(rows) => rows.output(),
+        }
+    }
+    fn copy_rows(&self) -> copy::ProviderScopeCopyRows<'_> {
+        match self {
+            Self::Complete(rows) => copy::ProviderScopeCopyRows {
+                residual: rows.residual(),
+                pending: rows.pending(),
+                nodes: rows.node_rows(),
+            },
+            Self::Deferred(rows) => copy::ProviderScopeCopyRows {
+                residual: rows.residual(),
+                pending: rows.pending(),
+                nodes: rows.node_rows(),
+            },
+        }
+    }
 }
 
 pub(super) struct ResourceActuals {
@@ -222,7 +241,6 @@ impl ResourceActuals {
 /// executable permission; final Core admission reconstructs these relations.
 pub(super) struct NativeScopeActuals {
     pub(super) native: Arc<crate::foreign::ForeignModuleFact>,
-    pub(super) state: IterativeTypeOwner,
     pub(super) effect: EffectInstance,
     pub(super) retained: Box<[TypeVariableId]>,
 }
@@ -236,6 +254,317 @@ impl Drop for ResourceActuals {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    /// Complete only resource suffixes covered by the ordinary owner closure.
+    /// Finished nested bodies precede their enclosing body in this inventory.
+    pub(super) fn complete_deferred_provider_instances(
+        &mut self,
+        marker: crate::evidence::PendingObligationMarker,
+        owner: NodeId,
+    ) -> Result<(), TypeError> {
+        if self.deferred_provider_instances.is_empty() {
+            return Ok(());
+        }
+        if self.purpose != ElaborationPurpose::ModuleCheck {
+            return Err(invalid_state());
+        }
+        // Pending-prefix counts alone are not owner identities: an unrelated
+        // later zero-obligation binding may share them. Authenticate the exact
+        // finished typed owner before completing any resource below it.
+        let mut stack = Vec::new();
+        let mut reachable = std::collections::HashSet::new();
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        stack.try_reserve(1).map_err(|_| type_resource())?;
+        stack.push(owner);
+        while let Some(node) = stack.pop() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            reachable.try_reserve(1).map_err(|_| type_resource())?;
+            if !reachable.insert(node) {
+                continue;
+            }
+            let kind = self.builder.compiler_node_kind(node)?;
+            self.type_work
+                .charge(F::child_count(kind))
+                .map_err(|()| type_resource())?;
+            stack
+                .try_reserve(F::child_count(kind))
+                .map_err(|_| type_resource())?;
+            for ordinal in 0..F::child_count(kind) {
+                stack.push(F::child_at(kind, ordinal).ok_or_else(invalid_state)?);
+            }
+        }
+        let count = self.deferred_provider_instances.len();
+        self.type_work.charge(count).map_err(|()| type_resource())?;
+        let mut retained = Vec::new();
+        retained
+            .try_reserve_exact(count)
+            .map_err(|_| type_resource())?;
+        let pending = std::mem::replace(&mut self.deferred_provider_instances, retained);
+        for instance in pending {
+            if !marker.covers(instance.marker) || !reachable.contains(&instance.scope_node) {
+                self.deferred_provider_instances.push(instance);
+                continue;
+            }
+            self.complete_deferred_provider_instance(instance)?;
+        }
+        Ok(())
+    }
+
+    fn complete_deferred_provider_instance(
+        &mut self,
+        instance: DeferredSourceProviderInstance,
+    ) -> Result<(), TypeError> {
+        let DeferredSourceProviderInstance {
+            slot,
+            definition,
+            code,
+            actuals,
+            body,
+            body_node,
+            forwarding,
+            native_effect,
+            members,
+            rows: deferred,
+            copy_plan,
+            provider,
+            span,
+            ..
+        } = instance;
+        self.complete_ready_provider_row_equations()?;
+        self.zonk_builder_types_since(None, false)
+            .map_err(TypeError::Internal)?;
+        let value = IterativeTypeOwner::new(self.zonk(body.value())?);
+        let effects = self.zonk_effect_row(body.effects())?;
+        let body = ProviderComputationOwner(ComputationType::new(value.into_inner(), effects));
+        let completed = self.provider_completed_roots.as_deref().unwrap_or(&[]);
+        let imported = self.provider_imported_captures.as_deref().unwrap_or(&[]);
+        self.type_work
+            .charge(
+                completed
+                    .len()
+                    .checked_add(members.len())
+                    .and_then(|n| n.checked_add(imported.len()))
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+        let mut roots = Vec::new();
+        roots
+            .try_reserve_exact(completed.len() + members.len())
+            .map_err(|_| type_resource())?;
+        roots.extend_from_slice(completed);
+        roots.extend_from_slice(&members);
+        let (methods, adapters) = self.capture_provider_actual_routes(body_node, &roots)?;
+        let imported = self.provider_imported_captures.as_deref().unwrap_or(&[]);
+        let mut imports = Vec::new();
+        imports
+            .try_reserve_exact(imported.len())
+            .map_err(|_| type_resource())?;
+        imports.extend(imported.iter().map(|(binder, capture)| (*binder, capture)));
+        let capture = crate::core::capture::prepare_actual_provider_capture(
+            &self.builder,
+            body_node,
+            &roots,
+            &imports,
+            &methods,
+            &adapters,
+            &native_effect,
+            F::capture_operation,
+            &mut self.type_work,
+        )
+        .map_err(|failure| super::capture_failure(failure, &mut self.type_work))?;
+        let source = if let Some(local) = self
+            .pending_local_provider
+            .as_ref()
+            .filter(|local| local.module() == definition.id.module())
+        {
+            local.template_source(&code, definition.id, definition.family, &mut self.type_work)?
+        } else {
+            code.imported_template_source(
+                definition.id,
+                definition.family,
+                self.source_provider_contracts
+                    .get(&definition.id.module())
+                    .ok_or_else(invalid_state)?,
+                &mut self.type_work,
+            )?
+        };
+        let rows = source
+            .handler
+            .prepare_rows(
+                actuals.replacements.types.as_map(),
+                &actuals.replacements.rows,
+                body.value(),
+                body.effects(),
+                &forwarding.effect,
+                Some(capture),
+                &mut self.type_work,
+            )
+            .map_err(|failure| {
+                if failure.is_row_union_ambiguous() {
+                    effect_row_failure(
+                        super::EffectRowCause::Union,
+                        span,
+                        "this resource instance has no principal effect-row union",
+                    )
+                } else {
+                    resolved_build_error(contract_validation_failure(failure))
+                }
+            })?;
+        // Validate every canonical original position before solving any copy
+        // coordinate. Copy-local identities use the retained exact alpha map.
+        let completion = deferred
+            .completion(&rows, &mut self.type_work)
+            .map_err(|failure| resolved_build_error(contract_validation_failure(failure)))?;
+        for (position, identity, row) in completion {
+            use crate::core::provider::DeferredProviderRowPosition as Position;
+            let row = match position {
+                Position::Node(_) | Position::Pending(_) | Position::Handler(_) => copy_plan.phases
+                    [2]
+                .context()
+                .realized_row(row, &mut self.type_work)
+                .map_err(|failure| TypeError::Internal(failure.into()))?,
+                Position::Output | Position::Residual => {
+                    crate::types::clone_effect_row_with_budget(row, &mut self.type_work)
+                        .map_err(|()| type_resource())?
+                }
+            };
+            self.complete_provider_row(identity, row)?;
+        }
+        self.complete_ready_provider_row_equations()?;
+        self.zonk_builder_types_since(None, false)
+            .map_err(TypeError::Internal)?;
+        self.type_work.charge(1).map_err(|()| type_resource())?;
+        let prepared = Arc::new(PreparedProviderInstance {
+            definition,
+            code,
+            actuals,
+            handler_rows: rows,
+            body,
+            forwarding,
+            provider,
+        });
+        self.provider_instances
+            .stage(&slot, prepared, &mut self.type_work)
+            .map_err(resolved_build_error)
+    }
+
+    /// The completed ordinary source unifier, rather than resource-body
+    /// synthesis, fixes a retained no-capture plan's answer and effect row.
+    pub(super) fn finalize_source_provider_plans(&mut self) -> Result<(), TypeError> {
+        if self.purpose != ElaborationPurpose::ModuleCheck
+            || !self.deferred_provider_instances.is_empty()
+        {
+            return Err(invalid_state());
+        }
+        let mut pending = std::mem::take(&mut self.provider_instances);
+        let result = (|| {
+            self.type_work
+                .charge(pending.len())
+                .map_err(|()| type_resource())?;
+            pending.finalize_unpublished(
+                |plan| self.finalize_no_capture_provider_plan(plan),
+                invalid_state,
+            )
+        })();
+        // Restore the exact transaction on both success and error. Every slot
+        // remains private and unfilled until the later joint publication.
+        self.provider_instances = pending;
+        result
+    }
+
+    fn finalize_no_capture_provider_plan(
+        &mut self,
+        plan: &mut PreparedProviderInstance,
+    ) -> Result<(), TypeError> {
+        let source = if let Some(local) = self
+            .pending_local_provider
+            .as_ref()
+            .filter(|local| local.module() == plan.definition.id.module())
+        {
+            local.template_source(
+                &plan.code,
+                plan.definition.id,
+                plan.definition.family,
+                &mut self.type_work,
+            )?
+        } else {
+            plan.code.imported_template_source(
+                plan.definition.id,
+                plan.definition.family,
+                self.source_provider_contracts
+                    .get(&plan.definition.id.module())
+                    .ok_or_else(invalid_state)?,
+                &mut self.type_work,
+            )?
+        };
+        if source.handler.needs_actual_captures() {
+            // Actual capture preparation has its own authenticated input
+            // domain; this no-capture refresh cannot mint a replacement receipt.
+            return Ok(());
+        }
+        // The initializer preparation already required closed actual arguments.
+        // Repeat that invariant before retaining the completed body metadata:
+        // rigid Type identities and formal open rows remain ordinary inputs.
+        for argument in plan.actuals.arguments() {
+            let ambiguous = crate::types::visit_argument_structure_with_budget(
+                argument,
+                &mut self.type_work,
+                |node, _| {
+                    Ok(matches!(node, TypeStructureNode::Type(Type::Inference(_)))
+                        || matches!(node,
+                            TypeStructureNode::Tail(tail)
+                                if matches!(tail.variable(), EffectRowVariable::Inference(_))
+                        ))
+                },
+            )
+            .map_err(|()| type_resource())?;
+            if ambiguous {
+                return Err(invalid_state());
+            }
+        }
+        // End the borrowed source view before using the full ordinary zonker.
+        let value = IterativeTypeOwner::new(self.zonk(plan.body.value())?);
+        let effects = self.zonk_effect_row(plan.body.effects())?;
+        let body = ProviderComputationOwner(ComputationType::new(value.into_inner(), effects));
+        let source = if let Some(local) = self
+            .pending_local_provider
+            .as_ref()
+            .filter(|local| local.module() == plan.definition.id.module())
+        {
+            local.template_source(
+                &plan.code,
+                plan.definition.id,
+                plan.definition.family,
+                &mut self.type_work,
+            )?
+        } else {
+            plan.code.imported_template_source(
+                plan.definition.id,
+                plan.definition.family,
+                self.source_provider_contracts
+                    .get(&plan.definition.id.module())
+                    .ok_or_else(invalid_state)?,
+                &mut self.type_work,
+            )?
+        };
+        let rows = source
+            .handler
+            .prepare_rows(
+                plan.actuals.replacements.types.as_map(),
+                &plan.actuals.replacements.rows,
+                body.value(),
+                body.effects(),
+                &plan.forwarding.effect,
+                None,
+                &mut self.type_work,
+            )
+            .map_err(|failure| resolved_build_error(contract_validation_failure(failure)))?;
+        // Nothing fallible follows these replacements. The original code,
+        // concrete actuals and forwarding identities remain the same owners.
+        plan.body = body;
+        plan.handler_rows = rows;
+        Ok(())
+    }
+
     // Keep the full owned progress out of the ordinary dispatcher's debug
     // frame. Ordinary source expressions only transfer its existing box.
     #[inline(never)]
@@ -253,7 +582,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(super) fn finish_provider_instance(
         &mut self,
         progress: ProviderInstanceProgress<'_>,
-        body: TypedNodeOwner,
+        mut body: TypedNodeOwner,
         context: &mut TypeContext,
     ) -> Result<TypedNode, TypeError> {
         use crate::core::provider::{
@@ -275,13 +604,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             mut members,
             handle,
             previous,
+            evidence_marker,
         } = progress;
+        // Resource syntax supplies ordinary constraints; its enclosing owner
+        // closes evidence only after the complete contextual expression check.
         self.leave_provider_instance_body(resource, previous, context)?;
         let source = if self.purpose == ElaborationPurpose::ModuleCheck {
             if let Some(local) = self
                 .pending_local_provider
                 .as_ref()
-                .filter(|local| local.code().module() == resource.definition.module())
+                .filter(|local| local.module() == resource.definition.module())
             {
                 local.template_source(
                     &code,
@@ -307,24 +639,211 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 &mut self.type_work,
             )?
         };
-        let checked_value = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        // Reuse the ordinary zonker's existing unresolved status. Resolved
+        // answers keep the same traversal and copy path in both source modes.
+        let (checked_value, ambiguous) = self.zonk_with_status(&body.ty)?;
+        let mut checked_value = IterativeTypeOwner::new(checked_value);
+        if self.purpose == ElaborationPurpose::FinalSynthesis && ambiguous {
+            // This published answer guides an ordinary check, never admission.
+            // The exact original template and complete caller actuals have
+            // already been reconstructed; verify the source slot association.
+            let prepared = resource.prepared.get().ok_or_else(invalid_state)?;
+            if prepared.provider != resource.provider
+                || prepared.definition.id != source.fact.id
+                || prepared.definition.family != source.fact.family
+                || prepared.actuals.arguments().len() != actuals.arguments().len()
+            {
+                return Err(invalid_state());
+            }
+            self.type_work
+                .charge(actuals.arguments().len())
+                .map_err(|()| type_resource())?;
+            for (original, actual) in prepared.actuals.arguments().iter().zip(actuals.arguments()) {
+                if !crate::types::same_kinded_argument_with_budget(
+                    original,
+                    actual,
+                    &mut self.type_work,
+                )
+                .map_err(|()| type_resource())?
+                {
+                    return Err(invalid_state());
+                }
+            }
+            // Source inference IDs belong to its completed unifier and cannot
+            // be reused as final inference identities. Caller rigid identities
+            // retain their original source scope; copy-local identities do not
+            // enter this caller answer under the existing escape checks.
+            if crate::types::visit_type_structure_with_budget(
+                prepared.body.value(),
+                &mut self.type_work,
+                |node, _| {
+                    Ok(matches!(node, TypeStructureNode::Type(Type::Inference(_)))
+                        || matches!(node, TypeStructureNode::Tail(tail)
+                        if matches!(tail.variable(), EffectRowVariable::Inference(_))))
+                },
+            )
+            .map_err(|()| type_resource())?
+            {
+                return Err(invalid_state());
+            }
+            let ty = IterativeTypeOwner::new(self.clone_type(prepared.body.value())?);
+            let provenance = self.at_span_provenance(&ty, resource.body.span)?;
+            let expected = super::ProvenancedTypeOwner::new(super::ProvenancedType {
+                ty: ty.into_inner(),
+                provenance,
+            });
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            let mut checked = TypedNodeBuffer(Vec::new());
+            checked
+                .0
+                .try_reserve_exact(1)
+                .map_err(|_| type_resource())?;
+            checked.push(body.into_inner());
+            self.finish_expression_check(
+                resource.body.span,
+                expected.into_inner(),
+                CheckKind::General,
+                &mut checked,
+            )?;
+            body = checked.pop().ok_or_else(invalid_state)?;
+            // The real body and any instantiated callable metadata now use
+            // this final unifier before canonical rows or copied forests read
+            // them. Other source obligations retain their ordinary ordering.
+            self.zonk_builder_types_since(None, false)
+                .map_err(TypeError::Internal)?;
+            checked_value = IterativeTypeOwner::new(self.zonk(&body.ty)?);
+        }
         let checked_effects = self.zonk_effect_row(&body.effects)?;
         let checked_body = ProviderComputationOwner(ComputationType::new(
             checked_value.into_inner(),
             checked_effects,
         ));
-        let rows = source
-            .handler
-            .prepare_rows(
-                actuals.replacements.types.as_map(),
-                &actuals.replacements.rows,
-                checked_body.value(),
-                checked_body.effects(),
-                &forwarding.effect,
+        let defer_source = self.purpose == ElaborationPurpose::ModuleCheck
+            && source.handler.needs_actual_captures();
+        let actual_capture = if !source.handler.needs_actual_captures() || defer_source {
+            None
+        } else {
+            let completed = self.provider_completed_roots.as_deref().unwrap_or(&[]);
+            let imports_len = self
+                .provider_imported_captures
+                .as_deref()
+                .map_or(0, |captures| captures.len());
+            self.type_work
+                .charge(
+                    members
+                        .len()
+                        .checked_add(completed.len())
+                        .and_then(|n| n.checked_add(imports_len))
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            let mut roots = Vec::new();
+            roots
+                .try_reserve_exact(members.len() + completed.len())
+                .map_err(|_| type_resource())?;
+            roots.extend_from_slice(completed);
+            roots.extend(
+                members
+                    .iter()
+                    .map(|(binder, function)| (binder.id(), *function)),
+            );
+            let (methods, adapters) = if self.purpose == ElaborationPurpose::ModuleCheck {
+                self.capture_provider_actual_routes(body.node, &roots)?
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let owned_imports = self.provider_imported_captures.as_deref().unwrap_or(&[]);
+            let mut imports = Vec::new();
+            imports
+                .try_reserve_exact(owned_imports.len())
+                .map_err(|_| type_resource())?;
+            imports.extend(
+                owned_imports
+                    .iter()
+                    .map(|(binder, capture)| (*binder, capture)),
+            );
+            Some(
+                crate::core::capture::prepare_actual_provider_capture(
+                    &self.builder,
+                    body.node,
+                    &roots,
+                    &imports,
+                    &methods,
+                    &adapters,
+                    &native.effect,
+                    F::capture_operation,
+                    &mut self.type_work,
+                )
+                .map_err(|failure| super::capture_failure(failure, &mut self.type_work))?,
+            )
+        };
+        let rows = if defer_source {
+            let count = crate::core::provider::DeferredProviderHandlerRows::row_count(
+                source.handler,
                 &mut self.type_work,
             )
-            .map_err(contract_validation_failure)
-            .map_err(resolved_build_error)?;
+            .map_err(|failure| resolved_build_error(contract_validation_failure(failure)))?;
+            let mut pending = Vec::new();
+            self.type_work.charge(count).map_err(|()| type_resource())?;
+            pending
+                .try_reserve_exact(count)
+                .map_err(|_| type_resource())?;
+            for _ in 0..count {
+                pending.push(self.defer_provider_row(span)?);
+            }
+            let mut pending = pending.into_iter();
+            SourceProviderRows::Deferred(
+                crate::core::provider::DeferredProviderHandlerRows::prepare(
+                    source.handler,
+                    || pending.next(),
+                    &mut self.type_work,
+                )
+                .map_err(|failure| resolved_build_error(contract_validation_failure(failure)))?,
+            )
+        } else {
+            SourceProviderRows::Complete(
+                source
+                    .handler
+                    .prepare_rows(
+                        actuals.replacements.types.as_map(),
+                        &actuals.replacements.rows,
+                        checked_body.value(),
+                        checked_body.effects(),
+                        &forwarding.effect,
+                        actual_capture,
+                        &mut self.type_work,
+                    )
+                    .map_err(|failure| {
+                        if failure.is_row_union_ambiguous() {
+                            effect_row_failure(
+                                super::EffectRowCause::Union,
+                                span,
+                                "this resource instance has no principal effect-row union",
+                            )
+                        } else {
+                            resolved_build_error(contract_validation_failure(failure))
+                        }
+                    })?,
+            )
+        };
+        if self.purpose == ElaborationPurpose::FinalSynthesis
+            && source.handler.needs_actual_captures()
+        {
+            let original_rows = &resource
+                .prepared
+                .get()
+                .ok_or_else(invalid_state)?
+                .handler_rows;
+            let SourceProviderRows::Complete(rows) = &rows else {
+                return Err(invalid_state());
+            };
+            if !original_rows
+                .same_actual_captures(rows, &mut self.type_work)
+                .map_err(|failure| resolved_build_error(contract_validation_failure(failure)))?
+            {
+                return Err(invalid_state());
+            }
+        }
         let final_preparation = if self.purpose == ElaborationPurpose::FinalSynthesis {
             self.type_work.charge(1).map_err(|()| type_resource())?;
             Some(Arc::clone(
@@ -343,19 +862,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     .ok_or_else(invalid_state)
             })
             .transpose()?;
-        let source_plan;
+        let mut source_plan = None;
         let plan = if let Some(final_plan) = final_plan {
             &final_plan.copyplan
         } else {
-            source_plan = self.prepare_scope_copy_plan(
+            source_plan = Some(self.prepare_scope_copy_plan_with_rows(
                 &source,
                 &actuals,
                 &checked_body,
-                &rows,
+                rows.copy_rows(),
                 resource.provider.module(),
                 span,
-            )?;
-            &source_plan
+            )?);
+            source_plan.as_ref().ok_or_else(invalid_state)?
         };
         let originals = [
             ProviderOriginalTemplate::Lifecycle(source.acquire.original, source.acquire.program),
@@ -442,6 +961,19 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             checked_body.value(),
         )?);
         self.check_provider_instance_escape(resource, &ty, &effects, context, span)?;
+        let deferred_members = if defer_source {
+            self.type_work
+                .charge(members.len())
+                .map_err(|()| type_resource())?;
+            let mut roots = Vec::new();
+            roots
+                .try_reserve_exact(members.len())
+                .map_err(|_| type_resource())?;
+            roots.extend(members.iter().map(|(binder, node)| (binder.id(), *node)));
+            roots
+        } else {
+            Vec::new()
+        };
         let mut body_node = body.node;
         while let Some((binder, function)) = members.pop() {
             let binder_id = binder.id();
@@ -536,6 +1068,28 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 catalog: &relocations[index],
                 original_slots: &slots[index],
             });
+            // The final scope is not enclosed by its forwarding binds yet.
+            // Supply only independently lowered prior globals and these exact
+            // typed forwarding members as virtual ordinary value bindings.
+            let completed = self.provider_completed_roots.as_deref().unwrap_or(&[]);
+            self.type_work
+                .charge(
+                    completed
+                        .len()
+                        .checked_add(members.len())
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+            let mut capture_globals = Vec::new();
+            capture_globals
+                .try_reserve_exact(completed.len() + members.len())
+                .map_err(|_| type_resource())?;
+            capture_globals.extend_from_slice(completed);
+            capture_globals.extend(
+                members
+                    .iter()
+                    .map(|(binder, function)| (binder.id(), *function)),
+            );
             let entries = ProviderSpecializationEntries {
                 acquire: &copied.acquire,
                 finish: &copied.finish,
@@ -543,6 +1097,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 handler: copied.handler,
                 clauses: &copied.clauses,
                 body: body_node,
+                capture_globals: &capture_globals,
             };
             let builder = F::effect_builder(&mut self.builder).ok_or_else(invalid_state)?;
             ProviderScopeAuthority::Admitted(
@@ -604,19 +1159,54 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )?;
         if self.purpose == ElaborationPurpose::ModuleCheck {
             self.type_work.charge(2).map_err(|()| type_resource())?;
-            let prepared = Arc::new(PreparedProviderInstance {
-                definition: Arc::clone(source.fact),
-                code,
-                actuals,
-                native,
-                handler_rows: rows,
-                body: checked_body,
-                forwarding,
-                provider: resource.provider,
-            });
-            self.provider_instances
-                .stage(&resource.prepared, prepared, &mut self.type_work)
-                .map_err(resolved_build_error)?;
+            match rows {
+                SourceProviderRows::Complete(rows) => {
+                    let prepared = Arc::new(PreparedProviderInstance {
+                        definition: Arc::clone(source.fact),
+                        code,
+                        actuals,
+                        handler_rows: rows,
+                        body: checked_body,
+                        forwarding,
+                        provider: resource.provider,
+                    });
+                    self.provider_instances
+                        .stage(&resource.prepared, prepared, &mut self.type_work)
+                        .map_err(resolved_build_error)?;
+                }
+                SourceProviderRows::Deferred(rows) => {
+                    let slot = resource
+                        .prepared
+                        .retain_unpublished(&mut self.type_work)
+                        .map_err(resolved_build_error)?;
+                    let native_effect = crate::types::clone_effect_instance_with_budget(
+                        &native.effect,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?;
+                    self.deferred_provider_instances
+                        .try_reserve(1)
+                        .map_err(|_| type_resource())?;
+                    self.deferred_provider_instances
+                        .push(DeferredSourceProviderInstance {
+                            slot,
+                            definition: Arc::clone(source.fact),
+                            code,
+                            actuals,
+                            body: checked_body,
+                            body_node: body.node,
+                            scope_node: node,
+                            forwarding,
+                            native_effect,
+                            members: deferred_members,
+                            rows,
+                            copy_plan: source_plan.take().ok_or_else(invalid_state)?,
+                            marker: evidence_marker.ok_or_else(invalid_state)?,
+                            provider: resource.provider,
+                            span,
+                        });
+                }
+            }
         }
         let provenance = self.at_span_provenance(&ty, span)?;
         Ok(TypedNode {
@@ -655,21 +1245,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         native: &EffectInstance,
         span: Span,
     ) -> Result<EffectRow, TypeError> {
-        let acquire =
-            crate::core::provider::interpret_native_phase_row(acquire, native, &mut self.type_work)
-                .map_err(contract_validation_failure)
-                .map_err(resolved_build_error)?;
-        let finish =
-            crate::core::provider::interpret_native_phase_row(finish, native, &mut self.type_work)
-                .map_err(contract_validation_failure)
-                .map_err(resolved_build_error)?;
-        let output = crate::core::provider::interpret_native_phase_row(
-            handler_output,
-            native,
-            &mut self.type_work,
-        )
-        .map_err(contract_validation_failure)
-        .map_err(resolved_build_error)?;
+        let acquire = self.provider_native_phase_row(acquire, native, span)?;
+        let finish = self.provider_native_phase_row(finish, native, span)?;
+        let output = self.provider_native_phase_row(handler_output, native, span)?;
         let phases = self.union_effects(&acquire, &finish, span)?;
         let completed = self.union_effects(&phases, &output, span)?;
         self.union_effects(initializer, &completed, span)
@@ -752,20 +1330,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         let code = if let Some(local) = self
             .pending_local_provider
             .as_ref()
-            .filter(|local| local.code().module() == resource.definition.module())
+            .filter(|local| local.module() == resource.definition.module())
         {
-            self.type_work.charge(1).map_err(|()| type_resource())?;
-            Arc::clone(local.code())
+            local.original_code(resource.definition, &mut self.type_work)?
         } else {
             self.provider_codes
                 .code(resource.definition.module(), &mut self.type_work)?
+                .map(provider::PreparedProviderCode::Group)
                 .ok_or_else(invalid_state)?
         };
         let source = if self.purpose == ElaborationPurpose::ModuleCheck {
             if let Some(local) = self
                 .pending_local_provider
                 .as_ref()
-                .filter(|local| local.code().module() == resource.definition.module())
+                .filter(|local| local.module() == resource.definition.module())
             {
                 local.template_source(
                     &code,
@@ -792,11 +1370,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             )?
         };
         self.type_work.charge(1).map_err(|()| type_resource())?;
+        let needs_actual_captures = source.handler.needs_actual_captures();
         let fact = Arc::clone(source.fact);
         let actuals = self.prepare_resource_actuals(resource, &fact, &initializer)?;
         let native = self.prepare_native_scope_actuals(resource, &fact, &actuals, &initializer)?;
         let forwarding = self.prepare_resource_forwardings(resource, &source, &actuals)?;
         let members = self.lower_resource_forwardings(resource, &forwarding)?;
+        let evidence_marker = if needs_actual_captures
+            && self.purpose == ElaborationPurpose::ModuleCheck
+            && self.selection.is_some()
+        {
+            Some(self.evidence_marker()?)
+        } else {
+            None
+        };
         let (handle, previous) =
             self.enter_provider_instance_body(resource, &fact, &actuals, &forwarding, context)?;
         self.type_work.charge(3).map_err(|()| type_resource())?;
@@ -813,6 +1400,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 members,
                 handle,
                 previous,
+                evidence_marker,
             },
         )));
         tasks.push(ElaborationTask::Synthesize {
@@ -961,14 +1549,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             if !context.remove_and_discard(source.binder.id) {
                 return Err(invalid_state());
             }
-            if let Some(lowering) = self.evidence_lowering.as_mut() {
-                if lowering
+            if let Some(lowering) = self.evidence_lowering.as_mut()
+                && lowering
                     .lexical_binders
                     .remove(&(resource.provider, source.method))
                     .is_none()
-                {
-                    return Err(invalid_state());
-                }
+            {
+                return Err(invalid_state());
             }
         }
         if let Some(selector) = self.selection.as_mut() {
@@ -1194,6 +1781,23 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             }
             for (argument, parameter) in written.iter().zip(fact.parameters.iter().skip(1)) {
                 match (&argument.ty, &parameter.kind) {
+                    (KindedArgument::RowArg(_), Kind::EffectRow) => {}
+                    (KindedArgument::TypeArg(_), kind) if !matches!(kind, Kind::EffectRow) => {}
+                    _ => return Err(invalid_state()),
+                }
+                let qualified =
+                    crate::types::qualify_kinded_argument_with_expected_row_with_budget(
+                        &argument.ty,
+                        self.expected_effect_rows.last(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| type_resource())?
+                    .map_err(|_| invalid_state())?
+                    .map(crate::types::IterativeArgumentOwner::new);
+                let argument = qualified
+                    .as_ref()
+                    .map_or(&argument.ty, |owner| owner.as_ref());
+                match (argument, &parameter.kind) {
                     (KindedArgument::RowArg(row), Kind::EffectRow) => {
                         rows.push(self.zonk_effect_row(row)?);
                     }
@@ -1295,7 +1899,18 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 }
                 KindedArgument::RowArg(row) => KindedArgument::RowArg(self.zonk_effect_row(row)?),
             };
-            crate::types::discard_kinded_argument_iteratively(std::mem::replace(argument, zonked));
+            let zonked = crate::types::IterativeArgumentOwner::new(zonked);
+            let qualified = crate::types::qualify_kinded_argument_with_expected_row_with_budget(
+                zonked.as_ref(),
+                self.expected_effect_rows.last(),
+                &mut self.type_work,
+            )
+            .map_err(|()| type_resource())?
+            .map_err(|_| invalid_state())?;
+            let qualified = qualified.unwrap_or_else(|| zonked.into_inner());
+            crate::types::discard_kinded_argument_iteratively(std::mem::replace(
+                argument, qualified,
+            ));
             let ambiguous = crate::types::visit_argument_structure_with_budget(
                 argument,
                 &mut self.type_work,
@@ -1412,10 +2027,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                         .ok_or_else(type_resource)?,
                 )
                 .map_err(|()| type_resource())?;
-            if candidate.effects.contains(&effect.effect()) {
-                if native.replace(Arc::clone(candidate)).is_some() {
-                    return Err(invalid_state());
-                }
+            if candidate.effects.contains(&effect.effect())
+                && native.replace(Arc::clone(candidate)).is_some()
+            {
+                return Err(invalid_state());
             }
         }
         let native = native.ok_or_else(invalid_state)?;
@@ -1523,7 +2138,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         Ok(NativeScopeActuals {
             native,
-            state,
             effect,
             retained: retained.into_boxed_slice(),
         })
@@ -1556,4 +2170,272 @@ fn retain_original_template_slots(
         }
     }
     Ok(slots)
+}
+
+#[cfg(test)]
+mod actual_capture_tests {
+    #[test]
+    fn deferred_provider_closure_failures_keep_original_slots_private_and_fresh_retry_succeeds() {
+        use crate::{
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind},
+        };
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        struct Tree(std::path::PathBuf);
+        impl Drop for Tree {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let tree = Tree(std::env::temp_dir().join(format!(
+            "ash-deferred-provider-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )));
+        std::fs::create_dir(&tree.0).unwrap();
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/control-source");
+        for entry in std::fs::read_dir(fixtures).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), tree.0.join(entry.file_name())).unwrap();
+        }
+        let entry = tree.0.join("deferred.ash");
+        let compile = |source: &str, should_succeed: bool, unknown: bool| {
+            std::fs::write(&entry, source).unwrap();
+            let registrations = crate::foreign::ForeignRegistrations::new([
+                crate::foreign::provider_manifest(crate::module::ForeignRegistrationId::new(1))
+                    .unwrap(),
+                crate::foreign::sqlite_manifest(crate::module::ForeignRegistrationId::new(2))
+                    .unwrap(),
+            ])
+            .unwrap();
+            let graph = load_module_graph(
+                &entry,
+                &ModuleRoots::empty().with_foreign_registrations(registrations),
+            )
+            .unwrap();
+            let mut checked: Vec<CheckedModule> = Vec::new();
+            let mut availability = crate::elaborate::ProviderCodeAvailability::default();
+            let mut checking = crate::types::TypeWorkBudget::default();
+            let mut coverage = crate::pattern::UsefulnessBudget::default();
+            let mut constraints = crate::interface::InterfaceConstraintBudget::default();
+            let mut observed = false;
+            for loaded in graph.modules() {
+                let dependencies = loaded
+                    .dependencies()
+                    .iter()
+                    .map(|edge| {
+                        DependencyExports::new(
+                            edge,
+                            checked
+                                .iter()
+                                .find(|module| module.module() == edge.target())
+                                .unwrap()
+                                .exports(),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let resolved = resolve_module(loaded, &dependencies).unwrap();
+                if loaded.id() != graph.entry() {
+                    let module = crate::elaborate::check_module_with_budget_and_provider_codes(
+                        resolved,
+                        &availability,
+                        &mut checking,
+                        &mut coverage,
+                        &mut constraints,
+                    )
+                    .unwrap();
+                    if let Some(code) = module.provider_code() {
+                        availability
+                            .retain(module.module(), code, &mut checking)
+                            .unwrap();
+                    }
+                    checked.push(module);
+                    continue;
+                }
+                observed = true;
+                let selected = resolved
+                    .definitions()
+                    .iter()
+                    .find_map(|definition| {
+                        let ResolvedDefinitionKind::Equational(group) = &definition.kind else {
+                            return None;
+                        };
+                        (group.interface.name.spelling == if unknown { "client" } else { "main" })
+                            .then_some(&group.equations[0].body)
+                    })
+                    .unwrap();
+                let body = if let ResolvedExprKind::Handle(handler) = &selected.kind {
+                    handler.body.as_ref()
+                } else {
+                    selected
+                };
+                let ResolvedExprKind::ProviderResource(resource) = &body.kind else {
+                    panic!("exact typed source resource occurrence");
+                };
+                let slot = resource.prepared.retain_for_test();
+                let mut work = crate::types::TypeWorkBudget::unbounded();
+                let evidence =
+                    crate::elaborate::module_bodies::ordinary_source_occurrences_for_test(
+                        selected, &mut work,
+                    )
+                    .unwrap()
+                    .iter()
+                    .flat_map(|occurrence| occurrence.evidence.iter())
+                    .map(|slot| slot.retain_unpublished().unwrap())
+                    .collect::<Vec<_>>();
+                assert!(!evidence.is_empty());
+                let result = crate::elaborate::check_module_with_budget_and_provider_codes(
+                    resolved,
+                    &availability,
+                    &mut checking,
+                    &mut coverage,
+                    &mut constraints,
+                );
+                if should_succeed {
+                    let checked = result.unwrap();
+                    assert!(slot.get().is_some());
+                    assert!(evidence.iter().all(|slot| slot.selection().is_some()));
+                    drop(checked);
+                } else {
+                    let Err(error) = result else {
+                        panic!("bounded closure refusal required");
+                    };
+                    if !unknown {
+                        assert!(
+                            matches!(error, crate::elaborate::TypeError::Interface(_)),
+                            "{error:?}"
+                        );
+                    } else {
+                        assert!(
+                            matches!(
+                                error,
+                                crate::elaborate::TypeError::Internal(
+                                    crate::elaborate::ElaborationFailure::InvalidState
+                                )
+                            ),
+                            "{error:?}"
+                        );
+                    }
+                    assert!(slot.get().is_none());
+                    assert!(evidence.iter().all(|slot| slot.selection().is_none()));
+                }
+            }
+            assert!(observed);
+        };
+        let header = "import @foreign.sqlite as Native\nimport provider as Provider\nimport capture_library as Library\ninterface Make<A> {\nmake : Unit -> A\n}\n";
+        let positive = format!(
+            "{header}impl Make<Int> {{\nmake ignored = 42\n}}\nmain : Unit -> Provider.Scope<Native.OpenError, Native.CloseError, Int>\nmain ignored = handle (resource Library.Probe<P> db = Native.InMemory {{\nlet ignored = Library.probe (db, Library.without_owner)\nmake ()\n}}) with Library.H {{\nop ignored => resume ()\n}}\n"
+        );
+        compile(
+            &positive
+                .replace("impl Make<Int>", "impl Make<Bool>")
+                .replace("make ignored = 42", "make ignored = true"),
+            false,
+            false,
+        );
+        compile(&positive, true, false);
+        let unknown = format!(
+            "{header}impl Make<Int> {{\nmake ignored = 42\n}}\nclient : (Unit -> Unit ! {{Library.Stop, Library.H}}) -> Provider.Scope<Native.OpenError, Native.CloseError, Int> ! {{Library.H}}\nclient callback = resource Library.Probe<P> db = Native.InMemory {{\nlet ignored = Library.probe (db, callback)\nmake ()\n}}\nmain : Unit -> Provider.Scope<Native.OpenError, Native.CloseError, Int>\nmain ignored = handle (client Library.without_owner) with Library.H {{\nop ignored => resume ()\n}}\n"
+        );
+        compile(&unknown, false, true);
+        compile(&positive, true, false);
+    }
+
+    #[test]
+    fn actual_request_receipts_distinguish_equal_sigma_epsilon_and_reconstruct_final_core() {
+        use crate::{
+            module::{ModuleRoots, load_module_graph},
+            resolve::{DependencyExports, resolve_module},
+            resolved::{CheckedModule, ResolvedDefinitionKind, ResolvedExprKind},
+        };
+        let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/control-source/capture-demand.ash");
+        let registrations = crate::foreign::ForeignRegistrations::new([
+            crate::foreign::provider_manifest(crate::module::ForeignRegistrationId::new(1))
+                .unwrap(),
+            crate::foreign::sqlite_manifest(crate::module::ForeignRegistrationId::new(2)).unwrap(),
+        ])
+        .unwrap();
+        let graph = load_module_graph(
+            &entry,
+            &ModuleRoots::empty().with_foreign_registrations(registrations),
+        )
+        .unwrap();
+        let mut checked: Vec<CheckedModule> = Vec::new();
+        let mut observed = false;
+        for loaded in graph.modules() {
+            let dependencies = loaded
+                .dependencies()
+                .iter()
+                .map(|edge| {
+                    DependencyExports::new(
+                        edge,
+                        checked
+                            .iter()
+                            .find(|module| module.module() == edge.target())
+                            .unwrap()
+                            .exports(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let module =
+                crate::elaborate::check_module(resolve_module(loaded, &dependencies).unwrap())
+                    .unwrap();
+            for definition in module.definitions() {
+                let ResolvedDefinitionKind::Equational(definition) = definition.kind() else {
+                    continue;
+                };
+                if definition.interface.name.spelling != "both" {
+                    continue;
+                }
+                let ResolvedExprKind::ProviderResource(resource) =
+                    &definition.equations[0].body.kind
+                else {
+                    panic!("exact Probe instance body")
+                };
+                let prepared = resource
+                    .prepared
+                    .get()
+                    .expect("actual source request proof");
+                let h = module
+                    .effects()
+                    .iter()
+                    .find(|effect| effect.spelling == "H")
+                    .unwrap()
+                    .id;
+                prepared
+                    .handler_rows
+                    .assert_distinct_actual_captures_for_test(h);
+                observed = true;
+            }
+            checked.push(module);
+        }
+        assert!(observed, "the canonical library instance was checked");
+        let linked = crate::elaborate::link_modules(checked, graph.entry()).unwrap();
+        let validated = crate::validate_linked_facts_for_test(linked).unwrap();
+        let mut elaborator =
+            crate::elaborate::EffectElaborator::for_module_program(&validated).unwrap();
+        let typed = elaborator
+            .synthesize_effect_module_program(&validated)
+            .unwrap();
+        let core = elaborator.finish(typed.node).unwrap();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let module_sources = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        crate::core::validate_effect_modules(core, &sources, &module_sources).expect(
+            "independent final executable reconstruction of the original ports and actual c",
+        );
+    }
 }

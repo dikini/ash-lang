@@ -270,22 +270,6 @@ pub(super) struct ModuleBodyDependencies {
     entries: Vec<ModuleBodyDependency>,
 }
 
-impl ModuleBodyDependencies {
-    pub(super) fn pending(&self) -> impl Iterator<Item = ResolvedDeclarationIndex> + '_ {
-        self.entries
-            .iter()
-            .filter(|entry| !entry.completed)
-            .map(|entry| entry.declaration)
-    }
-
-    pub(super) fn completed(&self) -> impl Iterator<Item = ResolvedDeclarationIndex> + '_ {
-        self.entries
-            .iter()
-            .filter(|entry| entry.completed)
-            .map(|entry| entry.declaration)
-    }
-}
-
 fn mark_dependency(
     schedule: &ModuleBodySchedule,
     declaration: ResolvedDeclarationIndex,
@@ -355,19 +339,6 @@ fn retain_selected_dependencies(
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
-    /// Follows completed typed roots and their exact staged selections. It
-    /// never inspects implementation candidates or treats an unchecked body as
-    /// having an empty capture. The caller stages evidence before this query.
-    pub(super) fn completed_module_body_dependencies(
-        &mut self,
-        module: &ResolvedModule,
-        checking: &ModuleBodyChecking,
-    ) -> Result<ModuleBodyDependencies, TypeError> {
-        let roots = self.completed_module_body_roots(checking)?;
-        self.module_body_dependencies_from_roots(module, checking, &roots)
-            .map(|(dependencies, _)| dependencies)
-    }
-
     /// Queries only authentic completed declarations selected by the caller.
     /// This does not imply that their dependencies form a closed component.
     pub(super) fn completed_module_body_dependencies_for(
@@ -662,76 +633,6 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         Ok(())
     }
 
-    /// Reconstructs true captures for a closed completed component, then
-    /// retains exactly those facts for original local template checking.
-    /// A missing selected method or typed global dependency is a failure;
-    /// unchecked declarations never receive a placeholder capture fact.
-    pub(super) fn completed_module_provider_facts(
-        &mut self,
-        module: &ResolvedModule,
-        schemes: &mut [CheckedGlobalScheme],
-        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
-        checking: &mut ModuleBodyChecking,
-    ) -> Result<crate::resolved::ProviderDefiningFacts, TypeError> {
-        self.stage_completed_module_body_evidence(checking)?;
-        if self.cleanup_rows.is_empty() {
-            self.zonk_builder_types().map_err(TypeError::Internal)?;
-        } else {
-            self.zonk_builder_types_since(None, false)
-                .map_err(TypeError::Internal)?;
-        }
-        let roots = self.completed_module_body_roots(checking)?;
-        let captures = self.capture_completed_module_roots(
-            module,
-            &roots,
-            &checking.facts.0,
-            checking.publication.as_ref().ok_or_else(invalid_state)?,
-        )?;
-        if captures.len() != roots.len() {
-            return Err(invalid_state());
-        }
-        let global_count = checking.globals.globals.len();
-        self.type_work
-            .charge(global_count)
-            .map_err(|()| type_resource())?;
-        let mut positions = Vec::new();
-        positions
-            .try_reserve_exact(global_count)
-            .map_err(|_| type_resource())?;
-        let schedule = checking.schedule.as_ref().ok_or_else(invalid_state)?;
-        let mut captures = captures.into_iter();
-        for (binder, _) in roots.iter().take(global_count) {
-            let position = schedule.global_position(*binder, &mut self.type_work)?;
-            let scheme = schemes.get_mut(position).ok_or_else(invalid_state)?;
-            if scheme.binder != *binder {
-                return Err(invalid_state());
-            }
-            scheme.capture = captures.next().ok_or_else(invalid_state)?;
-            positions.push(position);
-        }
-        for fact in &mut checking.facts.0 {
-            for method in &mut fact.methods {
-                self.type_work.charge(1).map_err(|()| type_resource())?;
-                method.capture = captures.next().ok_or_else(invalid_state)?;
-            }
-        }
-        if captures.next().is_some() {
-            return Err(invalid_state());
-        }
-        // Retain completed views only. Their source order is not authority;
-        // binder IDs and exact source facts remain independently authenticated.
-        let mut constraints = std::mem::take(&mut self.constraint_work);
-        let result = self.prepare_provider_defining_facts_completed(
-            positions.iter().map(|position| &schemes[*position]),
-            interfaces,
-            &checking.facts.0,
-            module.imported_facts(),
-            &mut constraints,
-        );
-        self.constraint_work = constraints;
-        result
-    }
-
     /// Reconstructs captures only for an authenticated closed subset. Checked
     /// bodies outside that subset remain stored with their existing state;
     /// none of their incomplete capture facts is offered to template checking.
@@ -880,6 +781,127 @@ pub(super) fn declaration_has_local_provider_instance(
     declaration: ResolvedDeclarationIndex,
     work: &mut TypeWorkBudget,
 ) -> Result<bool, TypeError> {
+    let pending = declaration_source_items(module, declaration, work)?;
+    visit_source_items(pending, work, |expression, _| {
+        Ok(matches!(&expression.kind,
+        ResolvedExprKind::ProviderResource(resource) if resource.definition.module() == module.module()))
+    })
+}
+
+/// This gate only avoids retaining a provider environment for ordinary bodies.
+/// It supplies no selection, capture, or executable permission.
+pub(super) fn declaration_has_provider_instance(
+    module: &ResolvedModule,
+    declaration: ResolvedDeclarationIndex,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, TypeError> {
+    let pending = declaration_source_items(module, declaration, work)?;
+    visit_source_items(pending, work, |expression, _| {
+        Ok(matches!(
+            &expression.kind,
+            ResolvedExprKind::ProviderResource(_)
+        ))
+    })
+}
+
+/// Source coordinates are readiness hints only. Checked typed components and
+/// their selected evidence remain the sole capture and original authority.
+pub(super) fn declaration_local_provider_requirements(
+    module: &ResolvedModule,
+    declaration: ResolvedDeclarationIndex,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<crate::resolved::ResourceDefinitionId>, TypeError> {
+    let pending = declaration_source_items(module, declaration, work)?;
+    let mut required = Vec::new();
+    visit_source_items(pending, work, |expression, work| {
+        if let ResolvedExprKind::ProviderResource(resource) = &expression.kind
+            && resource.definition.module() == module.module()
+        {
+            work.charge(required.len().checked_add(1).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            if !required.contains(&resource.definition) {
+                required.try_reserve(1).map_err(|_| type_resource())?;
+                required.push(resource.definition);
+            }
+        }
+        Ok(false)
+    })?;
+    Ok(required)
+}
+
+impl ModuleBodySchedule {
+    pub(super) fn original_source_dependencies(
+        &self,
+        definition: &crate::resolved::ResolvedResourceDefinition,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<ResolvedDeclarationIndex>, TypeError> {
+        let mut pending = Vec::new();
+        push_source(
+            &mut pending,
+            BodySourceItem::Expression(&definition.acquire),
+            work,
+            definition.span,
+        )?;
+        push_source(
+            &mut pending,
+            BodySourceItem::Expression(&definition.finish),
+            work,
+            definition.span,
+        )?;
+        for clause in &definition.handlers {
+            push_source(
+                &mut pending,
+                BodySourceItem::Expression(&clause.body),
+                work,
+                clause.span,
+            )?;
+        }
+        let mut dependencies = Vec::new();
+        visit_source_items(pending, work, |expression, work| {
+            let ResolvedExprKind::Occurrence(occurrence) = &expression.kind else {
+                return Ok(false);
+            };
+            let mut retain = |declaration| -> Result<(), TypeError> {
+                work.charge(
+                    dependencies
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?,
+                )
+                .map_err(|()| type_resource())?;
+                if !dependencies.contains(&declaration) {
+                    dependencies.try_reserve(1).map_err(|_| type_resource())?;
+                    dependencies.push(declaration);
+                }
+                Ok(())
+            };
+            match occurrence.term {
+                crate::resolved::ResolvedTermName::Global(binder) => {
+                    if self.globals.contains_key(&binder)
+                        || self.implementation_methods.contains_key(&binder)
+                    {
+                        retain(self.binder_declaration(binder)?)?;
+                    }
+                }
+                crate::resolved::ResolvedTermName::Method(_) => {
+                    // Keep the local candidate inventory complete before selecting
+                    // an ordinary method. This index never selects an implementation.
+                    for index in 0..self.implementation_count {
+                        retain(ResolvedDeclarationIndex::Implementation(index))?;
+                    }
+                }
+            }
+            Ok(false)
+        })?;
+        Ok(dependencies)
+    }
+}
+
+fn declaration_source_items<'a>(
+    module: &'a ResolvedModule,
+    declaration: ResolvedDeclarationIndex,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<BodySourceItem<'a>>, TypeError> {
     let mut pending = Vec::new();
     match declaration {
         ResolvedDeclarationIndex::Global(index) => {
@@ -924,8 +946,40 @@ pub(super) fn declaration_has_local_provider_instance(
         ResolvedDeclarationIndex::Resource(_)
         | ResolvedDeclarationIndex::Type(_)
         | ResolvedDeclarationIndex::Interface(_)
-        | ResolvedDeclarationIndex::Effect(_) => return Ok(false),
+        | ResolvedDeclarationIndex::Effect(_) => return Ok(pending),
     }
+    Ok(pending)
+}
+
+#[cfg(test)]
+pub(super) fn ordinary_source_occurrences_for_test<'a>(
+    body: &'a ResolvedExpr,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<&'a crate::resolved::ResolvedOccurrence>, TypeError> {
+    let mut pending = Vec::new();
+    push_source(
+        &mut pending,
+        BodySourceItem::Expression(body),
+        work,
+        body.span,
+    )?;
+    let mut occurrences = Vec::new();
+    visit_source_items(pending, work, |expression, work| {
+        if let ResolvedExprKind::Occurrence(occurrence) = &expression.kind {
+            work.charge(1).map_err(|()| type_resource())?;
+            occurrences.try_reserve(1).map_err(|_| type_resource())?;
+            occurrences.push(occurrence);
+        }
+        Ok(false)
+    })?;
+    Ok(occurrences)
+}
+
+fn visit_source_items<'a>(
+    mut pending: Vec<BodySourceItem<'a>>,
+    work: &mut TypeWorkBudget,
+    mut visit: impl FnMut(&'a ResolvedExpr, &mut TypeWorkBudget) -> Result<bool, TypeError>,
+) -> Result<bool, TypeError> {
     while let Some(item) = pending.pop() {
         work.charge(1).map_err(|()| type_resource())?;
         match item {
@@ -976,156 +1030,158 @@ pub(super) fn declaration_has_local_provider_instance(
                 }
             }
             BodySourceItem::Declaration(ResolvedLocalDeclaration::Newtype(_)) => {}
-            BodySourceItem::Expression(expression) => match &expression.kind {
-                ResolvedExprKind::ProviderResource(resource) => {
-                    if resource.definition.module() == module.module() {
-                        return Ok(true);
-                    }
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&resource.body),
-                        work,
-                        expression.span,
-                    )?;
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&resource.initializer),
-                        work,
-                        expression.span,
-                    )?;
+            BodySourceItem::Expression(expression) => {
+                if visit(expression, work)? {
+                    return Ok(true);
                 }
-                ResolvedExprKind::Block(block) => push_source(
-                    &mut pending,
-                    BodySourceItem::Block(block),
-                    work,
-                    expression.span,
-                )?,
-                ResolvedExprKind::Function(function) => push_source(
-                    &mut pending,
-                    BodySourceItem::Block(&function.body),
-                    work,
-                    expression.span,
-                )?,
-                ResolvedExprKind::Apply(application) => {
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&application.argument),
-                        work,
-                        expression.span,
-                    )?;
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&application.function),
-                        work,
-                        expression.span,
-                    )?;
-                }
-                ResolvedExprKind::Tuple(elements) => {
-                    for element in elements {
+                match &expression.kind {
+                    ResolvedExprKind::ProviderResource(resource) => {
                         push_source(
                             &mut pending,
-                            BodySourceItem::Expression(element),
+                            BodySourceItem::Expression(&resource.body),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&resource.initializer),
                             work,
                             expression.span,
                         )?;
                     }
-                }
-                ResolvedExprKind::Add(binary)
-                | ResolvedExprKind::Multiply(binary)
-                | ResolvedExprKind::Equal(binary) => {
-                    push_source(
+                    ResolvedExprKind::Block(block) => push_source(
                         &mut pending,
-                        BodySourceItem::Expression(&binary.left),
+                        BodySourceItem::Block(block),
                         work,
                         expression.span,
-                    )?;
-                    push_source(
+                    )?,
+                    ResolvedExprKind::Function(function) => push_source(
                         &mut pending,
-                        BodySourceItem::Expression(&binary.right),
+                        BodySourceItem::Block(&function.body),
                         work,
                         expression.span,
-                    )?;
-                }
-                ResolvedExprKind::Match(matched) => {
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&matched.scrutinee),
-                        work,
-                        expression.span,
-                    )?;
-                    for arm in &matched.arms {
+                    )?,
+                    ResolvedExprKind::Apply(application) => {
                         push_source(
                             &mut pending,
-                            BodySourceItem::Expression(&arm.body),
+                            BodySourceItem::Expression(&application.argument),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&application.function),
                             work,
                             expression.span,
                         )?;
                     }
-                }
-                ResolvedExprKind::Resource(resource) => {
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&resource.body),
-                        work,
-                        expression.span,
-                    )?;
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&resource.initializer),
-                        work,
-                        expression.span,
-                    )?;
-                }
-                ResolvedExprKind::Cleanup(cleanup) => {
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&cleanup.body),
-                        work,
-                        expression.span,
-                    )?;
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&cleanup.action),
-                        work,
-                        expression.span,
-                    )?;
-                }
-                ResolvedExprKind::Perform(request) => push_source(
-                    &mut pending,
-                    BodySourceItem::Expression(&request.operand),
-                    work,
-                    expression.span,
-                )?,
-                ResolvedExprKind::Handle(handler) => {
-                    push_source(
-                        &mut pending,
-                        BodySourceItem::Expression(&handler.body),
-                        work,
-                        expression.span,
-                    )?;
-                    for clause in &handler.clauses {
+                    ResolvedExprKind::Tuple(elements) => {
+                        for element in elements {
+                            push_source(
+                                &mut pending,
+                                BodySourceItem::Expression(element),
+                                work,
+                                expression.span,
+                            )?;
+                        }
+                    }
+                    ResolvedExprKind::Add(binary)
+                    | ResolvedExprKind::Multiply(binary)
+                    | ResolvedExprKind::Equal(binary) => {
                         push_source(
                             &mut pending,
-                            BodySourceItem::Expression(&clause.body),
+                            BodySourceItem::Expression(&binary.left),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&binary.right),
                             work,
                             expression.span,
                         )?;
                     }
+                    ResolvedExprKind::Match(matched) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&matched.scrutinee),
+                            work,
+                            expression.span,
+                        )?;
+                        for arm in &matched.arms {
+                            push_source(
+                                &mut pending,
+                                BodySourceItem::Expression(&arm.body),
+                                work,
+                                expression.span,
+                            )?;
+                        }
+                    }
+                    ResolvedExprKind::Resource(resource) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&resource.body),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&resource.initializer),
+                            work,
+                            expression.span,
+                        )?;
+                    }
+                    ResolvedExprKind::Cleanup(cleanup) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&cleanup.body),
+                            work,
+                            expression.span,
+                        )?;
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&cleanup.action),
+                            work,
+                            expression.span,
+                        )?;
+                    }
+                    ResolvedExprKind::Perform(request) => push_source(
+                        &mut pending,
+                        BodySourceItem::Expression(&request.operand),
+                        work,
+                        expression.span,
+                    )?,
+                    ResolvedExprKind::Handle(handler) => {
+                        push_source(
+                            &mut pending,
+                            BodySourceItem::Expression(&handler.body),
+                            work,
+                            expression.span,
+                        )?;
+                        for clause in &handler.clauses {
+                            push_source(
+                                &mut pending,
+                                BodySourceItem::Expression(&clause.body),
+                                work,
+                                expression.span,
+                            )?;
+                        }
+                    }
+                    ResolvedExprKind::Resume(resume) => push_source(
+                        &mut pending,
+                        BodySourceItem::Expression(&resume.value),
+                        work,
+                        expression.span,
+                    )?,
+                    ResolvedExprKind::String(_)
+                    | ResolvedExprKind::Integer(_)
+                    | ResolvedExprKind::Boolean(_)
+                    | ResolvedExprKind::Unit
+                    | ResolvedExprKind::Occurrence(_)
+                    | ResolvedExprKind::Constructor(_)
+                    | ResolvedExprKind::Discard(_) => {}
                 }
-                ResolvedExprKind::Resume(resume) => push_source(
-                    &mut pending,
-                    BodySourceItem::Expression(&resume.value),
-                    work,
-                    expression.span,
-                )?,
-                ResolvedExprKind::String(_)
-                | ResolvedExprKind::Integer(_)
-                | ResolvedExprKind::Boolean(_)
-                | ResolvedExprKind::Unit
-                | ResolvedExprKind::Occurrence(_)
-                | ResolvedExprKind::Constructor(_)
-                | ResolvedExprKind::Discard(_) => {}
-            },
+            }
         }
     }
     Ok(false)

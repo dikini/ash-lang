@@ -5,9 +5,10 @@
 > Candidate contracts, syntax, and Core rules are experimental. The
 > [execution record](execution.md#current-checkpoint) identifies implemented and
 > reviewed components. The public SQLite session is verified and integrated on the
-> original experimental branch. Basic arena integration and advanced row/control
-> obligations remain pending; experimental evidence does
-> not change current Ash semantics.
+> original experimental branch. Basic arena integration is also verified and
+> merged. Advanced row/control support is merged into the original branch; the execution
+> record identifies connected checks and the final original verification receipt. Experimental
+> evidence does not change current Ash semantics.
 
 The first slice establishes a copying SQLite bridge and a fixed-capacity scoped
 arena. The next slice compares retained foreign input, temporary output views,

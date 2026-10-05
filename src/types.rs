@@ -198,11 +198,6 @@ pub(crate) fn clone_effect_row_with_budget<B: TypeWorkMeter>(
     clone_effect_row_with_budget_and_failure(row, budget, allocation_error)
 }
 
-fn clone_effect_row(row: &EffectRow) -> EffectRow {
-    clone_effect_row_with_budget(row, &mut TypeWorkBudget::unbounded())
-        .expect("an in-memory row fits the address-space work bound")
-}
-
 pub(crate) fn clone_effect_row_with_budget_and_failure<B: TypeWorkMeter>(
     row: &EffectRow,
     budget: &mut B,
@@ -1068,6 +1063,7 @@ impl EffectRow {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn map_type_arguments_with_budget<E>(
         &self,
         map: impl FnMut(&Type, &mut TypeWorkBudget) -> Result<Type, E>,
@@ -1790,10 +1786,6 @@ impl ComputationType {
 
     pub(crate) fn effect_argument_count(&self) -> usize {
         self.effect_arguments().count()
-    }
-
-    pub(crate) fn extend_effect_arguments<'a>(&'a self, output: &mut Vec<&'a KindedArgument>) {
-        output.extend(self.effect_arguments());
     }
 }
 
@@ -3040,32 +3032,6 @@ pub(crate) fn substitute_type_and_row_variables_with<E>(
     )
 }
 
-/// Applies the same simultaneous substitution to conditional template rows.
-/// Inference-row replacements are already solved in the caller's scope; like
-/// rigid-row actuals, their payloads are not substituted a second time.
-pub(crate) fn substitute_type_and_template_rows_with<E>(
-    ty: &Type,
-    replacements: &HashMap<TypeVariableId, Type>,
-    row_replacements: &HashMap<TypeVariableId, EffectRow>,
-    inference_rows: &HashMap<InferenceVariableId, EffectRow>,
-    mut charge: impl FnMut(usize) -> Result<(), E>,
-    mut allocation_error: impl FnMut() -> E,
-) -> Result<Result<Type, EffectRowError>, E> {
-    substitute_structural_type_and_row_variables(
-        SubstitutionRoot::Type(ty),
-        replacements,
-        row_replacements,
-        Some(TemplateRowReplacements {
-            inference_rows,
-            renaming: None,
-        }),
-        &mut charge,
-        &mut allocation_error,
-        None,
-    )
-    .map(|result| result.map(StructuralValue::into_inner))
-}
-
 pub(crate) fn substitute_effect_and_template_rows_with<E>(
     row: &EffectRow,
     replacements: &HashMap<TypeVariableId, Type>,
@@ -3202,6 +3168,7 @@ pub(crate) fn substitute_argument_for_template_with<E>(
 /// free source binder to have a checked replacement. Replacement values retain
 /// the caller's scope. Missing bindings fail inside the shared reconstruction,
 /// so already rebuilt fragments remain protected by iterative owners.
+#[cfg(test)]
 pub(crate) fn substitute_type_and_row_variables_strict_source_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
@@ -3248,6 +3215,156 @@ enum SubstitutionRoot<'a> {
     Row(&'a EffectRow),
     Type(&'a Type),
     Argument(&'a KindedArgument),
+}
+
+/// Applies existing facts from a rigid expected row to matching occurrences
+/// throughout one complete owner argument. The caller authenticates that row;
+/// this operation neither infers exclusions nor changes other tail identities.
+/// No replacement means the original argument needs no qualification.
+pub(crate) fn qualify_kinded_argument_with_expected_row_with_budget(
+    argument: &KindedArgument,
+    expected: Option<&EffectRow>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Result<Option<KindedArgument>, EffectRowError>, ()> {
+    let Some(expected) = expected else {
+        return Ok(Ok(None));
+    };
+    let Some(tail) = expected.tail() else {
+        return Ok(Ok(None));
+    };
+    let EffectRowVariable::Rigid(binder) = tail.variable() else {
+        return Ok(Ok(None));
+    };
+    if tail.lacks().is_empty() && expected.known().is_empty() {
+        return Ok(Ok(None));
+    }
+    let qualified = rebuild_effect_row_with_budget(
+        std::iter::empty(),
+        Some(tail.variable()),
+        tail.lacks().iter().chain(expected.known()),
+        clone_type_with_budget,
+        budget,
+    )?;
+    budget.charge(1)?;
+    let mut rows = HashMap::new();
+    rows.try_reserve(1).map_err(|_| ())?;
+    rows.insert(binder, qualified);
+    substitute_kinded_argument_with(argument, &HashMap::new(), &rows, |cells| {
+        budget.charge(cells)
+    })
+    .map(|result| result.map(Some))
+}
+
+/// Qualifies a complete argument with independently authenticated enclosing
+/// declaration facts. Structural substitution preserves nested binder scope.
+pub(crate) fn qualify_kinded_argument_with_row_contexts_with_budget<'a>(
+    argument: &KindedArgument,
+    contexts: impl IntoIterator<Item = &'a HashMap<TypeVariableId, EffectRow>>,
+    budget: &mut TypeWorkBudget,
+) -> Result<Result<Option<KindedArgument>, EffectRowError>, ()> {
+    let mut qualified: Option<IterativeArgumentOwner> = None;
+    for rows in contexts {
+        if rows.is_empty() {
+            continue;
+        }
+        let original = qualified.as_deref().unwrap_or(argument);
+        let value =
+            match substitute_kinded_argument_with(original, &HashMap::new(), rows, |cells| {
+                budget.charge(cells)
+            })? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+        qualified = Some(IterativeArgumentOwner::new(value));
+    }
+    Ok(Ok(qualified.map(IterativeArgumentOwner::into_inner)))
+}
+
+/// A paid structural gate for lazy reconstruction of original ambient facts.
+/// It includes latent function rows and rows in complete effect owner payloads.
+pub(crate) fn kinded_arguments_have_rigid_rows_with_budget<'a>(
+    arguments: impl IntoIterator<Item = &'a KindedArgument>,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    enum Task<'a> {
+        Type(&'a Type),
+        Argument(&'a KindedArgument),
+        Row(&'a EffectRow),
+    }
+    let mut pending = Vec::new();
+    let mut found = false;
+    for argument in arguments {
+        budget.charge(1)?;
+        pending.try_reserve(1).map_err(|_| ())?;
+        pending.push(Task::Argument(argument));
+    }
+    while let Some(task) = pending.pop() {
+        budget.charge(1)?;
+        if let Task::Row(row) = &task {
+            let labels = row
+                .known()
+                .len()
+                .checked_add(row.tail().map_or(0, |tail| tail.lacks().len()))
+                .ok_or(())?;
+            budget.charge(labels)?;
+        }
+        let mut push = |task| -> Result<(), ()> {
+            budget.charge(1)?;
+            pending.try_reserve(1).map_err(|_| ())?;
+            pending.push(task);
+            Ok(())
+        };
+        match task {
+            Task::Argument(KindedArgument::TypeArg(ty)) => push(Task::Type(ty))?,
+            Task::Argument(KindedArgument::RowArg(row)) => push(Task::Row(row))?,
+            Task::Type(Type::Application(left, right) | Type::Function(left, right)) => {
+                push(Task::Type(left))?;
+                push(Task::Type(right))?;
+            }
+            Task::Type(Type::EffectfulFunction(domain, codomain)) => {
+                push(Task::Type(domain))?;
+                push(Task::Type(&codomain.value))?;
+                push(Task::Row(&codomain.effects))?;
+            }
+            Task::Type(Type::Tuple(elements)) => {
+                for ty in elements {
+                    push(Task::Type(ty))?;
+                }
+            }
+            Task::Type(Type::ResourceApply(_, arguments)) => {
+                for argument in arguments {
+                    push(Task::Argument(argument))?;
+                }
+            }
+            Task::Type(Type::Forall(_, body)) => push(Task::Type(body))?,
+            Task::Row(row) => {
+                found |= matches!(
+                    row.tail().map(|tail| tail.variable()),
+                    Some(EffectRowVariable::Rigid(_))
+                );
+                for instance in row
+                    .known()
+                    .iter()
+                    .chain(row.tail().into_iter().flat_map(|tail| tail.lacks()))
+                {
+                    for argument in instance.arguments() {
+                        push(Task::Argument(argument))?;
+                    }
+                }
+            }
+            Task::Type(
+                Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_),
+            ) => {}
+        }
+    }
+    Ok(found)
 }
 
 pub(crate) fn substitute_kinded_argument_with(
@@ -3457,13 +3574,14 @@ fn substitute_structural_type_and_row_variables<E>(
                 work.push(Task::VisitRow(row, substitute));
             }
             Task::VisitRow(row, substitute) => {
-                if substitute && let Some(invalid_source) = invalid_source.as_mut() {
-                    if let Some(tail) = &row.tail {
-                        match tail.variable {
-                            EffectRowVariable::Rigid(identity)
-                                if row_replacements.contains_key(&identity) => {}
-                            _ => return Err(invalid_source()),
-                        }
+                if substitute
+                    && let Some(invalid_source) = invalid_source.as_mut()
+                    && let Some(tail) = &row.tail
+                {
+                    match tail.variable {
+                        EffectRowVariable::Rigid(identity)
+                            if row_replacements.contains_key(&identity) => {}
+                        _ => return Err(invalid_source()),
                     }
                 }
                 charge(1)?;
@@ -6384,6 +6502,60 @@ mod tests {
     }
 }
 
+/// Checks existing rigid-tail absence authority without strengthening any row.
+/// Both source checking and final original reconstruction supply independently
+/// derived outer environments. Nested forall ownership was already shielded by
+/// the ordinary complete-type collector. This comparison does not strengthen a
+/// rigid binder or change its identity.
+pub(crate) fn rigid_row_requirements_entailed_with_budget(
+    required: &HashMap<TypeVariableId, EffectRow>,
+    contexts: &[HashMap<TypeVariableId, EffectRow>],
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, ()> {
+    for (binder, row) in required {
+        budget.charge(1)?;
+        let Some(tail) = row.tail() else {
+            return Ok(false);
+        };
+        if !row.known().is_empty() || tail.variable() != EffectRowVariable::rigid(*binder) {
+            return Ok(false);
+        }
+        for instance in tail.lacks() {
+            budget.charge(1)?;
+            let mut found = false;
+            for context in contexts {
+                budget.charge(1)?;
+                let Some(existing) = context.get(binder) else {
+                    continue;
+                };
+                let Some(existing_tail) = existing.tail() else {
+                    return Ok(false);
+                };
+                if !existing.known().is_empty()
+                    || existing_tail.variable() != EffectRowVariable::rigid(*binder)
+                {
+                    return Ok(false);
+                }
+                for established in existing_tail.lacks() {
+                    if compare_effect_instances_with_budget(instance, established, budget)?
+                        == std::cmp::Ordering::Equal
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if !found {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// Collects the row exclusions required by an effectful Core scheme.
 /// Nested schemes own their variables; callers qualify one scheme body.
 pub(crate) fn qualify_scheme_row_replacements_with_budget(
@@ -6534,4 +6706,110 @@ pub(crate) fn qualify_scheme_row_replacements_with_budget(
         row_replacements.insert(binder, row);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod lexical_row_context_tests {
+    use super::*;
+
+    #[test]
+    fn enclosing_row_facts_reach_nested_owner_payloads_without_crossing_forall() {
+        let file = crate::source::SourceFile::new("lexical-row-context.ash", "owner").unwrap();
+        let module = ModuleId::from(file.id());
+        let delta = TypeVariableId::resolved(module, 0);
+        let epsilon = TypeVariableId::resolved(module, 1);
+        let h = EffectInstance::new(EffectId::new(module, 0), Box::new([]));
+        let g = EffectInstance::new(EffectId::new(module, 1), Box::new([]));
+        let plain = |binder| EffectRow::open(EffectRowVariable::Rigid(binder), Box::new([]));
+        let qualified = |binder, effect: EffectInstance| {
+            EffectRow::open(EffectRowVariable::Rigid(binder), Box::new([effect]))
+        };
+        let function =
+            |row| Type::function_computation(Type::Unit, ComputationType::new(Type::Unit, row));
+        let argument = KindedArgument::TypeArg(Type::Tuple(Box::new([
+            function(plain(delta)),
+            Type::Forall(
+                Box::new([(delta, Kind::EffectRow)]),
+                Box::new(function(plain(delta))),
+            ),
+            function(EffectRow::singleton(EffectInstance::new_kinded(
+                EffectId::new(module, 2),
+                Box::new([KindedArgument::RowArg(plain(epsilon))]),
+            ))),
+        ])));
+        let expected = KindedArgument::TypeArg(Type::Tuple(Box::new([
+            function(qualified(delta, h.clone())),
+            Type::Forall(
+                Box::new([(delta, Kind::EffectRow)]),
+                Box::new(function(plain(delta))),
+            ),
+            function(EffectRow::singleton(EffectInstance::new_kinded(
+                EffectId::new(module, 2),
+                Box::new([KindedArgument::RowArg(qualified(epsilon, g.clone()))]),
+            ))),
+        ])));
+        let contexts = [
+            HashMap::from([(delta, qualified(delta, h))]),
+            HashMap::from([(epsilon, qualified(epsilon, g))]),
+        ];
+        let mut measured = TypeWorkBudget::default();
+        assert_eq!(
+            qualify_kinded_argument_with_row_contexts_with_budget(
+                &argument,
+                contexts.iter(),
+                &mut measured
+            )
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+            expected
+        );
+        let exact = measured.used();
+        for prefix in [0, 7] {
+            for limit in [exact - 1, exact, exact] {
+                let mut work = TypeWorkBudget::with_limit(prefix + limit);
+                work.charge(prefix).unwrap();
+                let result = qualify_kinded_argument_with_row_contexts_with_budget(
+                    &argument,
+                    contexts.iter(),
+                    &mut work,
+                );
+                if limit < exact {
+                    assert!(result.is_err());
+                } else {
+                    assert_eq!(result.unwrap().unwrap().unwrap(), expected);
+                    assert_eq!(work.used(), prefix + exact);
+                }
+            }
+        }
+        // Zero-argument known/lacks labels still contribute actual visits.
+        let label_only = KindedArgument::TypeArg(function(EffectRow::singleton(
+            EffectInstance::new(EffectId::new(module, 3), Box::new([])),
+        )));
+        for (root, has_rigid) in [(&argument, true), (&label_only, false)] {
+            let mut measured = TypeWorkBudget::default();
+            assert_eq!(
+                kinded_arguments_have_rigid_rows_with_budget(std::iter::once(root), &mut measured)
+                    .unwrap(),
+                has_rigid
+            );
+            let exact = measured.used();
+            for prefix in [0, 7] {
+                for limit in [exact - 1, exact, exact] {
+                    let mut work = TypeWorkBudget::with_limit(prefix + limit);
+                    work.charge(prefix).unwrap();
+                    let result = kinded_arguments_have_rigid_rows_with_budget(
+                        std::iter::once(root),
+                        &mut work,
+                    );
+                    if limit < exact {
+                        assert!(result.is_err());
+                    } else {
+                        assert_eq!(result.unwrap(), has_rigid);
+                        assert_eq!(work.used(), prefix + exact);
+                    }
+                }
+            }
+        }
+    }
 }

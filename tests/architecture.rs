@@ -244,8 +244,6 @@ define_kind_site_profiles! {
     FieldProviderSummaryBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, SummaryTree),
     FieldProviderRegistryShared => (Field, Shared, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, RegistryTree),
     FieldEvidenceValidationRegistryBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, EvidenceValidation, EvidenceType, RegistryTree),
-    FieldProviderElaborationCheckedBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, CheckedTree),
-    FieldProviderElaborationSummaryBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, Elaboration, InferenceType, SummaryTree),
     FieldProviderRegistryBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, RegistryTree),
     FieldNativeAuthenticationBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, TypeTreeAndResolvedTreeAndRegistryTree),
     FieldProviderDraftBorrow => (Field, Borrowed, Transient, CarrierRetention, PreservedCarrier, CoreValidation, CoreType, CoreTreeAndRegistryTree),
@@ -600,6 +598,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolved.rs::SummaryRoot.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolved.rs::SummaryRoot.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/surface.rs::SurfaceTypeKind.RowArgument.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree),
+    kind_site!("src/types.rs::$fn_kinded_arguments_have_rigid_rows_with_budget::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_kinded_arguments_have_rigid_rows_with_budget::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::$fn_kinded_arguments_have_rigid_rows_with_budget::Task.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_compare_structural_with_charge::Task.Arguments.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_compare_structural_with_charge::Task.Arguments.1", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_compare_structural_with_charge::Task.Instances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
@@ -688,9 +689,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/transform.rs::ProviderKindParameters.0", FieldProviderCoreOwned),
     kind_site!("src/core/validate.rs::CheckedHandlerTemplate.original_clauses", FieldProviderCoreOwned),
     kind_site!("src/core/validate.rs::CheckedHandlerTemplate.original_nodes", FieldProviderCoreOwned),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Row.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_163_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_160_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_160_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
     kind_site!("src/elaborate.rs::CoreElaborator.pending_local_provider", FieldProviderCodeShared),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_codes", FieldProviderCodeShared),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_instances", FieldProviderCodeShared),
@@ -701,6 +701,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::ModuleBodyChecking.facts", FieldProviderGlobalsMixed),
     kind_site!("src/elaborate.rs::ModuleBodyChecking.globals", FieldProviderGlobalsMixed, Owned),
     kind_site!("src/elaborate.rs::ModuleBodyChecking.publication", FieldProviderGlobalsMixed),
+    kind_site!("src/elaborate.rs::CoreElaborator.provider_completed_publication", FieldProviderGlobalsMixed),
     kind_site!("src/elaborate.rs::PreparedProviderInstance.$alias", FieldProviderCodeMixed),
     kind_site!("src/elaborate.rs::ProviderCodeAvailability.$alias", FieldProviderCodeShared),
     kind_site!("src/elaborate/module_bodies.rs::BodySourceItem.Block.0", FieldProviderResolvedBorrow),
@@ -710,15 +711,21 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.occurrences", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.original", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.program", FieldProviderInputsBorrow),
-    kind_site!("src/elaborate/provider.rs::LocalProviderCodeView._facts", FieldProviderInputsBorrow),
-    kind_site!("src/elaborate/provider.rs::LocalProviderCodeView._publication", FieldProviderInputsBorrow),
-    kind_site!("src/elaborate/provider.rs::LocalProviderCodeView.code", FieldProviderInputsBorrow),
-    kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.code", FieldProviderCodeShared, Mixed),
+    kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.code", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.originals", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedProviderCode.Group.0", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedProviderCode.Original.0", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedProviderOriginal.declaration", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedProviderOriginal.contract", FieldProviderContractShared),
+    kind_site!("src/elaborate/provider.rs::ModuleProviderOriginals.registry", FieldProviderRegistryShared),
+    kind_site!("src/elaborate/provider.rs::ModuleProviderOriginals.headers", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider.rs::ModuleProviderOriginals.native_authentication", FieldForeignFactsShared),
     kind_site!("src/elaborate/provider.rs::ProviderTemplateSource.acquire", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::ProviderTemplateSource.fact", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::ProviderTemplateSource.finish", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::ProviderTemplateSource.handler", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::ProviderTemplateSource.handler_occurrences", FieldProviderInputsBorrow),
+    kind_site!("src/elaborate/provider_code.rs::CheckedProviderCodes.$alias", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider_code.rs::ProviderCodeAvailability.codes", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider_instance.rs::FinalProviderPreparation.$alias", FieldProviderCodeShared, Mixed),
     kind_site!("src/elaborate/provider_instance.rs::PreparedScopeCopyPlan.$alias", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -750,10 +757,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider_instance.rs::ProviderForwardings.methods", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::ResourceActuals.arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::ResourceActuals.replacements", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate/provider_instance.rs::NativeScopeActuals.state", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::NativeScopeActuals.effect", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::PreparedProviderInstance.actuals", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate/provider_instance.rs::PreparedProviderInstance.native", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
     kind_site!("src/elaborate/provider_instance.rs::PreparedProviderInstance.handler_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::PreparedProviderInstance.body", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_instance.rs::PreparedProviderInstance.forwarding", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -819,6 +824,30 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/provider/specialization.rs::ProviderScopeAdmission.native", FieldProviderContractShared),
     kind_site!("src/core/provider/specialization.rs::ProviderScopeAdmission.arguments", FieldProviderCoreOwned),
     kind_site!("src/core/provider/specialization.rs::ProviderScopeAdmission.native_effect", FieldProviderCoreOwned),
+    kind_site!("src/elaborate/cleanup_rows.rs::Equation.InterpretNative.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/cleanup_rows.rs::Equation.InterpretNative.1", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderHandlerRows.output", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderHandlerRows.residual", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderHandlerRows.pending", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderHandlerRows.node_rows", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderHandlerRows.handler_outputs", FieldProviderCoreOwned),
+    kind_site!("src/core/provider/specialization.rs::DeferredProviderRowCompletion.$alias", FieldProviderTypeBorrow),
+    kind_site!("src/core/provider.rs::DeferredProviderHandlerRows.$alias", FieldProviderCoreOwned),
+    kind_site!("src/elaborate.rs::CoreElaborator.deferred_provider_instances", FieldProviderCodeMixed),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.slot", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.definition", FieldProviderContractShared),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.code", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.actuals", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.body", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.forwarding", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.native_effect", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::DeferredSourceProviderInstance.copy_plan", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::SourceProviderRows.Complete.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance.rs::SourceProviderRows.Deferred.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate/provider_instance/copy.rs::ProviderScopeCopyRows.residual", FieldProviderTypeBorrow),
+    kind_site!("src/elaborate/provider_instance/copy.rs::ProviderScopeCopyRows.pending", FieldProviderTypeBorrow),
+    kind_site!("src/elaborate/provider_instance/copy.rs::ProviderScopeCopyRows.nodes", FieldProviderTypeBorrow),
     kind_site!("src/core/provider/specialization.rs::ResolvedProviderHandlerRows.direct", FieldProviderCoreOwned),
     kind_site!("src/core/provider/specialization.rs::ResolvedProviderHandlerRows.epsilon", FieldProviderCoreOwned),
     kind_site!("src/core/provider/specialization.rs::ResolvedProviderHandlerRows.output", FieldProviderCoreOwned),
@@ -897,6 +926,15 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture.rs::BuiltCaptureGraph.graph", FieldConditionalCaptureMixed),
     kind_site!("src/core/capture.rs::ConditionalCaptureGraph.graph", FieldConditionalCaptureMixed),
     kind_site!("src/core/capture.rs::ConditionalCaptureGraph.ports", FieldProviderCoreOwned),
+    // Instance preparation retains independently observed request rows and a
+    // temporary typed control/value graph. Nothing enters executable authority.
+    kind_site!("src/core/capture.rs::ActualCaptureInputs.rows", FieldProviderCoreOwned),
+    kind_site!("src/core/capture.rs::ActualCaptureInputs.witnesses", FieldProviderCoreOwned),
+    kind_site!("src/core/capture.rs::ActualCaptureWitness.row", FieldProviderCoreOwned),
+    kind_site!("src/core/capture.rs::ActualProviderCapture.graph", FieldConditionalCaptureMixed),
+    kind_site!("src/core/capture.rs::ActualProviderCapture.native", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
+    kind_site!("src/core/capture/value.rs::ConditionalClauseInput.pattern", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
+    kind_site!("src/core/provider/specialization.rs::ResolvedProviderHandlerRows.captures", FieldProviderCoreOwned),
     kind_site!("src/core/capture.rs::ConditionalCapturePorts.clauses", FieldProviderCoreOwned),
     kind_site!("src/core/capture.rs::ConditionalClausePort.input", FieldProviderCoreOwned),
     kind_site!("src/core/capture.rs::ConditionalTypeReplacements.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
@@ -931,6 +969,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::CheckedHandlerContractCertificate.externals", FieldProviderContractShared),
     kind_site!("src/core/validate.rs::MonotypeVariableKinds.CatalogOwner.0", FieldProviderKindBorrow),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_defining_facts", FieldProviderSummaryShared),
+    kind_site!("src/elaborate.rs::CoreElaborator.provider_imported_captures", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
+    kind_site!("src/elaborate.rs::CoreElaborator.provider_capture_implementations", FieldConditionalSummaryMixed),
     kind_site!("src/elaborate/provider.rs::CheckedLifecycleTemplate.associations", FieldConditionalSummaryOwned),
     kind_site!("src/elaborate/provider.rs::CheckedLifecycleTemplate.canonical", FieldProviderContractShared),
     kind_site!("src/elaborate/provider.rs::CheckedLifecycleTemplate.draft", FieldProviderCodeMixed),
@@ -941,7 +981,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider.rs::CheckedProviderDeclaration.finish", FieldProviderCodeMixed),
     kind_site!("src/elaborate/provider.rs::CheckedProviderDeclaration.handlers", FieldProviderCodeMixed),
     kind_site!("src/elaborate/provider.rs::CheckedProviderGroup.contracts", FieldProviderContractShared),
-    kind_site!("src/elaborate/provider.rs::CheckedProviderGroup.declarations", FieldProviderCodeMixed),
+    kind_site!("src/elaborate/provider.rs::CheckedProviderGroup.declarations", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::LifecycleContractCertificate.canonical", FieldProviderContractShared),
     kind_site!("src/elaborate/provider.rs::LifecycleContractCertificate.externals", FieldProviderContractShared),
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateDraft.defining_facts", FieldProviderSummaryShared),
@@ -973,9 +1013,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/provider.rs::RetainedHandlerStateAssociation.$alias", FieldConditionalSummaryOwned),
     kind_site!("src/core/provider/external.rs::RetainedHandlerExternals.implementations", FieldConditionalSummaryMixed),
     kind_site!("src/core/provider/external.rs::RetainedHandlerExternals.occurrences", FieldConditionalSummaryMixed),
-    kind_site!("src/core/provider/external.rs::RetainedHandlerExternals.source_captures", FieldProviderSummaryShared),
     kind_site!("src/core/provider/external.rs::RetainedHandlerExternals.types", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
-    kind_site!("src/core/provider/external.rs::RetainedHandlerOccurrence.adapters", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/provider/external.rs::RetainedHandlerOccurrence.arguments", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/provider/external.rs::RetainedHandlerOccurrence.rows", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/provider/external.rs::RetainedHandlerParameters.0", FieldConditionalSummaryOwned),
@@ -1014,7 +1052,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::ConditionalHandlerAdmission.rows", FieldProviderCoreOwned),
     kind_site!("src/elaborate/provider.rs::CheckedConditionalHandler.staged_externals", FieldProviderStagedMixed),
     kind_site!("src/elaborate/provider.rs::CheckedConditionalHandler.template", FieldConditionalCodeSummaryMixed),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.pending_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider_external.rs::LoweredProviderForest.pending_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/core/provider/external.rs::AuthenticatedProviderExternals.program", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/provider/external.rs::AuthenticatedProviderExternals.types", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
@@ -1093,11 +1130,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider.rs::CheckedGlobalOccurrence.occurrence", FieldResolvedCarrierRetentionPreservedCarrierResolutionResolutionTypeResolvedTree, Shared),
     kind_site!("src/elaborate/provider.rs::CheckedGlobalOccurrence.arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate/provider.rs::CheckedGlobalOccurrence.row_arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.state_parameter", FieldProviderElaborationCoreOwned),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.direct_demands", FieldProviderElaborationCoreOwned),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.clauses", FieldProviderElaborationCoreOwned),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.builder", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
-    kind_site!("src/elaborate/provider.rs::HandlerSourceDraft.occurrences", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
     kind_site!("src/elaborate/provider.rs::PreparedHandlerSource.state_parameter", FieldProviderElaborationCoreOwned),
     kind_site!("src/elaborate/provider.rs::PreparedHandlerSource.direct_demands", FieldProviderElaborationCoreOwned),
     kind_site!("src/elaborate/provider.rs::PreparedHandlerSource.clauses", FieldProviderElaborationCoreOwned),
@@ -1118,12 +1150,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider_external.rs::$fn_walk_provider_source_occurrences::Item.Expression.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
     kind_site!("src/elaborate/provider_external.rs::$fn_walk_provider_source_occurrences::Item.Block.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
     kind_site!("src/elaborate/provider_external.rs::$fn_walk_provider_source_occurrences::Item.Declaration.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
-    kind_site!("src/elaborate/provider_globals.rs::ProviderExternalGlobals.rows", FieldProviderGlobalsMixed),
-    kind_site!("src/elaborate/provider_globals.rs::ProviderExternalGlobal.scheme", FieldCheckedCarrierRetentionPreservedCarrierElaborationInferenceTypeCheckedTree),
-    kind_site!("src/elaborate/provider_globals.rs::ProviderExternalGlobal.capture", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
-    kind_site!("src/elaborate/provider_globals.rs::ProviderExternalGlobal.lowered", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
-    kind_site!("src/elaborate/provider_globals.rs::GlobalSource.scheme", FieldProviderElaborationCheckedBorrow),
-    kind_site!("src/elaborate/provider_globals.rs::GlobalSource.capture", FieldProviderElaborationSummaryBorrow),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_context", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_global_occurrences", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTreeAndTransientWork),
     kind_site!("src/elaborate.rs::CheckedEffectClause.pattern", FieldProviderElaborationCoreOwned),
@@ -1263,6 +1289,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/evidence.rs::EvidenceSelector.lexical_sources", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence.rs::LexicalSource.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/evidence_validation.rs::EvidenceScope.lexical_sources", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::EvidenceScope.local_scopes", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Annotation.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Equation.source", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
+    kind_site!("src/evidence_validation.rs::LinkedLocalScope.Equation.method", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
     kind_site!("src/evidence_validation.rs::LinkedLocalScope.Method.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierEvidenceValidationEvidenceTypeResolvedTree),
     kind_site!("src/interface.rs::CheckedLexicalEvidence.application", FieldEvidenceInterfaceArgumentInterfaceParameterEvidenceSelectionEvidenceTypeEvidenceTree),
     kind_site!("src/interface.rs::CheckedLexicalEvidence.methods", FieldEvidenceCarrierRetentionPreservedCarrierEvidenceSelectionEvidenceTypeEvidenceTree),
@@ -1333,9 +1363,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/dialect.rs::CoreBuilder.registry", FieldRegistryCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeRegistryTree, Shared),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.head_arguments", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapter.prerequisites", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
-    kind_site!("src/core/dialect.rs::IterativeTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::IterativeTypeMap.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
-    kind_site!("src/core/dialect.rs::IterativeTypeSequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.application", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.method_parameters", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::MethodEvidenceAdapterEdge.value_type", FieldCoreCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -1495,7 +1523,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/validate.rs::$impl_Validator::$fn_validate_pattern::Task.Visit.1", FieldMixedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTreeAndTransientWork),
     kind_site!("src/core/validate.rs::CoreTypeBinders.$alias", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/validate.rs::MonotypeVariableKinds.Core.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
-    kind_site!("src/core/validate.rs::OwnedTypeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::CorePatternMatrix.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::CorePatternRow.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
     kind_site!("src/core/validate.rs::OwnedTypeSequence.0", FieldTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeTransientWork),
@@ -1541,7 +1568,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::CheckedInterfaceRef.Local.0", FieldBorrowedResolvedCarrierRetentionPreservedCarrierElaborationInferenceTypeResolvedTree),
     kind_site!("src/elaborate.rs::CheckedPattern.pattern", FieldTransientCarrierRetentionPreservedCarrierElaborationCoreTypeTransientWork),
     kind_site!("src/elaborate.rs::CheckedSchemeBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Mixed),
-    kind_site!("src/elaborate.rs::CheckedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.row_inference_solutions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.row_inference_obligations", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.cleanup_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -1618,6 +1644,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::CoreElaborator.builder", FieldMixedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeCoreTreeAndRegistryTree),
     kind_site!("src/elaborate.rs::CoreElaborator.active_resumes", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.expected_effect_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::CoreElaborator.expected_scheme_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::EquationsProgress.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::FunctionCheck.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    kind_site!("src/elaborate.rs::ElaborationTask.CheckFunction.ambient_rows", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.evidence_lowering", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.generated_type_variables", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/elaborate.rs::CoreElaborator.inference_solutions", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -1882,7 +1912,6 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/resolve.rs::$impl_Resolver::$fn_retain_type_nominals_with::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/resolve.rs::DependencyExports.summary", FieldSummaryCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree, Borrowed),
     kind_site!("src/resolve.rs::ImportedConstructorFactBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
-    kind_site!("src/resolve.rs::ImportedTypeCloneBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::ImportedTypeVariableBuffer.0", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::PendingInterfaceTypeParameters.methods", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
     kind_site!("src/resolve.rs::PendingInterfaceTypeParameters.parameters", FieldTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeTransientWork),
@@ -3745,6 +3774,153 @@ fn carrier_scanner_derives_owned_borrowed_shared_and_mixed_retention() {
 }
 
 #[test]
+fn carrier_scanner_resolves_inherited_shared_wrappers_without_erasing_borrowed_paths() {
+    let sources = [
+        ("src/lib.rs", "mod types; mod parent; mod facade; mod user;"),
+        ("src/types.rs", "struct Type;"),
+        (
+            "src/parent.rs",
+            "pub use std::sync::Arc; pub use std::rc::Rc; mod child;",
+        ),
+        (
+            "src/parent/child.rs",
+            r#"use super::{Arc, Rc};
+            struct Payload { owned: crate::types::Type, shared: std::sync::Arc<crate::types::Type> }
+            struct BorrowedPayload { owned: crate::types::Type, borrowed: &'static crate::types::Type }
+            struct Inherited { arc: Arc<Payload>, rc: Rc<Payload> }
+            struct InheritedBorrowed(Arc<BorrowedPayload>);"#,
+        ),
+        (
+            "src/facade.rs",
+            "pub use crate::parent::{Arc as SharedArc, Rc as SharedRc};",
+        ),
+        (
+            "src/user.rs",
+            r#"use crate::facade::{SharedArc, SharedRc};
+            use crate::facade as Wrappers;
+            struct Reexported { arc: SharedArc<crate::parent::child::Payload>, rc: SharedRc<crate::parent::child::Payload> }
+            struct ModuleAliased(Wrappers::SharedArc<crate::parent::child::Payload>);
+            mod local {
+                struct Arc<T>(T);
+                struct Rc<T>(T);
+                struct Local { arc: Arc<crate::types::Type>, rc: Rc<crate::types::Type> }
+                struct Qualified(crate::user::local::Arc<crate::types::Type>);
+            }"#,
+        ),
+    ];
+    let fields = fields_from_sources(&sources);
+    let modes = transitive_type_retention(&fields);
+    for (source, carrier, expected) in [
+        ("src/parent/child.rs", "Inherited", RetentionMode::Shared),
+        (
+            "src/parent/child.rs",
+            "InheritedBorrowed",
+            RetentionMode::Mixed,
+        ),
+        ("src/user.rs", "Reexported", RetentionMode::Shared),
+        ("src/user.rs", "ModuleAliased", RetentionMode::Shared),
+        ("src/user.rs", "local::Local", RetentionMode::Owned),
+        ("src/user.rs", "local::Qualified", RetentionMode::Owned),
+    ] {
+        assert_eq!(
+            modes.get(&CarrierId {
+                source: source.to_owned(),
+                name: carrier.to_owned()
+            }),
+            Some(&expected),
+            "incorrect retention through exact wrapper route {source}::{carrier}",
+        );
+    }
+}
+
+#[test]
+fn carrier_scanner_shared_wrapper_routes_preserve_lexical_type_shadowing_and_cycles() {
+    let fields = parse_top_level_fields(
+        "src/shadows.rs",
+        r#"use std::sync::Arc;
+        use std::rc::Rc;
+        fn scope() {
+            struct Arc<T>(T);
+            struct Rc<T>(T);
+            struct Local { arc: Arc<crate::types::Type>, rc: Rc<crate::types::Type> }
+            {
+                use std::sync::Arc;
+                struct Inner(Arc<crate::types::Type>);
+            }
+        }"#,
+    );
+    let mut all = parse_top_level_fields("src/types.rs", "struct Type;");
+    let inner = fields
+        .iter()
+        .find(|field| field.carrier.ends_with("::Inner"))
+        .map(|field| CarrierId {
+            source: field.source.clone(),
+            name: field.carrier.clone(),
+        })
+        .expect("the deeper reimport fixture retains its exact local carrier");
+    all.extend(fields);
+    let modes = transitive_type_retention(&all);
+    assert_eq!(modes.get(&inner), Some(&RetentionMode::Shared));
+    assert_eq!(
+        modes.get(&CarrierId {
+            source: "src/shadows.rs".to_owned(),
+            name: "$fn_scope::Local".to_owned(),
+        }),
+        Some(&RetentionMode::Owned),
+        "local type declarations shadow the imported shared wrapper names",
+    );
+    assert!(
+        std::panic::catch_unwind(|| parse_top_level_fields(
+            "src/collision.rs",
+            "use std::sync::Arc; struct Arc<T>(T); struct Ambiguous(Arc<crate::types::Type>);",
+        ))
+        .is_err(),
+        "same-scope imported and declared type bindings must refuse ambiguity",
+    );
+    let roots = [
+        (
+            "src/lib.rs",
+            "pub use crate as root; pub use std::sync::Arc; mod types; mod user;",
+        ),
+        ("src/types.rs", "struct Type;"),
+        (
+            "src/user.rs",
+            "struct RootAlias(crate::root::root::root::Arc<crate::types::Type>);",
+        ),
+    ];
+    let rooted = transitive_type_retention(&fields_from_sources(&roots));
+    assert_eq!(
+        rooted.get(&CarrierId {
+            source: "src/user.rs".to_owned(),
+            name: "RootAlias".to_owned()
+        }),
+        Some(&RetentionMode::Shared),
+        "finite repeated root reexports consume the qualified suffix",
+    );
+    assert!(
+        std::panic::catch_unwind(|| resolve_wrapper_import(
+            "crate::cycle::Arc",
+            &BTreeMap::from([("cycle".to_owned(), "crate::cycle::more".to_owned())]),
+        ))
+        .is_err(),
+        "a growing repeated wrapper path must refuse rather than loop",
+    );
+    let cyclic = [
+        ("src/lib.rs", "mod types; mod cycle;"),
+        ("src/types.rs", "struct Type;"),
+        (
+            "src/cycle.rs",
+            "use crate::cycle::B as A; use crate::cycle::A as B; struct Loop(A<crate::types::Type>);",
+        ),
+    ];
+    assert!(
+        std::panic::catch_unwind(|| transitive_type_retention(&fields_from_sources(&cyclic)))
+            .is_err(),
+        "exact wrapper-import cycles must fail closed",
+    );
+}
+
+#[test]
 fn carrier_scanner_follows_path_modules_reexports_and_inherited_imports() {
     let sources = [
         (
@@ -4270,12 +4446,24 @@ fn source_module_identities(sources: &[(&str, &str)]) -> BTreeMap<String, String
 
 fn fields_from_sources(sources: &[(&str, &str)]) -> Vec<ProductionField> {
     let modules = source_module_identities(sources);
+    let mut imports = BTreeMap::new();
+    for (path, source) in sources {
+        let Some(module) = modules.get(*path) else {
+            continue;
+        };
+        let tokens = production_rust_code_tokens(source);
+        for (binding, target) in module_import_bindings(&tokens, module) {
+            if let Some(previous) = imports.insert(binding.clone(), target.clone()) {
+                assert_eq!(previous, target, "conflicting module import {binding}");
+            }
+        }
+    }
     sources
         .iter()
         .filter_map(|(path, source)| {
             modules
                 .get(*path)
-                .map(|module| parse_fields_in_module(path, source, module))
+                .map(|module| parse_fields_in_module(path, source, module, &imports))
         })
         .flatten()
         .collect()
@@ -4665,7 +4853,11 @@ fn declaration_index(fields: &[ProductionField]) -> DeclarationIndex {
         let discovered = imports
             .iter()
             .filter_map(|(binding, target)| {
-                let target = target.strip_prefix("crate::").unwrap_or(target);
+                let target = if target == "crate" {
+                    ""
+                } else {
+                    target.strip_prefix("crate::").unwrap_or(target)
+                };
                 module_paths.contains(target).then(|| binding.clone())
             })
             .collect::<Vec<_>>();
@@ -4676,7 +4868,11 @@ fn declaration_index(fields: &[ProductionField]) -> DeclarationIndex {
     }
     imports.retain(|binding, target| {
         binding.rsplit("::").next().unwrap().as_bytes()[0].is_ascii_uppercase()
-            || module_paths.contains(target.strip_prefix("crate::").unwrap_or(target))
+            || module_paths.contains(if target == "crate" {
+                ""
+            } else {
+                target.strip_prefix("crate::").unwrap_or(target)
+            })
             || matches!(target.split("::").next(), Some("std" | "alloc" | "core"))
     });
     DeclarationIndex {
@@ -4787,9 +4983,10 @@ fn reference_reaches_owner_with_aliases(
             for prefix_length in (1..=segments.len()).rev() {
                 let binding = segments[..prefix_length].join("::");
                 if let Some(target) = declarations.imports.get(&binding) {
-                    assert!(
-                        visited.insert(format!("$module::{binding}")),
-                        "cyclic module import while resolving {reference}"
+                    record_module_import_progress(
+                        &binding,
+                        segments.len() - prefix_length,
+                        visited,
                     );
                     let expanded = if prefix_length == segments.len() {
                         target.clone()
@@ -5676,13 +5873,25 @@ fn carrier_scanner_distinguishes_precise_captures_from_imports() {
 }
 
 fn parse_top_level_fields(path: &str, source: &str) -> Vec<ProductionField> {
-    parse_fields_in_module(path, source, &default_source_module(path))
+    parse_fields_in_module(path, source, &default_source_module(path), &BTreeMap::new())
 }
 
-fn parse_fields_in_module(path: &str, source: &str, module: &str) -> Vec<ProductionField> {
+fn parse_fields_in_module(
+    path: &str,
+    source: &str,
+    module: &str,
+    wrapper_imports: &BTreeMap<String, String>,
+) -> Vec<ProductionField> {
     let tokens = production_rust_code_tokens(source);
-    let mut fields = parse_declaration_fields(path, &tokens, "", module, &BTreeMap::new());
     let module_imports = module_import_bindings(&tokens, module);
+    let mut imports = wrapper_imports.clone();
+    for (binding, target) in &module_imports {
+        if let Some(previous) = imports.insert(binding.clone(), target.clone()) {
+            assert_eq!(previous, *target, "conflicting module import {binding}");
+        }
+    }
+    let mut fields =
+        parse_declaration_fields(path, &tokens, "", module, &BTreeMap::new(), &imports);
     for field in &mut fields {
         field.module = module.to_owned();
         field.module_imports = module_imports.clone();
@@ -5764,6 +5973,7 @@ struct ScopedImportAlias {
     alias: String,
     target: String,
     exported: bool,
+    inherited: bool,
 }
 
 fn token_scope_paths(tokens: &[&str]) -> Vec<Vec<usize>> {
@@ -5812,6 +6022,7 @@ fn scoped_import_aliases(tokens: &[&str], scopes: &[Vec<usize>]) -> Vec<ScopedIm
                 alias: "*".to_owned(),
                 target: "$unsupported_glob".to_owned(),
                 exported,
+                inherited: false,
             });
             return;
         }
@@ -5856,6 +6067,7 @@ fn scoped_import_aliases(tokens: &[&str], scopes: &[Vec<usize>]) -> Vec<ScopedIm
             alias,
             target: segments.join("::"),
             exported,
+            inherited: false,
         });
     }
 
@@ -5917,6 +6129,37 @@ fn visible_import_aliases(
         .collect()
 }
 
+/// A type declaration in a nearer lexical scope shadows an imported name.
+/// Keep that distinction before wrapper classification as well as owner lookup.
+fn visible_type_import_aliases(
+    tokens: &[&str],
+    scopes: &[Vec<usize>],
+    imports: &[ScopedImportAlias],
+    scope: &[usize],
+) -> BTreeMap<String, String> {
+    let mut aliases = visible_import_aliases(imports, scope);
+    for (index, window) in tokens.windows(2).enumerate() {
+        if !matches!(window[0], "struct" | "enum" | "type") || !scope.starts_with(&scopes[index]) {
+            continue;
+        }
+        let name = window[1];
+        let selected = imports
+            .iter()
+            .filter(|imported| imported.alias == name && scope.starts_with(&imported.scope))
+            .max_by_key(|imported| (imported.scope.len(), !imported.inherited));
+        if let Some(selected) = selected {
+            assert!(
+                selected.inherited || scopes[index] != selected.scope,
+                "a type declaration and import have the same lexical binding {name}",
+            );
+            if scopes[index].starts_with(&selected.scope) {
+                aliases.remove(name);
+            }
+        }
+    }
+    aliases
+}
+
 fn resolve_import_alias(reference: &str, aliases: &BTreeMap<String, String>) -> String {
     if reference.contains("::") {
         return reference.to_owned();
@@ -5939,6 +6182,7 @@ fn parse_declaration_fields(
     module_prefix: &str,
     source_module: &str,
     inherited_imports: &BTreeMap<String, String>,
+    wrapper_imports: &BTreeMap<String, String>,
 ) -> Vec<ProductionField> {
     let scopes = token_scope_paths(tokens);
     let mut imports = scoped_import_aliases(tokens, &scopes);
@@ -5965,6 +6209,7 @@ fn parse_declaration_fields(
                 alias: alias.clone(),
                 target: target.clone(),
                 exported: false,
+                inherited: true,
             })
             .filter(|inherited| {
                 !imports
@@ -6021,7 +6266,8 @@ fn parse_declaration_fields(
                     break;
                 };
                 let carrier = qualify_lexical_declaration(module_prefix, &lexical_scopes, name);
-                let mut aliases = visible_import_aliases(&imports, &scopes[cursor]);
+                let mut aliases =
+                    visible_type_import_aliases(tokens, &scopes, &imports, &scopes[cursor]);
                 let Some((open, delimiter)) = declaration_delimiter(tokens, cursor + 2) else {
                     break;
                 };
@@ -6050,6 +6296,7 @@ fn parse_declaration_fields(
                             "",
                             &tokens[open + 1..close],
                             &aliases,
+                            wrapper_imports,
                         ));
                         cursor = close + 1;
                     }
@@ -6061,13 +6308,19 @@ fn parse_declaration_fields(
                             "",
                             &tokens[open + 1..close],
                             &aliases,
+                            wrapper_imports,
                         ));
                         cursor = close + 1;
                     }
                     ("enum", "{") => {
                         let close = matching_token(tokens, open, "{", "}");
-                        let parsed =
-                            parse_enum_fields(path, &carrier, &tokens[open + 1..close], &aliases);
+                        let parsed = parse_enum_fields(
+                            path,
+                            &carrier,
+                            &tokens[open + 1..close],
+                            &aliases,
+                            wrapper_imports,
+                        );
                         if parsed.is_empty() {
                             fields.push(ProductionField {
                                 source: path.to_owned(),
@@ -6092,7 +6345,8 @@ fn parse_declaration_fields(
                     break;
                 };
                 let carrier = qualify_lexical_declaration(module_prefix, &lexical_scopes, name);
-                let aliases = visible_import_aliases(&imports, &scopes[cursor]);
+                let aliases =
+                    visible_type_import_aliases(tokens, &scopes, &imports, &scopes[cursor]);
                 let tail = &tokens[cursor + 2..];
                 let Some(semicolon_offset) = top_level_position(tail, ";") else {
                     break;
@@ -6101,8 +6355,11 @@ fn parse_declaration_fields(
                 if !in_associated_item_scope(&lexical_scopes)
                     && let Some(equals) = top_level_position(declaration, "=")
                 {
-                    let reference_retentions =
-                        type_reference_retentions(&declaration[equals + 1..], &aliases);
+                    let reference_retentions = type_reference_retentions(
+                        &declaration[equals + 1..],
+                        &aliases,
+                        wrapper_imports,
+                    );
                     fields.push(ProductionField {
                         source: path.to_owned(),
                         module: default_source_module(path),
@@ -6143,7 +6400,8 @@ fn parse_declaration_fields(
                     &tokens[open + 1..close],
                     &nested_prefix,
                     source_module,
-                    &visible_import_aliases(&imports, &scopes[cursor]),
+                    &visible_type_import_aliases(tokens, &scopes, &imports, &scopes[cursor]),
+                    wrapper_imports,
                 ));
                 cursor = close + 1;
             }
@@ -6319,15 +6577,69 @@ fn has_direct_cfg_test_attribute(tokens: &[&str], declaration: usize) -> bool {
         .any(|attribute| attribute == ["cfg", "(", "test", ")"])
 }
 
+/// A repeated root-module reexport can consume a finite qualified suffix.
+/// Same-sized or growing repeated bindings do not make resolution progress.
+fn record_module_import_progress(binding: &str, remaining: usize, visited: &mut BTreeSet<String>) {
+    let prefix = format!("$module::{binding}#");
+    for prior in visited
+        .iter()
+        .filter_map(|entry| entry.strip_prefix(&prefix))
+    {
+        let prior = prior
+            .parse::<usize>()
+            .expect("recorded module suffix length");
+        assert!(
+            remaining < prior,
+            "cyclic module import while resolving {binding}"
+        );
+    }
+    visited.insert(format!("{prefix}{remaining}"));
+}
+
+/// Resolves a wrapper through exact crate module imports before assigning
+/// ownership. A local declaration named Arc/Rc is never recognized by basename.
+fn resolve_wrapper_import(path: &str, imports: &BTreeMap<String, String>) -> String {
+    let mut current = path.to_owned();
+    let mut visited = BTreeSet::new();
+    loop {
+        let Some(crate_path) = current.strip_prefix("crate::") else {
+            return current;
+        };
+        let segments = crate_path.split("::").collect::<Vec<_>>();
+        let mut expanded = None;
+        for length in (1..=segments.len()).rev() {
+            let binding = segments[..length].join("::");
+            if let Some(target) = imports.get(&binding) {
+                record_module_import_progress(&binding, segments.len() - length, &mut visited);
+                expanded = Some(if length == segments.len() {
+                    target.clone()
+                } else {
+                    format!("{target}::{}", segments[length..].join("::"))
+                });
+                break;
+            }
+        }
+        match expanded {
+            Some(next) => current = next,
+            None => return current,
+        }
+    }
+}
+
 fn type_reference_retentions(
     tokens: &[&str],
     aliases: &BTreeMap<String, String>,
+    wrapper_imports: &BTreeMap<String, String>,
 ) -> BTreeMap<String, RetentionSet> {
     fn compose(outer: RetentionSet, wrapper: RetentionSet) -> RetentionSet {
         transform_retention(outer, wrapper)
     }
 
-    fn wrapper_mode(path: &str, aliases: &BTreeMap<String, String>) -> RetentionSet {
+    fn wrapper_mode(
+        path: &str,
+        aliases: &BTreeMap<String, String>,
+        wrapper_imports: &BTreeMap<String, String>,
+    ) -> RetentionSet {
         let first = path.split("::").next().unwrap_or(path);
         let resolved = aliases.get(first).map_or_else(
             || path.to_owned(),
@@ -6336,6 +6648,7 @@ fn type_reference_retentions(
                     .map_or_else(|| target.clone(), |suffix| format!("{target}{suffix}"))
             },
         );
+        let resolved = resolve_wrapper_import(&resolved, wrapper_imports);
         if matches!(
             resolved.as_str(),
             "std::sync::Arc" | "alloc::sync::Arc" | "std::rc::Rc" | "alloc::rc::Rc"
@@ -6381,6 +6694,7 @@ fn type_reference_retentions(
         mut tokens: &[&str],
         inherited: RetentionSet,
         aliases: &BTreeMap<String, String>,
+        wrapper_imports: &BTreeMap<String, String>,
         references: &mut BTreeMap<String, RetentionSet>,
     ) {
         if tokens.first() == Some(&"pub") {
@@ -6398,13 +6712,19 @@ fn type_reference_retentions(
         }
 
         if let Some(equals) = top_level_position(tokens, "=") {
-            collect(&tokens[equals + 1..], inherited, aliases, references);
+            collect(
+                &tokens[equals + 1..],
+                inherited,
+                aliases,
+                wrapper_imports,
+                references,
+            );
             return;
         }
         let comma_parts = split_top_level(tokens, ",");
         if comma_parts.len() > 1 {
             for part in comma_parts {
-                collect(part, inherited, aliases, references);
+                collect(part, inherited, aliases, wrapper_imports, references);
             }
             return;
         }
@@ -6412,7 +6732,7 @@ fn type_reference_retentions(
             let close = matching_token(tokens, 0, "(", ")");
             if close == tokens.len() - 1 {
                 for part in split_top_level(&tokens[1..close], ",") {
-                    collect(part, inherited, aliases, references);
+                    collect(part, inherited, aliases, wrapper_imports, references);
                 }
                 return;
             }
@@ -6422,7 +6742,13 @@ fn type_reference_retentions(
             if close == tokens.len() - 1 {
                 let element_end = top_level_position(&tokens[1..close], ";")
                     .map_or(close - 1, |position| position);
-                collect(&tokens[1..1 + element_end], inherited, aliases, references);
+                collect(
+                    &tokens[1..1 + element_end],
+                    inherited,
+                    aliases,
+                    wrapper_imports,
+                    references,
+                );
                 return;
             }
         }
@@ -6438,6 +6764,7 @@ fn type_reference_retentions(
                 &tokens[start..],
                 compose(inherited, RetentionSet(RetentionSet::BORROWED)),
                 aliases,
+                wrapper_imports,
                 references,
             );
             return;
@@ -6448,13 +6775,14 @@ fn type_reference_retentions(
                 &tokens[start..],
                 compose(inherited, RetentionSet(RetentionSet::BORROWED)),
                 aliases,
+                wrapper_imports,
                 references,
             );
             return;
         }
         if matches!(tokens[0], "dyn" | "impl") {
             for bound in split_top_level(&tokens[1..], "+") {
-                collect(bound, inherited, aliases, references);
+                collect(bound, inherited, aliases, wrapper_imports, references);
             }
             return;
         }
@@ -6490,20 +6818,38 @@ fn type_reference_retentions(
         if tokens.get(end + 1) == Some(&"<") {
             let open = end + 1;
             let close = matching_token(tokens, open, "<", ">");
-            let child_mode = compose(inherited, wrapper_mode(&path, aliases));
+            let child_mode = compose(inherited, wrapper_mode(&path, aliases, wrapper_imports));
             for argument in split_top_level(&tokens[open + 1..close], ",") {
-                collect(argument, child_mode, aliases, references);
+                collect(argument, child_mode, aliases, wrapper_imports, references);
             }
             if close + 1 < tokens.len() {
-                collect(&tokens[close + 1..], inherited, aliases, references);
+                collect(
+                    &tokens[close + 1..],
+                    inherited,
+                    aliases,
+                    wrapper_imports,
+                    references,
+                );
             }
         } else if end + 1 < tokens.len() {
-            collect(&tokens[end + 1..], inherited, aliases, references);
+            collect(
+                &tokens[end + 1..],
+                inherited,
+                aliases,
+                wrapper_imports,
+                references,
+            );
         }
     }
 
     let mut references = BTreeMap::new();
-    collect(tokens, RetentionSet::owned(), aliases, &mut references);
+    collect(
+        tokens,
+        RetentionSet::owned(),
+        aliases,
+        wrapper_imports,
+        &mut references,
+    );
     references
 }
 
@@ -6528,6 +6874,7 @@ fn parse_enum_fields(
     carrier: &str,
     body: &[&str],
     aliases: &BTreeMap<String, String>,
+    wrapper_imports: &BTreeMap<String, String>,
 ) -> Vec<ProductionField> {
     let mut fields = Vec::new();
     for variant in split_top_level(body, ",") {
@@ -6546,6 +6893,7 @@ fn parse_enum_fields(
                 &format!("{name}."),
                 &variant[open + 1..close],
                 aliases,
+                wrapper_imports,
             ));
         } else if let Some(open) = variant.iter().position(|token| *token == "(") {
             let close = matching_token(variant, open, "(", ")");
@@ -6555,6 +6903,7 @@ fn parse_enum_fields(
                 &format!("{name}."),
                 &variant[open + 1..close],
                 aliases,
+                wrapper_imports,
             ));
         }
     }
@@ -6567,6 +6916,7 @@ fn parse_named_fields(
     prefix: &str,
     body: &[&str],
     aliases: &BTreeMap<String, String>,
+    wrapper_imports: &BTreeMap<String, String>,
 ) -> Vec<ProductionField> {
     split_top_level(body, ",")
         .into_iter()
@@ -6576,7 +6926,8 @@ fn parse_named_fields(
                 field[..colon].iter().rev().copied().find(|token| {
                     is_rust_identifier(token) && !matches!(*token, "pub" | "crate")
                 })?;
-            let reference_retentions = type_reference_retentions(&field[colon + 1..], aliases);
+            let reference_retentions =
+                type_reference_retentions(&field[colon + 1..], aliases, wrapper_imports);
             Some(ProductionField {
                 source: path.to_owned(),
                 module: default_source_module(path),
@@ -6597,13 +6948,14 @@ fn parse_tuple_fields(
     prefix: &str,
     body: &[&str],
     aliases: &BTreeMap<String, String>,
+    wrapper_imports: &BTreeMap<String, String>,
 ) -> Vec<ProductionField> {
     split_top_level(body, ",")
         .into_iter()
         .enumerate()
         .filter(|(_, field)| !field.is_empty())
         .map(|(index, field)| {
-            let reference_retentions = type_reference_retentions(field, aliases);
+            let reference_retentions = type_reference_retentions(field, aliases, wrapper_imports);
             ProductionField {
                 source: path.to_owned(),
                 module: default_source_module(path),

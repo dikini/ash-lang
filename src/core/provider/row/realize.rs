@@ -47,6 +47,7 @@ fn remove(
     }
 }
 impl HandlerRowRecipeDraft {
+    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
     pub(in crate::core) fn realize_nodes(
         &self,
         program: &super::super::UnvalidatedEffectProgram,
