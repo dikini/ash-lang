@@ -3602,3 +3602,27 @@ checks and unsigned commit verification are recorded separately.
 
 Evidence: [actual Resume-only gate](../../target/core-resume-ticket-integration-20261005/root-resume1-gate-v1-evidence.json), [dependency supplement](../../target/core-resume-ticket-integration-20261005/root-dependency-supplement-v1/review.json)
 and [public acceptance](../../target/core-resume-ticket-integration-20261005/root-dependency-supplement-v1/acceptance.json).
+
+The retained Boolean decision checkpoint adds current issued-ticket and registry
+origin preservation to the existing full BranchEvent. Both Boolean arms retain
+their full contracts, private families, plans, rows and original root. The event
+uses the same computed positive Core step and actual successor; no future source,
+successor Current or freshness witness is supplied.
+
+The Boolean-only acceptance records 1068 modules and 13564 ordered trust reports,
+one validated receipt hit, no productive compilation and 1067 unchanged parent
+artifact/log pairs. The current dependency closure has 625 modules: 620 matching
+archived records and five actual current queries, including four accepted modules
+whose old artifact selections were stale. Together with scheduler and stock-gate
+validation, the run uses seven dependency queries and one version query. Original
+historical records remain separate and unchanged. The 28 original public checks,
+three component source checks, two original missing-module negatives and two
+generic negatives retain their accepted scopes.
+
+Evidence: [retained source checkpoint](../../target/core-rich-decision-ticket-origin-20261005/checkpoint-source-v3/checkpoint.json),
+[Boolean-only gate](../../target/core-boolean-ticket-integration-20261005/root-boolean1-gate-v1-evidence.json),
+[dependency supplement](../../target/core-boolean-ticket-integration-20261005/root-dependency-supplement-v1/review.json)
+and [public acceptance](../../target/core-boolean-ticket-integration-20261005/root-dependency-supplement-v1/acceptance.json).
+Unsigned commit verification is recorded separately after the final checks and
+commit. Whole C1–C5 completion, generic cleanup completion and full C3 coverage
+remain open.

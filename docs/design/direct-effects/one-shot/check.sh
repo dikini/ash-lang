@@ -1072,3 +1072,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureOrigin.ol
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCoreAlignment.olean" CoreCallableRichCaptureCoreAlignment.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCurrentEvents.olean" CoreCallableRichCaptureCurrentEvents.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichResumeTicketOrigins.olean" CoreCallableRichResumeTicketOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichDecisionTicketOrigins.olean" CoreCallableRichDecisionTicketOrigins.lean
