@@ -2926,3 +2926,43 @@ diagnosis records ordered value and control events on the unchanged reset
 program, with exact source pins and explicit truncation boundaries. No trace
 or speculative shortcut is part of this delivery. Unsigned integration and
 verification in the original worktree remain required.
+
+
+## Verified shared cost integration and SQLite handoff (2026-10-05)
+
+Common cost commit `50f4b6b8b33a04f77cc6eeb511fa6f453fff48f2` is merged
+with both histories into `codex/provider-experiments` by unsigned merge
+`c97e0f3fdb4ec0c1269015864a7ca4efeaa132fd`. Receipt 116 runs
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in that original worktree and exits zero
+after 1,073.79 seconds. Its 117 reported test blocks contain 3,330 passes, zero
+failures and zero ignored cases; 103 integration binaries execute. Formatting,
+all-targets build, strict workspace lint, architecture and fixed small-stack
+regressions, native adapters and documentation checks pass. These reported
+counts include subprocess test receipts and are not a claim of unique test
+identities. The complete log SHA is
+`ded101cb6a5ee4060e918f529fdfc50614f3581ee6e2d1a580e0ac38428cc70e`.
+
+All ten delivery file pins and twenty-three unrelated working file pins match
+the before receipt. The index is empty at engine return; no Cargo, rustc,
+rustdoc, Lean or Rust LSP engine remains. Evidence, command, terminal result,
+source pins and explicit return are retained under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/provider-cost-integrated-final-gate-116/`.
+
+This completes the separate shared cost delivery on the twelve-operation
+contract. The coherent fourteen-operation String/TEXT package remains
+preserved in common and SQLite worktrees. The unchanged larger copying,
+reset and persistence programs are required pending acceptance; the ordered
+reset trace in receipt 115 still refuses before acquisition. The applied
+borrowed propagation candidate is outside this integrated commit and requires
+fresh connected verification. No work or depth limit changes, weakened
+assertions or trace instrumentation are integrated.
+
+Common owns shared compiler, Core, capture, provider checking, generic runtime
+and shared integration merges. SQLite owns independent library, native adapter,
+programs and executable evidence. SQLite imports this verified original
+checkpoint with an unsigned merge preserving its pending work, then receives
+a serial Cargo check window. Common next verifies the propagation repair
+against the unchanged realistic programs, reconciles further shared work, and
+merges each verified shared delivery through the original branch before
+SQLite's complete library delivery. These experimental results do not change
+`spec/` or establish production architecture or a mechanized P-1 proof.
