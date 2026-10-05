@@ -1066,3 +1066,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichResumePastConsum
 lean -DwarningAsError=true -o "$proof_build_dir/RichResumePastInterfaces.olean" RichResumePastInterfaces.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBetaPastConsumers.olean" CoreCallableRichBetaPastConsumers.lean
 lean -DwarningAsError=true -o "$proof_build_dir/RichBetaPastInterfaces.olean" RichBetaPastInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichRegistryOrigins.olean" CoreCallableRichRegistryOrigins.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichContextTicketDomain.olean" CoreCallableRichContextTicketDomain.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureOrigin.olean" CoreCallableRichCaptureOrigin.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCoreAlignment.olean" CoreCallableRichCaptureCoreAlignment.lean

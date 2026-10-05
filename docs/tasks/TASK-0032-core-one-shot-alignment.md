@@ -3520,3 +3520,42 @@ C2 or C3 item.
 Next work follows the [current connected batch plan](../../target/core-goal-next-batches-plan-v4.md): validate the uncompiled admission foundations and legacy APIs, then their consumers and the general registry/capture join. The saved source/API draft is implementation progress, not initial-admission evidence.
 
 Evidence: [frozen Beta gate](../../target/core-beta-integration-20261005/root-beta-gate-v1-evidence.json), [ordered dependency supplement](../../target/core-beta-integration-20261005/root-dependency-supplement-v1/review.json), and [public acceptance](../../target/core-beta-integration-20261005/root-acceptance-v1/acceptance.json). These record a component result; whole-goal acceptance remains open.
+
+### Retained capture origins and actual Core selection — 2026-10-05
+
+The four retained capture-origin components passed their serial local development
+batch with 23 ordered standard-only reports and 33 source checks. The
+[registry-origin leaf](../design/direct-effects/one-shot/CoreCallableRichRegistryOrigins.lean) seeds literal empty owner/action maps and
+preserves origin through actual beta and structural capture insertion. The
+[context-domain leaf](../design/direct-effects/one-shot/CoreCallableRichContextTicketDomain.lean) derives registered owners from the same rich
+Pending context, including dormant saved contexts and spent owners. The
+[capture-origin leaf](../design/direct-effects/one-shot/CoreCallableRichCaptureOrigin.lean) derives the three freshness premises at the
+actual counter and retains the existing full rich capture result. The
+[Core alignment leaf](../design/direct-effects/one-shot/CoreCallableRichCaptureCoreAlignment.lean) projects the same history's handler cut,
+aligns the actual selected clause and canonicalizes its future annotation from
+the full current Contract. This changes no actual Core successor state and
+asserts no equivalence of differently annotated future lexical endpoints.
+
+The original-root initial registry seed covers empty registries only. Full
+capture successor Current, original-root history and ownership bookkeeping,
+general reachable registry preservation, M4 validity and Rust correspondence
+remain open. No full C3 item closes. Whole acceptance remains C1 5/5, C2 0/4,
+C3 0/5, C4 2/3 and C5 0/4; original constructor coverage remains 14/16.
+
+The pre-gate preparation against accepted GOAL 220a1e1 recorded expected totals
+of 1,065 modules and 13,554 ordered reports, four receipt hits and 1,061 unchanged
+parent artifact/log pairs, with no productive recompilation. The actual results
+are recorded below. Public acceptance retains 28 checks, two original-parent
+failures and two generic negative reports; the 33 C3 source checks are separate
+component evidence.
+
+The frozen integration gate passed at 2026-10-05 12:44 UTC: 1,065 registered
+modules and 13,554 ordered reports, with four validated receipt hits, zero
+productive compilation and 1,061 unchanged parent artifact/log pairs. The
+metadata acceptance retained all 616 historical dependency associations and
+checked the current 612-module closure; no historical query was rerun. The
+public 28 checks and two original-parent failures retain their original scope.
+These four components are retained for the next full capture Current/history
+and ownership join; whole C3 remains open.
+
+Evidence: [actual frozen gate](../../target/core-rich-capture-integration-20261005/root-c3-gate-v1-evidence.json), [dependency supplement](../../target/core-rich-capture-integration-20261005/root-dependency-supplement-v1/review.json) and [public acceptance](../../target/core-rich-capture-integration-20261005/root-dependency-supplement-v1/acceptance.json). Final audit, documentation checks, independent review and unsigned commit verification are recorded separately.
