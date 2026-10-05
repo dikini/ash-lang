@@ -60,6 +60,49 @@ The host-allocation assumption remains explicit in candidate semantics. Existing
 compiler dead-code warnings remain visible. Unsigned integration and its checks
 are recorded by the coordinating task after this implementation checkpoint.
 
+## Shared capture lookup handoff (2026-10-05)
+
+The SQLite workstream transferred unsigned commit
+`0ac9c747e0e266b35f094a67ac2b64e62d88b83c`, based on verified original
+integration `8adf4b2`. Its only implementation file is
+`src/core/capture/value.rs`. Common owns shared compiler, Core, capture,
+provider checking and generic runtime changes after this handoff. SQLite owns
+its native adapter, SQLite manifest contract, Ash library, fixtures, examples
+and documentation. Cargo and integration windows are serial and explicit.
+
+The exact-port and canonical requirement/method indices preserve all original
+matching positions, duplicates, order, specialized destination contexts and
+lexical fallback. Construction and lookups remain fallible and cumulatively
+charged. The default work limit remains 327680. Independent identity, ownership
+and accounting review passes; this is a lookup repair, not new effect or
+resource semantics.
+
+Common merge `41410a9a423dade8b53237c9b06b8ac2d43ee309` preserves both
+histories. Its fresh all-targets check and 1,539 library cases pass; the inherited
+advanced callback is still ignored in this isolated baseline. Common's 56
+uncommitted Batch 3 files remain separately pinned and stashed. SQLite's 45
+pending files remain archived, pinned and uncommitted. No pending SQLite API or
+common control source is part of the isolated lookup delivery.
+
+The supplied realistic SQLite evidence passes 127 capture cases, three of six
+copying cases and an earlier six of seven session cases. Larger copying/reuse
+and persistence programs still refuse at the unchanged work limit. The next
+measured refusal is watcher membership work, not a completed copying program.
+The pending String/TEXT manifest and adapter snapshot is reproduction evidence;
+it is not a delivered native API. Generic codec failure classification also
+remains a separate reviewed snapshot with phase-precision repairs required.
+
+Fresh connected verification passes all 193 cases across eleven selected
+binaries, including all forty-one architecture checks, independent Core
+validation, owner rows, resource modules/runtime and the ten SQLite and four
+arena lifecycle cases. Formatting and changed-document review pass. Inherited
+compiler dead-code warnings remain visible in this isolated baseline. Original
+unsigned integration and its fresh checks are recorded under
+`~/.codex/ash-provider-evidence/common-resource-support-2026-10-04/shared-capture-lookup-29/`.
+Batch 3 resumes after this separate shared checkpoint. Its required control,
+validation and cost repairs must pass before its delivery integrates; no
+unchanged-limit or complete-program claim is inferred from the lookup repair.
+
 ## Current checkpoint
 
 The 2026-10-04 common-support workstream supersedes the paused task below.
