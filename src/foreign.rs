@@ -2,7 +2,9 @@
 //!
 //! Registrations generate passive declarations for the ordinary frontend. They
 //! carry no dynamic symbol names and do not initialize or execute an adapter.
+mod arena;
 pub mod runtime;
+pub use arena::arena_manifest;
 
 use crate::{
     interface::{InterfaceId, MethodId},

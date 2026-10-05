@@ -37,45 +37,47 @@ identity, commands, source pins and limitations are recorded in
 `batch-0-integration.md` and its companion JSON. Formatting and independent
 contract, source quality and changed-documentation reviews pass.
 
-Batch 1 is awaiting final connected verification and integration on the common
-worktree, starting from that integrated merge. The public SQLite driver executes
-`Completed(Completed(Ok(42), Closed), Closed)` with actual statement finalization
-before connection close. The ten public cases include imported and local
-resource definitions, repeated and simultaneous activations, initializer-once,
-acquisition refusal without body or finish, static registrations without
-executable bindings, and inferred hidden report dependencies.
+Batch 1 is complete on the original branch at unsigned merge
+`7c97a454a930c7cc732ce43f1f25c15ef2eea7f7`, integrating common commit
+`4ba09c1e7a9341f240d8c318add0be419aced5bb`. The real merge preserves both
+histories and all twenty-one pinned unrelated original files. Independent
+contract, source quality, native authentication memo and stack repair reviews
+passed before integration.
 
-Fresh `batch-1-connected-gate-09.log` passes all 1,528 library cases, with one
-explicitly ignored advanced callback. The constrained positive case and eleven
-authority mutations pass at unchanged work limits. Both the 64-KiB discard and
-256-KiB deep-drain regressions pass. Original declaration authentication now
-shares successful native self-proof only for an exact immutable allocation
-within one source admission. Registry comparisons and independent final Core
-admission remain active. The independent memo review found no authority or
-ownership blocker.
+The ten public SQLite tests execute
+`Completed(Completed(Ok(42), Closed), Closed)` and actual statement finalization
+before connection close. They cover imported/local definitions, repeated and
+simultaneous activations, initializer-once, acquisition refusal without body or
+finish, hidden report dependencies and static registration without executable
+bindings. `batch-1-integrated-check.log` passes all-targets compilation in the
+original worktree. `batch-1-integrated-tests.log` passes all 1,528 library cases
+(one advanced callback remains explicitly ignored), all forty-one architecture
+checks and selected SQLite, owner-row, resource, Core, effect and admission
+suites. Cargo dependency records authenticate the original fixture root. Wider
+common connected receipts10/12 cover the remaining affected suites.
 
-Fresh `batch-1-connected-gate-10.log` passes all forty-one architecture checks,
-all ten SQLite public cases and the affected cleanup, native-buffer, module,
-effect, Core and owner-argument suites preceding its stale syntax expectation.
-The syntax regression now admits retained arguments after the fresh identity.
-Receipt `batch-1-connected-gate-11.log` passes that correction and resource Core
-and module cases, then exposes a 256-KiB public pipeline stack overflow.
-Debugger receipts locate an unnecessary 89-KiB expression-dispatch frame on the
-ordinary equation/lexical-evidence path before evaluation. The repair dispatches
-equation work and the unchanged expression-check body directly from the existing
-iterative work loop. Fresh `batch-1-public-stack-regression-06.log` passes the
-unchanged 256-KiB child regression. The fixture and all work and depth limits
-remain unchanged. Fresh `batch-1-connected-gate-12.log` passes the complete library suite and
-connected resource, syntax, SQLite, Core and runtime-diagnostic follow-up. Final
-all-targets compilation, unsigned commit and original-worktree integration remain
-the delivery gate.
+The unchanged constrained positive and eleven authority mutations pass; the
+64-KiB and 256-KiB deep regressions pass. Scoped memoization reuses only successful
+native self-proof for an exact immutable declaration allocation. Direct equation
+and expression-check dispatch avoids an unrelated 89-KiB debug frame without
+changing checks or work accounting. Full integration identity, runnable command,
+source pins, commands and limitations are retained in `batch-1-integration.md`
+and its companion JSON. Independent SQLite work starts from this original
+integration commit. Advanced captured-control cases remain Batch 3.
 
 Batch 2 has executed evidence in `batch-2-arena-public-02.log`: all four public
 cases pass, including actual usage `(0, 64, 0, 4)`, zero capacity, repeated and
 nested native activations, release exactly once, native configuration refusal
 without body or release, and dependent access escape rejection. The adapter
-uses the existing arena backing through the common engine. Arena source remains
-uncommitted and unintegrated; typed allocation and references are excluded.
+uses the existing arena backing through the common engine. Fresh `batch-2-connected-public-04.log` passes all four arena cases and all ten
+SQLite cases together. The native backing suite required a byte-slice emptiness
+assertion after the added compiler dependency introduced another PartialEq
+implementation. `batch-2-native-05.log` passes thirty-two adapter unit cases and nine physical
+arena cases. `batch-2-check-05.log` passes all-targets compilation; the strict
+bidirectional carrier inventory passes in `batch-2-architecture-01.log`.
+Independent arena manifest/runtime review and changed-document checks pass.
+Arena source awaits its unsigned delivery commit and original-worktree checks;
+typed allocation and references are excluded.
 
 The imported S-01 receipt establishes executed library-defined scopes within
 that program. It does not establish the selected open-row callback,

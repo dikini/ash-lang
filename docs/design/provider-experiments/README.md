@@ -4,9 +4,9 @@
 > [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 > Candidate contracts, syntax, and Core rules are experimental. The
 > [execution record](execution.md#current-checkpoint) identifies implemented and
-> reviewed components. Public SQLite programs have execution receipts on the
-> common implementation branch. Their integration and the
-> advanced row/control obligations remain pending; experimental evidence does
+> reviewed components. The public SQLite session is verified and integrated on the
+> original experimental branch. Basic arena integration and advanced row/control
+> obligations remain pending; experimental evidence does
 > not change current Ash semantics.
 
 The first slice establishes a copying SQLite bridge and a fixed-capacity scoped
@@ -65,8 +65,8 @@ dispatch. Existing `run_path` callers retain their API.
 
 ## Reproducing common source cases
 
-From the common worktree, run the existing public driver tests with one Cargo
-build job. These commands execute the linked Ash programs and assert actual
+From the original experiment worktree or common implementation worktree, run
+the public driver tests with one Cargo build job. These commands execute the linked Ash programs and assert actual
 native observations:
 
 ```bash
@@ -79,11 +79,26 @@ the integer. The test checks
 `Completed(Completed(Ok(42), Closed), Closed)` and observes statement
 finalization before connection close. The
 [SQLite helper](../../../tests/provider_sqlite_source.rs) shows the complete
-public binding setup. The next common batch supplies basic arena lifecycle;
-arena allocation, references and layout evidence remain outside common support.
+public binding setup.
 
-These are moving-branch receipts until the execution record names each
-verified integration commit. They test the selected experiment, not current
+The arena [entry module](../../../tests/fixtures/provider-experiments/arena-basic/entry.ash)
+uses typed configuration `(64, 4)` and reads native usage `(0, 64, 0, 4)`.
+The [public driver setup](../../../tests/provider_arena_source.rs) registers the
+original memory manifest and its executable adapter. Reproduce the lifecycle:
+
+```bash
+CARGO_BUILD_JOBS=1 cargo test -p ash --test provider_arena_source arena_acquires_queries_actual_usage_and_releases_through_public_driver -- --exact
+```
+
+The wider suite covers repeated and nested activations, zero capacities, native
+configuration refusal without body or release, dependent access escape rejection,
+and release exactly once. The adapter uses the existing physical arena backing;
+compiler dispatch contains no arena-specific resource policy. Typed allocation,
+Layout evidence, references, containment, borrowing, sharing and storage-provider
+families remain separate arena work.
+
+The execution record names the verified integration commit for each completed
+delivery; later moving-branch receipts remain separate. They test the selected experiment, not current
 language semantics or a production architecture. Native adapters must uphold
 their ownership, borrowed-view, conversion and destruction contracts; execution
 tests do not prove foreign implementation correctness.

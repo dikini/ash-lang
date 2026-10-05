@@ -69,6 +69,15 @@ associated acquisition. Native finish disposition determines consumed versus
 retained ownership even if report conversion fails. Safe native destruction at
 host teardown is separate from executing source completion.
 
+The common arena lifecycle uses the same admitted descriptor, complete actual
+argument bridge and executable binding contracts as SQLite. Its opaque
+`ArenaState<R>` has typed configuration and acquisition errors. Borrowed usage
+returns copied counters; finish consumes the unique backing owner. The public
+`arena-basic` cases observe native acquisition, usage and release. This slice
+supplies no allocation, Layout, reference, borrowing or storage-family evidence.
+Those capabilities remain separate arena work, and native behavior remains a
+foreign assumption tested by the adapter and public observations.
+
 The existing Ash proofs cover their stated current-language models. No proof
 of the experimental descriptor, copied-forest correspondence or foreign adapter
 follows from those proofs. Adapter correctness, native ABI facts and safe

@@ -82,7 +82,7 @@ fn zero_payload_publishes_distinct_zero_sized_objects_up_to_the_exact_record_lim
     assert_ne!(first, second);
     assert_ne!(second, third);
     assert_eq!(size_of::<AllocationKey>(), 2 * size_of::<u64>());
-    assert_eq!(arena.read(second, unit.tag()).unwrap(), []);
+    assert!(arena.read(second, unit.tag()).unwrap().is_empty());
     assert_eq!(arena.usage().used_payload_bytes, 0);
     assert_eq!(arena.usage().object_count, 3);
     assert_eq!(
