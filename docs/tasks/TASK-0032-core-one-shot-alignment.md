@@ -63,7 +63,7 @@ remain separate targets. A small first example does not reduce the final scope.
   and first proof components. This does not close the product checkpoint or
   complete Core alignment.
 
-### Current deliverable board — 2026-10-03 requirement/resume checkpoint
+### Current deliverable board — 2026-10-05 Beta checkpoint
 
 The package counts measure whole-fragment acceptance. This board shows movement
 inside those packages. Each row names a fixed deliverable or subcase inventory;
@@ -72,6 +72,7 @@ counts measure implemented cases, not equal effort or a percentage of C2.
 
 | Deliverable or inventory | Implemented | Independently reviewed | Current-source verification | Integrated commit | Change since paused checkpoint `f1fc1e4` |
 | --- | --- | --- | --- | --- | --- |
+| Conditional Beta event and original past | **2 / 2 additive leaves** | **SOURCE/LIGHT and integration review passed** | **4 standard reports; 28 public checks; 2 retained parent REDs; 2 cache hits; 0 recompiles** | **Included in this checkpoint** | **SAME Current/input/Site, original-root past and stability required; whole C2/C3 open** |
 | Resource requirement closing | **3 / 3 new leaves** | **Gate passed; included in this checkpoint** | **16 standard reports; 10 public source checks** | **Included in this checkpoint** | **SAME demand/all-fresh Hides; no body Source/Auth/private-family producer** |
 | Current resume past | **2 / 2 new leaves** | **Gate passed; included in this checkpoint** | **12 standard reports; 41 public source checks; actual RawTrace/ledger** | **Included in this checkpoint** | **Full literal restoration; typed current/past required; weak Current qualification retained** |
 | **Requirement/resume integration batch** | **2 / 2 components; 5 / 5 new Lean leaves** | **Gate passed; included in this checkpoint** | **13,527 reports; 5 affected; actual validated scheduler receipts** | **Included in this checkpoint** | **Published parent 07b69b2; whole counts/estimates unchanged** |
@@ -3473,3 +3474,49 @@ Entry points: [requirement row checks](<../design/direct-effects/one-shot/CoreCa
 [actual current resume past](<../design/direct-effects/one-shot/CoreCallableRichResumePastConsumers.lean>) and [resume interfaces](<../design/direct-effects/one-shot/RichResumePastInterfaces.lean>).
 
 Next work follows the [goal batch execution plan](../../target/core-goal-next-batches-plan-v2.md), which defines no Ash semantics. The [capture simplification demonstration](../../target/core-capture-simplification-demonstration-v1/demonstration.md) is read-only, conditional evidence; its [ROOT review](../../target/core-capture-simplification-demonstration-v1/root-review.json) does not authorize a Core behavior change.
+
+### Conditional Beta event and original handler past — 2026-10-05
+
+The [Beta event consumer](../design/direct-effects/one-shot/CoreCallableRichBetaPastConsumers.lean) extends the existing BetaEvent at the same computed beta_result
+endpoint. It retains the original function and argument, full Contract,
+private families, Plans, Rows and root transport. The existing Generated.next
+joins the actual Core beta step to a positive Event and the original handler
+history. The event count increases by one; issued and completed owners stay
+unchanged. beta_counter_membership_rejected and beta_zero_event_rejected retain
+the generic rejection proofs.
+
+This result requires SAME Current, BetaInput, full Site and original-root
+InstallationsPast, including the existing stability premise. Current remains
+weak and phantom-indexed. It does not construct arbitrary rich initial
+admission, general reachable preservation, a runtime registry join, M4 Valid
+or availability, or Rust capacity correspondence. Multishot, escaping
+continuations, suspension and asynchronous hooks remain outside this goal.
+
+The [Beta interfaces](../design/direct-effects/one-shot/RichBetaPastInterfaces.lean) source checks 28 public declarations. The frozen local
+checkpoint retains two productive successes, four standard-only axiom reports,
+two original dependency outputs, two published-parent missing-module failures
+without artifacts, and two generic negative proof reports. Failed earlier MCP
+attempts remain excluded from accepted evidence. Compilation and axiom checks
+retain the existing standard axioms propext, Quot.sound and Classical.choice.
+
+The frozen shared gate passed with 1,061 registered modules and 13,531
+ordered reports: two affected leaves, four added reports, two validated receipt
+hits and zero productive recompilations. All 1,059 unchanged parent artifact/log
+pairs and eight library pins were preserved. Preparation and hash checks took
+12.25 seconds; receipt validation took 0.916 seconds. The reported compiler RSS
+belongs to the original local successes, not new compilation in this gate.
+Public acceptance passed with 28 source checks, two retained original-parent
+missing-module failures without artifacts and two generic negative reports.
+The metadata supplement retained 616 original ordered dependency-query
+associations with their command, cwd, LEAN_PATH and raw output; current paths
+are translated separately and freshly hash-checked. It ran no new queries.
+
+Original constructor coverage remains 14/16. Whole acceptance remains C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. The current goal estimate remains 40–71 base
+agent-hours, 50–90 with rework and 25–45 elapsed working hours. This additive
+formal-model increment changes no Ash language semantics and closes no whole
+C2 or C3 item.
+
+Next work follows the [current connected batch plan](../../target/core-goal-next-batches-plan-v4.md): validate the uncompiled admission foundations and legacy APIs, then their consumers and the general registry/capture join. The saved source/API draft is implementation progress, not initial-admission evidence.
+
+Evidence: [frozen Beta gate](../../target/core-beta-integration-20261005/root-beta-gate-v1-evidence.json), [ordered dependency supplement](../../target/core-beta-integration-20261005/root-dependency-supplement-v1/review.json), and [public acceptance](../../target/core-beta-integration-20261005/root-acceptance-v1/acceptance.json). These record a component result; whole-goal acceptance remains open.

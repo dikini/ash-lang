@@ -1,0 +1,38 @@
+import CoreCallableRichBetaPastConsumers
+import CoreCallableRichHandlerEventConsumers
+
+/-! Existing full beta/current/past outputs and the exact named handler consumer.
+No new reachability or provider judgment is introduced. -/
+namespace Ash.OneShot.RichBetaPastInterfaces
+open CoreCallableRichBetaPastConsumers
+
+#check beta_event_with_past
+#check beta_generated
+#check beta_counter_membership_rejected
+#check beta_zero_event_rejected
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.preserved
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.after
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.actual
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.positive
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.event
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.issued
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.completed
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.count
+#check CoreCallableRichAdmittedEventConsumers.BetaEvent.endpoint_accounting
+#check CoreCallableContractExecution.BetaPreserved.originalFunction
+#check CoreCallableContractExecution.BetaPreserved.originalArgument
+#check CoreCallableContractExecution.BetaPreserved.selected
+#check CoreCallableContractExecution.BetaPreserved.nextRoot
+#check CoreCallableContractExecution.BetaPreserved.rootTransport
+#check CoreCallableContractExecution.BetaPreserved.exactDemand
+#check CoreCallableContractExecution.BetaPreserved.exactRequirements
+#check CoreCallableContractExecution.BetaPreserved.exactPlan
+#check CoreCallableContractExecution.BetaPreserved.exactRows
+#check CoreCallableRichHandlerFreshness.InstallationsPast.actual
+#check CoreCallableRichHandlerFreshness.InstallationsPast.membership
+#check CoreCallableRichHandlerFreshness.InstallationsPast.fresh
+#check CoreCallableRichHandlerEventConsumers.handler_event
+#check CoreCallableGeneratedChronology.Generated.next
+
+end Ash.OneShot.RichBetaPastInterfaces

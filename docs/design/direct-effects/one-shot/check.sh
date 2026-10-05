@@ -1064,3 +1064,5 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableResourceRequirementC
 lean -DwarningAsError=true -o "$proof_build_dir/ResourceRequirementInterfaces.olean" ResourceRequirementInterfaces.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichResumePastConsumers.olean" CoreCallableRichResumePastConsumers.lean
 lean -DwarningAsError=true -o "$proof_build_dir/RichResumePastInterfaces.olean" RichResumePastInterfaces.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichBetaPastConsumers.olean" CoreCallableRichBetaPastConsumers.lean
+lean -DwarningAsError=true -o "$proof_build_dir/RichBetaPastInterfaces.olean" RichBetaPastInterfaces.lean

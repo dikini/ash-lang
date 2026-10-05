@@ -27832,3 +27832,47 @@ and Rust correspondence remain open. This increment closes no whole C2/C3 item.
 
 Entry points: [requirement row checks](<CoreCallableResourceRequirementChecks.lean>), [all-fresh requirement closing](<CoreCallableResourceRequirementClosing.lean>), [requirement interfaces](<ResourceRequirementInterfaces.lean>),
 [actual current resume past](<CoreCallableRichResumePastConsumers.lean>) and [resume interfaces](<RichResumePastInterfaces.lean>).
+
+### Conditional Beta event and original handler past — 2026-10-05
+
+The [Beta event consumer](CoreCallableRichBetaPastConsumers.lean) extends the existing BetaEvent at the same computed beta_result
+endpoint. It retains the original function and argument, full Contract,
+private families, Plans, Rows and root transport. The existing Generated.next
+joins the actual Core beta step to a positive Event and the original handler
+history. The event count increases by one; issued and completed owners stay
+unchanged. beta_counter_membership_rejected and beta_zero_event_rejected retain
+the generic rejection proofs.
+
+This result requires SAME Current, BetaInput, full Site and original-root
+InstallationsPast, including the existing stability premise. Current remains
+weak and phantom-indexed. It does not construct arbitrary rich initial
+admission, general reachable preservation, a runtime registry join, M4 Valid
+or availability, or Rust capacity correspondence. Multishot, escaping
+continuations, suspension and asynchronous hooks remain outside this goal.
+
+The [Beta interfaces](RichBetaPastInterfaces.lean) source checks 28 public declarations. The frozen local
+checkpoint retains two productive successes, four standard-only axiom reports,
+two original dependency outputs, two published-parent missing-module failures
+without artifacts, and two generic negative proof reports. Failed earlier MCP
+attempts remain excluded from accepted evidence. Compilation and axiom checks
+retain the existing standard axioms propext, Quot.sound and Classical.choice.
+
+The frozen shared gate passed with 1,061 registered modules and 13,531
+ordered reports: two affected leaves, four added reports, two validated receipt
+hits and zero productive recompilations. All 1,059 unchanged parent artifact/log
+pairs and eight library pins were preserved. Preparation and hash checks took
+12.25 seconds; receipt validation took 0.916 seconds. The reported compiler RSS
+belongs to the original local successes, not new compilation in this gate.
+Public acceptance passed with 28 source checks, two retained original-parent
+missing-module failures without artifacts and two generic negative reports.
+The metadata supplement retained 616 original ordered dependency-query
+associations with their command, cwd, LEAN_PATH and raw output; current paths
+are translated separately and freshly hash-checked. It ran no new queries.
+
+Original constructor coverage remains 14/16. Whole acceptance remains C1 5/5,
+C2 0/4, C3 0/5, C4 2/3 and C5 0/4. The current goal estimate remains 40–71 base
+agent-hours, 50–90 with rework and 25–45 elapsed working hours. This additive
+formal-model increment changes no Ash language semantics and closes no whole
+C2 or C3 item.
+
+Evidence: [frozen Beta gate](../../../../target/core-beta-integration-20261005/root-beta-gate-v1-evidence.json), [ordered dependency supplement](../../../../target/core-beta-integration-20261005/root-dependency-supplement-v1/review.json), and [public acceptance](../../../../target/core-beta-integration-20261005/root-acceptance-v1/acceptance.json). These record a component result; whole-goal acceptance remains open.
