@@ -2016,6 +2016,7 @@ pub(super) struct Analysis<'a> {
     context_indices: HashMap<Vec<Transition>, usize>,
     slots: Vec<Slot>,
     watched_pairs: HashSet<(usize, usize)>,
+    edge_pairs: HashSet<(usize, usize)>,
     indices: HashMap<(usize, usize), usize>,
     roots: HashMap<usize, usize>,
     revision: usize,
@@ -2689,6 +2690,7 @@ impl<'a> Analysis<'a> {
             context_indices,
             slots: Vec::new(),
             watched_pairs: HashSet::new(),
+            edge_pairs: HashSet::new(),
             indices: HashMap::new(),
             roots: HashMap::new(),
             revision: 0,
@@ -2850,16 +2852,52 @@ impl<'a> Analysis<'a> {
         if self.slots[target].key.1 < self.frozen_contexts {
             return Err(Failure::Invalid);
         }
-        charge(budget, self.slots[target].edges.len() + 1)?;
-        if !self.slots[target].edges.contains(&source) {
-            self.slots[target]
-                .edges
+        // Slot IDs preserve expression and creation context. This index only
+        // answers membership; the ordered edge list still drives propagation.
+        charge(budget, 1)?;
+        let edge = (target, source);
+        if self.edge_pairs.contains(&edge) {
+            return Ok(());
+        }
+        charge(budget, 2)?;
+        self.edge_pairs
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.slots[target]
+            .edges
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        // An edge also requires its independently tracked notification watch.
+        // Reserve the entire edge/watch/enqueue transition before committing
+        // any relation, so refusal cannot make a retry skip missing readers.
+        charge(budget, 1)?;
+        let watch = (source, target);
+        let new_watch = !self.watched_pairs.contains(&watch);
+        if new_watch {
+            charge(budget, 2)?;
+            self.watched_pairs
                 .try_reserve(1)
                 .map_err(|_| Failure::Resource)?;
-            self.slots[target].edges.push(source);
-            self.revision += 1;
-            self.watch(source, target, budget)?;
-            self.enqueue(target, budget)?;
+            self.slots[source]
+                .readers
+                .try_reserve(1)
+                .map_err(|_| Failure::Resource)?;
+        }
+        charge(budget, 1)?;
+        let enqueue = !self.slots[target].queued;
+        if enqueue {
+            self.pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        }
+        self.edge_pairs.insert(edge);
+        self.slots[target].edges.push(source);
+        self.revision += 1;
+        if new_watch {
+            self.watched_pairs.insert(watch);
+            self.slots[source].readers.push(target);
+        }
+        if enqueue {
+            self.pending.push_back(target);
+            self.slots[target].queued = true;
         }
         Ok(())
     }
@@ -3476,6 +3514,187 @@ mod tests {
             let mut exact = TypeWorkBudget::with_limit(measured.used());
             run(&mut exact).unwrap();
             assert_eq!(exact.used(), measured.used());
+        }
+    }
+
+    #[test]
+    fn edge_pairs_preserve_contexts_order_independent_watches_and_atomic_budget_boundaries() {
+        let graph = graph(vec![Expr::Slot]);
+        let mut setup = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+        let mut slots = Vec::new();
+        for site in 1..=7 {
+            let context = analysis
+                .context(0, Transition::Root(site), &mut setup)
+                .unwrap();
+            slots.push(analysis.slot(0, context, &mut setup).unwrap());
+        }
+        let [
+            target,
+            other_target,
+            first,
+            second,
+            fresh,
+            prefilled,
+            watched,
+        ] = slots.as_slice()
+        else {
+            panic!("seven exact contextful slots")
+        };
+        assert_eq!(analysis.slots[*first].key.0, analysis.slots[*second].key.0);
+        assert_ne!(analysis.slots[*first].key.1, analysis.slots[*second].key.1);
+        analysis.watch(*second, *other_target, &mut setup).unwrap();
+        analysis.edge(*target, *second, &mut setup).unwrap();
+        analysis.edge(*target, *first, &mut setup).unwrap();
+        assert_eq!(analysis.slots[*target].edges, vec![*second, *first]);
+        assert!(!analysis.edge_pairs.contains(&(*other_target, *second)));
+        assert_eq!(
+            analysis.slots[*second].readers,
+            vec![*other_target, *target]
+        );
+        analysis.pending.clear();
+        for slot in &mut analysis.slots {
+            slot.queued = false;
+        }
+        for (prefix, source) in [(0, *fresh), (9, *prefilled)] {
+            let mut duplicate = TypeWorkBudget::with_limit(prefix + 1);
+            duplicate.charge(prefix).unwrap();
+            analysis.edge(*target, *first, &mut duplicate).unwrap();
+            assert_eq!(duplicate.used(), prefix + 1);
+            assert!(!analysis.slots[*target].queued);
+            let before_edges = analysis.slots[*target].edges.clone();
+            let before_pairs = analysis.edge_pairs.clone();
+            let before_watches = analysis.watched_pairs.clone();
+            let before_readers = analysis.slots[source].readers.clone();
+            let before_revision = analysis.revision;
+            for allowance in 0..7 {
+                let mut short = TypeWorkBudget::with_limit(prefix + allowance);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    analysis.edge(*target, source, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(analysis.slots[*target].edges, before_edges);
+                assert_eq!(analysis.edge_pairs, before_pairs);
+                assert_eq!(analysis.watched_pairs, before_watches);
+                assert_eq!(analysis.slots[source].readers, before_readers);
+                assert_eq!(analysis.revision, before_revision);
+                assert!(analysis.pending.is_empty());
+                assert!(!analysis.slots[*target].queued);
+            }
+            let mut exact = TypeWorkBudget::with_limit(prefix + 7);
+            exact.charge(prefix).unwrap();
+            analysis.edge(*target, source, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + 7);
+            let mut expected = before_edges;
+            expected.push(source);
+            assert_eq!(analysis.slots[*target].edges, expected);
+            assert_eq!(analysis.slots[source].readers, vec![*target]);
+            assert_eq!(
+                analysis.pending.iter().copied().collect::<Vec<_>>(),
+                vec![*target]
+            );
+            analysis.pending.clear();
+            analysis.slots[*target].queued = false;
+        }
+        // A watch does not imply an edge, and an existing watch costs no new
+        // reader storage when the independently missing edge is inserted.
+        analysis.watch(*watched, *target, &mut setup).unwrap();
+        let before_pairs = analysis.edge_pairs.clone();
+        let mut short = TypeWorkBudget::with_limit(4);
+        assert!(matches!(
+            analysis.edge(*target, *watched, &mut short),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(analysis.edge_pairs, before_pairs);
+        assert!(!analysis.slots[*target].queued);
+        let mut exact = TypeWorkBudget::with_limit(5);
+        analysis.edge(*target, *watched, &mut exact).unwrap();
+        assert_eq!(exact.used(), 5);
+        assert_eq!(analysis.slots[*watched].readers, vec![*target]);
+        // A second target can already be queued, but still receives the exact
+        // edge and its pre-existing watch without a second queue position.
+        analysis.watch(*watched, *other_target, &mut setup).unwrap();
+        analysis.enqueue(*other_target, &mut setup).unwrap();
+        let before_pending = analysis.pending.iter().copied().collect::<Vec<_>>();
+        let mut exact = TypeWorkBudget::with_limit(5);
+        analysis.edge(*other_target, *watched, &mut exact).unwrap();
+        assert_eq!(exact.used(), 5);
+        assert_eq!(
+            analysis.pending.iter().copied().collect::<Vec<_>>(),
+            before_pending
+        );
+        assert_eq!(analysis.slots[*other_target].edges, vec![*watched]);
+        analysis.pending.clear();
+        for slot in &mut analysis.slots {
+            slot.queued = false;
+        }
+        analysis.atom(*second, Atom::Unknown, &mut setup).unwrap();
+        analysis.atom(*first, Atom::Free, &mut setup).unwrap();
+        assert_eq!(
+            analysis.pending.iter().copied().collect::<Vec<_>>(),
+            vec![*other_target, *target]
+        );
+        analysis.close(&mut setup).unwrap();
+        assert_eq!(
+            analysis.slots[*target].atoms,
+            vec![Atom::Unknown, Atom::Free]
+        );
+        assert!(
+            analysis.slots[*other_target].atoms.is_empty(),
+            "a watch alone never propagates atoms"
+        );
+        let before_pairs = analysis.edge_pairs.clone();
+        let mut frozen = TypeWorkBudget::with_limit(0);
+        analysis.frozen_contexts = analysis.contexts.len();
+        assert!(matches!(
+            analysis.edge(*target, *first, &mut frozen),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(analysis.edge_pairs, before_pairs);
+        assert_eq!(frozen.used(), 0);
+    }
+
+    #[test]
+    fn repeated_wide_edges_retry_at_exact_work_without_reordering() {
+        const WIDTH: usize = 96;
+        let graph = graph(vec![Expr::Slot]);
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let target = analysis.slot(0, 0, budget)?;
+            let mut sources = Vec::new();
+            for site in 1..=WIDTH {
+                let context = analysis.context(0, Transition::Root(site), budget)?;
+                let source = analysis.slot(0, context, budget)?;
+                analysis.edge(target, source, budget)?;
+                sources.push(source);
+            }
+            for _ in 0..WIDTH {
+                for source in sources.iter().rev() {
+                    analysis.edge(target, *source, budget)?;
+                }
+            }
+            assert_eq!(analysis.slots[target].edges, sources);
+            assert_eq!(analysis.edge_pairs.len(), WIDTH);
+            analysis.close(budget)?;
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(
+            measured.used() < 2 * WIDTH * WIDTH,
+            "membership cost must scale with pair visits"
+        );
+        for prefix in [0, 9] {
+            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                exact.charge(prefix).unwrap();
+                run(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + measured.used());
+            }
         }
     }
 

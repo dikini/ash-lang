@@ -2651,3 +2651,27 @@ cases with one inherited ignore, and 183 connected public/architecture cases.
 Unsigned original-branch integration and fresh integrated checks remain the
 delivery gate. The unrelated inherited baseline warnings remain visible; the
 pending B3 cleanup is not included in this isolated delivery.
+
+## Shared edge membership checkpoint (2026-10-05)
+
+SQLite reproduced three copying refusals and one persistence refusal after the
+watcher delivery at `3f8e03e0`. Its first recorded refusal consumed 327,674
+units and requested 19 more for an edge-membership scan with 18 existing
+edges. Ordinary helper-module partition probes also refused before native
+acquisition. Those probes do not satisfy the required flat programs.
+
+The common repair indexes exact target/source slot pairs within one capture
+analysis. Slot identities retain creation contexts. The existing edge vector
+still determines propagation order; watcher membership remains independent.
+Duplicate membership costs one unit. New edge insertion admits and reserves
+the index entry, ordered edge, any missing notification watch, and queue
+entry before changing semantic state. Refusal leaves all relations, revision,
+and queue flags intact. The default 327,680-unit work limit is unchanged.
+
+External contract and allocation/work reviews passed for patch `156c1e24`.
+Fresh common checks passed: all-target build, 1,543 library cases (one
+inherited ignore), 142 connected public cases, and 41 architecture cases.
+Integration checks and larger SQLite reproduction remain pending. All 67
+common Batch 3 paths were preserved in a retained stash and pinned source
+copies before isolating this delivery. The source-control and lexical-row
+repairs remain separate unverified progress.

@@ -2540,3 +2540,20 @@ cases with one inherited ignore, and 183 connected public/architecture cases.
 Unsigned original-branch integration and fresh integrated checks remain the
 delivery gate. The unrelated inherited baseline warnings remain visible; the
 pending B3 cleanup is not included in this isolated delivery.
+
+## Shared edge membership delivery (2026-10-05)
+
+The next measured SQLite capture frontier after `3f8e03e0` is ordered edge
+membership. The common delivery preserves exact slot/context identities and
+ordered propagation while indexing membership. Edge, watch, and queue
+publication share a fallible admission boundary; watch-only relations remain
+independent. Fresh-edge work is seven units, or five with an existing watch;
+duplicate work is one. This does not imply every low-fanout input costs less.
+
+The evidence directory
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/shared-edge-membership-39/`
+records the all-target build, 1,543 passing library cases with one inherited
+ignore, 142 passing public cases, 41 architecture cases, and unchanged work
+limits. Integrated verification is the next gate.
+Larger copying and persistence execution must be measured again after this
+delivery. No default limit increase or source workaround is admitted.
