@@ -105,11 +105,14 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common checkpoint is `642bb6b0d2536849d0c281783af60fec7a79ae3e`.
-The following Batch 0–2 entries and dated intermediate Batch 3 entries retain
-their historical evidence. The connected common delivery below supersedes its
-older control-failure summaries; it is not integrated until its delivery record
-names an original-branch merge and fresh checks.
+Latest integrated common code checkpoint is `3f9dd7565992169a1d9a77278105c99d6c8b4cdb`,
+merging common commit `9080b9508be3a8a0b5bea2332826b6301cc4cdea`. The delivery receipt
+`batch-3-integration.json` and its Markdown companion under the common evidence
+directory record the final original-branch tip and whole verification outcome.
+A completed delivery requires that receipt's successful unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in this original worktree.
+The following Batch 0–2 and dated intermediate Batch 3 entries retain historical
+evidence; later delivery records supersede their earlier control-failure summaries.
 
 The 2026-10-04 common-support workstream supersedes the paused task below.
 The recovery commit preserves compiler, native adapter, fixtures and tracking
@@ -2850,3 +2853,34 @@ associated cost work remain separate shared follow-ons. Typed arena allocation,
 Layout, references, containment, borrowing, sharing and storage families belong
 to the independent arena workstream. No DN-0037 or DN-0038 implementation is
 included, and no experimental rule is promoted into `spec/` or `main`.
+
+## Common control integration (2026-10-05)
+
+Unsigned merge `3f9dd7565992169a1d9a77278105c99d6c8b4cdb` preserves original parent
+`642bb6b0d2536849d0c281783af60fec7a79ae3e` and verified common parent
+`9080b9508be3a8a0b5bea2332826b6301cc4cdea`. The common source passes the connected
+checks recorded above. All twenty-three unrelated original files remain byte
+identical, the original index contained no unrelated staged changes, and the
+merge includes only the reviewed seventy-eight common paths.
+
+This checkpoint integrates complete owner arguments, formal open-Delta callback
+execution, the separate finite capture-demand witness, ownership-preserving
+resume, structural discard with outer-resource cleanup, consumed and retained
+completion handling, dependency quarantine and independent final Core checks.
+Existing S-01 and basic arena programs use the same public generic runtime.
+The original-branch final gate and its source pins are recorded in the external
+`batch-3-integration` receipt. The exact verified original tip is the handoff
+point for SQLite and arena; their independent delivery merges follow it.
+
+Common retains shared compiler, Core, capture, provider and generic-runtime
+ownership. SQLite retains library/native adapter ownership and supplies
+executable evidence. Arena's basic lifecycle is integrated; typed allocation and
+storage work remain its later study. Cargo windows stay serial: original whole
+verification first, arena's queued codec window next, then the separately queued
+proof tooling window after arena returns the lease. No missing process handle
+constitutes a lease release.
+
+The four larger SQLite default-budget refusals, deferred fourteen-operation
+TEXT migration, trusted foreign contracts and unproved general correspondence
+remain explicit limitations. No retry, close_v2 substitution, raised source
+limit, production-semantic adoption or main merge is included.

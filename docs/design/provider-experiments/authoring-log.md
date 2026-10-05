@@ -2820,3 +2820,13 @@ and exact accounting assertions remain in place. Contract, quality and
 documentation review pass. Original-branch unsigned merge and fresh unfiltered
 verification remain the delivery checkpoint; larger SQLite budget cases and
 typed arena work retain their independent scope.
+
+## 2026-10-05: common integration
+
+Verified common commit `9080b9508be3a8a0b5bea2332826b6301cc4cdea` is integrated by
+unsigned original merge `3f9dd7565992169a1d9a77278105c99d6c8b4cdb`. Both histories
+and all twenty-three unrelated working files are preserved. The external
+`batch-3-integration` receipt records the final original tip and whole unfiltered
+verification outcome, which governs completion and the consumer handoff.
+Independent SQLite and arena merges follow that verified checkpoint. Shared
+source remains common-owned, and Cargo leases remain explicit and serial.

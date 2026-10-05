@@ -134,7 +134,7 @@ adoption or executed source proof. The earlier module-publication baseline
 was Type-only. Common Batch 0 integrates the complete argument migration, and
 Batch 3 moving-source evidence executes the formal open-row callback. The
 finite per-request capture witness and required row/control cases pass connected
-common verification. Original-branch integration and its fresh final gate are
+common verification. The original-branch merge and its fresh final gate are
 recorded separately.
 [Execution](execution.md#current-checkpoint) records the precise evidence.
 The callback exclusion above means foreign callback ABI; this pressure case executes an ordinary synchronous Ash
@@ -176,7 +176,7 @@ native-request clause variant must preserve its known direct native demand
 until exact admitted interpretation discharges it.
 
 Independent reviews approve bounded selection and the required common checks
-pass. Original-branch integration evidence is recorded separately. Later adoption follows
+pass. The original-branch merge and verification evidence are recorded separately. Later adoption follows
 [Step 7](#step-7-bring-successful-work-into-ash-and-its-standard-library): an
 accepted semantic proposal, any justified architectural decision and authorized
 tasks precede product implementation, tests and specification changes. Allocate

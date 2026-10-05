@@ -974,7 +974,7 @@ acquisition, non-owning access, result nesting and release through the public
 driver. Moving Batch 3 tests establish specific resume, discard, handler
 precedence and injected retained-owner cases. Its formal open-row admission,
 finite capture-demand witness and mixed helper case have passing moving-source
-receipts. Connected common verification now passes; original-branch integration
+receipts. Connected common verification now passes; the original-branch merge
 and its fresh final gate are recorded separately in execution. These are tested
 observations, not a proof of the P-1 rules. Exact manifest contracts, safe adapter destruction and foreign state
 behavior remain explicit foreign assumptions. No completed Lean correspondence
