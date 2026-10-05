@@ -2610,3 +2610,24 @@ UTF-8 conversion and exact comparison. String literals remove the measured
 manual byte-constructor authoring burden. No generator or unrelated authoring
 tool is required for this copying checkpoint. The full String API remains out
 of scope. These are candidate experiment examples, not current `main` syntax.
+
+
+## 2026-10-05: shared lookup ownership handoff
+
+The SQLite workstream transfers isolated unsigned lookup commit `0ac9c747`,
+with both private indices retaining exact canonical identities, original match
+order and lexical fallback. Common merge `41410a9` preserves both histories;
+fresh compilation and 1,539 library cases pass, with the inherited advanced
+callback still ignored in this baseline. The 56 pending common files and 45
+pending SQLite files are separately preserved. Common now owns all shared
+compiler/Core/capture/provider/generic runtime edits; SQLite retains adapter,
+library and example work. Serial Cargo windows avoid concurrent builds.
+
+Larger copying/reuse and persistence cases still refuse at the unchanged
+327680 limit. Watcher membership is the next measured cost; the pending native
+String/TEXT and generic error-classification snapshots are not part of the
+isolated repair. Fresh connected verification passes 193 cases, including all
+forty-one architecture checks and the existing public SQLite/arena lifecycles.
+Formatting and changed-document review pass. Unsigned original integration and
+fresh integrated checks remain the delivery gate. This changes execution order, not the P-1 goal or
+current Ash semantics.

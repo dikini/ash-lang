@@ -2009,6 +2009,9 @@ struct PreparedCut {
 
 pub(super) struct Analysis<'a> {
     graph: &'a Graph,
+    evidence_ports: HashMap<usize, Vec<usize>>,
+    evidence_keys:
+        HashMap<(crate::interface::RequirementId, crate::interface::MethodId), Vec<usize>>,
     contexts: Vec<Vec<Transition>>,
     context_indices: HashMap<Vec<Transition>, usize>,
     slots: Vec<Slot>,
@@ -2646,6 +2649,28 @@ impl<'a> Analysis<'a> {
     }
 
     fn new(graph: &'a Graph, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        // Each capture can replace only the evidence keys assigned to that
+        // exact expression. Preserve their original order, including distinct
+        // keys sharing a port, without scanning unrelated graph evidence.
+        charge(budget, graph.evidence.len())?;
+        let mut evidence_ports: HashMap<usize, Vec<usize>> = HashMap::new();
+        evidence_ports
+            .try_reserve(graph.evidence.len())
+            .map_err(|_| Failure::Resource)?;
+        charge(budget, graph.evidence.len())?;
+        let mut evidence_keys: HashMap<_, Vec<usize>> = HashMap::new();
+        evidence_keys
+            .try_reserve(graph.evidence.len())
+            .map_err(|_| Failure::Resource)?;
+        for (position, (key, port)) in graph.evidence.iter().enumerate() {
+            charge(budget, 2)?;
+            let positions = evidence_ports.entry(*port).or_default();
+            positions.try_reserve(1).map_err(|_| Failure::Resource)?;
+            positions.push(position);
+            let positions = evidence_keys.entry(*key).or_default();
+            positions.try_reserve(1).map_err(|_| Failure::Resource)?;
+            positions.push(position);
+        }
         charge(budget, 2)?;
         let mut contexts = Vec::new();
         contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -2657,6 +2682,8 @@ impl<'a> Analysis<'a> {
         context_indices.insert(Vec::new(), 0);
         Ok(Self {
             graph,
+            evidence_ports,
+            evidence_keys,
             contexts,
             context_indices,
             slots: Vec::new(),
@@ -3119,12 +3146,15 @@ impl<'a> Analysis<'a> {
                             budget,
                         )?;
                         for (requirement, method, argument) in bindings {
-                            charge(budget, self.graph.evidence.len())?;
-                            for (key, target) in &self.graph.evidence {
-                                if *key == (*requirement, *method) {
-                                    let target = self.slot(*target, specialized, budget)?;
-                                    self.link(target, *argument, context, budget)?;
-                                }
+                            charge(budget, 1)?;
+                            let key = (*requirement, *method);
+                            let matching = self.evidence_keys.get(&key).map_or(0, Vec::len);
+                            for position in 0..matching {
+                                charge(budget, 1)?;
+                                let target =
+                                    self.graph.evidence[self.evidence_keys[&key][position]].1;
+                                let target = self.slot(target, specialized, budget)?;
+                                self.link(target, *argument, context, budget)?;
                             }
                         }
                         self.atom(slot, Atom::Closure(target, specialized), budget)?;
@@ -3168,13 +3198,13 @@ impl<'a> Analysis<'a> {
             }
             let destination = self.slot(capture, specialized, budget)?;
             let mut replaced = false;
-            for (key, port) in &self.graph.evidence {
+            charge(budget, 1)?;
+            let matching = self.evidence_ports.get(&capture).map_or(0, Vec::len);
+            for position in 0..matching {
                 charge(budget, bindings.len() + 1)?;
-                if *port != capture {
-                    continue;
-                }
+                let key = self.graph.evidence[self.evidence_ports[&capture][position]].0;
                 for (requirement, method, argument) in bindings {
-                    if *key == (*requirement, *method) {
+                    if key == (*requirement, *method) {
                         self.link(destination, *argument, arguments_context, budget)?;
                         replaced = true;
                     }
@@ -3310,6 +3340,129 @@ mod tests {
             metadata: HashMap::new(),
             evidence: Vec::new(),
         }
+    }
+
+    #[test]
+    fn evidence_specialization_preserves_shared_ports_and_inert_aliases() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("evidence-specialization.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let other_method = MethodId::new(interface, 1);
+        let requirement = RequirementId::new(RequirementOwner::Global(BinderId::generated(900)), 0);
+        let other_requirement =
+            RequirementId::new(RequirementOwner::Global(BinderId::generated(901)), 0);
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Unknown,
+            Expr::Alias(0),
+            Expr::Merge(vec![3]),
+            Expr::Unknown,
+        ]);
+        graph.evidence = vec![
+            ((requirement, method), 0),
+            ((requirement, other_method), 0),
+            ((other_requirement, method), 5),
+        ];
+        let mut measured = TypeWorkBudget::unbounded();
+        Analysis::new(&graph, &mut measured).unwrap();
+        assert!(matches!(
+            Analysis::new(&graph, &mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let specialized = analysis.context(0, Transition::Call(4), &mut work).unwrap();
+        analysis
+            .specialize_captures(
+                &[4, 5],
+                0,
+                specialized,
+                &[
+                    (requirement, method, 1),
+                    (requirement, other_method, 2),
+                    (other_requirement, other_method, 1),
+                ],
+                0,
+                &mut work,
+            )
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        let shared = analysis.indices[&(0, specialized)];
+        assert!(analysis.slots[shared].atoms.contains(&Atom::Free));
+        assert!(
+            analysis.slots[shared].atoms.contains(&Atom::Unknown),
+            "distinct keys sharing a port must both survive"
+        );
+        let alias = analysis.indices[&(4, specialized)];
+        assert!(
+            analysis.slots[alias].atoms.contains(&Atom::Unknown),
+            "inert alias traversal must reach the exact abstract port"
+        );
+        let lexical = analysis.indices[&(5, specialized)];
+        assert_eq!(
+            analysis.slots[lexical].atoms,
+            vec![Atom::Unknown],
+            "a different method identity cannot replace lexical captures"
+        );
+    }
+
+    #[test]
+    fn evidence_routes_every_matching_port_with_exact_canonical_identity() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("evidence-routes.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(BinderId::generated(902)), 0);
+        let other_requirement =
+            RequirementId::new(RequirementOwner::Global(BinderId::generated(903)), 0);
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Unknown,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 2,
+                captures: vec![0, 3],
+            },
+            Expr::Evidence {
+                value: 4,
+                bindings: vec![(requirement, method, 2)],
+            },
+        ]);
+        graph.evidence = vec![
+            ((requirement, method), 0),
+            ((requirement, method), 1),
+            ((other_requirement, method), 3),
+        ];
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let result = analysis.slot(5, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let specialized = analysis.slots[result]
+            .atoms
+            .iter()
+            .find_map(|atom| match atom {
+                Atom::Closure(4, context) => Some(*context),
+                _ => None,
+            })
+            .expect("evidence application preserves the specialized closure");
+        for port in [0, 1] {
+            let target = analysis.indices[&(port, specialized)];
+            assert_eq!(
+                analysis.slots[target].atoms,
+                vec![Atom::Free],
+                "all original ports for the selected canonical key receive the argument"
+            );
+        }
+        let unmatched = analysis.indices[&(3, specialized)];
+        assert_eq!(
+            analysis.slots[unmatched].atoms,
+            vec![Atom::Unknown],
+            "the same method under another requirement retains its lexical value"
+        );
     }
 
     #[test]
