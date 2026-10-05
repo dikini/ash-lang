@@ -38,8 +38,9 @@ P-1 is experimental, and does not change `spec/`. The
 extend this experimental contract. The common Batch 0 integration records
 verified argument-carrier and declaration publication evidence in
 [execution](execution.md#current-checkpoint). Public SQLite and basic arena
-programs now have execution receipts on the moving common branch; their
-integration and the selected open-row control cases remain pending.
+programs are verified and integrated into `codex/provider-experiments` at
+`7c97a45` and `53db4eb`, respectively. The selected advanced row and control
+delivery remains in progress on the common branch.
 P-1 tests S-01 first, then the
 remaining cases in [the execution record](execution.md). A successful scalar
 example alone does not establish success for DN-0036.
@@ -82,8 +83,10 @@ The existing Ash proofs cover their stated current-language models. No proof
 of the experimental descriptor, copied-forest correspondence or foreign adapter
 follows from those proofs. Adapter correctness, native ABI facts and safe
 destruction remain foreign assumptions checked by the recorded native tests.
-The open-Delta and per-request captured-control obligations remain pending at
-this checkpoint; the [execution record](execution.md#current-checkpoint)
+The formal open-Delta callback and the separate same-substitution, same-body-row
+witness with different per-request captured-control demands have passing public
+receipts on the moving common branch. These specific observations do not
+complete Batch 3. The [execution record](execution.md#current-checkpoint)
 separates passing source cases, remaining failures and integrated deliveries.
 
 ### Declaration and instance
@@ -802,8 +805,10 @@ The independently validated declaration descriptor contains:
 | Summaries and origins | Actual captures, retained state, operation results, completion requirements and defining/import origins. |
 
 P-1 selects a unary effect-dialect operation for the direct controlled
-`state_of` occurrence. This is a representation target, not implemented public
-authority. Its retained fields are:
+`state_of` occurrence. Batch 1 implements this experimental representation;
+its integrated SQLite session exercises enclosing connection access during
+statement acquisition. This does not introduce current normative Ash authority.
+Its retained fields are:
 
 ```text
 ProviderStateAccess {
@@ -879,7 +884,7 @@ Provider templates retain the exact original owners after those bodies are
 removed. Repeated specialization can give one original occurrence different
 type/row facts, so each copied occurrence also needs a fresh final identity.
 
-The proposed private carriers separate those roles:
+The experimental private carriers separate those roles:
 
 | Carrier | Retained relationship |
 | --- | --- |
@@ -910,17 +915,21 @@ final builder. Final linked validation remains a separate boundary.
 Authenticated abstract and lexical dictionary scopes are required alongside
 concrete implementation selections. Retain their requirement owners, dictionary
 positions, lexical identities, captured binders and enclosing envelopes.
-The current closed imported-selection checkpoint does not establish that
-mapping. Absent source evidence cannot be supplied by implicit specialization
-search or an invented header requirement.
+The earlier closed imported-selection checkpoint did not establish that
+mapping. Batch 1 adds the executed instance bridge; Batch 3 extends its row and
+control cases. Absent source evidence cannot be supplied by implicit
+specialization search or an invented header requirement.
 
 Evidence must cover distinct substitutions and same-argument repeats,
 different answers/rows, alias diamonds, source disposal and allocator churn,
 abstract/lexical scopes and independent mutations of source provenance,
 substitution, plan edges, producer authority, local capabilities and catalog
 indexes. Work refusal must leave no partial publication; fresh retries and
-iterative disposal must preserve ownership. This is a reviewed experimental
-representation direction, not implemented publication or current Ash semantics.
+iterative disposal must preserve ownership. Publication and the ordinary
+instance bridge are implemented experimental mechanisms. Advanced capture
+realization remains subject to the fresh Batch 3 checks recorded in
+[execution](execution.md#current-checkpoint); none of these mechanisms establish
+current Ash semantics.
 
 Native state and effect metadata declare the owned identity argument position
 and every borrowed/retained owner position. Connection has owned position 0 (R);
@@ -959,6 +968,17 @@ Capture moves the owner, handlers, state and pending completion together. Resume
 restores them without reacquisition. Discard runs admitted owned completion
 using the existing cleanup/disposal ordering, extended with the template's
 actual captures and interpreter requirements.
+
+The integrated Batch 1 and Batch 2 tests establish ordinary SQLite and arena
+acquisition, non-owning access, result nesting and release through the public
+driver. Moving Batch 3 tests establish specific resume, discard, handler
+precedence and injected retained-owner cases. Its formal open-row admission,
+finite capture-demand witness and mixed helper case have passing moving-source
+receipts. Connected common verification now passes; the original-branch merge
+and its fresh final gate are recorded separately in execution. These are tested
+observations, not a proof of the P-1 rules. Exact manifest contracts, safe adapter destruction and foreign state
+behavior remain explicit foreign assumptions. No completed Lean correspondence
+proof for generic provider scopes is claimed.
 
 ### Heterogeneous arena contract required after S-01
 
@@ -1068,14 +1088,16 @@ The [plan](plan.md#complete-owner-row-argument-follow-on) records review and
 follow-on evidence. These hashes identify external design evidence, not source
 or runtime results.
 
-Current implementation evidence includes public declaration checking and module
+The earlier declaration/publication evidence includes public declaration checking and module
 publication with mixed owner arguments, imported row payloads and original
 owner signatures. Independent Core and evidence checks reject wrong argument
 tags, unsaturated applications, missing owner records and out-of-scope variables
 or tails. These are checked boundary properties, not a proof of the amendment.
-They do not establish generic provider-scope execution, lifecycle completion,
-captured-control specialization or the open-row callback witness. The execution
-record identifies the tested source and remaining obligations.
+That receipt does not establish generic provider-scope execution, lifecycle
+completion, captured-control specialization or the open-row callback witness.
+The later common deliveries and moving-source callback receipt are recorded in
+[execution](execution.md#current-checkpoint); actual capture specialization
+remains a separate obligation.
 
 Current [row and kind
 rules](../../../spec/static-semantics.md#computation-types-and-effect-rows)
@@ -1535,23 +1557,28 @@ owners, independent complete row signatures on resource/effect/interface owners,
 and inherited-parent row roles in generated evidence. Association authority
 retains original P-1 provider-interface sealing and adds the bounded
 single-resource EffectId association rule; no association-dependent kind
-admission remains. The row-aware
-representation is an implementation decision still open; the semantic
-tag/arity/saturation obligations are not open. The context-free tagged argument
-grammar above is the proposed syntax contract. Parser diagnostics and a concrete
-specification patch remain subsequent implementation preparation.
+admission remains. The experiment implements ordered `TypeArg(Type)` and
+`RowArg(EffectRow)` carriers. Tag, arity and saturation obligations remain as
+selected above. The context-free tagged grammar is the candidate syntax
+contract; implementation and diagnostic evidence is recorded in
+[execution](execution.md#current-checkpoint). A normative specification patch
+belongs to a later product adoption decision.
 
-The positive derivation is a source/type design witness, not a run or accepted
-test. Design and integration reviews found no contradiction in the ordinary
+The derivation above is a source/type design witness. The later public
+open-Delta callback receipt executes its selected topology; it does not prove
+every handler equation. Design and integration reviews found no contradiction in the ordinary
 handler equations. Implementation evidence must still validate every final
 handler-output equation for the closed-input/open-output topology without
 self-containing lacks. Failure is a semantic blocker, not permission to weaken
 row algebra.
 
 Actual capture-dependent close demand `D(sigma,c)` remains conditional until
-actual specialization proves c. No P-1-valid same-sigma/same-epsilon different-c
-source witness is established here. Hidden-answer typing, discard consumption
-and surviving interpreter topology make that a separate mandatory obligation.
+actual specialization proves c. The callback derivation does not establish a
+same-sigma/same-epsilon different-c source witness. The separate finite public
+witness has passing moving-source evidence recorded in
+[execution](execution.md#connected-correction-verification); that observation
+is not a general mathematical proof. Hidden-answer typing, discard consumption
+and surviving interpreter topology make it a distinct obligation.
 The candidate does not claim this callback witness satisfies it, and it does not
 allow unknown higher-order close demands to pass discard checks.
 

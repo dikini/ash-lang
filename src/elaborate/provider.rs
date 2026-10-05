@@ -43,7 +43,6 @@ pub(super) enum Phase {
 /// relation and native postconditions; this context is not a Core certificate.
 #[derive(Debug)]
 pub(super) struct CheckingContext {
-    template: ProviderTemplateId,
     native: crate::types::EffectInstance,
     phase: Phase,
     operations: Box<[OperationId]>,
@@ -334,7 +333,9 @@ struct ProviderHeader {
     input_error: Type,
     completion_error: Type,
     methods: Vec<(MethodId, OperationId)>,
+    #[cfg(test)]
     scope_constructors: [ConstructorId; 2],
+    #[cfg(test)]
     completion_constructors: [ConstructorId; 3],
 }
 
@@ -442,6 +443,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
 }
 
 /// Provisional source clauses. No root or shared output row is fabricated.
+#[cfg(test)]
 #[derive(Debug)]
 struct HandlerSourceDraft {
     id: ProviderTemplateId,
@@ -517,28 +519,22 @@ struct CheckedLifecycleTemplate {
 pub(crate) struct CheckedProviderGroup {
     contracts: std::sync::Arc<CheckedProviderContracts>,
     module: crate::module::ModuleId,
-    declarations: Vec<CheckedProviderDeclaration>,
-}
-
-/// A local defining transaction's authenticated preparation view. It borrows
-/// the exact pending publication and grants no ordinary Core permission.
-pub(super) struct LocalProviderCodeView<'a> {
-    code: &'a CheckedProviderGroup,
-    _publication: &'a PendingEvidencePublication,
-    _facts: crate::resolved::ProviderExternalFacts<'a>,
+    declarations: Vec<Arc<CheckedProviderDeclaration>>,
 }
 
 /// One compiler transaction's checked local originals. Construction validates
 /// their exact pending selections and defining captures; this preparation can
 /// supply source copies but cannot supply final Core execution authority.
 pub(super) struct PreparedLocalProviderCode {
-    code: Arc<CheckedProviderGroup>,
+    module: crate::module::ModuleId,
+    code: Option<Arc<CheckedProviderGroup>>,
+    originals: Vec<Arc<PreparedProviderOriginal>>,
 }
 impl std::fmt::Debug for PreparedLocalProviderCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PreparedLocalProviderCode")
-            .field("module", &self.code.module)
+            .field("module", &self.module)
             .finish()
     }
 }
@@ -549,39 +545,262 @@ impl PreparedLocalProviderCode {
         publication: &PendingEvidencePublication,
         work: &mut TypeWorkBudget,
     ) -> Result<Arc<Self>, TypeError> {
-        let _ = code.local_template_view(code.contracts(), facts, publication, work)?;
+        code.local_template_view(code.contracts(), facts, publication, work)?;
         work.charge(2).map_err(|()| type_resource())?;
         Ok(Arc::new(Self {
-            code: Arc::clone(code),
+            module: code.module,
+            code: Some(Arc::clone(code)),
+            originals: Vec::new(),
         }))
     }
-    pub(super) fn code(&self) -> &Arc<CheckedProviderGroup> {
-        &self.code
+    pub(super) fn pending(
+        module: crate::module::ModuleId,
+        count: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<Self>, TypeError> {
+        work.charge(count.checked_add(1).ok_or_else(type_resource)?)
+            .map_err(|()| type_resource())?;
+        let mut originals = Vec::new();
+        originals
+            .try_reserve_exact(count)
+            .map_err(|_| type_resource())?;
+        Ok(Arc::new(Self {
+            module,
+            code: None,
+            originals,
+        }))
+    }
+    pub(super) fn module(&self) -> crate::module::ModuleId {
+        self.module
+    }
+    pub(super) fn code(&self) -> Result<&Arc<CheckedProviderGroup>, TypeError> {
+        self.code.as_ref().ok_or_else(invalid_state)
+    }
+    pub(super) fn contains(&self, definition: crate::resolved::ResourceDefinitionId) -> bool {
+        self.code.as_ref().is_some_and(|code| {
+            code.declarations
+                .iter()
+                .any(|entry| entry.fact.id == definition)
+        }) || self
+            .originals
+            .iter()
+            .any(|original| original.declaration.fact.id == definition)
+    }
+    pub(super) fn add(
+        &mut self,
+        original: Arc<PreparedProviderOriginal>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        work.charge(
+            self.originals
+                .len()
+                .checked_add(1)
+                .ok_or_else(type_resource)?,
+        )
+        .map_err(|()| type_resource())?;
+        if self.code.is_some()
+            || original.declaration.fact.id.module() != self.module
+            || self.contains(original.declaration.fact.id)
+        {
+            return Err(invalid_state());
+        }
+        self.originals.try_reserve(1).map_err(|_| type_resource())?;
+        self.originals.push(original);
+        Ok(())
+    }
+    pub(super) fn ordered_originals(
+        &self,
+        module: &ResolvedModule,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Vec<Arc<PreparedProviderOriginal>>, TypeError> {
+        if self.code.is_some() || self.originals.len() != module.resources().len() {
+            return Err(invalid_state());
+        }
+        work.charge(self.originals.len())
+            .map_err(|()| type_resource())?;
+        let mut originals = Vec::new();
+        originals
+            .try_reserve_exact(self.originals.len())
+            .map_err(|_| type_resource())?;
+        for definition in module.resources() {
+            work.charge(
+                self.originals
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(type_resource)?,
+            )
+            .map_err(|()| type_resource())?;
+            let original = self
+                .originals
+                .iter()
+                .find(|original| original.declaration.fact.id == definition.id)
+                .ok_or_else(invalid_state)?;
+            originals.push(Arc::clone(original));
+        }
+        Ok(originals)
+    }
+    pub(super) fn complete(
+        &mut self,
+        module: &ResolvedModule,
+        code: Arc<CheckedProviderGroup>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        if self.code.is_some()
+            || code.module != self.module
+            || code.contracts.module != self.module
+            || module.module() != self.module
+            || self.originals.len() != module.resources().len()
+            || code.declarations.len() != module.resources().len()
+            || code.contracts.declarations.len() != module.resources().len()
+        {
+            return Err(invalid_state());
+        }
+        work.charge(
+            module
+                .resources()
+                .len()
+                .checked_mul(
+                    self.originals
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(type_resource)?,
+                )
+                .ok_or_else(type_resource)?,
+        )
+        .map_err(|()| type_resource())?;
+        for ((definition, declaration), contract) in module
+            .resources()
+            .iter()
+            .zip(&code.declarations)
+            .zip(&code.contracts.declarations)
+        {
+            if declaration.fact.id != definition.id
+                || contract.fact.id != definition.id
+                || !self.originals.iter().any(|original| {
+                    Arc::ptr_eq(&original.declaration, declaration)
+                        && Arc::ptr_eq(&original.contract, contract)
+                })
+            {
+                return Err(invalid_state());
+            }
+        }
+        self.code = Some(code);
+        Ok(())
+    }
+    pub(super) fn original_code(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<PreparedProviderCode, TypeError> {
+        work.charge(
+            self.originals
+                .len()
+                .checked_add(1)
+                .ok_or_else(type_resource)?,
+        )
+        .map_err(|()| type_resource())?;
+        if let Some(code) = &self.code {
+            return Ok(PreparedProviderCode::Group(Arc::clone(code)));
+        }
+        let original = self
+            .originals
+            .iter()
+            .find(|original| original.declaration.fact.id == definition)
+            .ok_or_else(invalid_state)?;
+        Ok(PreparedProviderCode::Original(Arc::clone(original)))
     }
     pub(super) fn template_source<'a>(
         &self,
-        code: &'a Arc<CheckedProviderGroup>,
+        code: &'a PreparedProviderCode,
         definition: crate::resolved::ResourceDefinitionId,
         family: NominalTypeId,
         work: &mut TypeWorkBudget,
     ) -> Result<ProviderTemplateSource<'a>, TypeError> {
-        work.charge(1).map_err(|()| type_resource())?;
-        if !Arc::ptr_eq(&self.code, code) {
-            return Err(invalid_state());
+        work.charge(
+            self.originals
+                .len()
+                .checked_add(1)
+                .ok_or_else(type_resource)?,
+        )
+        .map_err(|()| type_resource())?;
+        match code {
+            PreparedProviderCode::Group(code)
+                if self
+                    .code
+                    .as_ref()
+                    .is_some_and(|original| Arc::ptr_eq(original, code)) =>
+            {
+                code.template_source_from_original(definition, family, work)
+            }
+            PreparedProviderCode::Original(code)
+                if self
+                    .originals
+                    .iter()
+                    .any(|original| Arc::ptr_eq(original, code)) =>
+            {
+                code.source(definition, family, work)
+            }
+            _ => Err(invalid_state()),
         }
-        code.template_source_from_original(definition, family, work)
     }
 }
 
-impl LocalProviderCodeView<'_> {
+/// Instance preparation retains immutable original allocations. A private
+/// original remains distinct from the completed group exported by a module.
+pub(crate) enum PreparedProviderCode {
+    Group(Arc<CheckedProviderGroup>),
+    Original(Arc<PreparedProviderOriginal>),
+}
+impl PreparedProviderCode {
+    pub(super) fn imported_template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        match self {
+            Self::Group(code) => {
+                code.imported_template_source(definition, family, certificate, work)
+            }
+            Self::Original(_) => Err(invalid_state()),
+        }
+    }
     pub(super) fn template_source(
         &self,
         definition: crate::resolved::ResourceDefinitionId,
         family: NominalTypeId,
+        registry: &crate::resolved::ResolvedRegistry,
         work: &mut TypeWorkBudget,
     ) -> Result<ProviderTemplateSource<'_>, TypeError> {
-        self.code
-            .template_source_from_original(definition, family, work)
+        match self {
+            Self::Group(code) => code.template_source(definition, family, registry, work),
+            Self::Original(original) => {
+                let mut certificate = None;
+                for (module, candidate) in registry.provider_contracts() {
+                    work.charge(1).map_err(|()| type_resource())?;
+                    if *module == definition.module() && certificate.replace(candidate).is_some() {
+                        return Err(invalid_state());
+                    }
+                }
+                let certificate = certificate.ok_or_else(invalid_state)?;
+                certificate
+                    .authenticate(true, work)
+                    .map_err(super::resolved_build_error)?;
+                work.charge(certificate.declarations.len())
+                    .map_err(|()| type_resource())?;
+                if !certificate
+                    .declarations
+                    .iter()
+                    .any(|contract| Arc::ptr_eq(contract, &original.contract))
+                {
+                    return Err(invalid_state());
+                }
+                authenticate_original_relation(&original.declaration, &original.contract, work)
+                    .map_err(super::resolved_build_error)?;
+                original.source(definition, family, work)
+            }
+        }
     }
 }
 
@@ -600,7 +819,6 @@ pub(super) struct LifecycleTemplateSource<'a> {
     pub(super) original: &'a crate::core::provider::LifecycleOriginal,
     pub(super) program: &'a crate::core::UnvalidatedEffectProgram,
     pub(super) body: NodeId,
-    pub(super) parameter: BinderId,
     pub(super) occurrences: &'a [CheckedGlobalOccurrence],
 }
 
@@ -609,7 +827,7 @@ pub(super) struct LifecycleTemplateSource<'a> {
 /// graph is reachable from this certificate.
 pub(crate) struct CheckedProviderContracts {
     module: crate::module::ModuleId,
-    declarations: Vec<ProviderDeclarationContract>,
+    declarations: Vec<Arc<ProviderDeclarationContract>>,
     sources: Vec<(
         crate::module::ModuleId,
         std::sync::Arc<crate::source::SourceFile>,
@@ -710,8 +928,8 @@ impl CheckedProviderContracts {
 
     /// Reuses only native self-authentication within one caller's admission.
     /// Source origins remain authenticated against this contract's source table.
-    pub(crate) fn authenticate_with_native_memo<'a>(
-        &'a self,
+    pub(crate) fn authenticate_with_native_memo(
+        &self,
         committed: bool,
         authenticated_native_facts: &mut crate::foreign::NativeAuthenticationMemo,
         work: &mut TypeWorkBudget,
@@ -935,6 +1153,29 @@ impl CheckedProviderContracts {
     }
 }
 impl CheckedLifecycleTemplate {
+    fn authenticate_state_associations(&self, work: &mut TypeWorkBudget) -> Result<(), TypeError> {
+        work.charge(self.associations.len())
+            .map_err(|()| type_resource())?;
+        let mut borrowed = Vec::new();
+        borrowed
+            .try_reserve_exact(self.associations.len())
+            .map_err(|_| type_resource())?;
+        borrowed.extend(self.associations.iter().map(|association| {
+            crate::core::provider::DraftStateAssociation {
+                definition: association.definition,
+                family: association.family,
+                parameters: &association.parameters,
+                state: &association.state,
+            }
+        }));
+        crate::core::provider::check_original_state_access_associations(
+            &self.draft.core,
+            &borrowed,
+            work,
+        )
+        .map_err(contract_validation_failure)
+        .map_err(super::resolved_build_error)
+    }
     fn original_authority(&self) -> &crate::core::provider::LifecycleOriginal {
         &self.original
     }
@@ -1175,7 +1416,7 @@ impl CheckedProviderGroup {
         facts: crate::resolved::ProviderExternalFacts<'a>,
         publication: &'a PendingEvidencePublication,
         work: &mut TypeWorkBudget,
-    ) -> Result<LocalProviderCodeView<'a>, TypeError> {
+    ) -> Result<(), TypeError> {
         if !Arc::ptr_eq(&self.contracts, certificate) || self.module != certificate.module {
             return Err(invalid_state());
         }
@@ -1216,11 +1457,7 @@ impl CheckedProviderGroup {
         }
         self.authenticate_code_relations(certificate, work)
             .map_err(super::resolved_build_error)?;
-        Ok(LocalProviderCodeView {
-            code: self,
-            _publication: publication,
-            _facts: facts,
-        })
+        Ok(())
     }
 
     pub(super) fn template_source(
@@ -1233,10 +1470,8 @@ impl CheckedProviderGroup {
         let mut certificate = None;
         for (module, original) in linked.provider_contracts() {
             work.charge(1).map_err(|()| type_resource())?;
-            if *module == self.module {
-                if certificate.replace(original).is_some() {
-                    return Err(invalid_state());
-                }
+            if *module == self.module && certificate.replace(original).is_some() {
+                return Err(invalid_state());
             }
         }
         self.authenticate_code(certificate.ok_or_else(invalid_state)?, work)
@@ -1275,30 +1510,7 @@ impl CheckedProviderGroup {
         if declaration.fact.family != family || definition.module() != self.module {
             return Err(invalid_state());
         }
-        fn lifecycle(
-            entry: &CheckedLifecycleTemplate,
-        ) -> Result<LifecycleTemplateSource<'_>, TypeError> {
-            Ok(LifecycleTemplateSource {
-                original: entry.original_authority(),
-                program: &entry.draft.core,
-                body: entry.draft.body,
-                parameter: entry.draft.parameter,
-                occurrences: &entry
-                    .draft
-                    .staged_externals
-                    .as_ref()
-                    .ok_or_else(invalid_state)?
-                    .occurrences,
-            })
-        }
-        Ok(ProviderTemplateSource {
-            fact: &declaration.fact,
-            acquire: lifecycle(&declaration.acquire)?,
-            finish: lifecycle(&declaration.finish)?,
-            handler: &declaration.handlers.template,
-            handler_occurrences: &declaration.handlers.staged_externals.occurrences,
-            methods: &declaration.methods,
-        })
+        declaration_template_source(declaration, work)
     }
 
     /// Authenticates the separately supplied immutable code against the
@@ -1328,74 +1540,7 @@ impl CheckedProviderGroup {
             return Err(Failure::InvalidState);
         }
         for (code, contract) in self.declarations.iter().zip(&certificate.declarations) {
-            if !Arc::ptr_eq(&code.fact, &contract.fact)
-                || !Arc::ptr_eq(&code.provider_application, &contract.provider_application)
-                || !Arc::ptr_eq(&code.methods, &contract.methods)
-                || code.public != contract.public
-            {
-                return Err(Failure::InvalidState);
-            }
-            for (entry, proof) in [
-                (&code.acquire, &contract.acquire),
-                (&code.finish, &contract.finish),
-            ] {
-                work.charge(entry.draft.formal_parameters.len())
-                    .map_err(|()| Failure::TypeResource)?;
-                if entry.draft.id != proof.template
-                    || entry.draft.phase != proof.phase
-                    || entry.draft.parameter != proof.parameter
-                    || entry.draft.hidden_answer != proof.hidden_answer
-                    || entry.draft.hidden_row != proof.hidden_row
-                    || !Arc::ptr_eq(&entry.parameter_origin, &proof.parameter_origin)
-                    || !Arc::ptr_eq(&entry.canonical, &proof.canonical)
-                    || !Arc::ptr_eq(&entry.externals, &proof.externals)
-                    || entry.draft.formal_parameters.len() != proof.formals.len()
-                    || !entry
-                        .draft
-                        .formal_parameters
-                        .iter()
-                        .zip(&proof.formals)
-                        .all(|((source, actual, _), expected)| (*source, *actual) == *expected)
-                {
-                    return Err(Failure::InvalidState);
-                }
-                entry.authenticate_contract(&contract.fact, work).map_err(
-                    |failure| match failure {
-                        LifecycleDraftCheckError::Resource => Failure::TypeResource,
-                        LifecycleDraftCheckError::Core(error) => contract_validation_failure(error),
-                        LifecycleDraftCheckError::InvalidEntry => Failure::InvalidState,
-                    },
-                )?;
-            }
-            if !code
-                .handlers
-                .template
-                .authenticates_certificate(&contract.handlers)
-            {
-                return Err(Failure::InvalidState);
-            }
-            let occurrences = &code.handlers.staged_externals.occurrences;
-            work.charge(occurrences.len())
-                .map_err(|()| Failure::TypeResource)?;
-            if occurrences
-                .iter()
-                .any(|occurrence| occurrence.node.is_none())
-            {
-                return Err(Failure::InvalidState);
-            }
-            code.handlers
-                .template
-                .authenticate_contract(
-                    &contract.fact,
-                    occurrences.iter().map(|occurrence| {
-                        (
-                            occurrence.node.expect("checked above"),
-                            &occurrence.occurrence,
-                        )
-                    }),
-                    work,
-                )
-                .map_err(contract_validation_failure)?;
+            authenticate_original_relation(code, contract, work)?;
         }
         Ok(())
     }
@@ -1404,26 +1549,6 @@ impl CheckedProviderGroup {
     }
     pub(crate) fn module(&self) -> crate::module::ModuleId {
         self.module
-    }
-
-    /// Borrows canonical body-free declarations from the independently checked
-    /// immutable owner. A copied header never constructs this owner.
-    pub(crate) fn resource_contracts(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &str,
-            bool,
-            &std::sync::Arc<crate::resolved::ResourceTypeFact>,
-        ),
-    > {
-        self.declarations.iter().map(|declaration| {
-            (
-                declaration.spelling.as_str(),
-                declaration.public,
-                &declaration.fact,
-            )
-        })
     }
 }
 
@@ -1434,6 +1559,165 @@ impl std::fmt::Debug for CheckedProviderGroup {
             .field("module", &self.module)
             .field("declarations", &self.declarations.len())
             .finish_non_exhaustive()
+    }
+}
+
+fn declaration_template_source<'a>(
+    declaration: &'a CheckedProviderDeclaration,
+    work: &mut TypeWorkBudget,
+) -> Result<ProviderTemplateSource<'a>, TypeError> {
+    fn lifecycle<'a>(
+        entry: &'a CheckedLifecycleTemplate,
+        work: &mut TypeWorkBudget,
+    ) -> Result<LifecycleTemplateSource<'a>, TypeError> {
+        entry.authenticate_state_associations(work)?;
+        Ok(LifecycleTemplateSource {
+            original: entry.original_authority(),
+            program: &entry.draft.core,
+            body: entry.draft.body,
+            occurrences: &entry
+                .draft
+                .staged_externals
+                .as_ref()
+                .ok_or_else(invalid_state)?
+                .occurrences,
+        })
+    }
+    Ok(ProviderTemplateSource {
+        fact: &declaration.fact,
+        acquire: lifecycle(&declaration.acquire, work)?,
+        finish: lifecycle(&declaration.finish, work)?,
+        handler: &declaration.handlers.template,
+        handler_occurrences: &declaration.handlers.staged_externals.occurrences,
+        methods: &declaration.methods,
+    })
+}
+
+fn authenticate_original_relation(
+    code: &CheckedProviderDeclaration,
+    contract: &ProviderDeclarationContract,
+    work: &mut TypeWorkBudget,
+) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+    use crate::resolved::ResolvedBuildFailure as Failure;
+    if !Arc::ptr_eq(&code.fact, &contract.fact)
+        || !Arc::ptr_eq(&code.provider_application, &contract.provider_application)
+        || !Arc::ptr_eq(&code.methods, &contract.methods)
+        || code.public != contract.public
+    {
+        return Err(Failure::InvalidState);
+    }
+    for (entry, proof) in [
+        (&code.acquire, &contract.acquire),
+        (&code.finish, &contract.finish),
+    ] {
+        work.charge(entry.draft.formal_parameters.len())
+            .map_err(|()| Failure::TypeResource)?;
+        if entry.draft.id != proof.template
+            || entry.draft.phase != proof.phase
+            || entry.draft.parameter != proof.parameter
+            || entry.draft.hidden_answer != proof.hidden_answer
+            || entry.draft.hidden_row != proof.hidden_row
+            || !Arc::ptr_eq(&entry.parameter_origin, &proof.parameter_origin)
+            || !Arc::ptr_eq(&entry.canonical, &proof.canonical)
+            || !Arc::ptr_eq(&entry.externals, &proof.externals)
+            || entry.draft.formal_parameters.len() != proof.formals.len()
+            || !entry
+                .draft
+                .formal_parameters
+                .iter()
+                .zip(&proof.formals)
+                .all(|((source, actual, _), expected)| (*source, *actual) == *expected)
+        {
+            return Err(Failure::InvalidState);
+        }
+        entry
+            .authenticate_contract(&contract.fact, work)
+            .map_err(|failure| match failure {
+                LifecycleDraftCheckError::Resource => Failure::TypeResource,
+                LifecycleDraftCheckError::Core(error) => contract_validation_failure(error),
+                LifecycleDraftCheckError::InvalidEntry => Failure::InvalidState,
+            })?;
+    }
+    if !code
+        .handlers
+        .template
+        .authenticates_certificate(&contract.handlers)
+    {
+        return Err(Failure::InvalidState);
+    }
+    let occurrences = &code.handlers.staged_externals.occurrences;
+    work.charge(occurrences.len())
+        .map_err(|()| Failure::TypeResource)?;
+    if occurrences
+        .iter()
+        .any(|occurrence| occurrence.node.is_none())
+    {
+        return Err(Failure::InvalidState);
+    }
+    code.handlers
+        .template
+        .authenticate_contract(
+            &contract.fact,
+            occurrences.iter().map(|occurrence| {
+                (
+                    occurrence.node.expect("checked above"),
+                    &occurrence.occurrence,
+                )
+            }),
+            work,
+        )
+        .map_err(contract_validation_failure)?;
+    Ok(())
+}
+
+impl PreparedProviderOriginal {
+    fn source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        if self.declaration.fact.id != definition || self.declaration.fact.family != family {
+            return Err(invalid_state());
+        }
+        declaration_template_source(&self.declaration, work)
+    }
+    pub(super) fn authenticate_pending(
+        &self,
+        facts: crate::resolved::ProviderExternalFacts<'_>,
+        publication: &PendingEvidencePublication,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        for (entry, proof) in [
+            (&self.declaration.acquire, &self.contract.acquire),
+            (&self.declaration.finish, &self.contract.finish),
+        ] {
+            entry
+                .externals
+                .authenticate_pending(
+                    publication,
+                    facts,
+                    &proof.canonical,
+                    self.declaration.fact.id.module(),
+                    work,
+                )
+                .map_err(contract_validation_failure)
+                .map_err(super::resolved_build_error)?;
+        }
+        self.declaration
+            .handlers
+            .template
+            .authenticate_pending(
+                publication,
+                facts,
+                self.contract.handlers.canonical_registry(),
+                self.declaration.fact.id.module(),
+                work,
+            )
+            .map_err(contract_validation_failure)
+            .map_err(super::resolved_build_error)?;
+        authenticate_original_relation(&self.declaration, &self.contract, work)
+            .map_err(super::resolved_build_error)
     }
 }
 
@@ -1448,6 +1732,49 @@ pub(super) fn check_module_provider_group(
     if module.resources().is_empty() {
         return Ok(None);
     }
+    let preparation = prepare_module_provider_originals(
+        module,
+        defining,
+        type_work,
+        coverage_work,
+        constraint_work,
+    )?;
+    let mut components = Vec::new();
+    type_work
+        .charge(module.resources().len())
+        .map_err(|()| type_resource())?;
+    components
+        .try_reserve_exact(module.resources().len())
+        .map_err(|_| type_resource())?;
+    for index in 0..module.resources().len() {
+        components.push(check_module_provider_original(
+            module,
+            &preparation,
+            index,
+            defining,
+            publication,
+            type_work,
+            coverage_work,
+            constraint_work,
+        )?);
+    }
+    finish_module_provider_originals(module, &components, type_work).map(Some)
+}
+
+/// Private original preparation; no incomplete source group can be exported.
+pub(super) struct ModuleProviderOriginals {
+    registry: Arc<crate::resolved::ResolvedRegistry>,
+    headers: Vec<ProviderHeader>,
+    native_authentication: crate::foreign::NativeAuthenticationSession,
+}
+
+pub(super) fn prepare_module_provider_originals(
+    module: &ResolvedModule,
+    defining: Option<&Arc<crate::resolved::ProviderDefiningFacts>>,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut super::UsefulnessBudget,
+    constraint_work: &mut super::InterfaceConstraintBudget,
+) -> Result<ModuleProviderOriginals, TypeError> {
     // Every declaration in this group borrows the same immutable module. Share
     // its authenticated source inventory and template registry; each compiler
     // context and each final Core admission still checks its own occurrence.
@@ -1460,13 +1787,6 @@ pub(super) fn check_module_provider_group(
             .provider_template_view(module.imported_facts(), type_work)
             .map_err(super::resolved_build_error)?,
     );
-    let mut declarations = Vec::new();
-    type_work
-        .charge(module.resources().len())
-        .map_err(|()| type_resource())?;
-    declarations
-        .try_reserve_exact(module.resources().len())
-        .map_err(|_| type_resource())?;
     type_work
         .charge(module.resources().len())
         .map_err(|()| type_resource())?;
@@ -1485,244 +1805,303 @@ pub(super) fn check_module_provider_group(
             |compiler| compiler.check_provider_header(module, definition),
         )?);
     }
-    // One source-group admission may authenticate the same immutable native
-    // declaration through several phase registries. The session is dropped at
-    // this boundary; independent publication and final Core start fresh.
-    let native_authentication = crate::foreign::NativeAuthenticationSession::default();
-    for (definition, header) in module.resources().iter().zip(&headers) {
-        let mut acquire = with_module_provider_compiler(
-            module,
-            &registry,
-            defining,
-            type_work,
-            coverage_work,
-            constraint_work,
-            |compiler| {
-                compiler
-                    .type_work
-                    .charge(headers.len())
-                    .map_err(|()| type_resource())?;
-                let mut associations = Vec::new();
-                associations
-                    .try_reserve_exact(headers.len())
-                    .map_err(|_| type_resource())?;
-                for header in &headers {
-                    associations.push(
-                        header
-                            .state_association
-                            .clone_with_budget(&mut compiler.type_work)?,
-                    );
-                }
-                compiler.compile_provider_lifecycle_with_externals_and_associations(
-                    definition,
-                    header,
-                    Phase::Acquire,
-                    module.imported_facts(),
-                    associations,
-                )
-            },
-        )?
-        .admit_from_defining_module_with_native_memo(
-            module,
-            Some(&native_authentication),
-            type_work,
-        )
-        .map_err(module_provider_failure)?;
+    Ok(ModuleProviderOriginals {
+        registry,
+        headers,
+        native_authentication: crate::foreign::NativeAuthenticationSession::default(),
+    })
+}
 
-        let mut finish = with_module_provider_compiler(
-            module,
-            &registry,
-            defining,
-            type_work,
-            coverage_work,
-            constraint_work,
-            |compiler| {
-                compiler
-                    .type_work
-                    .charge(headers.len())
-                    .map_err(|()| type_resource())?;
-                let mut associations = Vec::new();
-                associations
-                    .try_reserve_exact(headers.len())
-                    .map_err(|_| type_resource())?;
-                for header in &headers {
-                    associations.push(
-                        header
-                            .state_association
-                            .clone_with_budget(&mut compiler.type_work)?,
-                    );
-                }
-                compiler.compile_provider_lifecycle_with_externals_and_associations(
-                    definition,
-                    header,
-                    Phase::Finish,
-                    module.imported_facts(),
-                    associations,
-                )
-            },
-        )?
-        .admit_from_defining_module_with_native_memo(
-            module,
-            Some(&native_authentication),
-            type_work,
-        )
-        .map_err(module_provider_failure)?;
+/// One checked original and its immutable certificate. Readiness permits only
+/// source preparation; final Core requires membership in the complete group.
+pub(crate) struct PreparedProviderOriginal {
+    declaration: Arc<CheckedProviderDeclaration>,
+    contract: Arc<ProviderDeclarationContract>,
+}
 
-        let handler = with_module_provider_compiler(
-            module,
-            &registry,
-            defining,
-            type_work,
-            coverage_work,
-            constraint_work,
-            |compiler| {
-                compiler.compile_provider_handler(definition, header, module.imported_facts())
-            },
-        )?;
-        type_work
-            .charge(
-                module
-                    .defining_sources()
-                    .len()
-                    .checked_mul(2)
-                    .ok_or_else(type_resource)?,
+#[allow(clippy::too_many_arguments)]
+pub(super) fn check_module_provider_original(
+    module: &ResolvedModule,
+    preparation: &ModuleProviderOriginals,
+    index: usize,
+    defining: Option<&Arc<crate::resolved::ProviderDefiningFacts>>,
+    publication: &mut PendingEvidencePublication,
+    type_work: &mut TypeWorkBudget,
+    coverage_work: &mut super::UsefulnessBudget,
+    constraint_work: &mut super::InterfaceConstraintBudget,
+) -> Result<Arc<PreparedProviderOriginal>, TypeError> {
+    let definition = module.resources().get(index).ok_or_else(invalid_state)?;
+    let header = preparation.headers.get(index).ok_or_else(invalid_state)?;
+    let mut acquire = with_module_provider_compiler(
+        module,
+        &preparation.registry,
+        defining,
+        type_work,
+        coverage_work,
+        constraint_work,
+        |compiler| {
+            compiler
+                .type_work
+                .charge(preparation.headers.len())
+                .map_err(|()| type_resource())?;
+            let mut associations = Vec::new();
+            associations
+                .try_reserve_exact(preparation.headers.len())
+                .map_err(|_| type_resource())?;
+            for header in &preparation.headers {
+                associations.push(
+                    header
+                        .state_association
+                        .clone_with_budget(&mut compiler.type_work)?,
+                );
+            }
+            compiler.compile_provider_lifecycle_with_externals_and_associations(
+                definition,
+                header,
+                Phase::Acquire,
+                module.imported_facts(),
+                associations,
             )
-            .map_err(|()| type_resource())?;
-        let mut sources = Vec::new();
-        let mut module_sources = Vec::new();
-        sources
-            .try_reserve_exact(module.defining_sources().len())
-            .map_err(|_| type_resource())?;
-        module_sources
-            .try_reserve_exact(module.defining_sources().len())
-            .map_err(|_| type_resource())?;
-        for (id, source) in module.defining_sources() {
-            sources.push(&**source);
-            module_sources.push((*id, source.id()));
-        }
-        let mut handlers = handler
-            .admit_with_native_memo(
-                module,
-                &sources,
-                &module_sources,
-                Some(&native_authentication),
-                type_work,
+        },
+    )?
+    .admit_from_defining_module_with_native_memo(
+        module,
+        Some(&preparation.native_authentication),
+        type_work,
+    )
+    .map_err(module_provider_failure)?;
+
+    let mut finish = with_module_provider_compiler(
+        module,
+        &preparation.registry,
+        defining,
+        type_work,
+        coverage_work,
+        constraint_work,
+        |compiler| {
+            compiler
+                .type_work
+                .charge(preparation.headers.len())
+                .map_err(|()| type_resource())?;
+            let mut associations = Vec::new();
+            associations
+                .try_reserve_exact(preparation.headers.len())
+                .map_err(|_| type_resource())?;
+            for header in &preparation.headers {
+                associations.push(
+                    header
+                        .state_association
+                        .clone_with_budget(&mut compiler.type_work)?,
+                );
+            }
+            compiler.compile_provider_lifecycle_with_externals_and_associations(
+                definition,
+                header,
+                Phase::Finish,
+                module.imported_facts(),
+                associations,
             )
-            .map_err(module_provider_failure)?;
+        },
+    )?
+    .admit_from_defining_module_with_native_memo(
+        module,
+        Some(&preparation.native_authentication),
+        type_work,
+    )
+    .map_err(module_provider_failure)?;
 
-        let fact = Arc::new(
-            crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, type_work)
-                .map_err(|()| type_resource())?,
-        );
-        for staged in [
-            acquire
-                .draft
-                .staged_externals
-                .as_mut()
-                .ok_or_else(invalid_state)?,
-            finish
-                .draft
-                .staged_externals
-                .as_mut()
-                .ok_or_else(invalid_state)?,
-            &mut handlers.staged_externals,
-        ] {
-            publication
-                .append(std::mem::take(&mut staged.publication), constraint_work)
-                .map_err(|failure| selection_failure(failure, None))?;
-        }
-        type_work
-            .charge(definition.spelling.len())
-            .map_err(|()| type_resource())?;
-        let mut spelling = String::new();
-        spelling
-            .try_reserve_exact(definition.spelling.len())
-            .map_err(|_| type_resource())?;
-        spelling.push_str(&definition.spelling);
-        type_work
-            .charge(header.methods.len())
-            .map_err(|()| type_resource())?;
-        let mut methods = Vec::new();
-        methods
-            .try_reserve_exact(header.methods.len())
-            .map_err(|_| type_resource())?;
-        methods.extend_from_slice(&header.methods);
-        declarations.push(CheckedProviderDeclaration {
-            methods: Arc::from(methods.into_boxed_slice()),
-            provider_application: Arc::new(
-                header
-                    .provider_application
-                    .clone_with_budget(type_work)
-                    .map_err(|()| type_resource())?,
-            ),
-            spelling,
-            public: definition.public,
-            fact,
-            acquire,
-            finish,
-            handlers,
-        });
-    }
-
+    let handler = with_module_provider_compiler(
+        module,
+        &preparation.registry,
+        defining,
+        type_work,
+        coverage_work,
+        constraint_work,
+        |compiler| compiler.compile_provider_handler(definition, header, module.imported_facts()),
+    )?;
     type_work
-        .charge(declarations.len())
+        .charge(
+            module
+                .defining_sources()
+                .len()
+                .checked_mul(2)
+                .ok_or_else(type_resource)?,
+        )
         .map_err(|()| type_resource())?;
-    let mut contracts = Vec::new();
-    contracts
-        .try_reserve_exact(declarations.len())
+    let mut sources = Vec::new();
+    let mut module_sources = Vec::new();
+    sources
+        .try_reserve_exact(module.defining_sources().len())
         .map_err(|_| type_resource())?;
-    for declaration in &declarations {
-        let acquire = declaration
-            .acquire
-            .contract_certificate(&declaration.fact, type_work)
-            .map_err(module_provider_failure)?;
-        let finish = declaration
-            .finish
-            .contract_certificate(&declaration.fact, type_work)
-            .map_err(module_provider_failure)?;
-        let occurrences = &declaration.handlers.staged_externals.occurrences;
-        type_work
-            .charge(occurrences.len())
-            .map_err(|()| type_resource())?;
-        if occurrences
-            .iter()
-            .any(|occurrence| occurrence.node.is_none())
+    module_sources
+        .try_reserve_exact(module.defining_sources().len())
+        .map_err(|_| type_resource())?;
+    for (id, source) in module.defining_sources() {
+        sources.push(&**source);
+        module_sources.push((*id, source.id()));
+    }
+    let mut handlers = handler
+        .admit_with_native_memo(
+            module,
+            &sources,
+            &module_sources,
+            Some(&preparation.native_authentication),
+            type_work,
+        )
+        .map_err(module_provider_failure)?;
+
+    let fact = Arc::new(
+        crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, type_work)
+            .map_err(|()| type_resource())?,
+    );
+    for staged in [
+        acquire
+            .draft
+            .staged_externals
+            .as_mut()
+            .ok_or_else(invalid_state)?,
+        finish
+            .draft
+            .staged_externals
+            .as_mut()
+            .ok_or_else(invalid_state)?,
+        &mut handlers.staged_externals,
+    ] {
+        publication
+            .append(std::mem::take(&mut staged.publication), constraint_work)
+            .map_err(|failure| selection_failure(failure, None))?;
+    }
+    type_work
+        .charge(definition.spelling.len())
+        .map_err(|()| type_resource())?;
+    let mut spelling = String::new();
+    spelling
+        .try_reserve_exact(definition.spelling.len())
+        .map_err(|_| type_resource())?;
+    spelling.push_str(&definition.spelling);
+    type_work
+        .charge(header.methods.len())
+        .map_err(|()| type_resource())?;
+    let mut methods = Vec::new();
+    methods
+        .try_reserve_exact(header.methods.len())
+        .map_err(|_| type_resource())?;
+    methods.extend_from_slice(&header.methods);
+    type_work.charge(1).map_err(|()| type_resource())?;
+    let declaration = Arc::new(CheckedProviderDeclaration {
+        methods: Arc::from(methods.into_boxed_slice()),
+        provider_application: Arc::new(
+            header
+                .provider_application
+                .clone_with_budget(type_work)
+                .map_err(|()| type_resource())?,
+        ),
+        spelling,
+        public: definition.public,
+        fact,
+        acquire,
+        finish,
+        handlers,
+    });
+    let acquire = declaration
+        .acquire
+        .contract_certificate(&declaration.fact, type_work)
+        .map_err(module_provider_failure)?;
+    let finish = declaration
+        .finish
+        .contract_certificate(&declaration.fact, type_work)
+        .map_err(module_provider_failure)?;
+    let occurrences = &declaration.handlers.staged_externals.occurrences;
+    type_work
+        .charge(occurrences.len())
+        .map_err(|()| type_resource())?;
+    if occurrences
+        .iter()
+        .any(|occurrence| occurrence.node.is_none())
+    {
+        return Err(invalid_state());
+    }
+    declaration
+        .handlers
+        .template
+        .authenticate_contract(
+            &declaration.fact,
+            occurrences.iter().map(|occurrence| {
+                (
+                    occurrence.node.expect("checked above"),
+                    &occurrence.occurrence,
+                )
+            }),
+            type_work,
+        )
+        .map_err(|failure| module_provider_failure(LifecycleDraftCheckError::Core(failure)))?;
+    type_work
+        .charge(declaration.spelling.len())
+        .map_err(|()| type_resource())?;
+    let mut spelling = String::new();
+    spelling
+        .try_reserve_exact(declaration.spelling.len())
+        .map_err(|_| type_resource())?;
+    spelling.push_str(&declaration.spelling);
+    type_work.charge(1).map_err(|()| type_resource())?;
+    let contract = Arc::new(ProviderDeclarationContract {
+        methods: Arc::clone(&declaration.methods),
+        provider_application: Arc::clone(&declaration.provider_application),
+        spelling,
+        public: declaration.public,
+        fact: Arc::clone(&declaration.fact),
+        acquire,
+        finish,
+        handlers: declaration.handlers.template.contract_certificate(),
+    });
+    type_work.charge(1).map_err(|()| type_resource())?;
+    let component = Arc::new(PreparedProviderOriginal {
+        declaration,
+        contract,
+    });
+    Ok(component)
+}
+
+pub(super) fn finish_module_provider_originals(
+    module: &ResolvedModule,
+    components: &[Arc<PreparedProviderOriginal>],
+    type_work: &mut TypeWorkBudget,
+) -> Result<Arc<CheckedProviderGroup>, TypeError> {
+    if components.len() != module.resources().len() {
+        return Err(invalid_state());
+    }
+    type_work
+        .charge(components.len().checked_mul(2).ok_or_else(type_resource)?)
+        .map_err(|()| type_resource())?;
+    let mut declarations = Vec::new();
+    let mut contracts = Vec::new();
+    declarations
+        .try_reserve_exact(components.len())
+        .map_err(|_| type_resource())?;
+    contracts
+        .try_reserve_exact(components.len())
+        .map_err(|_| type_resource())?;
+    for (definition, component) in module.resources().iter().zip(components) {
+        type_work.charge(1).map_err(|()| type_resource())?;
+        if definition.id != component.declaration.fact.id
+            || definition.id != component.contract.fact.id
         {
             return Err(invalid_state());
         }
-        declaration
-            .handlers
-            .template
-            .authenticate_contract(
-                &declaration.fact,
-                occurrences.iter().map(|occurrence| {
-                    (
-                        occurrence.node.expect("checked above"),
-                        &occurrence.occurrence,
-                    )
-                }),
-                type_work,
+        if !Arc::ptr_eq(&component.declaration.fact, &component.contract.fact)
+            || !Arc::ptr_eq(
+                &component.declaration.provider_application,
+                &component.contract.provider_application,
             )
-            .map_err(|failure| module_provider_failure(LifecycleDraftCheckError::Core(failure)))?;
-        type_work
-            .charge(declaration.spelling.len())
-            .map_err(|()| type_resource())?;
-        let mut spelling = String::new();
-        spelling
-            .try_reserve_exact(declaration.spelling.len())
-            .map_err(|_| type_resource())?;
-        spelling.push_str(&declaration.spelling);
-        contracts.push(ProviderDeclarationContract {
-            methods: Arc::clone(&declaration.methods),
-            provider_application: Arc::clone(&declaration.provider_application),
-            spelling,
-            public: declaration.public,
-            fact: Arc::clone(&declaration.fact),
-            acquire,
-            finish,
-            handlers: declaration.handlers.template.contract_certificate(),
-        });
+            || !Arc::ptr_eq(&component.declaration.methods, &component.contract.methods)
+            || component.declaration.public != component.contract.public
+        {
+            return Err(invalid_state());
+        }
+        declarations.push(Arc::clone(&component.declaration));
+        contracts.push(Arc::clone(&component.contract));
     }
+
     type_work
         .charge(module.defining_sources().len())
         .map_err(|()| type_resource())?;
@@ -1741,11 +2120,11 @@ pub(super) fn check_module_provider_group(
         declarations: contracts,
         sources,
     });
-    Ok(Some(Arc::new(CheckedProviderGroup {
+    Ok(Arc::new(CheckedProviderGroup {
         contracts,
         module: module.module(),
         declarations,
-    })))
+    }))
 }
 
 fn module_provider_failure(failure: LifecycleDraftCheckError) -> TypeError {
@@ -1837,6 +2216,7 @@ enum LifecycleDraftCheckError {
 }
 
 impl LifecycleTemplateDraft {
+    #[cfg(test)]
     fn check_flow(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -1845,6 +2225,7 @@ impl LifecycleTemplateDraft {
         self.check_flow_with_associations(definition, &[], work)
     }
 
+    #[cfg(test)]
     fn check_flow_with_associations(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -2032,6 +2413,7 @@ impl CoreElaborator<EffectOperationFamily> {
     /// Source checking only. The shared continuation/direct-demand row equation
     /// is retained separately until its specialization contract is established.
     /// This draft cannot enter the template table or confer Core authority.
+    #[cfg(test)]
     fn check_provider_handler_source(
         mut self,
         definition: &ResolvedResourceDefinition,
@@ -2058,6 +2440,131 @@ impl CoreElaborator<EffectOperationFamily> {
             #[cfg(test)]
             compile_work: self.type_work.used(),
         })
+    }
+
+    fn provider_original_row_contexts(
+        &mut self,
+        definition: &ResolvedResourceDefinition,
+    ) -> Result<Vec<HashMap<TypeVariableId, EffectRow>>, TypeError> {
+        // The first parameter is the nominal identity. Preserve the closed
+        // provider path without another metadata traversal or allocation.
+        if definition.parameters.len() <= 1 {
+            return Ok(Vec::new());
+        }
+        self.type_work
+            .charge(definition.parameters.len() - 1)
+            .map_err(|()| type_resource())?;
+        let row_count = definition.parameters[1..]
+            .iter()
+            .filter(|parameter| parameter.kind == Kind::EffectRow)
+            .count();
+        if row_count == 0 {
+            return Ok(Vec::new());
+        }
+        let mut own_rows = HashSet::new();
+        self.type_work
+            .charge(definition.parameters.len() - 1)
+            .map_err(|()| type_resource())?;
+        own_rows
+            .try_reserve(row_count)
+            .map_err(|_| type_resource())?;
+        for parameter in &definition.parameters[1..] {
+            if parameter.kind == Kind::EffectRow && !own_rows.insert(parameter.id) {
+                return Err(invalid_state());
+            }
+        }
+        let mut contexts = Vec::new();
+        for ty in [
+            &definition.input.ty,
+            &definition.state.ty,
+            &definition.result.ty,
+        ] {
+            self.retain_provider_original_row_context(
+                ty,
+                &own_rows,
+                &mut contexts,
+                definition.span,
+            )?;
+        }
+        let count = self
+            .registry
+            .effect(definition.provided.instance.effect())
+            .ok_or_else(invalid_state)?
+            .operations
+            .len();
+        self.type_work.charge(count).map_err(|()| type_resource())?;
+        for index in 0..count {
+            let operation = self
+                .registry
+                .effect(definition.provided.instance.effect())
+                .ok_or_else(invalid_state)?
+                .operations
+                .get(index)
+                .ok_or_else(invalid_state)?
+                .id;
+            // The canonical operation signature authenticates the effect,
+            // ordinal and complete owner substitution. Its outer arrow is pure.
+            let (domain, result) = self.operation_signature(
+                &definition.provided.instance,
+                operation,
+                definition.span,
+            )?;
+            let domain = IterativeTypeOwner::new(domain);
+            let result = IterativeTypeOwner::new(result);
+            self.retain_provider_original_row_context(
+                &domain,
+                &own_rows,
+                &mut contexts,
+                definition.span,
+            )?;
+            self.retain_provider_original_row_context(
+                &result,
+                &own_rows,
+                &mut contexts,
+                definition.span,
+            )?;
+        }
+        Ok(contexts)
+    }
+
+    fn retain_provider_original_row_context(
+        &mut self,
+        ty: &Type,
+        own_rows: &HashSet<TypeVariableId>,
+        contexts: &mut Vec<HashMap<TypeVariableId, EffectRow>>,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let mut collected = HashMap::new();
+        self.qualify_scheme_row_replacements(ty, &HashMap::new(), &mut collected, true)?;
+        let mut own = HashMap::new();
+        let mut free = HashMap::new();
+        self.type_work
+            .charge(collected.len())
+            .map_err(|()| type_resource())?;
+        for (binder, row) in collected {
+            let destination = if own_rows.contains(&binder) {
+                &mut own
+            } else {
+                &mut free
+            };
+            destination.try_reserve(1).map_err(|_| type_resource())?;
+            destination.insert(binder, row);
+        }
+        if !crate::types::rigid_row_requirements_entailed_with_budget(
+            &free,
+            &self.expected_scheme_rows,
+            &mut self.type_work,
+        )
+        .map_err(|()| type_resource())?
+        {
+            return Err(row_exclusion_error(span, Some(span)));
+        }
+        if !own.is_empty() {
+            self.type_work.charge(1).map_err(|()| type_resource())?;
+            contexts.try_reserve(1).map_err(|_| type_resource())?;
+            contexts.push(own);
+        }
+        Ok(())
     }
 
     fn prepare_provider_handler_source(
@@ -2107,7 +2614,6 @@ impl CoreElaborator<EffectOperationFamily> {
         );
         self.provider_occurrence_template = Some(id);
         self.provider_context = Some(CheckingContext {
-            template: id,
             native,
             phase: Phase::Handler,
             operations: operations.into_boxed_slice(),
@@ -2127,14 +2633,25 @@ impl CoreElaborator<EffectOperationFamily> {
             self.builder
                 .resolved_binder(state.id, state_type, state.origin.clone())?;
         let checkpoint = self.builder.type_rewrite_checkpoint();
-        let (handler, direct_demands, clauses) = self.check_effect_clauses(
+        let original_rows = self.provider_original_row_contexts(definition)?;
+        let row_depth = self.expected_scheme_rows.len();
+        self.type_work
+            .charge(original_rows.len())
+            .map_err(|()| type_resource())?;
+        self.expected_scheme_rows
+            .try_reserve(original_rows.len())
+            .map_err(|_| type_resource())?;
+        self.expected_scheme_rows.extend(original_rows);
+        let checked = self.check_effect_clauses(
             &definition.provided.instance,
             &definition.handlers,
             definition.span,
             &mut context,
             &Type::Variable(hidden_answer),
             EffectRow::empty(),
-        )?;
+        );
+        self.expected_scheme_rows.truncate(row_depth);
+        let (handler, direct_demands, clauses) = checked?;
         self.close_evidence_obligations(marker)?;
         self.zonk_builder_types_since(Some(checkpoint), false)
             .map_err(TypeError::Internal)?;
@@ -2240,6 +2757,7 @@ impl CoreElaborator<EffectOperationFamily> {
         })
     }
 
+    #[cfg(test)]
     fn compile_provider_lifecycle(
         &mut self,
         definition: &ResolvedResourceDefinition,
@@ -2249,6 +2767,7 @@ impl CoreElaborator<EffectOperationFamily> {
         self.compile_provider_lifecycle_with_associations(definition, header, phase, Vec::new())
     }
 
+    #[cfg(test)]
     fn compile_provider_lifecycle_with_externals(
         &mut self,
         definition: &ResolvedResourceDefinition,
@@ -2282,6 +2801,7 @@ impl CoreElaborator<EffectOperationFamily> {
         )
     }
 
+    #[cfg(test)]
     fn compile_provider_lifecycle_with_associations(
         &mut self,
         definition: &ResolvedResourceDefinition,
@@ -2352,7 +2872,6 @@ impl CoreElaborator<EffectOperationFamily> {
         self.type_work.charge(1).map_err(|()| type_resource())?;
         self.provider_occurrence_template = Some(id);
         self.provider_context = Some(CheckingContext {
-            template: id,
             native: clone_effect_instance_with_budget(
                 &definition.interpreted.instance,
                 &mut self.type_work,
@@ -2374,13 +2893,24 @@ impl CoreElaborator<EffectOperationFamily> {
         let parameter_node =
             self.builder
                 .resolved_binder(parameter.id, parameter_type, parameter.origin.clone())?;
-        let body = TypedNodeOwner::new(self.elaborate_expression_with_context(
+        let original_rows = self.provider_original_row_contexts(definition)?;
+        let row_depth = self.expected_scheme_rows.len();
+        self.type_work
+            .charge(original_rows.len())
+            .map_err(|()| type_resource())?;
+        self.expected_scheme_rows
+            .try_reserve(original_rows.len())
+            .map_err(|_| type_resource())?;
+        self.expected_scheme_rows.extend(original_rows);
+        let body = self.elaborate_expression_with_context(
             ElaborationTask::Synthesize {
                 expression,
                 cause: None,
             },
             &mut context,
-        )?);
+        );
+        self.expected_scheme_rows.truncate(row_depth);
+        let body = TypedNodeOwner::new(body?);
         let report = body.ty.outer_nominal().ok_or_else(|| {
             contract_error(
                 expression.span,
@@ -2948,7 +3478,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         }
         let input_error = self.clone_type(result_arguments[0])?;
         let completion_error = self.clone_type(result_arguments[1])?;
-        let (scope_constructors, completion_constructors) =
+        let (_scope_constructors, _completion_constructors) =
             self.check_provider_report(scope, definition.result.span)?;
         let provided = registry
             .effect(definition.provided.instance.effect())
@@ -3100,8 +3630,10 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             input_error,
             completion_error,
             methods: associations,
-            scope_constructors,
-            completion_constructors,
+            #[cfg(test)]
+            scope_constructors: _scope_constructors,
+            #[cfg(test)]
+            completion_constructors: _completion_constructors,
         })
     }
 
@@ -4240,19 +4772,21 @@ mod tests {
             let certificate = Arc::clone(code.contracts());
             let owned =
                 Arc::get_mut(&mut code).expect("only code ownership is retained separately");
+            let declaration = Arc::get_mut(&mut owned.declarations[0])
+                .expect("original declaration is uniquely retained");
             match mutation {
-                0 => owned.declarations[0].acquire.draft.id = owned.declarations[0].finish.draft.id,
+                0 => declaration.acquire.draft.id = declaration.finish.draft.id,
                 1 => {
-                    owned.declarations[0].acquire.draft.hidden_answer =
+                    declaration.acquire.draft.hidden_answer =
                         TypeVariableId::resolved(owned.module, u32::MAX)
                 }
                 2 => crate::core::provider::mutate_entry_for_test(
-                    &mut owned.declarations[0].finish.draft.core,
+                    &mut declaration.finish.draft.core,
                     crate::core::provider::EntryMutation::RootType,
                 ),
                 3 => {
-                    owned.declarations[0].acquire.draft.hidden_row =
-                        EffectRowVariable::Rigid(owned.declarations[0].acquire.draft.hidden_answer)
+                    declaration.acquire.draft.hidden_row =
+                        EffectRowVariable::Rigid(declaration.acquire.draft.hidden_answer)
                 }
                 _ => unreachable!(),
             }

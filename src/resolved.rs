@@ -11783,6 +11783,7 @@ impl ExportSummary {
         Ok(retained.into_boxed_slice())
     }
 
+    #[cfg(test)]
     pub(crate) fn freeze(
         resolved: &ResolvedModule,
         checked_globals: &[CheckedGlobalScheme],
@@ -13613,8 +13614,8 @@ impl ExportSummary {
         self.terms.get(spelling)
     }
 
-    fn authenticate_foreign_facts<'a>(
-        &'a self,
+    fn authenticate_foreign_facts(
+        &self,
         authenticated_native_facts: &mut crate::foreign::NativeAuthenticationMemo,
         type_work: &mut TypeWorkBudget,
         constraint_work: &mut crate::interface::InterfaceConstraintBudget,
@@ -16975,7 +16976,6 @@ fn collect_capture_external_nominals(
 enum TypeIdentityReference {
     Nominal(NominalTypeId),
     Effect(EffectId),
-    Resource(ResourceDefinitionId),
 }
 
 fn visit_type_identity_references(
@@ -17010,8 +17010,7 @@ fn visit_type_identity_references(
             Task::Type(Type::Nominal(identity)) => {
                 visit(TypeIdentityReference::Nominal(*identity), budget)?
             }
-            Task::Type(Type::ResourceApply(identity, arguments)) => {
-                visit(TypeIdentityReference::Resource(*identity), budget)?;
+            Task::Type(Type::ResourceApply(_, arguments)) => {
                 for argument in arguments {
                     schedule(&mut work, Task::Argument(argument), budget)?;
                 }
@@ -17089,23 +17088,6 @@ fn collect_effect_identities(
 ) -> Result<(), ()> {
     visit_type_identity_references(root, budget, |identity, budget| {
         if let TypeIdentityReference::Effect(identity) = identity
-            && !output.contains(&identity)
-        {
-            budget.charge(1)?;
-            output.try_reserve(1).map_err(|_| ())?;
-            output.insert(identity);
-        }
-        Ok(())
-    })
-}
-
-fn collect_resource_identities(
-    root: &Type,
-    output: &mut HashSet<ResourceDefinitionId>,
-    budget: &mut TypeWorkBudget,
-) -> Result<(), ()> {
-    visit_type_identity_references(root, budget, |identity, budget| {
-        if let TypeIdentityReference::Resource(identity) = identity
             && !output.contains(&identity)
         {
             budget.charge(1)?;

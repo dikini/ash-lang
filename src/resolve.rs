@@ -78,8 +78,6 @@ use crate::{
 
 struct ResolvedTypeBuffer(Vec<(crate::types::KindedArgument, usize)>);
 
-struct ImportedTypeCloneBuffer(Vec<Type>);
-
 struct ImportedTypeVariableBuffer(Vec<ResolvedTypeVariable>);
 
 struct ImportedConstructorFactBuffer(Vec<ImportedConstructorFact>);
@@ -274,32 +272,6 @@ impl Drop for ImportedTypeVariableBuffer {
     fn drop(&mut self) {
         for parameter in self.0.drain(..) {
             discard_origin_iteratively(parameter.origin);
-        }
-    }
-}
-
-impl ImportedTypeCloneBuffer {
-    fn push(&mut self, ty: Type) {
-        self.0.push(ty);
-    }
-
-    fn pop_owned(&mut self) -> Option<IterativeTypeOwner> {
-        self.0.pop().map(IterativeTypeOwner::new)
-    }
-
-    fn split_off(&mut self, at: usize) -> Self {
-        Self(self.0.split_off(at))
-    }
-
-    fn into_vec(mut self) -> Vec<Type> {
-        std::mem::take(&mut self.0)
-    }
-}
-
-impl Drop for ImportedTypeCloneBuffer {
-    fn drop(&mut self) {
-        while let Some(ty) = self.0.pop() {
-            discard_type_iteratively(ty);
         }
     }
 }
@@ -2577,21 +2549,6 @@ fn public_implementation_route_precedes(
                 "public implementation route comparison exceeded its work budget",
             )
         })
-}
-
-fn retain_resolved_type_argument_owners(
-    arguments: Vec<IterativeTypeOwner>,
-    budget: &mut TypeWorkBudget,
-) -> Result<Box<[Type]>, ()> {
-    budget.charge(arguments.len())?;
-    let mut retained = Vec::new();
-    retained
-        .try_reserve_exact(arguments.len())
-        .map_err(|_| ())?;
-    for argument in arguments {
-        retained.push(argument.into_inner());
-    }
-    Ok(retained.into_boxed_slice())
 }
 
 impl Resolver {

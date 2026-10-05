@@ -1758,6 +1758,140 @@ fn normal_provider_completed_local_constrained_helpers_use_checked_methods() {
 }
 
 #[test]
+fn mixed_provider_late_failures_keep_early_helper_publication_atomic() {
+    const SOURCE: &str = include_str!(
+        "../../../../tests/fixtures/provider-experiments/control-source/mixed-local-order.ash"
+    );
+    const REPORT: &str =
+        include_str!("../../../../tests/fixtures/provider-experiments/control-source/provider.ash");
+    let fixture = |source: &str| {
+        Fixture::with_modules(
+            source,
+            &[("provider.ash", REPORT)],
+            ForeignRegistrations::new([
+                sqlite_manifest(ForeignRegistrationId::new(991)).unwrap(),
+                crate::foreign::provider_manifest(ForeignRegistrationId::new(992)).unwrap(),
+            ])
+            .unwrap(),
+        )
+    };
+    let helper_slot = |module: &ResolvedModule| {
+        let definition = module.definitions().iter().find(|definition| matches!(&definition.kind,
+            crate::resolved::ResolvedDefinitionKind::Equational(global) if global.interface.name.spelling == "a_helper")).unwrap();
+        let crate::resolved::ResolvedDefinitionKind::Equational(global) = &definition.kind else {
+            unreachable!()
+        };
+        let ResolvedExprKind::Block(block) = &global.equations[0].body.kind else {
+            panic!("helper block")
+        };
+        let crate::resolved::ResolvedLocalDeclaration::Binding(binding) = &block.declarations[0]
+        else {
+            panic!("helper binding")
+        };
+        let ResolvedExprKind::ProviderResource(resource) = &binding.initializer.kind else {
+            panic!("helper instance")
+        };
+        resource.prepared.retain_for_test()
+    };
+    for invalid in [
+        SOURCE.replace("Native.Row => resume Row", "Native.Row => resume 42"),
+        SOURCE.replace("Ok(()) => after_bind stmt", "Ok(()) => true"),
+    ] {
+        assert_ne!(invalid, SOURCE);
+        let failed = fixture(&invalid);
+        let evidence = normal_pending_slots(&failed.resolved);
+        assert!(!evidence.is_empty());
+        let instance = helper_slot(&failed.resolved);
+        assert!(check_module(failed.resolved).is_err());
+        assert!(evidence.iter().all(|slot| slot.selection().is_none()));
+        assert!(instance.get().is_none());
+
+        let retry = fixture(SOURCE);
+        let evidence = normal_pending_slots(&retry.resolved);
+        let instance = helper_slot(&retry.resolved);
+        // Direct StateAccess applications in provider originals become the
+        // privileged Core node, not an ordinary dictionary selection. Keep
+        // their exact source slots in the rollback domain, and partition only
+        // successful publication by their registered method identity.
+        let mut privileged = Vec::new();
+        let mut work = TypeWorkBudget::unbounded();
+        let registry = retry
+            .resolved
+            .registry()
+            .provider_template_view(retry.resolved.imported_facts(), &mut work)
+            .unwrap();
+        for resource in retry.resolved.resources() {
+            for body in [&resource.acquire, &resource.finish]
+                .into_iter()
+                .chain(resource.handlers.iter().map(|clause| &clause.body))
+            {
+                for occurrence in
+                    crate::elaborate::module_bodies::ordinary_source_occurrences_for_test(
+                        body, &mut work,
+                    )
+                    .unwrap()
+                {
+                    if let crate::resolved::ResolvedTermName::Method(method) = occurrence.term
+                        && registry.foreign_state_access(method).is_some()
+                    {
+                        privileged.extend(occurrence.evidence.iter().map(|slot| slot.storage_id()));
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            privileged.len(),
+            1,
+            "the original has exactly one registered StateAccess application"
+        );
+        let checked = check_module(retry.resolved).unwrap();
+        let mut selected = 0;
+        let mut intrinsic = 0;
+        for slot in &evidence {
+            if privileged.contains(&slot.storage_id()) {
+                assert!(
+                    slot.selection().is_none(),
+                    "intrinsic state access uses its structural proof"
+                );
+                intrinsic += 1;
+            } else {
+                assert!(
+                    slot.selection().is_some(),
+                    "every ordinary original and body slot must publish"
+                );
+                selected += 1;
+            }
+        }
+        assert_eq!(intrinsic, privileged.len());
+        assert!(selected > 0);
+        assert_eq!(selected + intrinsic, evidence.len());
+        let plan = instance
+            .prepared_for_test()
+            .expect("early helper commits with the complete group");
+        assert!(matches!(&plan.code, PreparedProviderCode::Original(_)));
+        let group = checked
+            .into_group(&mut InterfaceConstraintBudget::default())
+            .unwrap();
+        let code = group.provider_code().unwrap();
+        assert!(
+            plan.code
+                .imported_template_source(
+                    plan.definition.id,
+                    plan.definition.family,
+                    code.contracts(),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err()
+        );
+        assert!(
+            crate::resolved::PendingProviderInstancePublication::default()
+                .stage(&instance, plan, &mut TypeWorkBudget::unbounded())
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn normal_provider_late_clause_failure_keeps_original_helper_slots_pending() {
     let valid = constrained_source()
         .replace("import helper as Helper\n", "")
@@ -2189,10 +2323,9 @@ fn normal_pending_slots(
     let mut slots = Vec::new();
     let mut work = TypeWorkBudget::unbounded();
     let mut collect = |body: &crate::resolved::ResolvedExpr| {
-        for occurrence in crate::elaborate::provider::external::all_provider_expression_occurrences(
-            body, &mut work,
-        )
-        .unwrap()
+        for occurrence in
+            crate::elaborate::module_bodies::ordinary_source_occurrences_for_test(body, &mut work)
+                .unwrap()
         {
             for slot in &occurrence.evidence {
                 slots.push(slot.retain_unpublished().unwrap());
@@ -2403,7 +2536,9 @@ fn normal_provider_retained_selected_method_and_native_facts_refuse_mutation() {
         let mut code = checked.take_provider_code_for_test().unwrap();
         let certificate = Arc::clone(code.contracts());
         let owned = Arc::get_mut(&mut code).unwrap();
-        let core = &mut owned.declarations[0].finish.draft.core;
+        let declaration = Arc::get_mut(&mut owned.declarations[0])
+            .expect("original declaration is uniquely retained");
+        let core = &mut declaration.finish.draft.core;
         match mutation {
             0 => crate::core::erase_registered_foreign_facts_for_test(core),
             1 => crate::core::provider::mutate_method_catalog_for_test(core, crate::core::dialect::MethodEvidenceCatalogMutationForTest::WrongMethodPosition),
@@ -3513,4 +3648,245 @@ fn provider_source_wrapper_origin_refusal_owns_deep_types_until_handoff() {
                 .iter()
                 .all(|slot| slot.selection().is_none()))
     );
+}
+
+#[test]
+fn local_original_completion_requires_exact_ordered_allocations_and_budget() {
+    const SOURCE: &str = include_str!(
+        "../../../../tests/fixtures/provider-experiments/control-source/local-order.ash"
+    );
+    const REPORT: &str =
+        include_str!("../../../../tests/fixtures/provider-experiments/control-source/provider.ash");
+    let fixture = Fixture::with_modules(
+        SOURCE,
+        &[("provider.ash", REPORT)],
+        ForeignRegistrations::new([
+            sqlite_manifest(ForeignRegistrationId::new(991)).unwrap(),
+            crate::foreign::provider_manifest(ForeignRegistrationId::new(992)).unwrap(),
+        ])
+        .unwrap(),
+    );
+    let build = || {
+        check_module_provider_group(
+            &fixture.resolved,
+            None,
+            &mut PendingEvidencePublication::default(),
+            &mut TypeWorkBudget::unbounded(),
+            &mut UsefulnessBudget::default(),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let code = build();
+    assert_eq!(code.declarations.len(), 2);
+    let originals = code
+        .declarations
+        .iter()
+        .zip(&code.contracts.declarations)
+        .map(|(declaration, contract)| {
+            Arc::new(PreparedProviderOriginal {
+                declaration: Arc::clone(declaration),
+                contract: Arc::clone(contract),
+            })
+        })
+        .collect::<Vec<_>>();
+    let pending = || PreparedLocalProviderCode {
+        module: fixture.resolved.module(),
+        code: None,
+        originals: originals.clone(),
+    };
+    let rebuilt = build();
+    for mutation in 0..6 {
+        let mut declarations = code.declarations.clone();
+        let mut contracts = code.contracts.declarations.clone();
+        match mutation {
+            0 => {
+                declarations.pop();
+                contracts.pop();
+            }
+            1 => {
+                declarations.swap(0, 1);
+                contracts.swap(0, 1);
+            }
+            2 => {
+                declarations[1] = Arc::clone(&declarations[0]);
+                contracts[1] = Arc::clone(&contracts[0]);
+            }
+            3 => declarations[0] = Arc::clone(&rebuilt.declarations[0]),
+            4 => contracts[0] = Arc::clone(&rebuilt.contracts.declarations[0]),
+            5 => {
+                declarations[0] = Arc::clone(&rebuilt.declarations[0]);
+                contracts[0] = Arc::clone(&rebuilt.contracts.declarations[0]);
+            }
+            _ => unreachable!(),
+        }
+        let substituted = Arc::new(CheckedProviderGroup {
+            module: code.module,
+            declarations,
+            contracts: Arc::new(CheckedProviderContracts {
+                module: code.contracts.module,
+                declarations: contracts,
+                sources: code.contracts.sources.clone(),
+            }),
+        });
+        let mut state = pending();
+        assert!(
+            state
+                .complete(
+                    &fixture.resolved,
+                    substituted,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err(),
+            "mutation {mutation}"
+        );
+        assert!(state.code.is_none());
+    }
+    let mut measured = TypeWorkBudget::unbounded();
+    let mut state = pending();
+    let prefix = measured.used();
+    state
+        .complete(&fixture.resolved, Arc::clone(&code), &mut measured)
+        .unwrap();
+    let cost = measured.used() - prefix;
+    assert!(cost > 0);
+    assert!(
+        state
+            .complete(
+                &fixture.resolved,
+                Arc::clone(&code),
+                &mut TypeWorkBudget::unbounded()
+            )
+            .is_err()
+    );
+    let mut short = pending();
+    assert!(
+        short
+            .complete(
+                &fixture.resolved,
+                Arc::clone(&code),
+                &mut TypeWorkBudget::with_limit(cost - 1)
+            )
+            .is_err()
+    );
+    assert!(short.code.is_none());
+    let mut exact = pending();
+    exact
+        .complete(
+            &fixture.resolved,
+            Arc::clone(&code),
+            &mut TypeWorkBudget::with_limit(cost),
+        )
+        .unwrap();
+    assert!(Arc::ptr_eq(exact.code().unwrap(), &code));
+}
+
+#[test]
+fn retained_state_associations_are_checked_at_the_original_template_view() {
+    const SOURCE: &str = include_str!(
+        "../../../../tests/fixtures/provider-experiments/control-source/local-order.ash"
+    );
+    const REPORT: &str =
+        include_str!("../../../../tests/fixtures/provider-experiments/control-source/provider.ash");
+    let fixture = Fixture::with_modules(
+        SOURCE,
+        &[("provider.ash", REPORT)],
+        ForeignRegistrations::new([
+            sqlite_manifest(ForeignRegistrationId::new(991)).unwrap(),
+            crate::foreign::provider_manifest(ForeignRegistrationId::new(992)).unwrap(),
+        ])
+        .unwrap(),
+    );
+    let build = || {
+        check_module_provider_group(
+            &fixture.resolved,
+            None,
+            &mut PendingEvidencePublication::default(),
+            &mut TypeWorkBudget::unbounded(),
+            &mut UsefulnessBudget::default(),
+            &mut InterfaceConstraintBudget::default(),
+        )
+        .unwrap()
+        .unwrap()
+    };
+    let code = build();
+    assert_eq!(code.declarations.len(), 2);
+    assert!(
+        crate::core::provider::state_access_for_test(&code.declarations[1].acquire.draft.core,)
+            .is_some()
+    );
+    let mut measured = TypeWorkBudget::unbounded();
+    declaration_template_source(&code.declarations[1], &mut measured).unwrap();
+    let cost = measured.used();
+    assert!(cost > 0);
+    for prefix in [0, 17] {
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert!(declaration_template_source(&code.declarations[1], &mut short).is_err());
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            declaration_template_source(&code.declarations[1], &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+        }
+    }
+    for mutation in 0..5 {
+        let mut code = build();
+        let group = Arc::get_mut(&mut code).expect("private checked group");
+        let connection = group.declarations[0].fact.id;
+        let statement = group.declarations[1].fact.id;
+        let entry = &mut Arc::get_mut(&mut group.declarations[1])
+            .expect("private original declaration")
+            .acquire;
+        let connection_index = entry
+            .associations
+            .iter()
+            .position(|association| association.definition == connection)
+            .unwrap();
+        let statement_index = entry
+            .associations
+            .iter()
+            .position(|association| association.definition == statement)
+            .unwrap();
+        let statement_family = entry.associations[statement_index].family;
+        match mutation {
+            0 => entry.associations[connection_index].definition = statement,
+            1 => entry.associations[connection_index].family = statement_family,
+            2 => entry.associations[statement_index].parameters.swap(0, 1),
+            3 => {
+                // The same native state family and Type argument shapes do not
+                // authorize exchanging owned S and enclosing C roles.
+                let association = &mut entry.associations[statement_index];
+                let family = association.state.outer_nominal().unwrap();
+                association.state = IterativeTypeOwner::new(Type::Application(
+                    Box::new(Type::Application(
+                        Box::new(Type::Nominal(family)),
+                        Box::new(Type::Variable(association.parameters[1])),
+                    )),
+                    Box::new(Type::Variable(association.parameters[0])),
+                ));
+            }
+            4 => {
+                let EffectRowVariable::Rigid(row) = entry.draft.hidden_row else {
+                    panic!("retained row-kind role")
+                };
+                let association = &mut entry.associations[connection_index];
+                let family = association.state.outer_nominal().unwrap();
+                association.parameters[0] = row;
+                association.state = IterativeTypeOwner::new(Type::Application(
+                    Box::new(Type::Nominal(family)),
+                    Box::new(Type::Variable(row)),
+                ));
+            }
+            _ => unreachable!(),
+        }
+        // Only the retained association changes. Original Core, native flow,
+        // parameter proof and exact frozen node projections stay unchanged.
+        assert!(
+            declaration_template_source(&group.declarations[1], &mut TypeWorkBudget::unbounded())
+                .is_err(),
+            "retained association mutation {mutation}"
+        );
+    }
 }

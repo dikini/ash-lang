@@ -110,43 +110,6 @@ pub(crate) struct ProviderEvidenceOwner {
     pub(crate) arguments: Box<[crate::types::KindedArgument]>,
 }
 
-impl ProviderEvidenceOwner {
-    pub(crate) fn clone_with_budget(&self, budget: &mut TypeWorkBudget) -> Result<Self, ()> {
-        budget.charge(1)?;
-        Ok(Self {
-            definition: self.definition,
-            family: self.family,
-            identity: self.identity,
-            arguments: crate::types::clone_kinded_arguments_with_budget(
-                self.arguments.iter(),
-                budget,
-            )?,
-        })
-    }
-
-    pub(crate) fn same_with_budget(
-        &self,
-        other: &Self,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<bool, ()> {
-        budget.charge(1)?;
-        if self.definition != other.definition
-            || self.family != other.family
-            || self.identity != other.identity
-            || self.arguments.len() != other.arguments.len()
-        {
-            return Ok(false);
-        }
-        budget.charge(self.arguments.len())?;
-        for (left, right) in self.arguments.iter().zip(&other.arguments) {
-            if !crate::types::same_kinded_argument_with_budget(left, right, budget)? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-}
-
 impl Drop for ProviderEvidenceOwner {
     fn drop(&mut self) {
         for argument in std::mem::take(&mut self.arguments).into_vec() {
@@ -358,8 +321,6 @@ impl Drop for MethodEvidenceOccurrence {
     }
 }
 
-struct IterativeTypeBuffer(Vec<Type>);
-
 struct IterativeTypeMap(HashMap<TypeVariableId, Type>);
 
 impl Drop for IterativeTypeMap {
@@ -380,40 +341,6 @@ impl Drop for IterativeArgumentBuffer {
     fn drop(&mut self) {
         for argument in self.0.drain(..) {
             crate::types::discard_kinded_argument_iteratively(argument);
-        }
-    }
-}
-
-struct IterativeTypeSequence(std::vec::IntoIter<Type>);
-
-impl IterativeTypeSequence {
-    fn next(&mut self) -> Option<Type> {
-        self.0.next()
-    }
-
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Drop for IterativeTypeSequence {
-    fn drop(&mut self) {
-        for ty in self.0.by_ref() {
-            discard_type_iteratively(ty);
-        }
-    }
-}
-
-impl IterativeTypeBuffer {
-    fn into_boxed_slice(mut self) -> Box<[Type]> {
-        std::mem::take(&mut self.0).into_boxed_slice()
-    }
-}
-
-impl Drop for IterativeTypeBuffer {
-    fn drop(&mut self) {
-        for ty in self.0.drain(..) {
-            discard_type_iteratively(ty);
         }
     }
 }
@@ -3941,6 +3868,7 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
         ))
     }
 
+    #[allow(clippy::type_complexity)] // Borrowed arena, nodes and original catalog form one view.
     pub(in crate::core) fn provider_projection_parts(
         &self,
     ) -> Result<(ArenaId, &[StoredNode<F>], &Arc<MethodEvidenceCatalog>), BuildError> {
@@ -4159,6 +4087,13 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
 
     pub(crate) fn forget_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
         self.deferred_cleanup_rows.remove(&id);
+    }
+
+    /// A committed row solution must rewrite effect metadata even when the
+    /// previous type rewrite found no remaining type inference.
+    pub(crate) fn complete_cleanup_row(&mut self, id: crate::types::InferenceVariableId) {
+        self.deferred_cleanup_rows.remove(&id);
+        self.requires_type_rewrite = true;
     }
 
     pub(crate) fn push_operation(

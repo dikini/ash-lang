@@ -5,22 +5,63 @@ use super::{
     RuntimeFailure, RuntimePhase, Value, allocate_heap, charge_effect_work,
     resolve_location_with_work,
 };
-use crate::foreign::runtime::{ForeignData, ForeignDataNode};
+use crate::foreign::runtime::{
+    ForeignData, ForeignDataNode, ForeignExecutionError, ForeignExecutionReason,
+};
 use crate::types::TypeWorkBudget;
 use std::{collections::HashSet, sync::Arc};
+
+fn foreign_failure(error: ForeignExecutionError, phase: RuntimePhase) -> RuntimeFailure {
+    use super::{ResourceFailureCause, RuntimeResource};
+    let (cause, resource) = match error.reason() {
+        ForeignExecutionReason::Binding => return RuntimeFailure::ForeignBinding,
+        ForeignExecutionReason::WorkExhausted => (
+            ResourceFailureCause::WorkBudgetExhausted,
+            RuntimeResource::WorkUnits,
+        ),
+        ForeignExecutionReason::StorageRefused => (
+            ResourceFailureCause::StorageReservationFailed,
+            RuntimeResource::ForeignCodecStorage,
+        ),
+        ForeignExecutionReason::ResourceRefused => (
+            ResourceFailureCause::ResourceAdmissionRefused,
+            RuntimeResource::ForeignAdmission,
+        ),
+    };
+    // The generic adapter markers carry no measured quantities. Its work
+    // bound need not be the evaluator's ledger, so neither count is inferred.
+    super::resource_failure(cause, phase, resource, None, None)
+}
+
+fn codec_failure_phase(failure: RuntimeFailure, phase: RuntimePhase) -> RuntimeFailure {
+    match failure {
+        RuntimeFailure::Report(mut report) => {
+            if let Some(details) = report.primary.resource.as_mut() {
+                details.phase = phase;
+            }
+            RuntimeFailure::Report(report)
+        }
+        other => other,
+    }
+}
 
 fn charge_integer_copy(
     integer: &crate::integer::Integer,
     work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
 ) -> Result<(), RuntimeFailure> {
     let bytes = usize::try_from(integer.magnitude_byte_length())
-        .map_err(|_| super::effect_work_failure(work, None, RuntimePhase::Access))?;
-    charge_effect_work(work, bytes.max(1), RuntimePhase::Access)
+        .map_err(|_| super::effect_work_failure(work, None, phase))?;
+    charge_effect_work(work, bytes.max(1), phase)
 }
 
-fn clone_codec_value(value: &Value, work: &mut TypeWorkBudget) -> Result<Value, RuntimeFailure> {
+fn clone_codec_value(
+    value: &Value,
+    work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
+) -> Result<Value, RuntimeFailure> {
     if let Value::Integer(integer) = value {
-        charge_integer_copy(integer, work)?;
+        charge_integer_copy(integer, work, phase)?;
     }
     Ok(value.clone())
 }
@@ -30,6 +71,7 @@ pub(super) fn encode_input(
     heap: &[HeapCell],
     states: &mut Vec<ActivationKey>,
     work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
 ) -> Result<ForeignData, RuntimeFailure> {
     enum Task<'a> {
         Value(&'a Value),
@@ -41,26 +83,27 @@ pub(super) fn encode_input(
         nodes: &mut Vec<ForeignDataNode>,
         node: ForeignDataNode,
         work: &mut TypeWorkBudget,
+        phase: RuntimePhase,
     ) -> Result<usize, RuntimeFailure> {
-        charge_effect_work(work, 1, RuntimePhase::Access)?;
+        charge_effect_work(work, 1, phase)?;
         nodes
             .try_reserve(1)
-            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+            .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
         let index = nodes.len();
         nodes.push(node);
         Ok(index)
     }
     let mut pending = Vec::new();
-    charge_effect_work(work, 1, RuntimePhase::Access)?;
+    charge_effect_work(work, 1, phase)?;
     pending
         .try_reserve(1)
-        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
     pending.push(Task::Value(value));
     let mut results = Vec::new();
     let mut nodes = Vec::new();
     let mut active = HashSet::new();
     while let Some(task) = pending.pop() {
-        charge_effect_work(work, 1, RuntimePhase::Access)?;
+        charge_effect_work(work, 1, phase)?;
         let result = match task {
             Task::Exit(location) => {
                 active.remove(&location);
@@ -71,17 +114,18 @@ pub(super) fn encode_input(
                     .len()
                     .checked_sub(count)
                     .ok_or(RuntimeFailure::ForeignBinding)?;
-                charge_effect_work(work, count, RuntimePhase::Access)?;
+                charge_effect_work(work, count, phase)?;
                 let mut children = Vec::new();
                 children
                     .try_reserve_exact(count)
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
                 children.extend_from_slice(&results[start..]);
                 results.truncate(start);
                 push_node(
                     &mut nodes,
                     ForeignDataNode::Tuple(children.into_boxed_slice()),
                     work,
+                    phase,
                 )?
             }
             Task::Constructor(id, has_payload) => {
@@ -90,46 +134,58 @@ pub(super) fn encode_input(
                 } else {
                     None
                 };
-                push_node(&mut nodes, ForeignDataNode::Constructor(id, payload), work)?
+                push_node(
+                    &mut nodes,
+                    ForeignDataNode::Constructor(id, payload),
+                    work,
+                    phase,
+                )?
             }
             Task::Value(value) => match value {
                 Value::Integer(integer) => {
-                    charge_integer_copy(integer, work)?;
+                    charge_integer_copy(integer, work, phase)?;
                     let integer = integer.clone();
-                    push_node(&mut nodes, ForeignDataNode::Integer(integer), work)?
+                    push_node(&mut nodes, ForeignDataNode::Integer(integer), work, phase)?
                 }
-                Value::Bytes(value) => {
-                    push_node(&mut nodes, ForeignDataNode::Bytes(Arc::clone(value)), work)?
-                }
-                Value::String(value) => {
-                    push_node(&mut nodes, ForeignDataNode::String(Arc::clone(value)), work)?
-                }
+                Value::Bytes(value) => push_node(
+                    &mut nodes,
+                    ForeignDataNode::Bytes(Arc::clone(value)),
+                    work,
+                    phase,
+                )?,
+                Value::String(value) => push_node(
+                    &mut nodes,
+                    ForeignDataNode::String(Arc::clone(value)),
+                    work,
+                    phase,
+                )?,
                 Value::Boolean(value) => {
-                    push_node(&mut nodes, ForeignDataNode::Boolean(*value), work)?
+                    push_node(&mut nodes, ForeignDataNode::Boolean(*value), work, phase)?
                 }
-                Value::Unit => push_node(&mut nodes, ForeignDataNode::Unit, work)?,
+                Value::Unit => push_node(&mut nodes, ForeignDataNode::Unit, work, phase)?,
                 Value::NativeStateView(key) => {
-                    charge_effect_work(work, states.len(), RuntimePhase::Access)?;
+                    charge_effect_work(work, states.len(), phase)?;
                     let slot = match states.iter().position(|found| found == key) {
                         Some(slot) => slot,
                         None => {
-                            charge_effect_work(work, 1, RuntimePhase::Access)?;
-                            states
-                                .try_reserve(1)
-                                .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                            charge_effect_work(work, 1, phase)?;
+                            states.try_reserve(1).map_err(|_| {
+                                foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                            })?;
                             let slot = states.len();
                             states.push(*key);
                             slot
                         }
                     };
-                    push_node(&mut nodes, ForeignDataNode::State(slot), work)?
+                    push_node(&mut nodes, ForeignDataNode::State(slot), work, phase)?
                 }
                 Value::Location(location) => {
-                    let location = resolve_location_with_work(heap, *location, work)?;
-                    charge_effect_work(work, 1, RuntimePhase::Access)?;
-                    active
-                        .try_reserve(1)
-                        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    let location = resolve_location_with_work(heap, *location, work)
+                        .map_err(|failure| codec_failure_phase(failure, phase))?;
+                    charge_effect_work(work, 1, phase)?;
+                    active.try_reserve(1).map_err(|_| {
+                        foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                    })?;
                     if !active.insert(location) {
                         return Err(RuntimeFailure::AliasLoop);
                     }
@@ -139,14 +195,13 @@ pub(super) fn encode_input(
                         HeapCell::Constructor(_, payload) => usize::from(payload.is_some()),
                         _ => return Err(RuntimeFailure::ForeignBinding),
                     };
-                    charge_effect_work(
-                        work,
-                        count.checked_add(2).ok_or(RuntimeFailure::HeapCapacity)?,
-                        RuntimePhase::Access,
-                    )?;
-                    pending
-                        .try_reserve(count + 2)
-                        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    let pending_count = count
+                        .checked_add(2)
+                        .ok_or_else(|| super::effect_work_failure(work, None, phase))?;
+                    charge_effect_work(work, pending_count, phase)?;
+                    pending.try_reserve(pending_count).map_err(|_| {
+                        foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                    })?;
                     pending.push(Task::Exit(location));
                     match cell {
                         HeapCell::Tuple(children) => {
@@ -166,33 +221,34 @@ pub(super) fn encode_input(
                 _ => return Err(RuntimeFailure::ForeignBinding),
             },
         };
-        charge_effect_work(work, 1, RuntimePhase::Access)?;
+        charge_effect_work(work, 1, phase)?;
         results
             .try_reserve(1)
-            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+            .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
         results.push(result);
     }
     if results.len() != 1 {
         return Err(RuntimeFailure::ForeignBinding);
     }
-    ForeignData::new(nodes, results[0]).map_err(|_| RuntimeFailure::ForeignBinding)
+    ForeignData::new(nodes, results[0]).map_err(|error| foreign_failure(error, phase))
 }
 
 pub(super) fn decode_data(
     data: &ForeignData,
     heap: &mut Vec<HeapCell>,
     work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
 ) -> Result<Value, RuntimeFailure> {
-    charge_effect_work(work, data.nodes().len(), RuntimePhase::Access)?;
+    charge_effect_work(work, data.nodes().len(), phase)?;
     let mut values: Vec<Value> = Vec::new();
     values
         .try_reserve_exact(data.nodes().len())
-        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
     for node in data.nodes() {
-        charge_effect_work(work, 1, RuntimePhase::Access)?;
+        charge_effect_work(work, 1, phase)?;
         let value = match node {
             ForeignDataNode::Integer(value) => {
-                charge_integer_copy(value, work)?;
+                charge_integer_copy(value, work, phase)?;
                 Value::Integer(value.clone())
             }
             ForeignDataNode::Bytes(value) => Value::Bytes(Arc::clone(value)),
@@ -201,15 +257,16 @@ pub(super) fn decode_data(
             ForeignDataNode::Unit => Value::Unit,
             ForeignDataNode::State(_) => return Err(RuntimeFailure::ForeignBinding),
             ForeignDataNode::Tuple(children) => {
-                charge_effect_work(work, children.len() + 1, RuntimePhase::Access)?;
+                charge_effect_work(work, children.len() + 1, phase)?;
                 let mut fields = Vec::new();
                 fields
                     .try_reserve_exact(children.len())
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
                 for child in children {
                     fields.push(clone_codec_value(
                         values.get(*child).ok_or(RuntimeFailure::ForeignBinding)?,
                         work,
+                        phase,
                     )?);
                 }
                 heap.try_reserve(1)
@@ -225,10 +282,11 @@ pub(super) fn decode_data(
                         clone_codec_value(
                             values.get(child).ok_or(RuntimeFailure::ForeignBinding)?,
                             work,
+                            phase,
                         )
                     })
                     .transpose()?;
-                charge_effect_work(work, 1, RuntimePhase::Access)?;
+                charge_effect_work(work, 1, phase)?;
                 heap.try_reserve(1)
                     .map_err(|_| RuntimeFailure::HeapCapacity)?;
                 Value::Location(allocate_heap(heap, HeapCell::Constructor(*id, payload))?)
@@ -241,6 +299,7 @@ pub(super) fn decode_data(
             .get(data.root())
             .ok_or(RuntimeFailure::ForeignBinding)?,
         work,
+        phase,
     )
 }
 
@@ -252,6 +311,7 @@ pub(super) fn validate_codec(
     registry: &crate::resolved::ResolvedRegistry,
     allow_state: bool,
     work: &mut TypeWorkBudget,
+    phase: RuntimePhase,
 ) -> Result<(), RuntimeFailure> {
     use crate::types::{
         IterativeTypeOwner, Type, clone_type_with_budget, discard_type_iteratively,
@@ -266,16 +326,17 @@ pub(super) fn validate_codec(
         }
     }
     let root = IterativeTypeOwner::new(
-        clone_type_with_budget(expected, work).map_err(|_| RuntimeFailure::ForeignBinding)?,
+        clone_type_with_budget(expected, work)
+            .map_err(|_| foreign_failure(ForeignExecutionError::RESOURCE_REFUSED, phase))?,
     );
     let mut pending = Vec::new();
-    charge_effect_work(work, 1, RuntimePhase::Access)?;
+    charge_effect_work(work, 1, phase)?;
     pending
         .try_reserve(1)
-        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+        .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
     pending.push((data.root(), root));
     while let Some((index, expected)) = pending.pop() {
-        charge_effect_work(work, 1, RuntimePhase::Access)?;
+        charge_effect_work(work, 1, phase)?;
         let node = data.node(index).ok_or(RuntimeFailure::ForeignBinding)?;
         match (node, &*expected) {
             (ForeignDataNode::Bytes(_), Type::Bytes)
@@ -287,15 +348,14 @@ pub(super) fn validate_codec(
                 if children.len() != types.len() {
                     return Err(RuntimeFailure::ForeignBinding);
                 }
-                charge_effect_work(work, children.len(), RuntimePhase::Access)?;
+                charge_effect_work(work, children.len(), phase)?;
                 pending
                     .try_reserve(children.len())
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
                 for (child, ty) in children.iter().zip(types.iter()).rev() {
-                    let ty = IterativeTypeOwner::new(
-                        clone_type_with_budget(ty, work)
-                            .map_err(|_| RuntimeFailure::ForeignBinding)?,
-                    );
+                    let ty = IterativeTypeOwner::new(clone_type_with_budget(ty, work).map_err(
+                        |_| foreign_failure(ForeignExecutionError::RESOURCE_REFUSED, phase),
+                    )?);
                     pending.push((*child, ty));
                 }
             }
@@ -303,10 +363,10 @@ pub(super) fn validate_codec(
                 let mut arguments = Vec::new();
                 let mut head = &*expected;
                 while let Type::Application(function, argument) = head {
-                    charge_effect_work(work, 1, RuntimePhase::Access)?;
-                    arguments
-                        .try_reserve(1)
-                        .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                    charge_effect_work(work, 1, phase)?;
+                    arguments.try_reserve(1).map_err(|_| {
+                        foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                    })?;
                     arguments.push(argument.as_ref());
                     head = function;
                 }
@@ -341,29 +401,29 @@ pub(super) fn validate_codec(
                         if parameters.len() != arguments.len() {
                             return Err(RuntimeFailure::ForeignBinding);
                         }
-                        charge_effect_work(work, parameters.len(), RuntimePhase::Access)?;
+                        charge_effect_work(work, parameters.len(), phase)?;
                         let mut replacements = Replacements(std::collections::HashMap::new());
-                        replacements
-                            .0
-                            .try_reserve(parameters.len())
-                            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                        replacements.0.try_reserve(parameters.len()).map_err(|_| {
+                            foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                        })?;
                         for (parameter, argument) in parameters.iter().zip(arguments.iter().rev()) {
                             let argument = IterativeTypeOwner::new(
-                                clone_type_with_budget(argument, work)
-                                    .map_err(|_| RuntimeFailure::ForeignBinding)?,
+                                clone_type_with_budget(argument, work).map_err(|_| {
+                                    foreign_failure(ForeignExecutionError::RESOURCE_REFUSED, phase)
+                                })?,
                             );
                             replacements.0.insert(parameter.id, argument.into_inner());
                         }
                         let payload = IterativeTypeOwner::new(substitute_type_variables_with(
                             payload,
                             &replacements.0,
-                            |cells| charge_effect_work(work, cells, RuntimePhase::Access),
-                            || RuntimeFailure::HeapCapacity,
+                            |cells| charge_effect_work(work, cells, phase),
+                            || foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase),
                         )?);
-                        charge_effect_work(work, 1, RuntimePhase::Access)?;
-                        pending
-                            .try_reserve(1)
-                            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                        charge_effect_work(work, 1, phase)?;
+                        pending.try_reserve(1).map_err(|_| {
+                            foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase)
+                        })?;
                         pending.push((*child, payload));
                     }
                     _ => return Err(RuntimeFailure::ForeignBinding),
@@ -504,7 +564,7 @@ impl<'runtime> Machine<'runtime> {
             .as_mut()
             .ok_or(RuntimeFailure::ForeignBinding)?
             .reserve_quarantine(count)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            .map_err(|error| foreign_failure(error, RuntimePhase::Teardown))?;
         // Every path was checked against this unchanged frame forest. No
         // fallible operation follows the first enclosing ownership transfer.
         let runtime = self
@@ -543,8 +603,9 @@ impl<'runtime> Machine<'runtime> {
         &mut self,
         id: ConstructorId,
         payload: Option<Value>,
+        phase: RuntimePhase,
     ) -> Result<Value, RuntimeFailure> {
-        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+        charge_effect_work(&mut self.instantiation_work, 1, phase)?;
         self.heap
             .try_reserve(1)
             .map_err(|_| RuntimeFailure::HeapCapacity)?;
@@ -553,16 +614,16 @@ impl<'runtime> Machine<'runtime> {
             HeapCell::Constructor(id, payload),
         )?))
     }
-    fn foreign_tuple(&mut self, values: &[Value]) -> Result<Value, RuntimeFailure> {
-        charge_effect_work(
-            &mut self.instantiation_work,
-            values.len() + 1,
-            RuntimePhase::Access,
-        )?;
+    fn foreign_tuple(
+        &mut self,
+        values: &[Value],
+        phase: RuntimePhase,
+    ) -> Result<Value, RuntimeFailure> {
+        charge_effect_work(&mut self.instantiation_work, values.len() + 1, phase)?;
         let mut fields = Vec::new();
         fields
             .try_reserve_exact(values.len())
-            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+            .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, phase))?;
         fields.extend(values.iter().cloned());
         self.heap
             .try_reserve(1)
@@ -575,12 +636,14 @@ impl<'runtime> Machine<'runtime> {
     fn foreign_report(
         &mut self,
         value: &Value,
+        phase: RuntimePhase,
     ) -> Result<(ConstructorId, Option<Value>), RuntimeFailure> {
         let Value::Location(location) = value else {
             return Err(RuntimeFailure::ForeignBinding);
         };
         let location =
-            resolve_location_with_work(&self.heap, *location, &mut self.instantiation_work)?;
+            resolve_location_with_work(&self.heap, *location, &mut self.instantiation_work)
+                .map_err(|failure| codec_failure_phase(failure, phase))?;
         match self.heap.get(location) {
             Some(HeapCell::Constructor(id, payload)) => Ok((*id, payload.clone())),
             _ => Err(RuntimeFailure::ForeignBinding),
@@ -621,7 +684,7 @@ impl<'runtime> Machine<'runtime> {
         // the source acquisition entry can call any native operation.
         runtime
             .preflight(descriptor.native(), &mut self.instantiation_work)
-            .map_err(|_| RuntimeFailure::ForeignBinding)?;
+            .map_err(|error| foreign_failure(error, RuntimePhase::Acquisition))?;
         charge_effect_work(
             &mut self.instantiation_work,
             live,
@@ -629,7 +692,7 @@ impl<'runtime> Machine<'runtime> {
         )?;
         runtime
             .reserve_quarantine(live)
-            .map_err(|_| RuntimeFailure::ResourceCapacity)?;
+            .map_err(|error| foreign_failure(error, RuntimePhase::Acquisition))?;
         // Seal runtime metadata and reserve ownership storage before a native call.
         environment.instantiation = environment.instantiation.acquire(
             descriptor.identity(),
@@ -667,6 +730,11 @@ impl<'runtime> Machine<'runtime> {
         let node = boundary.node;
         let key = boundary.key;
         let phase = boundary.phase;
+        let report_phase = match phase {
+            ProviderPhase::Acquire => RuntimePhase::Acquisition,
+            ProviderPhase::Body => RuntimePhase::Access,
+            ProviderPhase::Finish => RuntimePhase::Cleanup,
+        };
         let environment = std::mem::take(&mut boundary.environment);
         let mut owner = boundary.owner.take();
         let saved = boundary.saved.take();
@@ -686,7 +754,7 @@ impl<'runtime> Machine<'runtime> {
             let protocol = descriptor.protocol();
             match phase {
                 ProviderPhase::Acquire => {
-                    let (constructor, payload) = self.foreign_report(&value)?;
+                    let (constructor, payload) = self.foreign_report(&value, report_phase)?;
                     if constructor == protocol.acquire[1] {
                         if owner.is_some() {
                             return Err(RuntimeFailure::ForeignBinding);
@@ -696,7 +764,8 @@ impl<'runtime> Machine<'runtime> {
                             .live_resources
                             .checked_sub(1)
                             .ok_or(RuntimeFailure::InvalidControlState)?;
-                        let result = self.foreign_constructor(protocol.scope[0], Some(error))?;
+                        let result =
+                            self.foreign_constructor(protocol.scope[0], Some(error), report_phase)?;
                         self.control = Some(Control::Return(result));
                         return Ok(());
                     }
@@ -730,6 +799,7 @@ impl<'runtime> Machine<'runtime> {
                         node,
                         environment: handler_environment,
                         registration: None,
+                        provider: Some(key),
                     });
                     self.trace_effect(EffectTraceEvent::ResourceAcquired(key.0));
                     self.trace_effect(EffectTraceEvent::HandlerActivated(handler));
@@ -756,7 +826,7 @@ impl<'runtime> Machine<'runtime> {
                     self.control = Some(Control::Evaluate(finish.body, finish_environment));
                 }
                 ProviderPhase::Finish => {
-                    let (constructor, payload) = self.foreign_report(&value)?;
+                    let (constructor, payload) = self.foreign_report(&value, report_phase)?;
                     let kind = finished.ok_or(RuntimeFailure::ForeignBinding)?;
                     let completion = match kind {
                         ProviderFinish::Closed => {
@@ -767,7 +837,11 @@ impl<'runtime> Machine<'runtime> {
                             if discarded {
                                 None
                             } else {
-                                Some(self.foreign_constructor(protocol.completion[0], None)?)
+                                Some(self.foreign_constructor(
+                                    protocol.completion[0],
+                                    None,
+                                    report_phase,
+                                )?)
                             }
                         }
                         ProviderFinish::ConsumedError => {
@@ -779,7 +853,11 @@ impl<'runtime> Machine<'runtime> {
                             if discarded {
                                 None
                             } else {
-                                Some(self.foreign_constructor(protocol.completion[1], Some(error))?)
+                                Some(self.foreign_constructor(
+                                    protocol.completion[1],
+                                    Some(error),
+                                    report_phase,
+                                )?)
                             }
                         }
                         ProviderFinish::RetainedError => {
@@ -795,7 +873,8 @@ impl<'runtime> Machine<'runtime> {
                                 &self.heap,
                                 location,
                                 &mut self.instantiation_work,
-                            )?;
+                            )
+                            .map_err(|failure| codec_failure_phase(failure, report_phase))?;
                             let Some(HeapCell::Tuple(fields)) = self.heap.get(location) else {
                                 return Err(RuntimeFailure::ForeignBinding);
                             };
@@ -821,7 +900,11 @@ impl<'runtime> Machine<'runtime> {
                             if discarded {
                                 None
                             } else {
-                                Some(self.foreign_constructor(protocol.completion[2], Some(error))?)
+                                Some(self.foreign_constructor(
+                                    protocol.completion[2],
+                                    Some(error),
+                                    report_phase,
+                                )?)
                             }
                         }
                     };
@@ -833,20 +916,34 @@ impl<'runtime> Machine<'runtime> {
                     self.control = Some(if discarded {
                         Control::Return(Value::Unit)
                     } else {
-                        let tuple = self.foreign_tuple(&[
-                            saved.ok_or(RuntimeFailure::ForeignBinding)?,
-                            completion.ok_or(RuntimeFailure::ForeignBinding)?,
-                        ])?;
-                        Control::Return(self.foreign_constructor(protocol.scope[1], Some(tuple))?)
+                        let tuple = self.foreign_tuple(
+                            &[
+                                saved.ok_or(RuntimeFailure::ForeignBinding)?,
+                                completion.ok_or(RuntimeFailure::ForeignBinding)?,
+                            ],
+                            report_phase,
+                        )?;
+                        Control::Return(self.foreign_constructor(
+                            protocol.scope[1],
+                            Some(tuple),
+                            report_phase,
+                        )?)
                     });
                 }
             }
             Ok(())
         })();
-        if result.is_err() {
-            if let Some(owner) = owner.take() {
-                // The popped frame must not release a retained owner or its
-                // dependencies before the machine's host-abort drain runs.
+        if result.is_err()
+            && let Some(owner) = owner.take()
+        {
+            if phase == ProviderPhase::Acquire {
+                // This fresh guard has never entered its body, so it has
+                // no acquired dependents. Dispose it before abandoning
+                // the enclosing owners whose state it may have borrowed.
+                drop(owner);
+            } else {
+                // Active and retained owners keep their dependencies
+                // until the machine's host-abort drain completes.
                 self.quarantine_provider_owner(owner)?;
             }
         }
@@ -952,12 +1049,19 @@ impl<'runtime> Machine<'runtime> {
             .iter()
             .find(|fact| fact.id == operation)
             .ok_or(RuntimeFailure::ForeignBinding)?;
+        let codec_phase = match operation.role {
+            ForeignOperationRole::Acquire => RuntimePhase::Acquisition,
+            ForeignOperationRole::Borrow => RuntimePhase::Access,
+            ForeignOperationRole::Finish => RuntimePhase::Cleanup,
+        };
         let expected = environment.instantiation.effect(
             descriptor.native_effect(),
             &mut self.instantiation_work,
-            Some(RuntimePhase::Access),
+            Some(codec_phase),
         )?;
-        if !super::same_effect_instance(&expected, effect, &mut self.instantiation_work)? {
+        if !super::same_effect_instance(&expected, effect, &mut self.instantiation_work)
+            .map_err(|failure| codec_failure_phase(failure, codec_phase))?
+        {
             return Err(RuntimeFailure::ForeignBinding);
         }
         let mut state_keys = Vec::new();
@@ -966,6 +1070,7 @@ impl<'runtime> Machine<'runtime> {
             &self.heap,
             &mut state_keys,
             &mut self.instantiation_work,
+            codec_phase,
         )?;
         let Type::Function(domain, codomain) = &operation.signature else {
             return Err(RuntimeFailure::ForeignBinding);
@@ -976,21 +1081,22 @@ impl<'runtime> Machine<'runtime> {
             self.program.registry(),
             true,
             &mut self.instantiation_work,
+            codec_phase,
         )?;
         // Resolve each original state path and its complete effect lineage.
         let mut indices = Vec::new();
         charge_effect_work(
             &mut self.instantiation_work,
             operation.state_lineage.len(),
-            RuntimePhase::Access,
+            codec_phase,
         )?;
         indices
             .try_reserve_exact(operation.state_lineage.len())
-            .map_err(|_| RuntimeFailure::HeapCapacity)?;
+            .map_err(|_| foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase))?;
         for operand in &operation.state_lineage {
             let mut node = input.root();
             for coordinate in &operand.path {
-                charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                charge_effect_work(&mut self.instantiation_work, 1, codec_phase)?;
                 let Some(ForeignDataNode::Tuple(fields)) = input.node(node) else {
                     return Err(RuntimeFailure::ForeignBinding);
                 };
@@ -1016,7 +1122,8 @@ impl<'runtime> Machine<'runtime> {
             if Instantiation::activation_at(effect, coordinate) != Some(found) {
                 return Err(RuntimeFailure::ForeignBinding);
             }
-            let index = find_provider_path(&self.frames, found, &mut self.instantiation_work)?
+            let index = find_provider_path(&self.frames, found, &mut self.instantiation_work)
+                .map_err(|failure| codec_failure_phase(failure, codec_phase))?
                 .ok_or(RuntimeFailure::ForeignBinding)?;
             let candidate =
                 provider_at(&self.frames, &index).ok_or(RuntimeFailure::ForeignBinding)?;
@@ -1059,9 +1166,9 @@ impl<'runtime> Machine<'runtime> {
                     indices.len(),
                     RuntimePhase::Acquisition,
                 )?;
-                dependencies
-                    .try_reserve_exact(indices.len())
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                dependencies.try_reserve_exact(indices.len()).map_err(|_| {
+                    foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
+                })?;
                 for (index, operand) in indices.iter().zip(operation.state_lineage.iter()) {
                     let state_fact = native
                         .states
@@ -1090,9 +1197,9 @@ impl<'runtime> Machine<'runtime> {
                     RuntimePhase::Access,
                 )?;
                 let mut views = Vec::new();
-                views
-                    .try_reserve_exact(indices.len())
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                views.try_reserve_exact(indices.len()).map_err(|_| {
+                    foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
+                })?;
                 for index in &indices {
                     let candidate =
                         provider_at(&self.frames, index).ok_or(RuntimeFailure::ForeignBinding)?;
@@ -1119,7 +1226,7 @@ impl<'runtime> Machine<'runtime> {
                 let acquired = binding
                     .executable()
                     .acquire(operation_key, native, &input, &views)
-                    .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                    .map_err(|error| foreign_failure(error, RuntimePhase::Acquisition))?;
                 drop(views);
                 let report = match acquired {
                     ForeignAcquisition::Refused(error_data) => {
@@ -1129,12 +1236,18 @@ impl<'runtime> Machine<'runtime> {
                             self.program.registry(),
                             false,
                             &mut self.instantiation_work,
+                            RuntimePhase::Acquisition,
                         )?;
-                        let error =
-                            decode_data(&error_data, &mut self.heap, &mut self.instantiation_work)?;
+                        let error = decode_data(
+                            &error_data,
+                            &mut self.heap,
+                            &mut self.instantiation_work,
+                            RuntimePhase::Acquisition,
+                        )?;
                         self.foreign_constructor(
                             *constructors.get(1).ok_or(RuntimeFailure::ForeignBinding)?,
                             Some(error),
+                            codec_phase,
                         )?
                     }
                     ForeignAcquisition::Acquired(payload) => {
@@ -1143,10 +1256,11 @@ impl<'runtime> Machine<'runtime> {
                             .as_mut()
                             .ok_or(RuntimeFailure::ForeignBinding)?
                             .guard(payload, *state, dependencies)
-                            .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                            .map_err(|error| foreign_failure(error, RuntimePhase::Acquisition))?;
                         let report = self.foreign_constructor(
                             *constructors.first().ok_or(RuntimeFailure::ForeignBinding)?,
                             Some(Value::NativeStateView(key)),
+                            codec_phase,
                         )?;
                         let candidate = provider_at_mut(&mut self.frames, &boundary)
                             .ok_or(RuntimeFailure::ForeignBinding)?;
@@ -1173,9 +1287,9 @@ impl<'runtime> Machine<'runtime> {
                     RuntimePhase::Access,
                 )?;
                 let mut views = Vec::new();
-                views
-                    .try_reserve_exact(indices.len())
-                    .map_err(|_| RuntimeFailure::HeapCapacity)?;
+                views.try_reserve_exact(indices.len()).map_err(|_| {
+                    foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
+                })?;
                 for index in &indices {
                     let candidate =
                         provider_at(&self.frames, index).ok_or(RuntimeFailure::ForeignBinding)?;
@@ -1200,7 +1314,7 @@ impl<'runtime> Machine<'runtime> {
                 let output = binding
                     .executable()
                     .invoke(operation_key, native, &input, &views)
-                    .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                    .map_err(|error| foreign_failure(error, RuntimePhase::Access))?;
                 drop(views);
                 validate_codec(
                     &output,
@@ -1208,8 +1322,14 @@ impl<'runtime> Machine<'runtime> {
                     self.program.registry(),
                     false,
                     &mut self.instantiation_work,
+                    RuntimePhase::Access,
                 )?;
-                let value = decode_data(&output, &mut self.heap, &mut self.instantiation_work)?;
+                let value = decode_data(
+                    &output,
+                    &mut self.heap,
+                    &mut self.instantiation_work,
+                    RuntimePhase::Access,
+                )?;
                 self.control = Some(Control::Return(value));
             }
             ForeignOperationRole::Finish => {
@@ -1245,7 +1365,7 @@ impl<'runtime> Machine<'runtime> {
                 let outcome = if quarantined {
                     runtime
                         .finish_quarantined(identity, native, operation)
-                        .map_err(|_| RuntimeFailure::ForeignBinding)?
+                        .map_err(|error| foreign_failure(error, RuntimePhase::Cleanup))?
                 } else {
                     let context = crate::foreign::runtime::ForeignFinishContext {
                         retained_dependents: runtime.retained_dependents(identity),
@@ -1265,7 +1385,7 @@ impl<'runtime> Machine<'runtime> {
                     let outcome = binding
                         .executable()
                         .finish(operation_key, native, owner.payload.as_mut(), context)
-                        .map_err(|_| RuntimeFailure::ForeignBinding)?;
+                        .map_err(|error| foreign_failure(error, RuntimePhase::Cleanup))?;
                     if context.retained_dependents
                         && !matches!(outcome, ForeignCompletion::RetainedError(_))
                     {
@@ -1292,6 +1412,7 @@ impl<'runtime> Machine<'runtime> {
                     ForeignCompletion::Closed => self.foreign_constructor(
                         *constructors.first().ok_or(RuntimeFailure::ForeignBinding)?,
                         None,
+                        codec_phase,
                     )?,
                     ForeignCompletion::ConsumedError(data)
                     | ForeignCompletion::RetainedError(data) => {
@@ -1300,15 +1421,22 @@ impl<'runtime> Machine<'runtime> {
                                 candidate.finished == Some(ProviderFinish::RetainedError)
                             });
                         let converted = (|| {
-                            let data = data.map_err(|_| RuntimeFailure::ForeignBinding)?;
+                            let data = data
+                                .map_err(|error| foreign_failure(error, RuntimePhase::Cleanup))?;
                             validate_codec(
                                 &data,
                                 &Type::Nominal(*error),
                                 self.program.registry(),
                                 false,
                                 &mut self.instantiation_work,
+                                RuntimePhase::Cleanup,
                             )?;
-                            decode_data(&data, &mut self.heap, &mut self.instantiation_work)
+                            decode_data(
+                                &data,
+                                &mut self.heap,
+                                &mut self.instantiation_work,
+                                RuntimePhase::Cleanup,
+                            )
                         })();
                         let error = match converted {
                             Ok(error) => error,
@@ -1317,7 +1445,7 @@ impl<'runtime> Machine<'runtime> {
                             }
                         };
                         let payload = if retained {
-                            self.foreign_tuple(&[Value::NativeStateView(key), error])?
+                            self.foreign_tuple(&[Value::NativeStateView(key), error], codec_phase)?
                         } else {
                             error
                         };
@@ -1326,6 +1454,7 @@ impl<'runtime> Machine<'runtime> {
                                 .get(if retained { 2 } else { 1 })
                                 .ok_or(RuntimeFailure::ForeignBinding)?,
                             Some(payload),
+                            codec_phase,
                         )?
                     }
                 };
@@ -1446,6 +1575,85 @@ mod integer_codec_tests {
     }
 
     #[test]
+    fn codec_budget_refusal_retains_phase_and_erased_clone_cause() {
+        let data = ForeignData::new(vec![ForeignDataNode::Unit], 0).unwrap();
+        let registry = crate::resolved::ResolvedRegistry::default();
+        for phase in [
+            RuntimePhase::Acquisition,
+            RuntimePhase::Access,
+            RuntimePhase::Cleanup,
+        ] {
+            let failure = validate_codec(
+                &data,
+                &Type::Unit,
+                &registry,
+                false,
+                &mut TypeWorkBudget::with_limit(0),
+                phase,
+            )
+            .unwrap_err();
+            let RuntimeFailure::Report(report) = failure else {
+                panic!("erased structural-clone resource refusal must not become a binding error");
+            };
+            let details = report.primary.resource().unwrap();
+            assert_eq!(details.phase, phase);
+            assert_eq!(
+                details.cause,
+                super::super::ResourceFailureCause::ResourceAdmissionRefused
+            );
+            assert_eq!(
+                details.resource,
+                super::super::RuntimeResource::ForeignAdmission
+            );
+            assert_eq!(details.requested, None);
+            assert_eq!(details.available, None);
+            for failure in [
+                encode_input(
+                    &Value::Unit,
+                    &[],
+                    &mut Vec::new(),
+                    &mut TypeWorkBudget::with_limit(0),
+                    phase,
+                )
+                .unwrap_err(),
+                decode_data(
+                    &data,
+                    &mut Vec::new(),
+                    &mut TypeWorkBudget::with_limit(0),
+                    phase,
+                )
+                .unwrap_err(),
+            ] {
+                let RuntimeFailure::Report(report) = failure else {
+                    panic!("structured codec work refusal");
+                };
+                let details = report.primary.resource().unwrap();
+                assert_eq!(details.phase, phase);
+                assert_eq!(
+                    details.cause,
+                    super::super::ResourceFailureCause::WorkBudgetExhausted
+                );
+                assert_eq!(details.resource, super::super::RuntimeResource::WorkUnits);
+                assert_eq!(details.requested, Some(1));
+                assert_eq!(details.available, Some(0));
+            }
+        }
+        assert_eq!(
+            validate_codec(
+                &data,
+                &Type::Int,
+                &registry,
+                false,
+                &mut TypeWorkBudget::unbounded(),
+                RuntimePhase::Access
+            )
+            .unwrap_err()
+            .reason_code(),
+            RuntimeFailure::ForeignBinding.reason_code()
+        );
+    }
+
+    #[test]
     fn generic_codec_preserves_integers_beyond_native_range() {
         let integer = large_integer();
         assert_eq!(integer.to_i64(), None);
@@ -1455,10 +1663,16 @@ mod integer_codec_tests {
             &[],
             &mut Vec::new(),
             &mut TypeWorkBudget::unbounded(),
+            RuntimePhase::Access,
         )
         .unwrap();
-        let decoded =
-            decode_data(&encoded, &mut Vec::new(), &mut TypeWorkBudget::unbounded()).unwrap();
+        let decoded = decode_data(
+            &encoded,
+            &mut Vec::new(),
+            &mut TypeWorkBudget::unbounded(),
+            RuntimePhase::Access,
+        )
+        .unwrap();
         assert_eq!(decoded.to_string(), expected);
     }
 
@@ -1475,12 +1689,14 @@ mod integer_codec_tests {
                 &[],
                 &mut Vec::new(),
                 &mut TypeWorkBudget::with_limit(bytes + 1),
+                RuntimePhase::Access,
             )
             .unwrap_err(),
             decode_data(
                 &encoded,
                 &mut Vec::new(),
                 &mut TypeWorkBudget::with_limit(bytes + 1),
+                RuntimePhase::Access,
             )
             .unwrap_err(),
         ] {

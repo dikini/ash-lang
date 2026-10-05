@@ -37,7 +37,8 @@ pub(crate) use scope::{
     derive_provider_scope_protocol, interpret_native_phase_row,
 };
 pub(crate) use specialization::{
-    LifecycleOriginal, ResolvedProviderHandlerRows, admit_lifecycle_original,
+    DeferredProviderHandlerRows, DeferredProviderRowPosition, LifecycleOriginal,
+    ResolvedProviderHandlerRows, admit_lifecycle_original,
 };
 pub(crate) use specialization::{
     ProviderCopiedTemplate, ProviderFreshening, ProviderOccurrenceRelocation,
@@ -48,10 +49,12 @@ mod external;
 mod handler;
 mod row;
 pub(in crate::core) use external::ProviderLocalFlow;
+#[cfg(test)]
+pub(crate) use external::authenticate_plain_externals_with_defining;
 pub(crate) use external::{
     AuthenticatedProviderExternals, AuthenticatedProviderMethodEvidence,
     AuthenticatedProviderStateAccesses, ProviderExternalOccurrence, ProviderSourceRelation,
-    authenticate_plain_externals_with_defining, authenticate_staged_externals_with_defining,
+    authenticate_staged_externals_with_defining,
 };
 #[cfg(test)]
 pub(crate) use external::{
@@ -91,6 +94,7 @@ pub(crate) use row::{
 pub(in crate::core) use row::{authenticate_definition_contract, authenticate_owned_contract};
 mod entry;
 pub(crate) use access::DraftStateAssociation;
+pub(crate) use access::check_original_state_access_associations;
 #[cfg(test)]
 pub(crate) use access::check_state_access_associations;
 #[cfg(test)]
@@ -1064,14 +1068,6 @@ pub(crate) fn check_enclosing_finish_rejection_for_test(
 /// Tracks actual registered outcomes through ordinary bindings and total
 /// matches. State aliases share a guard lineage; they never clone ownership.
 /// Branching and environment transfer consume one cumulative work budget.
-pub(crate) fn check_lifecycle_flow(
-    program: &UnvalidatedEffectProgram,
-    context: &LifecycleFlowContext<'_>,
-    work: &mut TypeWorkBudget,
-) -> Result<(), ValidationError> {
-    check_lifecycle_flow_with_associations(program, context, &[], work)
-}
-
 pub(crate) fn check_lifecycle_flow_with_associations(
     program: &UnvalidatedEffectProgram,
     context: &LifecycleFlowContext<'_>,
@@ -1719,7 +1715,17 @@ fn execute_flow_paths(
                         }
                         externals
                             .ok_or_else(|| invalid(id))?
-                            .independent_call(program, id, binder, occurrence, work)?;
+                            // Only an admitted handler original may call an ordinary
+                            // helper with an internally owned scope. Lifecycle
+                            // source calls retain their bounded pure bridge.
+                            .independent_call(
+                                program,
+                                id,
+                                binder,
+                                occurrence,
+                                matches!(mode, FlowMode::Handler(_)),
+                                work,
+                            )?;
                         independent
                     } else {
                         let EffectExprKind::Pure(PureExprKind::Computation(

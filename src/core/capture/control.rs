@@ -243,6 +243,8 @@ pub(super) enum Control {
         body: usize,
         effect: Request,
         clauses: Vec<Clause>,
+        // Only a generated provider handler may name its exact native owner.
+        owning_resource: Option<usize>,
     },
     Resource {
         body: usize,
@@ -374,6 +376,7 @@ impl Control {
                 body,
                 effect,
                 clauses,
+                owning_resource,
             } => {
                 let mut clauses = copy_slice(clauses, budget)?;
                 for clause in &mut clauses {
@@ -384,6 +387,9 @@ impl Control {
                     body: body + code_offset,
                     effect: effect.copy(budget)?,
                     clauses,
+                    owning_resource: owning_resource
+                        .map(|owner| owner.checked_add(code_offset).ok_or(Failure::Resource))
+                        .transpose()?,
                 }
             }
             Self::Resume { owner, value } => Self::Resume {
@@ -517,6 +523,14 @@ struct Event {
     port: Option<usize>,
 }
 
+/// The owner occurrence uses the existing finite value-context domain.
+/// An equal native effect never substitutes for this exact enclosing frame.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct ProviderResourceOccurrence {
+    code: usize,
+    value_context: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Frame {
     Closing {
@@ -554,6 +568,7 @@ enum Frame {
         context: usize,
         value_context: usize,
         capture_context: usize,
+        owning_resource: Option<ProviderResourceOccurrence>,
     },
     Resource {
         code: usize,
@@ -992,7 +1007,175 @@ pub(super) struct Analysis<'a> {
     focusing: bool,
     payloads: Vec<(usize, usize, usize)>,
     pub(super) infer_cleanup_rows: bool,
+    pub(super) authenticate_actual_captures: bool,
+    pub(super) actual_captures: Vec<super::ActualDiscardCapture>,
     pub(super) cleanup_rows: Vec<super::CleanupRequirement>,
+}
+
+/// Resource restore cuts relocate an existing exact occurrence. A same-code
+/// sibling cannot replace it, and conflicting relocations grant no authority.
+fn relocate_provider_resource_occurrence(
+    owner: ProviderResourceOccurrence,
+    restored_owners: &[(ProviderResourceOccurrence, ProviderResourceOccurrence)],
+    budget: &mut TypeWorkBudget,
+) -> Result<ProviderResourceOccurrence, Failure> {
+    let mut restored = None;
+    for (original, actual) in restored_owners {
+        charge(budget, 1)?;
+        if *original == owner {
+            if restored.is_some_and(|previous| previous != *actual) {
+                return Err(Failure::Invalid);
+            }
+            restored = Some(*actual);
+        }
+    }
+    Ok(restored.unwrap_or(owner))
+}
+
+/// Binds a generated handler to the nearest exact Resource code on every
+/// possible enclosing path. Different occurrences or missing paths fail closed.
+fn enclosing_provider_resource(
+    state: &State,
+    root: Address,
+    code: usize,
+    budget: &mut TypeWorkBudget,
+) -> Result<Option<ProviderResourceOccurrence>, Failure> {
+    let mut pending = Vec::new();
+    let mut seen = HashMap::new();
+    charge(budget, 1)?;
+    pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+    pending.push((root, false));
+    let mut owner = None;
+    while let Some((address, returning)) = pending.pop() {
+        charge(budget, 1)?;
+        if matches!(address, Address::End | Address::Empty) {
+            return Ok(None);
+        }
+        if returning {
+            seen.insert(address, true);
+            continue;
+        }
+        if let Some(complete) = seen.get(&address) {
+            if *complete {
+                continue;
+            }
+            // A cyclic owner-avoiding path does not prove structural enclosure.
+            return Ok(None);
+        }
+        charge(budget, 1)?;
+        seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+        seen.insert(address, false);
+        charge(budget, 1)?;
+        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        pending.push((address, true));
+        let edges = state.edges(address, budget)?;
+        if edges.is_empty() {
+            return Ok(None);
+        }
+        for edge in edges {
+            charge(budget, 1)?;
+            if let Frame::Resource {
+                code: candidate,
+                value_context,
+                ..
+            } = edge.frame
+                && candidate == code
+            {
+                let actual = ProviderResourceOccurrence {
+                    code,
+                    value_context,
+                };
+                if owner.is_some_and(|expected| expected != actual) {
+                    return Ok(None);
+                }
+                owner = Some(actual);
+            } else {
+                charge(budget, 1)?;
+                pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                pending.push((edge.next, false));
+            }
+        }
+    }
+    Ok(owner)
+}
+
+/// Capture End connects to the surviving clause continuation. Every path must
+/// reach the bound owner; a nearer different occurrence cannot fall through.
+fn provider_resource_survives(
+    captured: &State,
+    root: Address,
+    surviving: &State,
+    continuation: Address,
+    owner: ProviderResourceOccurrence,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    let check = |state: &State, root: Address, budget: &mut TypeWorkBudget| {
+        let mut pending = Vec::new();
+        let mut seen = HashMap::new();
+        charge(budget, 1)?;
+        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        pending.push((root, false));
+        let mut reached_owner = false;
+        let mut reached_cut = false;
+        while let Some((address, returning)) = pending.pop() {
+            charge(budget, 1)?;
+            match address {
+                // Only the authenticated capture cut joins its continuation.
+                Address::Empty => return Ok::<_, Failure>((false, false)),
+                Address::End => {
+                    reached_cut = true;
+                    continue;
+                }
+                _ => {}
+            }
+            if returning {
+                seen.insert(address, true);
+                continue;
+            }
+            if let Some(complete) = seen.get(&address) {
+                if *complete {
+                    continue;
+                }
+                return Ok((false, false));
+            }
+            charge(budget, 1)?;
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            seen.insert(address, false);
+            charge(budget, 1)?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push((address, true));
+            let edges = state.edges(address, budget)?;
+            if edges.is_empty() {
+                return Ok((false, false));
+            }
+            for edge in edges {
+                charge(budget, 1)?;
+                if let Frame::Resource {
+                    code,
+                    value_context,
+                    ..
+                } = edge.frame
+                    && code == owner.code
+                {
+                    if value_context != owner.value_context {
+                        return Ok((false, false));
+                    }
+                    reached_owner = true;
+                } else {
+                    charge(budget, 1)?;
+                    pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    pending.push((edge.next, false));
+                }
+            }
+        }
+        Ok((reached_owner || reached_cut, reached_cut))
+    };
+    let (matches, escaped) = check(captured, root, budget)?;
+    if !matches || !escaped {
+        return Ok(matches);
+    }
+    let (matches, escaped) = check(surviving, continuation, budget)?;
+    Ok(matches && !escaped)
 }
 
 impl<'a> Analysis<'a> {
@@ -1130,6 +1313,8 @@ impl<'a> Analysis<'a> {
             focusing: false,
             payloads: Vec::new(),
             infer_cleanup_rows: false,
+            authenticate_actual_captures: false,
+            actual_captures: Vec::new(),
             cleanup_rows: Vec::new(),
         })
     }
@@ -1808,6 +1993,7 @@ impl<'a> Analysis<'a> {
         targets: &[usize],
         actual: &'a Type,
         authenticated_wrapper: bool,
+        allow_owned_scopes: bool,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         let mut analysis = Self::new(graph, Some(actual), budget)?;
@@ -1833,7 +2019,47 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             pending.try_reserve(1).map_err(|_| Failure::Resource)?;
             pending.push((callable.body, context, value_context));
-            data.provider_result(callable.body, value_context, budget)?;
+            if !allow_owned_scopes {
+                data.provider_result(callable.body, value_context, budget)?;
+            }
+        }
+        if allow_owned_scopes {
+            if !authenticated_wrapper {
+                return Err(Failure::Invalid);
+            }
+            // The phase permission is supplied only by the independently
+            // checked handler flow. Seed the same ordinary resource engine
+            // with the authenticated callable substitution and value context.
+            analysis.data = Some(data);
+            for &(code, context, value_context) in &pending {
+                let state = State {
+                    position: Position { code, next: 0 },
+                    context,
+                    value_context,
+                    stack: Address::Empty,
+                    heap: Vec::new(),
+                    abandoned: None,
+                };
+                analysis.discover(&[], Some(&state), budget)?;
+            }
+            if let Some(data) = &mut analysis.data {
+                for (code, _, value_context) in pending {
+                    data.provider_result(code, value_context, budget)?;
+                }
+            }
+            analysis.check_payloads(budget)?;
+            if let Some(data) = &mut analysis.data {
+                data.close(budget)?;
+                for candidate in data.resource_candidates(budget)? {
+                    charge(budget, 1)?;
+                    analysis
+                        .candidates
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    analysis.candidates.insert(candidate);
+                }
+            }
+            return analysis.check_focused_entries(budget);
         }
         while let Some((code, context, value_context)) = pending.pop() {
             charge(budget, 1)?;
@@ -1875,6 +2101,21 @@ impl<'a> Analysis<'a> {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn actual_request_path(
+        &self,
+        request: super::ActualRequestContext,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Span, Vec<super::ActualValuePathStep>), Failure> {
+        self.data
+            .as_ref()
+            .ok_or(Failure::Invalid)?
+            .actual_request_path(
+                request.port.ok_or(Failure::Invalid)?,
+                request.value_context,
+                budget,
+            )
     }
 
     pub(super) fn check(
@@ -2049,6 +2290,26 @@ impl<'a> Analysis<'a> {
                                 context: next.context,
                                 value_context: next.value_context,
                                 capture_context: next.value_context,
+                                owning_resource: match self.graph.code[code] {
+                                    Control::Handler {
+                                        owning_resource: Some(owner),
+                                        ..
+                                    } => {
+                                        if !matches!(
+                                            self.graph.code.get(owner),
+                                            Some(Control::Resource { .. })
+                                        ) {
+                                            return Err(Failure::Invalid);
+                                        }
+                                        Some(
+                                            enclosing_provider_resource(
+                                                &next, next.stack, owner, budget,
+                                            )?
+                                            .ok_or(Failure::Invalid)?,
+                                        )
+                                    }
+                                    _ => None,
+                                },
                             }
                         };
                         next.push(frame, budget)?;
@@ -2303,7 +2564,23 @@ impl<'a> Analysis<'a> {
         charge(budget, seed.heap.len())?;
         cuts.try_reserve(seed.heap.len())
             .map_err(|_| Failure::Resource)?;
+        let mut restored_owners = Vec::new();
+        charge(budget, seed.heap.len())?;
+        restored_owners
+            .try_reserve_exact(seed.heap.len())
+            .map_err(|_| Failure::Resource)?;
         for edge in &mut seed.heap {
+            let original_owner = match edge.frame {
+                Frame::Resource {
+                    code,
+                    value_context,
+                    ..
+                } => Some(ProviderResourceOccurrence {
+                    code,
+                    value_context,
+                }),
+                _ => None,
+            };
             let cut = match &mut edge.frame {
                 Frame::Closing {
                     code,
@@ -2456,7 +2733,35 @@ impl<'a> Analysis<'a> {
                     }
                 }
             };
+            if let Some(original) = original_owner {
+                let Frame::Resource {
+                    code,
+                    value_context,
+                    ..
+                } = edge.frame
+                else {
+                    return Err(Failure::Invalid);
+                };
+                restored_owners.push((
+                    original,
+                    ProviderResourceOccurrence {
+                        code,
+                        value_context,
+                    },
+                ));
+            }
             cuts.push(cut);
+        }
+        // Relocate an already authenticated occurrence through its own restore
+        // cut. This does not use a sibling owner as new interpretation authority.
+        for edge in &mut seed.heap {
+            if let Frame::Handler {
+                owning_resource: Some(owner),
+                ..
+            } = &mut edge.frame
+            {
+                *owner = relocate_provider_resource_occurrence(*owner, &restored_owners, budget)?;
+            }
         }
         // Connect the saved continuation graph by result ports. Reusing old
         // value-context equality would replay completed calls and acquisitions.
@@ -2623,7 +2928,8 @@ impl<'a> Analysis<'a> {
                     consumed,
                     ..
                 } => {
-                    if !consumed && !self.infer_cleanup_rows {
+                    if !consumed && (!self.infer_cleanup_rows || self.authenticate_actual_captures)
+                    {
                         let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
                             return Err(Failure::Invalid);
                         };
@@ -2718,7 +3024,7 @@ impl<'a> Analysis<'a> {
         }
         for selected in selected {
             if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
-                if self.infer_cleanup_rows {
+                if self.infer_cleanup_rows && !self.authenticate_actual_captures {
                     self.returned(state.copy(budget)?, pending, visited, budget)?;
                     continue;
                 }
@@ -2767,6 +3073,7 @@ impl<'a> Analysis<'a> {
                 context,
                 value_context,
                 capture_context,
+                ..
             } = selected.boundary.frame
             else {
                 return Err(Failure::Invalid);
@@ -2918,6 +3225,7 @@ impl<'a> Analysis<'a> {
         )?;
         let mut retained = Vec::new();
         let mut discard_context = None;
+        let mut requests = Vec::new();
         let (drivers, _) = selections(
             state,
             outer,
@@ -2928,13 +3236,33 @@ impl<'a> Analysis<'a> {
             budget,
         )?;
         for driver in drivers {
-            let Frame::Closing { context, .. } = driver.boundary.frame else {
+            let Frame::Closing {
+                context,
+                value_context,
+                event,
+                ..
+            } = driver.boundary.frame
+            else {
                 return Err(Failure::Invalid);
             };
             if discard_context.is_some_and(|previous| previous != context) {
                 return Err(Failure::Invalid);
             }
             discard_context = Some(context);
+            let request = super::ActualRequestContext {
+                code: event.code,
+                label: event.label,
+                port: event.port,
+                value_context,
+            };
+            charge(
+                budget,
+                requests.len().checked_add(1).ok_or(Failure::Resource)?,
+            )?;
+            if !requests.contains(&request) {
+                requests.try_reserve(1).map_err(|_| Failure::Resource)?;
+                requests.push(request);
+            }
         }
         let discard_context = discard_context.ok_or(Failure::Invalid)?;
         charge(budget, 1)?;
@@ -2953,10 +3281,39 @@ impl<'a> Analysis<'a> {
             }
             None => EffectRow::empty(),
         };
-        charge(budget, resources.len() + 1)?;
-        retained
-            .try_reserve(resources.len())
-            .map_err(|_| Failure::Resource)?;
+        // A generic owner's native interpreter and its generated source
+        // handler serve different effect families. Closing retains only the
+        // latter's authenticated exact owner association. Its provided effect
+        // therefore also interprets a cleanup action's outward demand.
+        let (providers, _) = selections(
+            state,
+            outer,
+            |frame| {
+                Ok((
+                    matches!(
+                        frame,
+                        Frame::Handler {
+                            owning_resource: Some(_),
+                            ..
+                        }
+                    ),
+                    !matches!(
+                        frame,
+                        Frame::Closing {
+                            site: Site::Closing(_, _),
+                            ..
+                        }
+                    ),
+                ))
+            },
+            budget,
+        )?;
+        let count = resources
+            .len()
+            .checked_add(providers.len())
+            .ok_or(Failure::Resource)?;
+        charge(budget, count.checked_add(1).ok_or(Failure::Resource)?)?;
+        retained.try_reserve(count).map_err(|_| Failure::Resource)?;
         for resource in resources {
             let Frame::Resource { code, context, .. } = resource.boundary.frame else {
                 return Err(Failure::Invalid);
@@ -2969,19 +3326,53 @@ impl<'a> Analysis<'a> {
                 );
             }
         }
+        for provider in providers {
+            let Frame::Handler {
+                code,
+                context,
+                owning_resource: Some(_),
+                ..
+            } = provider.boundary.frame
+            else {
+                return Err(Failure::Invalid);
+            };
+            let label = self.label(code, context, budget)?;
+            if let Some(effect) = &self.labels[label].effect {
+                retained.push(
+                    crate::core::effect::clone_effect_instance_with_budget(effect, budget)
+                        .map_err(|_| Failure::Resource)?,
+                );
+            }
+        }
+        charge(budget, requests.len())?;
         self.cleanup_rows
-            .try_reserve(1)
+            .try_reserve(requests.len())
             .map_err(|_| Failure::Resource)?;
-        self.cleanup_rows.push(super::CleanupRequirement {
-            discard: node,
-            local,
-            code: discard,
-            source,
-            context: discard_context,
-            expected,
-            row,
-            retained,
-        });
+        for request in requests {
+            let mut retained_copy = Vec::new();
+            charge(budget, retained.len())?;
+            retained_copy
+                .try_reserve_exact(retained.len())
+                .map_err(|_| Failure::Resource)?;
+            for effect in &retained {
+                retained_copy.push(
+                    crate::core::effect::clone_effect_instance_with_budget(effect, budget)
+                        .map_err(|_| Failure::Resource)?,
+                );
+            }
+            self.cleanup_rows.push(super::CleanupRequirement {
+                discard: node,
+                local,
+                code: discard,
+                source,
+                context: discard_context,
+                request,
+                expected: clone_effect_row_with_budget(&expected, budget)
+                    .map_err(|_| Failure::Resource)?,
+                row: clone_effect_row_with_budget(&row, budget).map_err(|_| Failure::Resource)?,
+                retained: retained_copy,
+            });
+        }
         Ok(())
     }
 
@@ -3014,7 +3405,7 @@ impl<'a> Analysis<'a> {
                         code,
                         running: true,
                         ..
-                    } if !self.infer_cleanup_rows => {
+                    } if !self.infer_cleanup_rows || self.authenticate_actual_captures => {
                         let Control::Cleanup { source, .. } = self.graph.code[code] else {
                             return Err(Failure::Invalid);
                         };
@@ -3024,7 +3415,9 @@ impl<'a> Analysis<'a> {
                             Some(CompletionOwner::Cleanup(source)),
                         ));
                     }
-                    Frame::Closing { .. } if !self.infer_cleanup_rows => {
+                    Frame::Closing { .. }
+                        if !self.infer_cleanup_rows || self.authenticate_actual_captures =>
+                    {
                         return Err(self.unsafe_discard(discard, event, None));
                     }
                     Frame::Cleanup {
@@ -3044,12 +3437,38 @@ impl<'a> Analysis<'a> {
                         code,
                         context,
                         value_context,
-                        ..
-                    } => Frame::RemovedHandler {
-                        code,
-                        context,
-                        value_context,
-                    },
+                        capture_context,
+                        owning_resource,
+                    } => {
+                        let survives = match owning_resource {
+                            // The selected capture boundary is cut at End.
+                            // It is removed even when its native owner survives.
+                            Some(owner) if edge.next != Address::End => provider_resource_survives(
+                                source,
+                                edge.next,
+                                target,
+                                target.stack,
+                                owner,
+                                budget,
+                            )?,
+                            _ => false,
+                        };
+                        if survives {
+                            Frame::Handler {
+                                code,
+                                context,
+                                value_context,
+                                capture_context,
+                                owning_resource,
+                            }
+                        } else {
+                            Frame::RemovedHandler {
+                                code,
+                                context,
+                                value_context,
+                            }
+                        }
+                    }
                     Frame::Next {
                         context,
                         value_context,
@@ -3150,8 +3569,44 @@ impl<'a> Analysis<'a> {
                     budget,
                 )?;
             }
-            if !resume && event.unknown && !self.infer_cleanup_rows {
+            if !resume
+                && event.unknown
+                && (!self.infer_cleanup_rows || self.authenticate_actual_captures)
+            {
                 return Err(self.unsafe_discard(state.position.code, event, None));
+            }
+            if !resume && self.authenticate_actual_captures {
+                let label = self.labels.get(event.label).ok_or(Failure::Invalid)?;
+                if event.unknown
+                    || label.ambiguous_instance
+                    || label.effect.is_none()
+                    || event.port.is_none()
+                {
+                    return Err(self.unsafe_discard(state.position.code, event, None));
+                }
+                let occurrence = super::ActualDiscardCapture {
+                    code: state.position.code,
+                    context: state.context,
+                    request: super::ActualRequestContext {
+                        code: event.code,
+                        label: event.label,
+                        port: event.port,
+                        value_context: state.value_context,
+                    },
+                };
+                charge(
+                    budget,
+                    self.actual_captures
+                        .len()
+                        .checked_add(1)
+                        .ok_or(Failure::Resource)?,
+                )?;
+                if !self.actual_captures.contains(&occurrence) {
+                    self.actual_captures
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    self.actual_captures.push(occurrence);
+                }
             }
             let mut next = state.copy(budget)?;
             // Replacing this occurrence does not mutate an older activation
@@ -3343,6 +3798,588 @@ mod tests {
         source::{ByteRange, SourceFile},
         types::{ComputationType, EffectId, EffectRow},
     };
+
+    fn provider_owner_state(code: usize, value_context: usize) -> State {
+        let frame = Frame::Resource {
+            code,
+            context: 0,
+            value_context,
+            focused: false,
+        };
+        let address = Address::Slot {
+            region: Region::Active,
+            site: frame.site(),
+            allocation_context: value_context,
+            old: false,
+        };
+        State {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context,
+            stack: address,
+            heap: vec![Edge {
+                address,
+                frame,
+                next: Address::Empty,
+            }],
+            abandoned: None,
+        }
+    }
+
+    #[test]
+    fn actual_capture_mode_refuses_unknown_missing_ports_and_nearest_removed_handler() {
+        let source = SourceFile::new("actual-c-negative", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: vec![],
+            types: TypeArguments(vec![Type::function_computation(
+                Type::Unit,
+                crate::types::ComputationType::new(Type::Unit, EffectRow::empty()),
+            )]),
+            code: vec![
+                Control::Return,
+                Control::Handler {
+                    body: 0,
+                    effect: Request::effect(&effect, span, &mut TypeWorkBudget::unbounded())
+                        .unwrap(),
+                    clauses: vec![],
+                    owning_resource: None,
+                },
+                Control::Request(
+                    Request::effect(&effect, span, &mut TypeWorkBudget::unbounded()).unwrap(),
+                ),
+                Control::Discard {
+                    owner: 7,
+                    node: 3,
+                    local: true,
+                    row_type: 0,
+                    source: span,
+                },
+            ],
+        };
+        for (unknown, port) in [(true, Some(0)), (false, None)] {
+            let mut budget = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
+            analysis.infer_cleanup_rows = true;
+            analysis.authenticate_actual_captures = true;
+            let label = analysis.label(2, 0, &mut budget).unwrap();
+            let event = Event {
+                code: 2,
+                label,
+                unknown,
+                port,
+            };
+            let clause = Frame::Clause {
+                handler: 1,
+                ordinal: 0,
+                owner: 7,
+                context: 0,
+                value_context: 0,
+                capture: Address::End,
+                capture_context: 0,
+                clause_context: 0,
+                event,
+                consumed: false,
+            };
+            let address = Address::Slot {
+                region: Region::Active,
+                site: clause.site(),
+                allocation_context: 0,
+                old: false,
+            };
+            let mut state = State {
+                position: Position { code: 3, next: 0 },
+                context: 0,
+                value_context: 0,
+                stack: address,
+                heap: vec![Edge {
+                    address,
+                    frame: clause,
+                    next: Address::Empty,
+                }],
+                abandoned: None,
+            };
+            state.normalize(&mut budget).unwrap();
+            assert!(matches!(
+                analysis.completed(
+                    state,
+                    7,
+                    false,
+                    &mut VecDeque::new(),
+                    &mut HashSet::new(),
+                    &mut budget
+                ),
+                Err(Failure::Unsafe(_))
+            ));
+            assert!(
+                analysis.actual_captures.is_empty(),
+                "unproved request never contributes an empty c"
+            );
+        }
+        let mut budget = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, None, &mut budget).unwrap();
+        analysis.infer_cleanup_rows = true;
+        analysis.authenticate_actual_captures = true;
+        let label = analysis.label(2, 0, &mut budget).unwrap();
+        let event = Event {
+            code: 2,
+            label,
+            unknown: false,
+            port: Some(0),
+        };
+        let removed = Frame::RemovedHandler {
+            code: 1,
+            context: 0,
+            value_context: 0,
+        };
+        let live = Frame::Handler {
+            code: 1,
+            context: 0,
+            value_context: 0,
+            capture_context: 0,
+            owning_resource: None,
+        };
+        let address = |frame: Frame| Address::Slot {
+            region: Region::Closing(3, 2),
+            site: frame.site(),
+            allocation_context: 0,
+            old: false,
+        };
+        let mut state = State {
+            position: Position { code: 2, next: 0 },
+            context: 0,
+            value_context: 0,
+            stack: address(removed),
+            heap: vec![
+                Edge {
+                    address: address(removed),
+                    frame: removed,
+                    next: address(live),
+                },
+                Edge {
+                    address: address(live),
+                    frame: live,
+                    next: Address::Empty,
+                },
+            ],
+            abandoned: Some((3, event)),
+        };
+        state.normalize(&mut budget).unwrap();
+        assert!(
+            matches!(
+                analysis.requested(
+                    &state,
+                    event,
+                    &mut VecDeque::new(),
+                    &mut HashSet::new(),
+                    &mut budget
+                ),
+                Err(Failure::CleanupContext { .. })
+            ),
+            "an outer same-label live handler cannot replace the nearest removed source handler during actual c inference"
+        );
+    }
+
+    #[test]
+    fn provider_handler_owner_requires_the_exact_enclosing_occurrence() {
+        let owner = ProviderResourceOccurrence {
+            code: 3,
+            value_context: 7,
+        };
+        let state = provider_owner_state(owner.code, owner.value_context);
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(
+            enclosing_provider_resource(&state, state.stack, owner.code, &mut measured).unwrap(),
+            Some(owner)
+        );
+        let exact = measured.used();
+        assert!(matches!(
+            enclosing_provider_resource(
+                &state,
+                state.stack,
+                owner.code,
+                &mut TypeWorkBudget::with_limit(exact - 1)
+            ),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(
+            enclosing_provider_resource(
+                &state,
+                state.stack,
+                owner.code,
+                &mut TypeWorkBudget::with_limit(exact)
+            )
+            .unwrap(),
+            Some(owner)
+        );
+        assert!(
+            provider_resource_survives(
+                &state,
+                Address::End,
+                &state,
+                state.stack,
+                owner,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        assert!(
+            !provider_resource_survives(
+                &state,
+                Address::Empty,
+                &state,
+                state.stack,
+                owner,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        assert!(
+            !provider_resource_survives(
+                &state,
+                Address::End,
+                &state,
+                state.stack,
+                ProviderResourceOccurrence {
+                    value_context: 8,
+                    ..owner
+                },
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        // An unrelated sibling heap edge cannot supply the missing owner path.
+        let mut sibling = provider_owner_state(4, 9);
+        sibling.heap.push(state.heap[0]);
+        sibling.heap.sort_unstable();
+        assert!(
+            !provider_resource_survives(
+                &state,
+                Address::End,
+                &sibling,
+                sibling.stack,
+                owner,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            enclosing_provider_resource(
+                &sibling,
+                sibling.stack,
+                owner.code,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap(),
+            None
+        );
+        // One proven branch cannot hide another branch with a dangling address.
+        let mut dangling = provider_owner_state(owner.code, owner.value_context);
+        let root = Address::Slot {
+            region: Region::Active,
+            site: Site::Next(Position { code: 0, next: 0 }),
+            allocation_context: 0,
+            old: false,
+        };
+        let missing = Address::Slot {
+            region: Region::Active,
+            site: Site::Next(Position { code: 1, next: 0 }),
+            allocation_context: 0,
+            old: false,
+        };
+        let frame = Frame::Next {
+            position: Position { code: 0, next: 0 },
+            context: 0,
+            value_context: 0,
+        };
+        dangling.heap.push(Edge {
+            address: root,
+            frame,
+            next: dangling.stack,
+        });
+        dangling.heap.push(Edge {
+            address: root,
+            frame,
+            next: missing,
+        });
+        dangling.heap.sort_unstable();
+        assert_eq!(
+            enclosing_provider_resource(
+                &dangling,
+                root,
+                owner.code,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            !provider_resource_survives(
+                &dangling,
+                root,
+                &state,
+                state.stack,
+                owner,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        let mut cyclic = provider_owner_state(owner.code, owner.value_context);
+        cyclic.heap.push(Edge {
+            address: root,
+            frame,
+            next: cyclic.stack,
+        });
+        cyclic.heap.push(Edge {
+            address: root,
+            frame,
+            next: root,
+        });
+        cyclic.heap.sort_unstable();
+        assert_eq!(
+            enclosing_provider_resource(
+                &cyclic,
+                root,
+                owner.code,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            !provider_resource_survives(
+                &cyclic,
+                root,
+                &state,
+                state.stack,
+                owner,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_restore_relocates_the_original_owner_cut_and_refuses_conflicts() {
+        let original = ProviderResourceOccurrence {
+            code: 3,
+            value_context: 7,
+        };
+        let restored = ProviderResourceOccurrence {
+            value_context: 10,
+            ..original
+        };
+        let sibling = ProviderResourceOccurrence {
+            value_context: 8,
+            ..original
+        };
+        let mapping = [
+            (
+                sibling,
+                ProviderResourceOccurrence {
+                    value_context: 99,
+                    ..sibling
+                },
+            ),
+            (original, restored),
+        ];
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(
+            relocate_provider_resource_occurrence(original, &mapping, &mut measured).unwrap(),
+            restored
+        );
+        let exact = measured.used();
+        assert!(matches!(
+            relocate_provider_resource_occurrence(
+                original,
+                &mapping,
+                &mut TypeWorkBudget::with_limit(exact - 1)
+            ),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(
+            relocate_provider_resource_occurrence(
+                original,
+                &mapping,
+                &mut TypeWorkBudget::with_limit(exact)
+            )
+            .unwrap(),
+            restored
+        );
+        let conflict = [
+            (original, restored),
+            (
+                original,
+                ProviderResourceOccurrence {
+                    value_context: 11,
+                    ..original
+                },
+            ),
+        ];
+        assert!(matches!(
+            relocate_provider_resource_occurrence(
+                original,
+                &conflict,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(Failure::Invalid)
+        ));
+        let state = provider_owner_state(restored.code, restored.value_context);
+        assert!(
+            provider_resource_survives(
+                &state,
+                Address::End,
+                &state,
+                state.stack,
+                restored,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        assert!(
+            !provider_resource_survives(
+                &state,
+                Address::End,
+                &state,
+                state.stack,
+                original,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn provider_handler_copy_relocates_only_the_exact_resource_coordinate() {
+        let source = SourceFile::new("provider-handler-copy", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        for owner in [None, Some(3)] {
+            let original = Control::Handler {
+                body: 1,
+                effect: Request::effect(&effect, span, &mut TypeWorkBudget::unbounded()).unwrap(),
+                clauses: vec![],
+                owning_resource: owner,
+            };
+            let copied = original
+                .copy(10, 0, 0, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+            let Control::Handler {
+                body,
+                owning_resource,
+                ..
+            } = copied
+            else {
+                panic!("expected handler");
+            };
+            assert_eq!(body, 11);
+            assert_eq!(owning_resource, owner.map(|owner| owner + 10));
+        }
+    }
+
+    #[test]
+    fn provider_closing_keeps_only_nonselected_handlers_with_live_exact_owners() {
+        let source = SourceFile::new("provider-handler-close", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let effect = EffectInstance::new(EffectId::new(ModuleId::new(0), 0), Box::new([]));
+        let graph = SummaryGraph {
+            effects: true,
+            data: Some(std::sync::Arc::new(
+                super::super::value::provider_capture_graph_for_test(None, false),
+            )),
+            callables: vec![],
+            types: TypeArguments(vec![]),
+            code: vec![
+                Control::Return,
+                Control::Handler {
+                    body: 0,
+                    effect: Request::effect(&effect, span, &mut TypeWorkBudget::unbounded())
+                        .unwrap(),
+                    clauses: vec![],
+                    owning_resource: Some(2),
+                },
+                Control::Resource {
+                    body: 0,
+                    effect: Request::effect(&effect, span, &mut TypeWorkBudget::unbounded())
+                        .unwrap(),
+                },
+            ],
+        };
+        let event = Event {
+            code: 0,
+            label: 0,
+            unknown: false,
+            port: None,
+        };
+        for (associated, selected, survives) in [
+            (true, false, true),
+            (false, false, false),
+            (true, true, false),
+        ] {
+            let mut state = provider_owner_state(2, 7);
+            if !selected {
+                // A captured segment terminates at its authenticated cut.
+                state.heap[0].next = Address::End;
+            }
+            let owner_address = state.stack;
+            let frame = Frame::Handler {
+                code: 1,
+                context: 0,
+                value_context: 8,
+                capture_context: 8,
+                owning_resource: associated.then_some(ProviderResourceOccurrence {
+                    code: 2,
+                    value_context: 7,
+                }),
+            };
+            let root = Address::Slot {
+                region: Region::Capture(1, 0),
+                site: frame.site(),
+                allocation_context: 8,
+                old: false,
+            };
+            state.heap.push(Edge {
+                address: root,
+                frame,
+                next: if selected {
+                    Address::End
+                } else {
+                    owner_address
+                },
+            });
+            state.heap.sort_unstable();
+            let mut target = state.copy(&mut TypeWorkBudget::unbounded()).unwrap();
+            target.stack = if selected {
+                owner_address
+            } else {
+                Address::Empty
+            };
+            let analysis = Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+            analysis
+                .close_segment(
+                    &state,
+                    &mut target,
+                    root,
+                    0,
+                    event,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+            target.normalize(&mut TypeWorkBudget::unbounded()).unwrap();
+            let edges = target
+                .edges(target.stack, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+            assert_eq!(edges.len(), 1);
+            assert_eq!(matches!(edges[0].frame, Frame::Handler { .. }), survives);
+            assert_eq!(
+                matches!(edges[0].frame, Frame::RemovedHandler { .. }),
+                !survives
+            );
+        }
+    }
 
     #[test]
     fn wide_resource_free_call_targets_preflight_and_retry_exactly() {
@@ -4768,6 +5805,7 @@ mod tests {
                 graph.code.push(Control::Handler {
                     body,
                     effect: Request::effect(&effect, span, &mut preparation).unwrap(),
+                    owning_resource: None,
                     clauses: vec![Clause {
                         operation: None,
                         body: 2,

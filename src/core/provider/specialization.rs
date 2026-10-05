@@ -82,6 +82,7 @@ pub(crate) struct ProviderSpecializationEntries<'a> {
     pub(crate) handler: crate::core::HandlerId,
     pub(crate) clauses: &'a [crate::core::EffectClause],
     pub(crate) body: NodeId,
+    pub(crate) capture_globals: &'a [(crate::resolved::BinderId, NodeId)],
 }
 
 fn renamed<T: Copy + Eq>(
@@ -335,6 +336,7 @@ fn specialize_projection(
 /// Omega and the normalized residual; a caller cannot supply a row solution.
 #[derive(Debug)]
 pub(crate) struct ResolvedProviderHandlerRows {
+    original_arena: crate::core::dialect::ArenaId,
     direct: crate::types::EffectRow,
     epsilon: crate::types::EffectRow,
     output: crate::types::EffectRow,
@@ -342,21 +344,57 @@ pub(crate) struct ResolvedProviderHandlerRows {
     pending: std::collections::HashMap<crate::types::InferenceVariableId, crate::types::EffectRow>,
     node_rows: std::collections::HashMap<NodeId, crate::types::EffectRow>,
     handler_outputs: std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow>,
+    captures: crate::core::capture::ActualCaptureInputs,
 }
 impl ResolvedProviderHandlerRows {
+    #[cfg(test)]
+    pub(crate) fn assert_distinct_actual_captures_for_test(&self, effect: crate::types::EffectId) {
+        assert!(
+            self.epsilon.is_empty(),
+            "both requests have the same empty scalar body remainder"
+        );
+        crate::core::capture::assert_distinct_actual_captures_for_test(&self.captures, effect);
+    }
+    /// Both solutions name equations in the same authenticated ORIGINAL
+    /// template arena. Target copied node coordinates are checked separately
+    /// by final scope admission and never enter this comparison.
+    pub(crate) fn same_actual_captures(
+        &self,
+        other: &Self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        super::charge(work, 1)?;
+        if self.original_arena != other.original_arena
+            || !self
+                .captures
+                .same(&other.captures, work)
+                .map_err(|failure| match failure {
+                    crate::core::capture::Failure::Resource => super::resource(),
+                    _ => ValidationError::new(crate::core::ValidationReason::ResourceEscape, None),
+                })?
+        {
+            return Ok(false);
+        }
+        for (left, right) in [
+            (&self.direct, &other.direct),
+            (&self.epsilon, &other.epsilon),
+            (&self.output, &other.output),
+            (&self.residual, &other.residual),
+        ] {
+            if !crate::types::same_effect_rows_with_budget(left, right, work)
+                .map_err(|_| super::resource())?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(
+            same_original_row_domain(&self.pending, &other.pending, work)?
+                && same_original_row_domain(&self.node_rows, &other.node_rows, work)?
+                && same_original_row_domain(&self.handler_outputs, &other.handler_outputs, work)?,
+        )
+    }
     pub(crate) fn node_rows(&self) -> &std::collections::HashMap<NodeId, crate::types::EffectRow> {
         &self.node_rows
-    }
-    pub(crate) fn handler_outputs(
-        &self,
-    ) -> &std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow> {
-        &self.handler_outputs
-    }
-    pub(crate) fn direct(&self) -> &crate::types::EffectRow {
-        &self.direct
-    }
-    pub(crate) fn epsilon(&self) -> &crate::types::EffectRow {
-        &self.epsilon
     }
     pub(crate) fn output(&self) -> &crate::types::EffectRow {
         &self.output
@@ -372,6 +410,251 @@ impl ResolvedProviderHandlerRows {
     }
 }
 
+/// One source obligation position in the immutable original row domain.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum DeferredProviderRowPosition {
+    Output,
+    Residual,
+    Pending(crate::types::InferenceVariableId),
+    Node(NodeId),
+    Handler(crate::core::HandlerId),
+}
+
+pub(crate) type DeferredProviderRowCompletion<'a> = Vec<(
+    DeferredProviderRowPosition,
+    crate::types::InferenceVariableId,
+    &'a crate::types::EffectRow,
+)>;
+
+/// Ordinary source variables, never a solved row or capture certificate. The
+/// caller registers every variable with its source row owner and builder guard.
+#[derive(Debug)]
+pub(crate) struct DeferredProviderHandlerRows {
+    original_arena: crate::core::dialect::ArenaId,
+    output: crate::types::EffectRow,
+    residual: crate::types::EffectRow,
+    pending: std::collections::HashMap<crate::types::InferenceVariableId, crate::types::EffectRow>,
+    node_rows: std::collections::HashMap<NodeId, crate::types::EffectRow>,
+    handler_outputs: std::collections::HashMap<crate::core::HandlerId, crate::types::EffectRow>,
+    bindings: Vec<(
+        DeferredProviderRowPosition,
+        crate::types::InferenceVariableId,
+    )>,
+}
+
+fn invalid_deferred_rows() -> ValidationError {
+    ValidationError::new(crate::core::ValidationReason::NodeType, None)
+}
+
+impl DeferredProviderHandlerRows {
+    pub(crate) fn row_count(
+        checked: &crate::core::validate::CheckedHandlerTemplate,
+        work: &mut TypeWorkBudget,
+    ) -> Result<usize, ValidationError> {
+        super::charge(work, 1)?;
+        let (nodes, handlers) = checked.original_recipe().deferred_copy_counts();
+        checked
+            .original_pending_rows()
+            .len()
+            .checked_add(nodes)
+            .and_then(|n| n.checked_add(handlers))
+            .and_then(|n| n.checked_add(2))
+            .ok_or_else(super::resource)
+    }
+
+    pub(crate) fn prepare(
+        checked: &crate::core::validate::CheckedHandlerTemplate,
+        allocate: impl FnMut() -> Option<crate::types::EffectRow>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        let (nodes, handlers) = checked.original_recipe().deferred_copy_domain(work)?;
+        let records = checked.original_pending_rows();
+        super::charge(work, records.len())?;
+        let mut pending = Vec::new();
+        pending
+            .try_reserve_exact(records.len())
+            .map_err(|_| super::resource())?;
+        pending.extend(records.iter().map(|record| record.identity));
+        Self::from_domain(
+            checked.original_program().arena,
+            &pending,
+            &nodes,
+            &handlers,
+            allocate,
+            work,
+        )
+    }
+
+    fn from_domain(
+        original_arena: crate::core::dialect::ArenaId,
+        original_pending: &[crate::types::InferenceVariableId],
+        original_nodes: &[NodeId],
+        original_handlers: &[crate::core::HandlerId],
+        mut allocate: impl FnMut() -> Option<crate::types::EffectRow>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ValidationError> {
+        use std::collections::{HashMap, HashSet};
+        let count = original_pending
+            .len()
+            .checked_add(original_nodes.len())
+            .and_then(|n| n.checked_add(original_handlers.len()))
+            .and_then(|n| n.checked_add(2))
+            .ok_or_else(super::resource)?;
+        // Price row storage, scalar receipt and temporary uniqueness index.
+        super::charge(work, count.checked_mul(3).ok_or_else(super::resource)?)?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(count).map_err(|_| super::resource())?;
+        let mut bindings = Vec::new();
+        bindings
+            .try_reserve_exact(count)
+            .map_err(|_| super::resource())?;
+        let mut pending = HashMap::new();
+        pending
+            .try_reserve(original_pending.len())
+            .map_err(|_| super::resource())?;
+        let mut node_rows = HashMap::new();
+        node_rows
+            .try_reserve(original_nodes.len())
+            .map_err(|_| super::resource())?;
+        let mut handler_outputs = HashMap::new();
+        handler_outputs
+            .try_reserve(original_handlers.len())
+            .map_err(|_| super::resource())?;
+        let mut fresh = |position| {
+            let row = allocate().ok_or_else(invalid_deferred_rows)?;
+            let Some(tail) = row.tail() else {
+                return Err(invalid_deferred_rows());
+            };
+            let crate::types::EffectRowVariable::Inference(identity) = tail.variable() else {
+                return Err(invalid_deferred_rows());
+            };
+            if !row.known().is_empty() || !tail.lacks().is_empty() || !seen.insert(identity) {
+                return Err(invalid_deferred_rows());
+            }
+            bindings.push((position, identity));
+            Ok(row)
+        };
+        let output = fresh(DeferredProviderRowPosition::Output)?;
+        let residual = fresh(DeferredProviderRowPosition::Residual)?;
+        for original in original_pending {
+            let row = fresh(DeferredProviderRowPosition::Pending(*original))?;
+            if pending.insert(*original, row).is_some() {
+                return Err(invalid_deferred_rows());
+            }
+        }
+        for original in original_nodes {
+            if original.arena() != original_arena {
+                return Err(super::invalid(*original));
+            }
+            let row = fresh(DeferredProviderRowPosition::Node(*original))?;
+            if node_rows.insert(*original, row).is_some() {
+                return Err(super::invalid(*original));
+            }
+        }
+        for original in original_handlers {
+            let row = fresh(DeferredProviderRowPosition::Handler(*original))?;
+            if handler_outputs.insert(*original, row).is_some() {
+                return Err(invalid_deferred_rows());
+            }
+        }
+        Ok(Self {
+            original_arena,
+            output,
+            residual,
+            pending,
+            node_rows,
+            handler_outputs,
+            bindings,
+        })
+    }
+
+    pub(crate) fn output(&self) -> &crate::types::EffectRow {
+        &self.output
+    }
+    pub(crate) fn residual(&self) -> &crate::types::EffectRow {
+        &self.residual
+    }
+    pub(crate) fn pending(
+        &self,
+    ) -> &std::collections::HashMap<crate::types::InferenceVariableId, crate::types::EffectRow>
+    {
+        &self.pending
+    }
+    pub(crate) fn node_rows(&self) -> &std::collections::HashMap<NodeId, crate::types::EffectRow> {
+        &self.node_rows
+    }
+
+    /// Check the complete original domain before exposing any equations to the
+    /// source unifier. Actual rows still require the retained alpha relocation.
+    pub(crate) fn completion<'a>(
+        &self,
+        actual: &'a ResolvedProviderHandlerRows,
+        work: &mut TypeWorkBudget,
+    ) -> Result<DeferredProviderRowCompletion<'a>, ValidationError> {
+        // Price the original-position visit and each retained completion entry.
+        super::charge(
+            work,
+            self.bindings
+                .len()
+                .checked_mul(2)
+                .ok_or_else(super::resource)?,
+        )?;
+        if self.original_arena != actual.original_arena
+            || self.pending.len() != actual.pending.len()
+            || self.node_rows.len() != actual.node_rows.len()
+            || self.handler_outputs.len() != actual.handler_outputs.len()
+        {
+            return Err(invalid_deferred_rows());
+        }
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(self.bindings.len())
+            .map_err(|_| super::resource())?;
+        for &(position, source) in &self.bindings {
+            let row = match position {
+                DeferredProviderRowPosition::Output => Some(&actual.output),
+                DeferredProviderRowPosition::Residual => Some(&actual.residual),
+                DeferredProviderRowPosition::Pending(original) => actual.pending.get(&original),
+                DeferredProviderRowPosition::Node(original) => actual.node_rows.get(&original),
+                DeferredProviderRowPosition::Handler(original) => {
+                    actual.handler_outputs.get(&original)
+                }
+            };
+            result.push((position, source, row.ok_or_else(invalid_deferred_rows)?));
+        }
+        Ok(result)
+    }
+}
+
+fn same_original_row_domain<K: Eq + std::hash::Hash>(
+    left: &std::collections::HashMap<K, crate::types::EffectRow>,
+    right: &std::collections::HashMap<K, crate::types::EffectRow>,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    super::charge(
+        work,
+        left.len()
+            .checked_add(right.len())
+            .ok_or_else(super::resource)?,
+    )?;
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (key, row) in left {
+        super::charge(work, 1)?;
+        let Some(other) = right.get(key) else {
+            return Ok(false);
+        };
+        if !crate::types::same_effect_rows_with_budget(row, other, work)
+            .map_err(|_| super::resource())?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
 pub(in crate::core) fn prepare_handler_rows(
     checked: &crate::core::validate::CheckedHandlerTemplate,
     types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
@@ -379,6 +662,7 @@ pub(in crate::core) fn prepare_handler_rows(
     body_answer: &crate::types::Type,
     body_effects: &crate::types::EffectRow,
     provided: &crate::types::EffectInstance,
+    actual: Option<crate::core::capture::ActualProviderCapture>,
     work: &mut TypeWorkBudget,
 ) -> Result<ResolvedProviderHandlerRows, ValidationError> {
     use crate::types::{
@@ -388,21 +672,42 @@ pub(in crate::core) fn prepare_handler_rows(
     if types.contains_key(&hidden[0].0) || rows.contains_key(&hidden[1].0) {
         return Err(super::invalid(checked.original_program().root));
     }
-    // An empty actual capture input domain is admissible only when the original
-    // checked recipe has no discard ports. Advanced capture realization must
-    // provide independently reconstructed inputs through this same vocabulary.
-    if !checked.original_recipe().discards().is_empty() {
-        return Err(ValidationError::new(
-            crate::core::ValidationReason::ResourceEscape,
-            None,
-        ));
+    let captures = if checked.original_recipe().discards().is_empty() {
+        if actual.is_some() {
+            return Err(super::invalid(checked.original_program().root));
+        }
+        crate::core::capture::ActualCaptureInputs::empty(checked.original_template())
+    } else {
+        crate::core::capture::reconstruct_actual_provider_captures(
+            checked.original_capture(),
+            checked.original_program(),
+            actual.ok_or_else(|| {
+                ValidationError::new(crate::core::ValidationReason::ResourceEscape, None)
+            })?,
+            types,
+            rows,
+            body_answer,
+            provided,
+            work,
+        )
+        .map_err(|failure| match failure {
+            crate::core::capture::Failure::Resource => super::resource(),
+            _ => ValidationError::new(crate::core::ValidationReason::ResourceEscape, None),
+        })?
+    };
+    let (direct, pending_rows) =
+        checked
+            .original_recipe()
+            .realize_direct(types, rows, captures.rows(), work)?;
+    let contract_direct =
+        checked
+            .original_row_contract()
+            .realize_direct(types, rows, captures.rows(), work)?;
+    if !same_effect_rows_with_budget(&direct, &contract_direct, work)
+        .map_err(|_| super::resource())?
+    {
+        return Err(super::invalid(checked.original_program().root));
     }
-    let (direct, pending_rows) = checked.original_recipe().realize_direct(
-        types,
-        rows,
-        &std::collections::HashMap::new(),
-        work,
-    )?;
     let epsilon = match body_effects
         .remove_exact_with_budget(provided, work)
         .map_err(|()| super::resource())?
@@ -421,7 +726,7 @@ pub(in crate::core) fn prepare_handler_rows(
     let output = direct
         .union_with_budget(&epsilon, work)
         .map_err(|()| super::resource())?
-        .map_err(|_| ValidationError::new(crate::core::ValidationReason::EffectRow, None))?;
+        .map_err(|error| ValidationError::row_union_failure(error, None))?;
     let mut residual =
         clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?;
     for known in direct.known() {
@@ -505,11 +810,12 @@ pub(in crate::core) fn prepare_handler_rows(
         &complete.types,
         &complete.rows,
         &pending,
-        &std::collections::HashMap::new(),
+        captures.rows(),
         &output,
         work,
     )?;
     Ok(ResolvedProviderHandlerRows {
+        original_arena: checked.original_program().arena,
         direct,
         epsilon,
         output,
@@ -517,6 +823,7 @@ pub(in crate::core) fn prepare_handler_rows(
         pending,
         node_rows: realized.nodes,
         handler_outputs: realized.handlers,
+        captures,
     })
 }
 
@@ -545,12 +852,6 @@ pub(crate) struct LifecycleOriginal {
 }
 
 impl LifecycleOriginal {
-    pub(crate) fn body(&self) -> NodeId {
-        self.body
-    }
-    pub(crate) fn parameter(&self) -> crate::resolved::BinderId {
-        self.parameter
-    }
     pub(crate) fn parameter_binder<'a>(
         &self,
         program: &'a UnvalidatedEffectProgram,
@@ -649,12 +950,6 @@ impl LifecycleOriginal {
             _ => return Err(super::invalid(abstraction.body())),
         }
         Ok(binder)
-    }
-    pub(crate) fn template(&self) -> crate::resolved::ProviderTemplateId {
-        self.template
-    }
-    pub(crate) fn phase(&self) -> super::LifecyclePhase {
-        self.phase
     }
     pub(crate) fn formals(
         &self,
@@ -1279,11 +1574,11 @@ fn mapped(
         .copied()
         .ok_or_else(|| super::invalid(node))
 }
-fn target_node<'a>(
+fn target_node(
     arena: crate::core::dialect::ArenaId,
-    nodes: &'a [crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
+    nodes: &[crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
     node: NodeId,
-) -> Result<&'a crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>, ValidationError>
+) -> Result<&crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>, ValidationError>
 {
     if node.arena() != arena {
         return Err(super::invalid(node));
@@ -1603,12 +1898,34 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                             }
                         }
                     }
+                    let actual_capture = if original.original_recipe().discards().is_empty() {
+                        None
+                    } else {
+                        Some(
+                            crate::core::capture::prepare_actual_provider_capture(
+                                self,
+                                entries.body,
+                                entries.capture_globals,
+                                &[],
+                                &[],
+                                &[],
+                                &admission.native_effect,
+                                crate::core::provider::row::effect_operation,
+                                work,
+                            )
+                            .map_err(|failure| match failure {
+                                crate::core::capture::Failure::Resource => super::resource(),
+                                _ => super::invalid(entries.body),
+                            })?,
+                        )
+                    };
                     let rows = original.prepare_rows(
                         &formals.types,
                         &formals.rows,
                         &body.ty,
                         &body.effects,
                         &provided,
+                        actual_capture,
                         work,
                     )?;
                     super::charge(work, rows.node_rows.len())?;
@@ -2107,6 +2424,7 @@ fn substitute_instance(
         args.into_boxed_slice(),
     ))
 }
+#[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
 fn authenticate_catalog(
     copy: &ProviderCopiedTemplate<'_>,
     source: &UnvalidatedEffectProgram,
@@ -3155,9 +3473,252 @@ mod executable_scope_tests {
     };
     use std::{path::PathBuf, sync::Arc};
 
+    #[test]
+    fn deferred_source_rows_require_unique_variables_complete_original_domains_and_exact_work() {
+        use crate::types::{EffectRow, EffectRowVariable, InferenceVariableId};
+        let arena = crate::core::dialect::ArenaId::new(1);
+        let pending = InferenceVariableId::new(0);
+        let node = NodeId::new(arena, 0);
+        let handler = crate::core::HandlerId::new(0);
+        let make = |work: &mut TypeWorkBudget| {
+            let mut next = 100;
+            DeferredProviderHandlerRows::from_domain(
+                arena,
+                &[pending],
+                &[node],
+                &[handler],
+                || {
+                    let row = EffectRow::open(
+                        EffectRowVariable::Inference(InferenceVariableId::new(next)),
+                        Box::new([]),
+                    );
+                    next += 1;
+                    Some(row)
+                },
+                work,
+            )
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        let deferred = make(&mut measured).unwrap();
+        assert_eq!(deferred.bindings.len(), 5);
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(make(&mut short).is_err());
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                make(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        for malformed in 0..2 {
+            let result = DeferredProviderHandlerRows::from_domain(
+                arena,
+                &[pending],
+                &[node],
+                &[handler],
+                || {
+                    Some(if malformed == 0 {
+                        EffectRow::empty()
+                    } else {
+                        EffectRow::open(
+                            EffectRowVariable::Inference(InferenceVariableId::new(100)),
+                            Box::new([]),
+                        )
+                    })
+                },
+                &mut TypeWorkBudget::unbounded(),
+            );
+            assert!(
+                result.is_err(),
+                "closed or duplicate source variable {malformed}"
+            );
+        }
+        let module = crate::module::ModuleId::new(0);
+        let template = crate::resolved::ProviderTemplateId::new(
+            crate::resolved::ResourceDefinitionId::new(module, 0),
+            2,
+        );
+        let actual = || ResolvedProviderHandlerRows {
+            original_arena: arena,
+            direct: EffectRow::empty(),
+            epsilon: EffectRow::empty(),
+            output: EffectRow::empty(),
+            residual: EffectRow::empty(),
+            pending: std::collections::HashMap::from([(pending, EffectRow::empty())]),
+            node_rows: std::collections::HashMap::from([(node, EffectRow::empty())]),
+            handler_outputs: std::collections::HashMap::from([(handler, EffectRow::empty())]),
+            captures: crate::core::capture::ActualCaptureInputs::empty(template),
+        };
+        let complete = actual();
+        let mut measured = TypeWorkBudget::unbounded();
+        let equations = deferred.completion(&complete, &mut measured).unwrap();
+        assert_eq!(equations.len(), 5);
+        assert!(equations.iter().all(|(_, _, row)| row.is_empty()));
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(deferred.completion(&complete, &mut short).is_err());
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            deferred.completion(&complete, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + cost);
+        }
+        for mutation in 0..6 {
+            let mut candidate = actual();
+            match mutation {
+                0 => candidate.original_arena = crate::core::dialect::ArenaId::new(2),
+                1 => {
+                    candidate.pending = std::collections::HashMap::from([(
+                        InferenceVariableId::new(1),
+                        EffectRow::empty(),
+                    )])
+                }
+                2 => {
+                    candidate.node_rows = std::collections::HashMap::from([(
+                        NodeId::new(arena, 1),
+                        EffectRow::empty(),
+                    )])
+                }
+                3 => {
+                    candidate.handler_outputs = std::collections::HashMap::from([(
+                        crate::core::HandlerId::new(1),
+                        EffectRow::empty(),
+                    )])
+                }
+                4 => {
+                    candidate
+                        .node_rows
+                        .insert(NodeId::new(arena, 1), EffectRow::empty());
+                }
+                _ => candidate.pending.clear(),
+            }
+            assert!(
+                deferred
+                    .completion(&candidate, &mut TypeWorkBudget::unbounded())
+                    .is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_source_final_solved_rows_require_original_domains_and_exact_budget() {
+        use crate::types::{EffectId, EffectInstance, EffectRow, InferenceVariableId};
+        let module = crate::module::ModuleId::new(0);
+        let arena = crate::core::dialect::ArenaId::new(1);
+        let template = crate::resolved::ProviderTemplateId::new(
+            crate::resolved::ResourceDefinitionId::new(module, 0),
+            2,
+        );
+        let h =
+            || EffectRow::singleton(EffectInstance::new(EffectId::new(module, 0), Box::new([])));
+        let rows = || ResolvedProviderHandlerRows {
+            original_arena: arena,
+            direct: h(),
+            epsilon: EffectRow::empty(),
+            output: h(),
+            residual: h(),
+            pending: std::collections::HashMap::from([(
+                InferenceVariableId::new(0),
+                EffectRow::empty(),
+            )]),
+            node_rows: std::collections::HashMap::from([(NodeId::new(arena, 0), h())]),
+            handler_outputs: std::collections::HashMap::from([(
+                crate::core::HandlerId::new(0),
+                h(),
+            )]),
+            captures: crate::core::capture::ActualCaptureInputs::empty(template),
+        };
+        let expected = rows();
+        for mutation in 0..14 {
+            let mut actual = rows();
+            match mutation {
+                0 => actual.original_arena = crate::core::dialect::ArenaId::new(2),
+                1 => actual.direct = EffectRow::empty(),
+                2 => actual.epsilon = h(),
+                3 => actual.output = EffectRow::empty(),
+                4 => actual.residual = EffectRow::empty(),
+                5 => {
+                    actual.pending = std::collections::HashMap::from([(
+                        InferenceVariableId::new(1),
+                        EffectRow::empty(),
+                    )])
+                }
+                6 => {
+                    actual.node_rows =
+                        std::collections::HashMap::from([(NodeId::new(arena, 1), h())])
+                }
+                7 => {
+                    actual.handler_outputs =
+                        std::collections::HashMap::from([(crate::core::HandlerId::new(1), h())])
+                }
+                8 => actual.pending.clear(),
+                9 => {
+                    actual.node_rows.insert(NodeId::new(arena, 1), h());
+                }
+                10 => {
+                    actual.pending =
+                        std::collections::HashMap::from([(InferenceVariableId::new(0), h())])
+                }
+                11 => {
+                    actual.node_rows = std::collections::HashMap::from([(
+                        NodeId::new(arena, 0),
+                        EffectRow::empty(),
+                    )])
+                }
+                12 => {
+                    actual.handler_outputs = std::collections::HashMap::from([(
+                        crate::core::HandlerId::new(0),
+                        EffectRow::empty(),
+                    )])
+                }
+                _ => actual.handler_outputs.clear(),
+            }
+            assert!(
+                !expected
+                    .same_actual_captures(&actual, &mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                "mutation {mutation}"
+            );
+        }
+        let equal = rows();
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(
+            expected
+                .same_actual_captures(&equal, &mut measured)
+                .unwrap()
+        );
+        let cost = measured.used();
+        for prefix in [0, 13] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                expected
+                    .same_actual_captures(&equal, &mut short)
+                    .unwrap_err()
+                    .reason(),
+                crate::core::ValidationReason::Resource
+            );
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert!(expected.same_actual_captures(&equal, &mut exact).unwrap());
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+    }
+
     fn sqlite_scopes() -> (ModuleGraph, ValidatedEffectProgram) {
         let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/provider-experiments/sqlite-copying/simultaneous-entry.ash");
+        checked_provider_scopes(entry)
+    }
+
+    fn checked_provider_scopes(entry: PathBuf) -> (ModuleGraph, ValidatedEffectProgram) {
         let roots = ModuleRoots::empty().with_foreign_registrations(
             ForeignRegistrations::new([
                 provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
@@ -3232,6 +3793,90 @@ mod executable_scope_tests {
             .collect::<Vec<_>>();
         let program = validate_effect_modules(unchecked, &sources, &relation).unwrap();
         (graph, program)
+    }
+
+    #[test]
+    fn mixed_resource_owner_vectors_reject_independent_core_mutations_after_both_transforms() {
+        use crate::types::{EffectRow, EffectRowVariable, KindedArgument};
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/control-source/callback-open.ash");
+        let (graph, program) = checked_provider_scopes(entry);
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let rebuilt = transform(&program).unwrap();
+            validate_effect_modules(rebuilt, &sources, &relation)
+                .expect("the actual mixed-owner public pipeline must survive each rebuild");
+            for mutation in 0..8 {
+                let mut forged = transform(&program).unwrap();
+                let stored = forged.nodes.iter_mut().find(|node|
+                    matches!(&node.ty, Type::ResourceApply(_, arguments)
+                        if matches!(arguments.as_ref(), [KindedArgument::TypeArg(_), KindedArgument::RowArg(_)]))
+                    && matches!(&node.kind, EffectExprKind::Pure(PureExprKind::Variable(_))))
+                    .expect("the checked callback resource has a concrete mixed-owner access occurrence");
+                let Type::ResourceApply(resource, actuals) = &stored.ty else {
+                    unreachable!()
+                };
+                let original_resource = *resource;
+                let mut arguments = clone_kinded_arguments_with_budget(
+                    actuals.iter(),
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap()
+                .into_vec();
+                let unknown =
+                    crate::types::TypeVariableId::resolved(original_resource.module(), u32::MAX);
+                assert!(
+                    forged.registry.type_variable(unknown).is_none(),
+                    "the forged scope tail must be genuinely unbound"
+                );
+                let mut identity = original_resource;
+                match mutation {
+                    0 => {
+                        identity = crate::resolved::ResourceDefinitionId::new(
+                            original_resource.module(),
+                            u32::MAX,
+                        )
+                    }
+                    1 => arguments[0] = KindedArgument::RowArg(EffectRow::empty()),
+                    2 => arguments[1] = KindedArgument::TypeArg(Type::Unit),
+                    3 => {
+                        arguments.pop();
+                    }
+                    4 => arguments.push(KindedArgument::RowArg(EffectRow::empty())),
+                    5 => arguments.swap(0, 1),
+                    6 => arguments[0] = KindedArgument::TypeArg(Type::Variable(unknown)),
+                    7 => {
+                        arguments[1] = KindedArgument::RowArg(EffectRow::with_tail(
+                            Box::new([]),
+                            EffectRowVariable::Rigid(unknown),
+                            Box::new([]),
+                        ))
+                    }
+                    _ => unreachable!(),
+                }
+                crate::types::discard_type_iteratively(std::mem::replace(
+                    &mut stored.ty,
+                    Type::ResourceApply(identity, arguments.into_boxed_slice()),
+                ));
+                let failure = validate_effect_modules(forged, &sources, &relation).expect_err(
+                    "an independently mutated mixed-owner argument must not acquire Core authority",
+                );
+                assert_ne!(
+                    failure.reason(),
+                    crate::core::ValidationReason::Resource,
+                    "mutation {mutation} must fail its owner/tag/saturation/scope relation, not a work limit"
+                );
+            }
+        }
     }
 
     #[test]

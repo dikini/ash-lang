@@ -88,6 +88,14 @@ enum Expr {
     },
 }
 
+/// Borrowed exact original pattern and projected clause body. Only the sealed
+/// conditional capture builder supplies these inputs; they confer no execution.
+pub(super) struct ConditionalClauseInput<'a> {
+    pub(super) pattern: &'a CorePattern,
+    pub(super) body: crate::core::NodeId,
+    pub(super) source: Span,
+}
+
 #[derive(Debug)]
 struct DataClause {
     input: usize,
@@ -387,6 +395,120 @@ impl Graph {
         Ok(())
     }
 
+    fn import_graph(
+        &mut self,
+        imported: &Graph,
+        target_offset: usize,
+        code_offset: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        let offset = self.expressions.len();
+        charge(budget, imported.expressions.len() + imported.globals.len())?;
+        self.expressions
+            .try_reserve(imported.expressions.len())
+            .map_err(|_| Failure::Resource)?;
+        self.sources
+            .try_reserve(imported.sources.len())
+            .map_err(|_| Failure::Resource)?;
+        for expression in &imported.expressions {
+            self.expressions.push(expression.copy(offset, budget)?);
+        }
+        self.sources.extend_from_slice(&imported.sources);
+        self.globals
+            .try_reserve(imported.globals.len())
+            .map_err(|_| Failure::Resource)?;
+        self.globals.extend(
+            imported
+                .globals
+                .iter()
+                .map(|(binder, value)| (binder + offset, value + offset)),
+        );
+        for (&code, &expression) in &imported.positions {
+            self.position(code + code_offset, expression + offset, budget)?;
+        }
+        charge(budget, imported.metadata.len())?;
+        self.metadata
+            .try_reserve(imported.metadata.len())
+            .map_err(|_| Failure::Resource)?;
+        self.metadata.extend(
+            imported
+                .metadata
+                .iter()
+                .map(|(slot, variable)| (slot + offset, *variable)),
+        );
+        charge(budget, imported.targets.len())?;
+        self.targets
+            .try_reserve(imported.targets.len())
+            .map_err(|_| Failure::Resource)?;
+        self.targets.extend(
+            imported
+                .targets
+                .iter()
+                .map(|(expression, target)| (expression + offset, target + target_offset)),
+        );
+        charge(budget, imported.evidence.len())?;
+        self.evidence
+            .try_reserve(imported.evidence.len())
+            .map_err(|_| Failure::Resource)?;
+        self.evidence.extend(
+            imported
+                .evidence
+                .iter()
+                .map(|(key, slot)| (*key, slot + offset)),
+        );
+        Ok(offset)
+    }
+
+    /// Append the authenticated original value graph and install its exact
+    /// clause-pattern ports at the actual generated handler control position.
+    /// The caller separately proves original template/operation/owner identity.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "exact original handler/body and control/callable relocation coordinates stay distinct at sealed graph admission"
+    )]
+    pub(super) fn import_conditional_handler(
+        &mut self,
+        imported: &Graph,
+        original_handler: usize,
+        actual_body_code: usize,
+        actual_handler_code: usize,
+        target_offset: usize,
+        code_offset: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        if !matches!(
+            imported.expressions.get(original_handler),
+            Some(Expr::Handler { .. })
+        ) || self.positions.contains_key(&actual_handler_code)
+        {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, 2)?;
+        for code in imported.positions.keys() {
+            charge(budget, 1)?;
+            if code.checked_add(code_offset).ok_or(Failure::Resource)? == actual_handler_code {
+                return Err(Failure::Invalid);
+            }
+        }
+        let body = *self
+            .positions
+            .get(&actual_body_code)
+            .ok_or(Failure::Invalid)?;
+        self.expressions.get(body).ok_or(Failure::Invalid)?;
+        let offset = self.import_graph(imported, target_offset, code_offset, budget)?;
+        let handler = original_handler
+            .checked_add(offset)
+            .ok_or(Failure::Resource)?;
+        let Expr::Handler { body: actual, .. } =
+            self.expressions.get_mut(handler).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        *actual = body;
+        self.position(actual_handler_code, handler, budget)?;
+        Ok(handler)
+    }
+
     /// Retain actual lexical initializers available at this checked flow call.
     /// These are local slots, never imported/global source definitions.
     pub(super) fn retain_provider_lexical<F: CoreOperationFamily>(
@@ -443,6 +565,7 @@ impl Graph {
     /// Inspect only the selected closure's retained dependencies. Metadata
     /// slots require an authenticated concrete instantiation from the caller;
     /// unresolved lexical slots and privileged values never become scalars.
+    #[cfg(test)]
     pub(super) fn check_provider_selected_captures(
         &self,
         target: usize,
@@ -1360,6 +1483,65 @@ impl Graph {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "ordinary and conditional handlers share the same exact pattern, body and selected-route capture builder"
+    )]
+    fn clause_data<F: CoreOperationFamily>(
+        &mut self,
+        pattern: &CorePattern,
+        body: usize,
+        source: Span,
+        nodes: &[StoredNode<F>],
+        symbols: &mut HashMap<BinderId, usize>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<DataClause, Failure> {
+        let input = self.push(Expr::Slot, source, budget)?;
+        let bindings = self.pattern(pattern, input, symbols, budget)?;
+        let mut captures = Vec::new();
+        for binder in super::free_values_with_methods(
+            nodes,
+            body,
+            &[],
+            methods,
+            self.capture_ports(),
+            budget,
+        )? {
+            let slot = self.symbol(symbols, binder, source, budget)?;
+            charge(budget, bindings.len())?;
+            if !bindings.iter().any(|(bound, _)| *bound == slot) {
+                captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+                captures.push(slot);
+            }
+        }
+        let mut metadata = MetadataVariables::default();
+        retain_function_metadata(&mut metadata, nodes, body, operation, budget)?;
+        for variable in metadata.variables {
+            let slot = self.symbol(types, variable, source, budget)?;
+            captures.try_reserve(1).map_err(|_| Failure::Resource)?;
+            captures.push(slot);
+        }
+        self.abstract_captures(
+            nodes,
+            body,
+            methods,
+            adapters,
+            symbols,
+            &mut captures,
+            budget,
+        )?;
+        Ok(DataClause {
+            input,
+            bindings,
+            body,
+            captures,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid another owning environment.
     fn build_operation<F: CoreOperationFamily>(
         &mut self,
@@ -1415,52 +1597,18 @@ impl Graph {
                     .try_reserve(handler.clauses().len())
                     .map_err(|_| Failure::Resource)?;
                 for clause in handler.clauses() {
-                    let input = self.push(Expr::Slot, source, budget)?;
-                    let bindings = self.pattern(clause.pattern(), input, symbols, budget)?;
-                    let mut captures = Vec::new();
-                    for binder in super::free_values_with_methods(
-                        nodes,
+                    clauses.push(self.clause_data(
+                        clause.pattern(),
                         index(clause.body()),
-                        &[],
-                        methods,
-                        self.capture_ports(),
-                        budget,
-                    )? {
-                        let slot = self.symbol(symbols, binder, source, budget)?;
-                        charge(budget, bindings.len())?;
-                        if !bindings.iter().any(|(bound, _)| *bound == slot) {
-                            captures.try_reserve(1).map_err(|_| Failure::Resource)?;
-                            captures.push(slot);
-                        }
-                    }
-                    let mut metadata = MetadataVariables::default();
-                    retain_function_metadata(
-                        &mut metadata,
+                        source,
                         nodes,
-                        index(clause.body()),
+                        symbols,
+                        types,
                         operation,
-                        budget,
-                    )?;
-                    for variable in metadata.variables {
-                        let slot = self.symbol(types, variable, source, budget)?;
-                        captures.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        captures.push(slot);
-                    }
-                    self.abstract_captures(
-                        nodes,
-                        index(clause.body()),
                         methods,
                         adapters,
-                        symbols,
-                        &mut captures,
                         budget,
-                    )?;
-                    clauses.push(DataClause {
-                        input,
-                        bindings,
-                        body: index(clause.body()),
-                        captures,
-                    });
+                    )?);
                 }
                 let handler = Expr::Handler {
                     body: index(handler.body()),
@@ -1542,6 +1690,7 @@ impl Graph {
     }
 
     #[allow(clippy::too_many_arguments)] // The two authenticated evidence carriers stay explicit.
+    #[cfg(test)]
     pub(super) fn build<F: CoreOperationFamily>(
         nodes: &[StoredNode<F>],
         globals: &[(BinderId, crate::core::NodeId)],
@@ -1552,6 +1701,73 @@ impl Graph {
         adapters: &[super::MethodAdapter],
         independent_parameters: &[BinderId],
         capture_ports: &[crate::core::NodeId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        Self::build_with_conditional_handler(
+            nodes,
+            globals,
+            imports,
+            imported_callables,
+            operation,
+            methods,
+            adapters,
+            independent_parameters,
+            capture_ports,
+            None,
+            budget,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the sealed conditional clause ports accompany the existing actual typed-node and selected-evidence graph inputs"
+    )]
+    #[cfg(test)]
+    pub(super) fn build_with_conditional_handler<F: CoreOperationFamily>(
+        nodes: &[StoredNode<F>],
+        globals: &[(BinderId, crate::core::NodeId)],
+        imports: &[(BinderId, &super::CaptureValueSummary)],
+        imported_callables: &super::ImportedCallables<'_>,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+        methods: &[super::MethodUse],
+        adapters: &[super::MethodAdapter],
+        independent_parameters: &[BinderId],
+        capture_ports: &[crate::core::NodeId],
+        conditional: Option<(&[ConditionalClauseInput<'_>], &mut Option<usize>)>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        Self::build_in_domain(
+            nodes,
+            globals,
+            imports,
+            imported_callables,
+            operation,
+            methods,
+            adapters,
+            independent_parameters,
+            capture_ports,
+            conditional,
+            None,
+            budget,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the same typed value graph preserves source ordinals within the authenticated actual-root domain"
+    )]
+    pub(super) fn build_in_domain<F: CoreOperationFamily>(
+        nodes: &[StoredNode<F>],
+        globals: &[(BinderId, crate::core::NodeId)],
+        imports: &[(BinderId, &super::CaptureValueSummary)],
+        imported_callables: &super::ImportedCallables<'_>,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+        methods: &[super::MethodUse],
+        adapters: &[super::MethodAdapter],
+        independent_parameters: &[BinderId],
+        capture_ports: &[crate::core::NodeId],
+        conditional: Option<(&[ConditionalClauseInput<'_>], &mut Option<usize>)>,
+        domain: Option<&HashSet<usize>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         let methods = super::MethodUses::new(methods, budget)?;
@@ -1576,7 +1792,11 @@ impl Graph {
             .try_reserve(nodes.len())
             .map_err(|_| Failure::Resource)?;
         for node in nodes {
-            graph.expressions.push(Expr::Scalar);
+            graph.expressions.push(if domain.is_some() {
+                Expr::Unknown
+            } else {
+                Expr::Scalar
+            });
             graph
                 .sources
                 .push(node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span());
@@ -1600,6 +1820,9 @@ impl Graph {
         }
         for id in 0..nodes.len() {
             charge(budget, 1)?;
+            if domain.is_some_and(|domain| !domain.contains(&id)) {
+                continue;
+            }
             graph.position(id + 1, id, budget)?;
             let source = graph.sources[id];
             graph.expressions[id] = graph.build_expression(
@@ -1673,6 +1896,44 @@ impl Graph {
                 };
             }
         }
+        if let Some((clauses, handler)) = conditional {
+            if handler.is_some() || clauses.is_empty() {
+                return Err(Failure::Invalid);
+            }
+            charge(budget, clauses.len())?;
+            let mut data_clauses = Vec::new();
+            data_clauses
+                .try_reserve_exact(clauses.len())
+                .map_err(|_| Failure::Resource)?;
+            for clause in clauses {
+                let body = index(clause.body);
+                nodes.get(body).ok_or(Failure::Invalid)?;
+                data_clauses.push(graph.clause_data(
+                    clause.pattern,
+                    body,
+                    clause.source,
+                    nodes,
+                    &mut symbols,
+                    &mut types,
+                    operation,
+                    &methods,
+                    adapters,
+                    budget,
+                )?);
+            }
+            // Uninstantiated external body control is deliberately unavailable.
+            // Sealed realization later installs the actual typed body expression.
+            let source = clauses[0].source;
+            let body = graph.push(Expr::Unknown, source, budget)?;
+            *handler = Some(graph.push(
+                Expr::Handler {
+                    body,
+                    clauses: data_clauses,
+                },
+                source,
+                budget,
+            )?);
+        }
         charge(budget, types.len())?;
         graph
             .metadata
@@ -1698,30 +1959,6 @@ impl Graph {
             let offset = if let Some(offset) = offset {
                 offset
             } else {
-                let offset = graph.expressions.len();
-                charge(budget, imported.expressions.len() + imported.globals.len())?;
-                graph
-                    .expressions
-                    .try_reserve(imported.expressions.len())
-                    .map_err(|_| Failure::Resource)?;
-                graph
-                    .sources
-                    .try_reserve(imported.sources.len())
-                    .map_err(|_| Failure::Resource)?;
-                for expression in &imported.expressions {
-                    graph.expressions.push(expression.copy(offset, budget)?);
-                }
-                graph.sources.extend_from_slice(&imported.sources);
-                graph
-                    .globals
-                    .try_reserve(imported.globals.len())
-                    .map_err(|_| Failure::Resource)?;
-                graph.globals.extend(
-                    imported
-                        .globals
-                        .iter()
-                        .map(|(binder, value)| (binder + offset, value + offset)),
-                );
                 charge(budget, imported_callables.graphs.len())?;
                 let (_, target_offset, code_offset, _) = imported_callables
                     .graphs
@@ -1733,42 +1970,7 @@ impl Graph {
                             .is_some_and(|data| std::ptr::eq(data.as_ref(), imported.as_ref()))
                     })
                     .ok_or(Failure::Invalid)?;
-                for (&code, &expression) in &imported.positions {
-                    graph.position(code + code_offset, expression + offset, budget)?;
-                }
-                charge(budget, imported.metadata.len())?;
-                graph
-                    .metadata
-                    .try_reserve(imported.metadata.len())
-                    .map_err(|_| Failure::Resource)?;
-                graph.metadata.extend(
-                    imported
-                        .metadata
-                        .iter()
-                        .map(|(slot, variable)| (slot + offset, *variable)),
-                );
-                charge(budget, imported.targets.len())?;
-                graph
-                    .targets
-                    .try_reserve(imported.targets.len())
-                    .map_err(|_| Failure::Resource)?;
-                graph.targets.extend(
-                    imported
-                        .targets
-                        .iter()
-                        .map(|(expression, target)| (expression + offset, target + target_offset)),
-                );
-                charge(budget, imported.evidence.len())?;
-                graph
-                    .evidence
-                    .try_reserve(imported.evidence.len())
-                    .map_err(|_| Failure::Resource)?;
-                graph.evidence.extend(
-                    imported
-                        .evidence
-                        .iter()
-                        .map(|(key, slot)| (*key, slot + offset)),
-                );
+                let offset = graph.import_graph(imported, *target_offset, *code_offset, budget)?;
                 retained.try_reserve(1).map_err(|_| Failure::Resource)?;
                 retained.push((imported.as_ref(), offset));
                 offset
@@ -2012,9 +2214,16 @@ pub(super) struct Analysis<'a> {
     evidence_ports: HashMap<usize, Vec<usize>>,
     evidence_keys:
         HashMap<(crate::interface::RequirementId, crate::interface::MethodId), Vec<usize>>,
+    // Exact immutable Evidence expression -> key -> ordered binding positions.
+    // This indexes source bindings only; slots and creation contexts stay live.
+    binding_indices: HashMap<
+        usize,
+        HashMap<(crate::interface::RequirementId, crate::interface::MethodId), Vec<usize>>,
+    >,
     contexts: Vec<Vec<Transition>>,
     context_indices: HashMap<Vec<Transition>, usize>,
     slots: Vec<Slot>,
+    atom_pairs: HashSet<(usize, Atom)>,
     watched_pairs: HashSet<(usize, usize)>,
     edge_pairs: HashSet<(usize, usize)>,
     indices: HashMap<(usize, usize), usize>,
@@ -2189,10 +2398,20 @@ impl<'a> Analysis<'a> {
             .try_reserve(self.slots.len())
             .map_err(|_| Failure::Resource)?;
         for slot in &self.slots {
-            query.indices.insert(slot.key, query.slots.len());
+            let id = query.slots.len();
+            let atoms = copy_slice(&slot.atoms, budget)?;
+            charge(budget, atoms.len().checked_mul(2).ok_or(Failure::Resource)?)?;
+            query
+                .atom_pairs
+                .try_reserve(atoms.len())
+                .map_err(|_| Failure::Resource)?;
+            for atom in &atoms {
+                query.atom_pairs.insert((id, *atom));
+            }
+            query.indices.insert(slot.key, id);
             query.slots.push(Slot {
                 key: slot.key,
-                atoms: copy_slice(&slot.atoms, budget)?,
+                atoms,
                 edges: Vec::new(),
                 readers: Vec::new(),
                 queued: false,
@@ -2375,6 +2594,54 @@ impl<'a> Analysis<'a> {
 
     pub(super) fn revision(&self) -> usize {
         self.revision
+    }
+
+    pub(super) fn actual_request_path(
+        &self,
+        port: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Span, Vec<super::ActualValuePathStep>), Failure> {
+        let (expression, _) = self.slots.get(port).ok_or(Failure::Invalid)?.key;
+        let request = *self.graph.sources.get(expression).ok_or(Failure::Invalid)?;
+        let path = self.contexts.get(context).ok_or(Failure::Invalid)?;
+        charge(budget, path.len())?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(path.len())
+            .map_err(|_| Failure::Resource)?;
+        let source = |expression: usize| {
+            self.graph
+                .sources
+                .get(expression)
+                .copied()
+                .ok_or(Failure::Invalid)
+        };
+        for step in path {
+            charge(budget, 1)?;
+            output.push(match *step {
+                Transition::Root(expression) => {
+                    super::ActualValuePathStep::Root(source(expression)?)
+                }
+                Transition::Call(expression) => {
+                    super::ActualValuePathStep::Call(source(expression)?)
+                }
+                Transition::Invoke(call, target) => {
+                    super::ActualValuePathStep::Invoke(source(call)?, source(target)?)
+                }
+                Transition::Dispatch(request, handler, ordinal) => {
+                    super::ActualValuePathStep::Dispatch(
+                        source(request)?,
+                        source(handler)?,
+                        ordinal,
+                    )
+                }
+                // Actual c is reconstructed from original entry paths before
+                // any focused resource query or restored continuation replay.
+                Transition::Focus | Transition::Restore(..) => return Err(Failure::Invalid),
+            });
+        }
+        Ok((request, output))
     }
 
     pub(super) fn root_context(
@@ -2686,9 +2953,11 @@ impl<'a> Analysis<'a> {
             graph,
             evidence_ports,
             evidence_keys,
+            binding_indices: HashMap::new(),
             contexts,
             context_indices,
             slots: Vec::new(),
+            atom_pairs: HashSet::new(),
             watched_pairs: HashSet::new(),
             edge_pairs: HashSet::new(),
             indices: HashMap::new(),
@@ -2824,20 +3093,37 @@ impl<'a> Analysis<'a> {
         atom: Atom,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.slots[slot].atoms.len() + 1)?;
-        if !self.slots[slot].atoms.contains(&atom) {
-            self.slots[slot]
-                .atoms
-                .try_reserve(1)
-                .map_err(|_| Failure::Resource)?;
-            self.slots[slot].atoms.push(atom);
-            self.revision += 1;
-            // Enqueue mutates queue flags, never this reader list. Retain its
-            // fixed extent and copy each scalar identity as it is used.
-            let reader_count = self.slots[slot].readers.len();
-            for index in 0..reader_count {
-                let reader = self.slots[slot].readers[index];
-                self.enqueue(reader, budget)?;
+        // Slot identity includes its exact expression/context; Atom retains
+        // its variant and original code/creation coordinates. The ordered Vec
+        // remains the sole propagation source, while this set tests membership.
+        charge(budget, 1)?;
+        let pair = (slot, atom);
+        if self.atom_pairs.contains(&pair) {
+            return Ok(());
+        }
+        charge(budget, 2)?;
+        self.atom_pairs
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.slots[slot]
+            .atoms
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let reader_count = self.slots[slot].readers.len();
+        // Prepay the actual ordered notification walk and reserve its maximum
+        // possible queue growth. No fallible operation follows publication.
+        charge(budget, reader_count)?;
+        self.pending
+            .try_reserve(reader_count)
+            .map_err(|_| Failure::Resource)?;
+        self.atom_pairs.insert(pair);
+        self.slots[slot].atoms.push(atom);
+        self.revision += 1;
+        for index in 0..reader_count {
+            let reader = self.slots[slot].readers[index];
+            if !self.slots[reader].queued {
+                self.pending.push_back(reader);
+                self.slots[reader].queued = true;
             }
         }
         Ok(())
@@ -3192,7 +3478,7 @@ impl<'a> Analysis<'a> {
                             captures,
                             creation,
                             specialized,
-                            bindings,
+                            expression,
                             context,
                             budget,
                         )?;
@@ -3226,19 +3512,61 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn prepare_binding_index(
+        &mut self,
+        evidence: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if self.binding_indices.contains_key(&evidence) {
+            return Ok(());
+        }
+        charge(budget, 1)?;
+        let Some(Expr::Evidence { bindings, .. }) = self.graph.expressions.get(evidence) else {
+            return Err(Failure::Invalid);
+        };
+        let mut positions: HashMap<_, Vec<usize>> = HashMap::new();
+        // Build privately from this exact immutable expression. No graph state
+        // or index entry is published until every charge/reservation succeeds.
+        charge(budget, bindings.len())?; // Visit the complete original vector.
+        positions
+            .try_reserve(bindings.len())
+            .map_err(|_| Failure::Resource)?;
+        for (position, (requirement, method, _)) in bindings.iter().enumerate() {
+            charge(budget, 1)?;
+            let key = (*requirement, *method);
+            let ordered = match positions.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    charge(budget, 1)?;
+                    entry.insert(Vec::new())
+                }
+            };
+            charge(budget, 1)?;
+            ordered.try_reserve(1).map_err(|_| Failure::Resource)?;
+            ordered.push(position);
+        }
+        charge(budget, 1)?;
+        self.binding_indices
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.binding_indices.insert(evidence, positions);
+        Ok(())
+    }
+
     fn specialize_captures(
         &mut self,
         captures: &[usize],
         creation: usize,
         specialized: usize,
-        bindings: &[(
-            crate::interface::RequirementId,
-            crate::interface::MethodId,
-            usize,
-        )],
+        evidence: usize,
         arguments_context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        self.prepare_binding_index(evidence, budget)?;
+        let Expr::Evidence { bindings, .. } = &self.graph.expressions[evidence] else {
+            return Err(Failure::Invalid);
+        };
         let mut pending = copy_slice(captures, budget)?;
         let mut visited = HashSet::new();
         while let Some(capture) = pending.pop() {
@@ -3252,13 +3580,17 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             let matching = self.evidence_ports.get(&capture).map_or(0, Vec::len);
             for position in 0..matching {
-                charge(budget, bindings.len() + 1)?;
+                charge(budget, 1)?;
                 let key = self.graph.evidence[self.evidence_ports[&capture][position]].0;
-                for (requirement, method, argument) in bindings {
-                    if key == (*requirement, *method) {
-                        self.link(destination, *argument, arguments_context, budget)?;
-                        replaced = true;
-                    }
+                let count = self.binding_indices[&evidence]
+                    .get(&key)
+                    .map_or(0, Vec::len);
+                for binding in 0..count {
+                    charge(budget, 1)?;
+                    let original = self.binding_indices[&evidence][&key][binding];
+                    let argument = bindings[original].2;
+                    self.link(destination, argument, arguments_context, budget)?;
+                    replaced = true;
                 }
             }
             if replaced {
@@ -3699,6 +4031,130 @@ mod tests {
     }
 
     #[test]
+    fn atom_membership_publication_and_notifications_have_exact_retry_boundaries() {
+        let graph = graph(vec![Expr::Slot, Expr::Slot, Expr::Slot]);
+        for queued in [[false, false], [true, false], [true, true]] {
+            for prefix in [0, 9] {
+                for available in 0..5 {
+                    let mut setup = TypeWorkBudget::unbounded();
+                    let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+                    let source = analysis.slot(0, 0, &mut setup).unwrap();
+                    let first = analysis.slot(1, 0, &mut setup).unwrap();
+                    let second = analysis.slot(2, 0, &mut setup).unwrap();
+                    analysis.close(&mut setup).unwrap();
+                    analysis.watch(source, second, &mut setup).unwrap();
+                    analysis.watch(source, first, &mut setup).unwrap();
+                    for (reader, already) in [second, first].into_iter().zip(queued) {
+                        if already {
+                            analysis.enqueue(reader, &mut setup).unwrap();
+                        }
+                    }
+                    let before_pending = analysis.pending.clone();
+                    let before_revision = analysis.revision;
+                    let before_flags: Vec<_> =
+                        analysis.slots.iter().map(|slot| slot.queued).collect();
+                    let before_watches = analysis.watched_pairs.clone();
+                    let mut short = TypeWorkBudget::with_limit(prefix + available);
+                    short.charge(prefix).unwrap();
+                    assert!(matches!(
+                        analysis.atom(source, Atom::Unknown, &mut short),
+                        Err(Failure::Resource)
+                    ));
+                    assert!(analysis.atom_pairs.is_empty());
+                    assert!(analysis.slots[source].atoms.is_empty());
+                    assert_eq!(analysis.pending, before_pending);
+                    assert_eq!(analysis.revision, before_revision);
+                    assert_eq!(
+                        analysis
+                            .slots
+                            .iter()
+                            .map(|slot| slot.queued)
+                            .collect::<Vec<_>>(),
+                        before_flags
+                    );
+                    assert_eq!(analysis.watched_pairs, before_watches);
+                    let mut retry = TypeWorkBudget::with_limit(prefix + 5);
+                    retry.charge(prefix).unwrap();
+                    analysis.atom(source, Atom::Unknown, &mut retry).unwrap();
+                    assert_eq!(retry.used(), prefix + 5);
+                    assert_eq!(analysis.slots[source].atoms, vec![Atom::Unknown]);
+                    assert!(analysis.atom_pairs.contains(&(source, Atom::Unknown)));
+                    assert_eq!(analysis.revision, before_revision + 1);
+                    let mut expected = before_pending;
+                    for (reader, already) in [second, first].into_iter().zip(queued) {
+                        if !already {
+                            expected.push_back(reader);
+                        }
+                    }
+                    assert_eq!(analysis.pending, expected);
+                    let mut duplicate = TypeWorkBudget::with_limit(prefix + 1);
+                    duplicate.charge(prefix).unwrap();
+                    analysis
+                        .atom(source, Atom::Unknown, &mut duplicate)
+                        .unwrap();
+                    assert_eq!(duplicate.used(), prefix + 1);
+                    assert_eq!(analysis.pending, expected);
+                    assert_eq!(analysis.revision, before_revision + 1);
+                    analysis.close(&mut setup).unwrap();
+                    for reader in [second, first] {
+                        // Watch notification wakes evaluation; ordinary edges
+                        // still own value propagation, independently of watches.
+                        analysis.edge(reader, source, &mut setup).unwrap();
+                    }
+                    analysis.close(&mut setup).unwrap();
+                    assert_eq!(analysis.slots[first].atoms, vec![Atom::Unknown]);
+                    assert_eq!(analysis.slots[second].atoms, vec![Atom::Unknown]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn atom_membership_keeps_variants_creation_contexts_and_slot_contexts_distinct() {
+        let graph = graph(vec![Expr::Slot]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let first = analysis.slot(0, 0, &mut work).unwrap();
+        let context = analysis.context(0, Transition::Call(0), &mut work).unwrap();
+        let second = analysis.slot(0, context, &mut work).unwrap();
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let atoms = [
+            Atom::Free,
+            Atom::Unknown,
+            Atom::Constructor(ConstructorId::new(family, 0)),
+            Atom::Constructor(ConstructorId::new(family, 1)),
+            Atom::Closure(5, 0),
+            Atom::Closure(5, 1),
+            Atom::Closure(6, 0),
+            Atom::Aggregate(5, 0),
+            Atom::Aggregate(5, 1),
+            Atom::Aggregate(6, 0),
+            Atom::Resource(5, 0),
+            Atom::Resource(5, 1),
+            Atom::Resource(6, 0),
+        ];
+        for slot in [first, second] {
+            for atom in atoms {
+                analysis.atom(slot, atom, &mut work).unwrap();
+            }
+            assert_eq!(analysis.slots[slot].atoms, atoms);
+        }
+        let before = analysis.revision;
+        for prefix in [0, 9] {
+            for slot in [first, second] {
+                for atom in atoms {
+                    let mut exact = TypeWorkBudget::with_limit(prefix + 1);
+                    exact.charge(prefix).unwrap();
+                    analysis.atom(slot, atom, &mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + 1);
+                }
+            }
+        }
+        assert_eq!(analysis.revision, before);
+        assert_eq!(analysis.atom_pairs.len(), 2 * atoms.len());
+    }
+
+    #[test]
     fn evidence_specialization_preserves_shared_ports_and_inert_aliases() {
         use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
         let source = crate::source::SourceFile::new("evidence-specialization.ash", "x").unwrap();
@@ -3715,6 +4171,14 @@ mod tests {
             Expr::Alias(0),
             Expr::Merge(vec![3]),
             Expr::Unknown,
+            Expr::Evidence {
+                value: 4,
+                bindings: vec![
+                    (requirement, method, 1),
+                    (requirement, other_method, 2),
+                    (other_requirement, other_method, 1),
+                ],
+            },
         ]);
         graph.evidence = vec![
             ((requirement, method), 0),
@@ -3731,18 +4195,7 @@ mod tests {
         let mut analysis = Analysis::new(&graph, &mut work).unwrap();
         let specialized = analysis.context(0, Transition::Call(4), &mut work).unwrap();
         analysis
-            .specialize_captures(
-                &[4, 5],
-                0,
-                specialized,
-                &[
-                    (requirement, method, 1),
-                    (requirement, other_method, 2),
-                    (other_requirement, other_method, 1),
-                ],
-                0,
-                &mut work,
-            )
+            .specialize_captures(&[4, 5], 0, specialized, 6, 0, &mut work)
             .unwrap();
         analysis.close(&mut work).unwrap();
         let shared = analysis.indices[&(0, specialized)];
@@ -3762,6 +4215,209 @@ mod tests {
             vec![Atom::Unknown],
             "a different method identity cannot replace lexical captures"
         );
+    }
+
+    #[test]
+    fn binding_indices_preserve_owner_keys_duplicates_and_refusal_atomicity() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("binding-indices.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let other_method = MethodId::new(interface, 1);
+        let requirement = RequirementId::new(RequirementOwner::Global(BinderId::generated(920)), 0);
+        let other_requirement =
+            RequirementId::new(RequirementOwner::Global(BinderId::generated(921)), 0);
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Unknown,
+            Expr::Evidence {
+                value: 0,
+                bindings: vec![
+                    (requirement, method, 1),
+                    (other_requirement, method, 2),
+                    (requirement, method, 2),
+                    (requirement, other_method, 1),
+                    (requirement, method, 1),
+                ],
+            },
+            Expr::Evidence {
+                value: 0,
+                bindings: vec![(requirement, method, 2)],
+            },
+        ]);
+        let mut measured = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+        let mut work = TypeWorkBudget::unbounded();
+        measured.prepare_binding_index(3, &mut work).unwrap();
+        let exact = work.used();
+        assert_eq!(
+            measured.binding_indices[&3][&(requirement, method)],
+            vec![0, 2, 4]
+        );
+        assert_eq!(
+            measured.binding_indices[&3][&(other_requirement, method)],
+            vec![1]
+        );
+        assert_eq!(
+            measured.binding_indices[&3][&(requirement, other_method)],
+            vec![3]
+        );
+        for prefix in [0, 9] {
+            for available in 0..exact {
+                let mut analysis = Analysis::new(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    analysis.prepare_binding_index(3, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(analysis.binding_indices.is_empty());
+                assert!(analysis.slots.is_empty());
+                assert!(analysis.pending.is_empty());
+                assert_eq!(analysis.revision, 0);
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).unwrap();
+                analysis.prepare_binding_index(3, &mut retry).unwrap();
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(analysis.binding_indices, measured.binding_indices);
+                let mut duplicate = TypeWorkBudget::with_limit(prefix + 1);
+                duplicate.charge(prefix).unwrap();
+                analysis.prepare_binding_index(3, &mut duplicate).unwrap();
+                assert_eq!(duplicate.used(), prefix + 1);
+                assert_eq!(analysis.binding_indices, measured.binding_indices);
+            }
+        }
+        measured
+            .prepare_binding_index(4, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(
+            measured.binding_indices[&4][&(requirement, method)],
+            vec![0]
+        );
+        assert_eq!(
+            measured.binding_indices[&3][&(requirement, method)],
+            vec![0, 2, 4]
+        );
+        for invalid in [0, usize::MAX] {
+            let before = measured.binding_indices.clone();
+            assert!(matches!(
+                measured.prepare_binding_index(invalid, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+            assert_eq!(measured.binding_indices, before);
+        }
+    }
+
+    #[test]
+    fn repeated_binding_lookup_work_depends_on_matches_instead_of_vector_width() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("wide-binding-index.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let mut recurring = Vec::new();
+        for width in [1, 96] {
+            let bindings: Vec<_> = (0..width)
+                .map(|position| {
+                    (
+                        RequirementId::new(
+                            RequirementOwner::Global(BinderId::generated(930)),
+                            position,
+                        ),
+                        method,
+                        1,
+                    )
+                })
+                .collect();
+            let matched = bindings.last().unwrap().0;
+            let mut graph = graph(vec![
+                Expr::Slot,
+                Expr::Scalar,
+                Expr::Evidence { value: 0, bindings },
+            ]);
+            graph.evidence = vec![((matched, method), 0)];
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let context = analysis.context(0, Transition::Call(2), &mut work).unwrap();
+            analysis
+                .specialize_captures(&[0], 0, context, 2, 0, &mut work)
+                .unwrap();
+            analysis.close(&mut work).unwrap();
+            let before = work.used();
+            for _ in 0..24 {
+                analysis
+                    .specialize_captures(&[0], 0, context, 2, 0, &mut work)
+                    .unwrap();
+            }
+            recurring.push(work.used() - before);
+            let destination = analysis.indices[&(0, context)];
+            assert_eq!(analysis.slots[destination].atoms, vec![Atom::Free]);
+        }
+        assert_eq!(
+            recurring[0], recurring[1],
+            "unrelated immutable bindings must not be rescanned"
+        );
+    }
+
+    #[test]
+    fn indexed_bindings_keep_late_notifications_and_distinct_argument_contexts() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("binding-notifications.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(BinderId::generated(922)), 0);
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Evidence {
+                value: 0,
+                bindings: vec![
+                    (requirement, method, 1),
+                    (requirement, method, 2),
+                    (requirement, method, 1),
+                ],
+            },
+        ]);
+        graph.evidence = vec![((requirement, method), 0)];
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let first = analysis.context(0, Transition::Call(1), &mut work).unwrap();
+        let second = analysis.context(0, Transition::Call(2), &mut work).unwrap();
+        analysis
+            .specialize_captures(&[0], 0, first, 3, 0, &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        let destination = analysis.indices[&(0, first)];
+        let one = analysis.indices[&(1, 0)];
+        let two = analysis.indices[&(2, 0)];
+        assert_eq!(analysis.slots[destination].edges, vec![one, two]);
+        assert!(analysis.slots[destination].atoms.is_empty());
+        assert!(analysis.slots[one].readers.contains(&destination));
+        assert!(analysis.slots[two].readers.contains(&destination));
+        analysis.atom(one, Atom::Unknown, &mut work).unwrap();
+        analysis.atom(two, Atom::Free, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(
+            analysis.slots[destination].atoms,
+            vec![Atom::Unknown, Atom::Free]
+        );
+        // Reuse only static positions. Fresh argument slots retain their context.
+        analysis
+            .specialize_captures(&[0], 0, second, 3, first, &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        let other = analysis.indices[&(0, second)];
+        assert!(analysis.slots[other].atoms.is_empty());
+        let later = analysis.indices[&(1, first)];
+        assert_ne!(one, later);
+        analysis.atom(later, Atom::Free, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(analysis.slots[other].atoms, vec![Atom::Free]);
+        assert_eq!(
+            analysis.slots[destination].atoms,
+            vec![Atom::Unknown, Atom::Free]
+        );
+        assert_eq!(analysis.binding_indices.len(), 1);
     }
 
     #[test]
@@ -4038,6 +4694,139 @@ mod tests {
                 run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn conditional_handler_import_preserves_per_request_pattern_and_resume_operands() {
+        let mut actual = graph(vec![
+            Expr::Slot,
+            Expr::Request {
+                operand: 0,
+                scalar: false,
+            },
+            Expr::Slot,
+            Expr::Request {
+                operand: 2,
+                scalar: false,
+            },
+            Expr::Scalar,
+        ]);
+        actual.positions.extend([(10, 4), (11, 1), (12, 3)]);
+        let mut original = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Alias(0),
+            Expr::Unknown,
+            Expr::Handler {
+                body: 3,
+                clauses: vec![DataClause {
+                    input: 1,
+                    bindings: vec![(0, 1)],
+                    body: 2,
+                    captures: vec![],
+                }],
+            },
+            Expr::Resume { operand: 0 },
+        ]);
+        original.positions.extend([(1, 2), (2, 5)]);
+        let mut budget = TypeWorkBudget::unbounded();
+        let handler = actual
+            .import_conditional_handler(&original, 4, 10, 50, 0, 20, &mut budget)
+            .unwrap();
+        let Expr::Handler { body, clauses } = &actual.expressions[handler] else {
+            panic!("handler");
+        };
+        assert_eq!(*body, 4);
+        let clause_body = clauses[0].body;
+        let mut analysis = Analysis::new(&actual, &mut budget).unwrap();
+        let first = analysis.slot(0, 0, &mut budget).unwrap();
+        let second = analysis.slot(2, 0, &mut budget).unwrap();
+        let a = Atom::Resource(99, 0);
+        let b = Atom::Resource(100, 0);
+        analysis.atom(first, a, &mut budget).unwrap();
+        analysis.atom(second, b, &mut budget).unwrap();
+        let first = analysis.port(11, 0, &mut budget).unwrap();
+        let second = analysis.port(12, 0, &mut budget).unwrap();
+        let first_context = analysis.dispatch(first, 50, 0, 0, 0, &mut budget).unwrap();
+        let second_context = analysis.dispatch(second, 50, 0, 0, 0, &mut budget).unwrap();
+        assert_ne!(first_context, second_context);
+        let first_body = analysis
+            .slot(clause_body, first_context, &mut budget)
+            .unwrap();
+        let second_body = analysis
+            .slot(clause_body, second_context, &mut budget)
+            .unwrap();
+        analysis
+            .resume(first, 22, first_context, 50, 0, &mut budget)
+            .unwrap();
+        analysis
+            .resume(second, 22, second_context, 50, 0, &mut budget)
+            .unwrap();
+        analysis.close(&mut budget).unwrap();
+        let first_dependencies = analysis.dependencies(first_body, &mut budget).unwrap();
+        let second_dependencies = analysis.dependencies(second_body, &mut budget).unwrap();
+        assert!(first_dependencies.contains(&a));
+        assert!(!first_dependencies.contains(&b));
+        assert!(second_dependencies.contains(&b));
+        assert!(!second_dependencies.contains(&a));
+        assert!(
+            analysis
+                .dependencies(first, &mut budget)
+                .unwrap()
+                .contains(&a)
+        );
+        assert!(
+            analysis
+                .dependencies(second, &mut budget)
+                .unwrap()
+                .contains(&b)
+        );
+    }
+
+    #[test]
+    fn conditional_handler_import_refuses_unknown_body_and_control_port_collisions() {
+        let mut original = graph(vec![
+            Expr::Unknown,
+            Expr::Handler {
+                body: 0,
+                clauses: vec![],
+            },
+        ]);
+        original.positions.insert(1, 0);
+        for (original_handler, body, handler, offset) in [
+            (0, 10, 50, 20),
+            (1, 99, 50, 20),
+            (1, 10, 21, 20),
+            (1, 10, 10, 20),
+        ] {
+            let mut actual = graph(vec![Expr::Scalar]);
+            actual.positions.insert(10, 0);
+            assert!(matches!(
+                actual.import_conditional_handler(
+                    &original,
+                    original_handler,
+                    body,
+                    handler,
+                    0,
+                    offset,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(Failure::Invalid)
+            ));
+            assert_eq!(actual.expressions.len(), 1);
+        }
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut actual = graph(vec![Expr::Scalar]);
+            actual.positions.insert(10, 0);
+            actual.import_conditional_handler(&original, 1, 10, 50, 0, 20, budget)
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
     }
 
     #[test]
@@ -4735,7 +5524,37 @@ mod tests {
         normal.slot(6, 0, &mut budget).unwrap();
         normal.slot(8, 0, &mut budget).unwrap();
         normal.close(&mut budget).unwrap();
-        let (mut focused, context) = normal.focused(6, 0, &mut budget).unwrap();
+        let mut focused_work = TypeWorkBudget::unbounded();
+        let (mut focused, context) = normal.focused(6, 0, &mut focused_work).unwrap();
+        let exact = focused_work.used();
+        for prefix in [0, 9] {
+            let mut short = TypeWorkBudget::with_limit(prefix + exact - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                normal.focused(6, 0, &mut short),
+                Err(Failure::Resource)
+            ));
+            let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+            retry.charge(prefix).unwrap();
+            let (retried, retry_context) = normal.focused(6, 0, &mut retry).unwrap();
+            assert_eq!(retry.used(), prefix + exact);
+            assert_eq!(retry_context, context);
+            assert_eq!(retried.atom_pairs, focused.atom_pairs);
+        }
+        for (slot, original) in normal.slots.iter().enumerate() {
+            for atom in &original.atoms {
+                assert!(focused.atom_pairs.contains(&(slot, *atom)));
+                let revision = focused.revision;
+                focused
+                    .atom(slot, *atom, &mut TypeWorkBudget::with_limit(1))
+                    .unwrap();
+                assert_eq!(
+                    focused.revision, revision,
+                    "copied frozen atoms are already indexed"
+                );
+                assert_eq!(focused.slots[slot].atoms, original.atoms);
+            }
+        }
         let inherited = focused.slot(0, context, &mut budget).unwrap();
         let local = focused.slot(4, context, &mut budget).unwrap();
         assert_eq!(focused.slots[inherited].atoms, vec![Atom::Closure(4, 0)]);

@@ -21,10 +21,13 @@ use crate::{
         clone_kinded_type_parameters_with_budget, clone_type_with_budget,
         discard_kinded_argument_iteratively, discard_type_iteratively,
         extend_owner_type_children_with_charge, extend_owner_type_pairs_with_charge,
-        same_kinded_type_parameters_with_charge, same_type, type_arguments_to_kinded_with_budget,
-        visit_owner_type_children_with_charge, visit_owner_type_pairs_with_charge,
+        same_kinded_type_parameters_with_charge, same_type, visit_owner_type_children_with_charge,
+        visit_owner_type_pairs_with_charge,
     },
 };
+
+#[cfg(test)]
+use crate::types::type_arguments_to_kinded_with_budget;
 
 impl KindWorkLedger for InterfaceConstraintBudget {
     fn charge(&mut self, work: usize) -> Result<(), ()> {
@@ -3384,6 +3387,7 @@ impl Drop for InterfaceArgumentBuffer {
 }
 
 impl InterfaceApplication {
+    #[cfg(test)]
     pub(crate) fn from_type_arguments_with_budget<B: crate::types::TypeWorkMeter>(
         interface: InterfaceId,
         arguments: Box<[Type]>,
@@ -3584,30 +3588,11 @@ impl EvidenceSelection {
         left_root == right_root && Arc::ptr_eq(left, right)
     }
 
-    pub(crate) fn original_interface(&self) -> InterfaceId {
-        self.canonical_original().0.application.interface()
-    }
-
-    pub(crate) fn original_arguments(&self) -> &[KindedArgument] {
-        self.canonical_original().0.application.arguments()
-    }
-
-    pub(crate) fn original_root(&self) -> EvidenceNodeId {
-        self.canonical_original().1
-    }
-
-    pub(crate) fn original_node_count(&self) -> usize {
-        self.canonical_original().0.nodes.len()
-    }
-
-    pub(crate) fn original_node(&self, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
-        evidence_node(self.canonical_original().0, id)
-    }
-
     /// Reconstructs a complete view of the canonical original selection using
     /// the caller's simultaneous template substitution and local relocation.
     /// This projection never checks source or selects an implementation. Final
     /// Core must compare every original node and rewritten payload independently.
+    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
     pub(crate) fn specialize_with<E>(
         &self,
         types: &mut TypeWorkBudget,

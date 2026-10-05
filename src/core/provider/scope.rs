@@ -229,17 +229,8 @@ impl ProviderScopeNode {
     pub(crate) fn handler(&self) -> &HandlerNode {
         &self.handler
     }
-    pub(crate) fn handler_output(&self) -> &ComputationType {
-        &self.handler_output
-    }
     pub(crate) fn descriptor(&self) -> &ProviderScopeAuthority {
         &self.descriptor
-    }
-    pub(crate) fn lexical(&self) -> LexicalEvidenceId {
-        self.lexical
-    }
-    pub(crate) fn forwardings(&self) -> &[ProviderForwardingMethod] {
-        &self.forwardings
     }
 
     /// Returns all initializer, lifecycle, body, and clause edges.
@@ -967,10 +958,10 @@ impl ProviderScopeNode {
             }
             Ok(parameters)
         }
-        fn payload<'a>(
-            registry: &'a ResolvedRegistry,
+        fn payload(
+            registry: &ResolvedRegistry,
             id: ConstructorId,
-        ) -> Result<Option<&'a Type>, crate::core::ValidationError> {
+        ) -> Result<Option<&Type>, crate::core::ValidationError> {
             Ok(registry
                 .constructor(id)
                 .ok_or_else(invalid)?

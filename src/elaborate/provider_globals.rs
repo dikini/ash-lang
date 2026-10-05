@@ -2,34 +2,38 @@
 //!
 //! This catalog does not admit occurrences or authenticate a template entry.
 
-use super::{
-    BinderId, CheckedImplementationFact, CheckedInterfaceFact, CheckedModule, ConstrainedScheme,
-    CoreElaborator, CoreLoweringFamily, EvidenceLowering, HashMap, InterfaceId,
-    LoweredImplementationMethod, LoweredInterface, LoweredInterfaceMethod, LoweredScheme,
-    MethodEvidenceOwner, Origin, OriginOwner, TypeError, TypeWorkBudget, clone_kind_with_budget,
-    constraint_resource, discard_origin_iteratively, invalid_state, resolved_build_error,
-    same_kinded_type_parameters_with_budget, same_type_with_budget, type_resource,
-};
 #[cfg(test)]
 use super::{
-    CheckedRequirement, EffectElaborator, ElaborationFailure, GeneratedReason,
-    InterfaceApplication, IterativeTypeOwner, MethodId, RequirementId, ResolvedModule, Type,
-    TypeVariableId, check_module, link_modules,
+    BinderId, CheckedModule, CheckedRequirement, ConstrainedScheme, EffectElaborator,
+    ElaborationFailure, GeneratedReason, InterfaceApplication, InterfaceId, IterativeTypeOwner,
+    LoweredScheme, MethodId, OriginOwner, RequirementId, ResolvedModule, Type, TypeVariableId,
+    check_module, discard_origin_iteratively, link_modules,
+    same_kinded_type_parameters_with_budget, same_type_with_budget,
 };
+use super::{
+    CheckedImplementationFact, CheckedInterfaceFact, CoreElaborator, CoreLoweringFamily,
+    EvidenceLowering, HashMap, LoweredImplementationMethod, LoweredInterface,
+    LoweredInterfaceMethod, MethodEvidenceOwner, Origin, TypeError, TypeWorkBudget,
+    clone_kind_with_budget, constraint_resource, invalid_state, resolved_build_error,
+    type_resource,
+};
+use crate::resolved::ImportedFacts;
+#[cfg(test)]
 use crate::{
     interface::MatchedNominalIdentities,
     resolved::{
-        ImportedFacts, same_checked_interface_fact_observing_nominals_with_budget,
-        same_origin_with_budget,
+        same_checked_interface_fact_observing_nominals_with_budget, same_origin_with_budget,
     },
 };
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ProviderExternalGlobals {
     rows: Box<[ProviderExternalGlobal]>,
     positions: HashMap<BinderId, usize>,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) struct ProviderExternalGlobal {
     binder: BinderId,
@@ -39,6 +43,7 @@ pub(crate) struct ProviderExternalGlobal {
     lowered: LoweredScheme,
 }
 
+#[cfg(test)]
 impl ProviderExternalGlobals {
     pub(crate) fn rows(&self) -> &[ProviderExternalGlobal] {
         &self.rows
@@ -48,6 +53,7 @@ impl ProviderExternalGlobals {
     }
 }
 
+#[cfg(test)]
 impl ProviderExternalGlobal {
     pub(crate) fn binder(&self) -> BinderId {
         self.binder
@@ -66,6 +72,7 @@ impl ProviderExternalGlobal {
     }
 }
 
+#[cfg(test)]
 impl Drop for ProviderExternalGlobal {
     fn drop(&mut self) {
         let span = self.origin.primary_span();
@@ -74,6 +81,7 @@ impl Drop for ProviderExternalGlobal {
 }
 
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
+    #[cfg(test)]
     pub(super) fn prepare_provider_external_globals(
         &mut self,
         checked: &CheckedModule,
@@ -86,6 +94,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )
     }
 
+    #[cfg(test)]
     fn prepare_provider_completed_globals(
         &mut self,
         globals: &[super::CheckedGlobalScheme],
@@ -528,6 +537,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
     }
 }
 
+#[cfg(test)]
 struct GlobalSource<'a> {
     binder: BinderId,
     scheme: &'a ConstrainedScheme,
@@ -535,6 +545,7 @@ struct GlobalSource<'a> {
     capture: &'a crate::core::capture::CaptureValueSummary,
 }
 
+#[cfg(test)]
 fn same_global_source(
     retained: &ProviderExternalGlobal,
     source: &GlobalSource<'_>,
