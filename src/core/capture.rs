@@ -1150,6 +1150,21 @@ fn retain_function_metadata<F: CoreOperationFamily>(
                 bound.try_reserve(1).map_err(|_| Failure::Resource)?;
                 bound.push(resource.acquisition.identity);
             }
+            Some(EffectOperation::ProviderScope(scope)) => {
+                charge(budget, 1)?;
+                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound.push(scope.descriptor.identity());
+                for argument in scope
+                    .descriptor
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(value, Metadata::Argument(argument), budget)?;
+                }
+                retain_type_variables(value, scope.handler_output.value(), budget)?;
+                retain_row_variables(value, scope.handler_output.effects(), budget)?;
+            }
             Some(EffectOperation::Handler(handler)) => {
                 for argument in handler.effect().arguments() {
                     retain_metadata_variables(value, Metadata::Argument(argument), budget)?;
@@ -1346,7 +1361,12 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     }
     let mut owners = HashMap::new();
     for node in nodes {
-        if let Some(EffectOperation::Handler(handler)) = operation(&node.kind) {
+        let handler = match operation(&node.kind) {
+            Some(EffectOperation::Handler(handler)) => Some(handler),
+            Some(EffectOperation::ProviderScope(scope)) => Some(&scope.handler),
+            _ => None,
+        };
+        if let Some(handler) = handler {
             for clause in handler.clauses() {
                 owners.try_reserve(1).map_err(|_| Failure::Resource)?;
                 owners.insert((handler.id(), clause.resume()), graph.code.len());
@@ -1459,7 +1479,9 @@ fn compile_with_boundary<F: CoreOperationFamily>(
                 Some(EffectOperation::ProviderStateAccess(_)) if provider_query => {
                     Control::Unavailable
                 }
-                Some(EffectOperation::ProviderStateAccess(_)) => return Err(Failure::Invalid),
+                Some(EffectOperation::ProviderStateAccess(access)) => {
+                    Control::Sequence(copy_slice(&[index(access.operand()) + 1], budget)?)
+                }
                 Some(EffectOperation::Cleanup(scope)) => {
                     let row_type = graph.types.0.len();
                     charge(budget, 3)?;
@@ -1523,6 +1545,81 @@ fn compile_with_boundary<F: CoreOperationFamily>(
                         &[index(resource.initializer) + 1, acquisition],
                         budget,
                     )?)
+                }
+                Some(EffectOperation::ProviderScope(scope)) => {
+                    charge(
+                        budget,
+                        scope
+                            .handler
+                            .clauses()
+                            .len()
+                            .checked_add(5)
+                            .ok_or(Failure::Resource)?,
+                    )?;
+                    graph.code.try_reserve(5).map_err(|_| Failure::Resource)?;
+                    let mut clauses = Vec::new();
+                    clauses
+                        .try_reserve_exact(scope.handler.clauses().len())
+                        .map_err(|_| Failure::Resource)?;
+                    for clause in scope.handler.clauses() {
+                        clauses.push(Clause {
+                            operation: Some(clause.operation()),
+                            body: index(clause.body()) + 1,
+                            owner: *owners
+                                .get(&(scope.handler.id(), clause.resume()))
+                                .ok_or(Failure::Invalid)?,
+                            source: clause.origin().primary_span(),
+                        });
+                    }
+                    let handler = graph.code.len();
+                    data.position_provider_handler(handler, id, budget)?;
+                    graph.code.push(Control::Handler {
+                        body: index(scope.handler.body()) + 1,
+                        effect: Request::effect(scope.handler.effect(), source, budget)?,
+                        clauses,
+                    });
+                    let row_type = graph.types.0.len();
+                    charge(budget, 3)?;
+                    graph
+                        .types
+                        .0
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    let effects = crate::types::clone_effect_row_with_budget(
+                        F::effect_row(&nodes[index(scope.finish.body)].effects),
+                        budget,
+                    )
+                    .map_err(|_| Failure::Resource)?;
+                    graph.types.0.push(Type::function_computation(
+                        Type::Unit,
+                        crate::types::ComputationType::new(Type::Unit, effects),
+                    ));
+                    let completed = graph.code.len();
+                    data.position(completed, id, budget)?;
+                    graph.code.push(Control::Cleanup {
+                        body: handler,
+                        action: index(scope.finish.body) + 1,
+                        row_type,
+                        source,
+                    });
+                    let choice = graph.code.len();
+                    data.position(choice, id, budget)?;
+                    graph
+                        .code
+                        .push(Control::Choice(copy_slice(&[0, completed], budget)?));
+                    let acquisition = graph.code.len();
+                    data.position(acquisition, id, budget)?;
+                    graph.code.push(Control::Sequence(copy_slice(
+                        &[index(scope.acquire.body) + 1, choice],
+                        budget,
+                    )?));
+                    let owner = graph.code.len();
+                    data.position(owner, id, budget)?;
+                    graph.code.push(Control::Resource {
+                        body: acquisition,
+                        effect: Request::effect(scope.descriptor.native_effect(), source, budget)?,
+                    });
+                    Control::Sequence(copy_slice(&[index(scope.initializer) + 1, owner], budget)?)
                 }
                 Some(EffectOperation::Request(request)) => {
                     graph.code.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -2331,6 +2428,10 @@ fn build_capture_graph<F: CoreOperationFamily>(
         if let Some(EffectOperation::Resource(resource)) = operation(&node.kind) {
             resource_scope.get_or_insert(resource.acquisition.span);
         }
+        if let Some(EffectOperation::ProviderScope(_)) = operation(&node.kind) {
+            resource_scope
+                .get_or_insert(node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span());
+        }
         if let Some(EffectOperation::Registration(scope)) = operation(&node.kind) {
             resource_scope.get_or_insert(scope.span);
         }
@@ -2550,6 +2651,12 @@ fn solve_capture_values<F: CoreOperationFamily>(
                     }
                     Some(EffectOperation::Resource(resource)) => {
                         value = values[index(resource.body)].copy(budget)?;
+                    }
+                    Some(EffectOperation::ProviderScope(scope)) => {
+                        value.join(&values[index(scope.handler.body())], budget)?;
+                        for clause in scope.handler.clauses() {
+                            value.join(&values[index(clause.body())], budget)?;
+                        }
                     }
                     Some(EffectOperation::Handler(handler)) => {
                         value.join(&values[index(handler.body())], budget)?;

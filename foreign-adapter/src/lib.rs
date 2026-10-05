@@ -5,6 +5,9 @@
 //! There is no shutdown call: initialization belongs to the host process.
 
 pub mod arena;
+/// Identity-bound executable Ash bindings for the SQLite copying experiment.
+pub mod ash_bindings;
+pub use ash_bindings::{SqliteFinishFaults, sqlite_binding, sqlite_binding_with_finish_faults};
 
 use std::{
     cell::{Cell, RefCell},

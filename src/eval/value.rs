@@ -136,6 +136,7 @@ impl ObservedValue {
                 }
                 Task::Value(value) => match value {
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
+                    Value::NativeStateView(_) => output.push_str("<native-state-view>"),
                     Value::Integer(value) => output.push_str(&value.to_string()),
                     Value::Boolean(value) => output.push_str(if value { "true" } else { "false" }),
                     Value::Unit => output.push_str("()"),
@@ -274,6 +275,8 @@ impl fmt::Debug for Closure {
 pub enum Value {
     /// An opaque, non-owning access key for a live resource activation.
     ResourceHandle(ActivationKey),
+    /// An opaque borrowed native state view with no native ownership edge.
+    NativeStateView(ActivationKey),
     /// An arbitrary-precision mathematical integer.
     Integer(Integer),
     /// A Boolean value.
@@ -301,6 +304,7 @@ impl fmt::Display for Value {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
+            Self::NativeStateView(_) => formatter.write_str("<native-state-view>"),
             Self::Integer(value) => value.fmt(formatter),
             Self::Boolean(value) => value.fmt(formatter),
             Self::Unit => formatter.write_str("()"),

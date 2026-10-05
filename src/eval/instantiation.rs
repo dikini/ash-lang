@@ -153,6 +153,15 @@ impl Instantiation {
         }
     }
 
+    pub(super) fn activation_at(effect: &EffectInstance, position: usize) -> Option<ActivationKey> {
+        match effect.arguments().get(position) {
+            Some(crate::types::KindedArgument::TypeArg(Type::Inference(identity))) => {
+                Some(ActivationKey(identity.value()))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn apply(
         &self,
         caller: &Self,
@@ -259,6 +268,30 @@ impl Instantiation {
             return Err(RuntimeFailure::InvalidControlState);
         }
         Ok(Self(Some(Arc::new(bindings))))
+    }
+
+    pub(super) fn argument(
+        &self,
+        argument: &crate::types::KindedArgument,
+        work: &mut TypeWorkBudget,
+    ) -> Result<crate::types::IterativeArgumentOwner, RuntimeFailure> {
+        work.charge(1).map_err(|()| {
+            metadata_failure(
+                Some(RuntimePhase::Access),
+                ResourceFailureCause::WorkBudgetExhausted,
+                Some(1),
+                Some(work.remaining()),
+            )
+        })?;
+        let argument = match argument {
+            crate::types::KindedArgument::TypeArg(ty) => {
+                crate::types::KindedArgument::TypeArg(self.ty(ty, work)?)
+            }
+            crate::types::KindedArgument::RowArg(row) => {
+                crate::types::KindedArgument::RowArg(self.row(row, work)?)
+            }
+        };
+        Ok(crate::types::IterativeArgumentOwner::new(argument))
     }
 
     pub(super) fn ty(&self, ty: &Type, work: &mut TypeWorkBudget) -> Result<Type, RuntimeFailure> {

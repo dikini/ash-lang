@@ -436,6 +436,7 @@ pub enum EffectOperation {
     Cleanup(CleanupScopeNode),
     Registration(RegistrationScopeNode),
     Resource(Box<ResourceScopeNode>),
+    ProviderScope(Box<super::provider::ProviderScopeNode>),
     ProviderStateAccess(ProviderStateAccessNode),
     Request(RequestNode),
     Handler(HandlerNode),
@@ -497,8 +498,20 @@ impl CoreOperationFamily for EffectOperationFamily {
         if let EffectExprKind::Operation(EffectOperation::Resource(resource)) = kind {
             visit(&resource.handle);
         }
-        let EffectExprKind::Operation(EffectOperation::Handler(handler)) = kind else {
-            return;
+        let handler = match kind {
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(binder);
+                }
+                &scope.handler
+            }
+            EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+            _ => return,
         };
         for clause in &handler.clauses {
             for binder in clause.pattern().binder_iter() {
@@ -520,6 +533,34 @@ impl CoreOperationFamily for EffectOperationFamily {
                     visit(super::dialect::OperationTypeMetadata::Argument(argument));
                 }
                 None
+            }
+            EffectOperation::ProviderScope(scope) => {
+                for argument in scope.descriptor.arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for argument in scope.descriptor.native_effect().arguments() {
+                    visit(super::dialect::OperationTypeMetadata::Argument(argument));
+                }
+                for binder in [
+                    &scope.acquire.parameter,
+                    &scope.finish.parameter,
+                    &scope.handler_state,
+                    &scope.handle,
+                ] {
+                    visit(super::dialect::OperationTypeMetadata::Type(binder.ty()));
+                }
+                visit(super::dialect::OperationTypeMetadata::Type(
+                    scope.handler_output.value(),
+                ));
+                visit(super::dialect::OperationTypeMetadata::Row(
+                    scope.handler_output.effects(),
+                ));
+                for clause in &scope.handler.clauses {
+                    visit(super::dialect::OperationTypeMetadata::Pattern(
+                        clause.pattern(),
+                    ));
+                }
+                Some(&scope.handler.effect)
             }
             EffectOperation::Resource(resource) => {
                 visit(super::dialect::OperationTypeMetadata::Type(
@@ -571,6 +612,28 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => {
                 return rewrite_kinded_arguments(&mut access.arguments, rewrite, charge);
             }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                charge(4)?;
+                for binder in [
+                    &mut scope.acquire.parameter,
+                    &mut scope.finish.parameter,
+                    &mut scope.handler_state,
+                    &mut scope.handle,
+                ] {
+                    binder.rewrite_type(&mut |ty| rewrite(ty))?;
+                }
+                let output = rewrite(scope.handler_output.value())?;
+                crate::types::replace_type_iteratively(&mut scope.handler_output.value, output);
+                rewrite_effect_row(&mut scope.handler_output.effects, rewrite, charge)?;
+                charge(scope.handler.clauses.len())?;
+                for clause in &mut scope.handler.clauses {
+                    clause
+                        .arm
+                        .pattern_mut()
+                        .rewrite_types(&mut |ty| rewrite(ty))?;
+                }
+                &mut scope.handler.effect
+            }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => {
                 charge(1)?;
                 resource.handle.rewrite_type(&mut |ty| rewrite(ty))?;
@@ -611,6 +674,7 @@ impl CoreOperationFamily for EffectOperationFamily {
             EffectExprKind::Operation(EffectOperation::Cleanup(_)) => 2,
             EffectExprKind::Operation(EffectOperation::Registration(_)) => 1,
             EffectExprKind::Operation(EffectOperation::Resource(_)) => 2,
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => scope.child_count(),
             EffectExprKind::Operation(EffectOperation::Discard(_)) => 0,
             EffectExprKind::Operation(
                 EffectOperation::Request(_)
@@ -623,6 +687,9 @@ impl CoreOperationFamily for EffectOperationFamily {
     fn operation_extra_edge_count(kind: &Self::Kind) -> usize {
         match kind {
             EffectExprKind::Operation(EffectOperation::Handler(node)) => node.clauses.len(),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                scope.handler.clauses.len()
+            }
             EffectExprKind::Pure(_)
             | EffectExprKind::Operation(EffectOperation::Cleanup(_))
             | EffectExprKind::Operation(EffectOperation::Registration(_))
@@ -644,6 +711,9 @@ impl CoreOperationFamily for EffectOperationFamily {
             },
             EffectExprKind::Operation(EffectOperation::Registration(scope)) => {
                 (index == 0).then_some(scope.body)
+            }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                scope.child_at(index)
             }
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => match index {
                 0 => Some(resource.initializer),
@@ -676,6 +746,7 @@ impl CoreOperationFamily for EffectOperationFamily {
                 EffectOperation::Registration(_) | EffectOperation::Cleanup(_),
             ) => {}
             EffectExprKind::Operation(EffectOperation::Resource(resource)) => drop(resource),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => drop(scope),
             EffectExprKind::Operation(EffectOperation::ProviderStateAccess(access)) => drop(access),
             EffectExprKind::Operation(EffectOperation::Request(mut node)) => {
                 let placeholder = EffectInstance::new(node.effect.effect(), Box::new([]));
@@ -704,6 +775,46 @@ pub type UnvalidatedEffectProgram = UnvalidatedCoreProgram<EffectOperationFamily
 pub type ValidatedEffectProgram = ValidatedCoreProgram<EffectOperationFamily>;
 
 impl CoreBuilder<EffectOperationFamily> {
+    /// Replaces only a copied computation row with an equation realization claim.
+    /// Final provider admission independently reconstructs and authenticates it.
+    pub(crate) fn set_provider_copy_node_row(
+        &mut self,
+        node: NodeId,
+        effects: EffectRow,
+    ) -> Result<(), super::BuildError> {
+        self.type_work
+            .charge(1)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // The ordinary provenance accessor checks both arena and index.
+        self.compiler_node_kind(node)?;
+        let index = node.index()?;
+        crate::types::charge_effect_row_cells(&effects, &mut self.type_work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        // EffectRow's disposal walks nested Type/row payloads iteratively.
+        let displaced = std::mem::replace(&mut self.nodes[index].effects, effects);
+        drop(displaced);
+        Ok(())
+    }
+
+    /// Reads the actual copied entry row without granting scope authority.
+    pub(crate) fn provider_scope_entry_row(
+        &self,
+        entry: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EffectRow, super::BuildError> {
+        work.charge(1)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)?;
+        let (arena, nodes, _) = self.provider_projection_parts()?;
+        if entry.arena() != arena {
+            return Err(super::BuildError::InvalidNodeId);
+        }
+        let node = nodes
+            .get(entry.index()?)
+            .ok_or(super::BuildError::InvalidNodeId)?;
+        clone_effect_row_with_budget(&node.effects, work)
+            .map_err(|()| super::BuildError::TypeWorkExceeded)
+    }
+
     pub(crate) fn provider_state_access(
         &mut self,
         access: ProviderStateAccessNode,
@@ -725,6 +836,51 @@ impl CoreBuilder<EffectOperationFamily> {
             effects,
             origin,
             EffectOperation::ProviderStateAccess(access),
+        )
+    }
+
+    pub(crate) fn provider_scope(
+        &mut self,
+        mut scope: Box<super::provider::ProviderScopeNode>,
+        ty: Type,
+        effects: EffectRow,
+        origin: Origin,
+    ) -> Result<NodeId, super::BuildError> {
+        let ty = crate::types::IterativeTypeOwner::new(ty);
+        let result = (|| {
+            self.charge_effect_metadata(
+                scope
+                    .handler
+                    .clauses
+                    .len()
+                    .checked_add(scope.forwardings.len())
+                    .and_then(|n| n.checked_add(1))
+                    .ok_or(super::BuildError::TypeWorkExceeded)?,
+            )?;
+            let mut admitted = Vec::new();
+            admitted
+                .try_reserve_exact(scope.handler.clauses.len())
+                .map_err(|_| super::BuildError::TypeWorkExceeded)?;
+            for clause in std::mem::take(&mut scope.handler.clauses).into_vec() {
+                let (operation, resume, arm) = clause.into_parts();
+                admitted.push(EffectClause::new(
+                    operation,
+                    resume,
+                    self.admit_effect_clause_arm(arm)?,
+                ));
+            }
+            scope.handler.clauses = admitted.into_boxed_slice();
+            Ok(())
+        })();
+        if let Err(error) = result {
+            discard_origin_iteratively(origin);
+            return Err(error);
+        }
+        self.push_operation(
+            ty.into_inner(),
+            effects,
+            origin,
+            EffectOperation::ProviderScope(scope),
         )
     }
 
@@ -768,6 +924,15 @@ impl CoreBuilder<EffectOperationFamily> {
             Request(NodeId, EffectInstance),
             Handler(EffectInstance, usize, bool),
             Resource(crate::resolved::ResourceAcquisition, NodeId, NodeId),
+            ProviderScope(
+                NodeId,
+                NodeId,
+                NodeId,
+                NodeId,
+                EffectInstance,
+                EffectInstance,
+                usize,
+            ),
             Keep,
         }
 
@@ -796,6 +961,23 @@ impl CoreBuilder<EffectOperationFamily> {
                             resource.acquisition,
                             resource.initializer,
                             resource.body,
+                        )
+                    }
+                    EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                        Equation::ProviderScope(
+                            scope.initializer,
+                            scope.acquire.body,
+                            scope.finish.body,
+                            scope.handler.body(),
+                            clone_effect_instance_with_budget(
+                                scope.descriptor.native_effect(),
+                                &mut self.type_work,
+                            )?,
+                            clone_effect_instance_with_budget(
+                                scope.handler.effect(),
+                                &mut self.type_work,
+                            )?,
+                            scope.handler.clauses.len(),
                         )
                     }
                     EffectExprKind::Pure(_) => Equation::Pure,
@@ -835,6 +1017,7 @@ impl CoreBuilder<EffectOperationFamily> {
                         )
                     }
                 };
+                let mut provider_output = None;
                 let effects = match equation {
                     Equation::StateAccess(operand) => clone_effect_row_with_budget(
                         &self
@@ -904,6 +1087,96 @@ impl CoreBuilder<EffectOperationFamily> {
                             .map_err(|()| super::BuildError::TypeWorkExceeded)?
                             .map_err(|_| super::BuildError::InvalidPayload)?
                     }
+                    Equation::ProviderScope(
+                        initializer,
+                        acquire,
+                        finish,
+                        body,
+                        native,
+                        provided,
+                        clauses,
+                    ) => {
+                        let body = &self
+                            .nodes
+                            .get(body.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects;
+                        let mut handler = match body
+                            .remove_exact_with_budget(&provided, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                        {
+                            Ok(row) => row,
+                            Err(crate::types::EffectRowError::Missing) => {
+                                clone_effect_row_with_budget(body, &mut self.type_work)
+                                    .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            }
+                            Err(_) => return Err(super::BuildError::InvalidPayload),
+                        };
+                        self.charge_effect_metadata(clauses)?;
+                        for ordinal in 0..clauses {
+                            let clause = EffectOperationFamily::child_at(
+                                &self.nodes[index].kind,
+                                ordinal + 4,
+                            )
+                            .ok_or(super::BuildError::InvalidPayload)?;
+                            handler = handler
+                                .union_with_budget(
+                                    &self
+                                        .nodes
+                                        .get(clause.index()?)
+                                        .ok_or(super::BuildError::InvalidNodeId)?
+                                        .effects,
+                                    &mut self.type_work,
+                                )
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        provider_output = Some(
+                            clone_effect_row_with_budget(&handler, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                        );
+                        let mut outward = super::provider::interpret_native_phase_row(
+                            &handler,
+                            &native,
+                            &mut self.type_work,
+                        )
+                        .map_err(|error| {
+                            if error.reason() == super::ValidationReason::Resource {
+                                super::BuildError::TypeWorkExceeded
+                            } else {
+                                super::BuildError::InvalidPayload
+                            }
+                        })?;
+                        for root in [acquire, finish] {
+                            let phase = super::provider::interpret_native_phase_row(
+                                &self
+                                    .nodes
+                                    .get(root.index()?)
+                                    .ok_or(super::BuildError::InvalidNodeId)?
+                                    .effects,
+                                &native,
+                                &mut self.type_work,
+                            )
+                            .map_err(|error| {
+                                if error.reason() == super::ValidationReason::Resource {
+                                    super::BuildError::TypeWorkExceeded
+                                } else {
+                                    super::BuildError::InvalidPayload
+                                }
+                            })?;
+                            outward = outward
+                                .union_with_budget(&phase, &mut self.type_work)
+                                .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                                .map_err(|_| super::BuildError::InvalidPayload)?;
+                        }
+                        self.nodes
+                            .get(initializer.index()?)
+                            .ok_or(super::BuildError::InvalidNodeId)?
+                            .effects
+                            .union_with_budget(&outward, &mut self.type_work)
+                            .map_err(|()| super::BuildError::TypeWorkExceeded)?
+                            .map_err(|_| super::BuildError::InvalidPayload)?
+                    }
                     Equation::Pure => self.infer_pure_effects_at(index)?,
                     Equation::Replace => clone_effect_row_with_budget(output, &mut self.type_work)
                         .map_err(|()| super::BuildError::TypeWorkExceeded)?,
@@ -964,13 +1237,30 @@ impl CoreBuilder<EffectOperationFamily> {
                     Equation::Keep => continue,
                 };
                 let previous = std::mem::replace(&mut self.nodes[index].effects, effects);
-                undo.push((index, previous));
+                let previous_output = if let Some(output) = provider_output {
+                    let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut self.nodes[index].kind
+                    else {
+                        return Err(super::BuildError::InvalidPayload);
+                    };
+                    Some(std::mem::replace(&mut scope.handler_output.effects, output))
+                } else {
+                    None
+                };
+                undo.push((index, previous, previous_output));
             }
             Ok(())
         })();
         if let Err(error) = result {
-            while let Some((index, previous)) = undo.pop() {
+            while let Some((index, previous, output)) = undo.pop() {
                 drop(std::mem::replace(&mut self.nodes[index].effects, previous));
+                if let Some(output) = output {
+                    if let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut self.nodes[index].kind
+                    {
+                        drop(std::mem::replace(&mut scope.handler_output.effects, output));
+                    }
+                }
             }
             return Err(error);
         }
@@ -988,13 +1278,29 @@ impl CoreBuilder<EffectOperationFamily> {
         let mut handlers = std::collections::HashMap::new();
         for index in 0..count {
             self.charge_effect_metadata(1)?;
-            previous.push(
+            let output = match &self.nodes[index].kind {
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => Some(
+                    clone_effect_row_with_budget(
+                        scope.handler_output.effects(),
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| super::BuildError::TypeWorkExceeded)?,
+                ),
+                _ => None,
+            };
+            previous.push((
                 clone_effect_row_with_budget(&self.nodes[index].effects, &mut self.type_work)
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?,
-            );
-            if let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
-                &self.nodes[index].kind
-            {
+                output,
+            ));
+            let handler = match &self.nodes[index].kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => Some(handler),
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    Some(&scope.handler)
+                }
+                _ => None,
+            };
+            if let Some(handler) = handler {
                 self.type_work
                     .charge(handler.clauses.len())
                     .map_err(|()| super::BuildError::TypeWorkExceeded)?;
@@ -1050,8 +1356,13 @@ impl CoreBuilder<EffectOperationFamily> {
                         .ok_or(super::BuildError::InvalidPayload)?;
                     // Operand work is intrinsic even while the owner output is
                     // bottom. At the fixed point it is included in that output.
-                    let output = self.nodes[owner]
-                        .effects
+                    let owner_output = match &self.nodes[owner].kind {
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                            scope.handler_output.effects()
+                        }
+                        _ => &self.nodes[owner].effects,
+                    };
+                    let output = owner_output
                         .union_with_budget(
                             &self.nodes[resume.value.index()?].effects,
                             &mut self.type_work,
@@ -1080,8 +1391,14 @@ impl CoreBuilder<EffectOperationFamily> {
             }
         })();
         if result.is_err() {
-            for (node, row) in self.nodes.iter_mut().zip(previous) {
+            for (node, (row, output)) in self.nodes.iter_mut().zip(previous) {
                 node.effects = row;
+                if let Some(output) = output
+                    && let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut node.kind
+                {
+                    scope.handler_output.effects = output;
+                }
             }
         }
         result
@@ -1328,6 +1645,22 @@ fn rewrite_effect_instance(
     );
     let replacement = EffectInstance::new_kinded(instance.effect(), arguments.into_boxed_slice());
     drop(std::mem::replace(instance, replacement));
+    Ok(())
+}
+
+fn rewrite_effect_row(
+    row: &mut EffectRow,
+    rewrite: &mut dyn FnMut(&Type) -> Result<Type, super::BuildError>,
+    charge: &mut dyn FnMut(usize) -> Result<(), super::BuildError>,
+) -> Result<(), super::BuildError> {
+    let rewritten = crate::types::rebuild_effect_row_with_budget(
+        row.known(),
+        row.tail().map(|tail| tail.variable()),
+        row.tail().into_iter().flat_map(|tail| tail.lacks()),
+        |ty, _| rewrite(ty),
+        &mut |cells| charge(cells),
+    )?;
+    drop(std::mem::replace(row, rewritten));
     Ok(())
 }
 

@@ -238,6 +238,7 @@ fn runtime_json_covers_existing_base_reasons_without_inventing_resource_details(
         RuntimeFailure::UnexpectedRecursiveBinding,
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
+        RuntimeFailure::ForeignBinding,
         RuntimeFailure::HeapCapacity,
         RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::ResourceCapacity,

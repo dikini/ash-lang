@@ -1918,7 +1918,7 @@ fn project_expression(
                         only_child_of_kind(node, NodeKind::EffectInstance)?,
                         tokens,
                     )?;
-                    let [argument] = family.arguments.as_slice() else {
+                    let Some(argument) = family.arguments.first() else {
                         return malformed(InternalReason::UnexpectedShape);
                     };
                     let SurfaceTypeKind::Named(SurfaceReference::Unqualified(identity)) =
@@ -1926,11 +1926,20 @@ fn project_expression(
                     else {
                         return malformed(InternalReason::UnexpectedShape);
                     };
+                    let identity = identity.clone();
+                    let mut arguments = family.arguments;
+                    let _ = arguments.remove(0);
+                    let arguments = if arguments.is_empty() {
+                        None
+                    } else {
+                        Some(arguments)
+                    };
                     let handle =
                         project_binder(only_child_of_kind(node, NodeKind::Binder)?, tokens)?;
                     tasks.push(ExpressionTask::FinishProviderResource {
+                        identity,
+                        arguments,
                         family: family.effect,
-                        identity: identity.clone(),
                         handle: handle.name,
                         span: node_span(source, node, tokens)?,
                     });
@@ -2207,6 +2216,7 @@ fn project_expression(
             ExpressionTask::FinishProviderResource {
                 family,
                 identity,
+                arguments,
                 handle,
                 span,
             } => {
@@ -2219,6 +2229,7 @@ fn project_expression(
                         crate::surface::SurfaceProviderResourceExpr {
                             family,
                             identity,
+                            arguments,
                             handle,
                             initializer,
                             body,
@@ -2470,6 +2481,7 @@ enum ExpressionTask<'a> {
     FinishProviderResource {
         family: SurfaceReference,
         identity: SurfaceName,
+        arguments: Option<Vec<SurfaceType>>,
         handle: SurfaceName,
         span: Span,
     },

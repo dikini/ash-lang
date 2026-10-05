@@ -15,7 +15,7 @@ use std::io::{self, Write};
 /// Preparation may allocate and format catalogues. Reporting only borrows these
 /// strings and existing fixed-size failure data; it performs no preparation.
 pub struct PreparedRuntimeMessages {
-    reasons: [(&'static str, String); 18],
+    reasons: [(&'static str, String); 19],
     phases: [(RuntimePhase, String); 7],
     resources: [(RuntimeResource, String); 21],
     cleanup: [(CleanupStatus, String); 3],
@@ -63,6 +63,10 @@ impl PreparedRuntimeMessages {
                 (
                     RuntimeFailure::InvalidControlState.reason_code(),
                     catalogue.format(&Message::runtime_invalid_control_state())?,
+                ),
+                (
+                    RuntimeFailure::ForeignBinding.reason_code(),
+                    catalogue.format(&Message::runtime_foreign_binding())?,
                 ),
                 (
                     RuntimeFailure::HeapCapacity.reason_code(),

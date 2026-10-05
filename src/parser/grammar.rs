@@ -1609,6 +1609,10 @@ fn resource_expression(parser: &mut Parser<'_>) {
         expect_upper_identifier(parser);
         parser.finish();
         parser.finish();
+        while parser.at(&TokenKind::Comma) {
+            let _ = parser.bump();
+            application_argument(parser);
+        }
         let _ = parser.expect(&TokenKind::Greater, ExpectedForm::Greater);
         parser.finish();
         binder(parser);

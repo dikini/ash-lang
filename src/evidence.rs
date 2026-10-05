@@ -565,6 +565,16 @@ pub(crate) struct PendingEvidencePublication {
     slot_ids: HashMap<usize, Option<MethodId>>,
 }
 
+/// One compiler batch whose original source slots have all passed preflight.
+///
+/// Dropping this token publishes nothing. The compiler must preflight any
+/// associated instance-plan batch before committing either batch, and must not
+/// fill these private one-shot slots between preparation and commit.
+#[derive(Debug)]
+pub(crate) struct PreflightedEvidencePublication {
+    publication: PendingEvidencePublication,
+}
+
 /// Borrowed closed source facts; obtaining this view never fills a slot.
 pub(crate) struct PendingOccurrence<'a> {
     pub(crate) application: &'a InterfaceApplication,
@@ -977,9 +987,26 @@ impl PendingEvidencePublication {
         }
     }
 
-    pub(crate) fn publish(mut self) -> Result<(), SelectionFailure> {
+    /// Preflights the whole batch without filling any source occurrence.
+    /// The consuming token permits a joint plan/evidence publication boundary.
+    pub(crate) fn prepare_publication(
+        mut self,
+    ) -> Result<PreflightedEvidencePublication, SelectionFailure> {
         self.preflight()?;
-        while let Some(mut occurrence) = self.occurrences.pop() {
+        Ok(PreflightedEvidencePublication { publication: self })
+    }
+
+    pub(crate) fn publish(self) -> Result<(), SelectionFailure> {
+        self.prepare_publication()?.commit();
+        Ok(())
+    }
+}
+
+impl PreflightedEvidencePublication {
+    /// Commits the already preflighted batch without allocation, work charges,
+    /// or another fallible check. Only this compiler batch may fill its slots.
+    pub(crate) fn commit(mut self) {
+        while let Some(mut occurrence) = self.publication.occurrences.pop() {
             let interface = occurrence.checked_application.interface();
             let checked_application = std::mem::replace(
                 &mut occurrence.checked_application,
@@ -1004,7 +1031,6 @@ impl PendingEvidencePublication {
                     selection,
                 );
         }
-        Ok(())
     }
 }
 

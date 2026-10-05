@@ -4,8 +4,10 @@
 > [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 > Candidate contracts, syntax, and Core rules are experimental. The
 > [execution record](execution.md#current-checkpoint) identifies implemented and
-> reviewed components. Public Ash-source provider execution remains pending;
-> experimental evidence does not change current Ash semantics.
+> reviewed components. Public SQLite programs have execution receipts on the
+> common implementation branch. Their integration and the
+> advanced row/control obligations remain pending; experimental evidence does
+> not change current Ash semantics.
 
 The first slice establishes a copying SQLite bridge and a fixed-capacity scoped
 arena. The next slice compares retained foreign input, temporary output views,
@@ -54,6 +56,37 @@ adapter crate may isolate unsafe foreign calls within that workspace if needed;
 it supplies native primitives, not another parser, checker, or runtime.
 Documentation lives here. The plan includes the proposal and task path to adopt
 successful code, specify the language changes, and establish library APIs.
+
+The additive `driver::run_path_with_foreign_runtime` entry point executes the
+experimental native cases. Its `RunConfiguration` carries static manifest
+registrations; a separate `ForeignRuntime` carries executable bindings to those
+exact original manifests. Static registrations alone do not authorize native
+dispatch. Existing `run_path` callers retain their API.
+
+## Reproducing common source cases
+
+From the common worktree, run the existing public driver tests with one Cargo
+build job. These commands execute the linked Ash programs and assert actual
+native observations:
+
+```bash
+CARGO_BUILD_JOBS=1 cargo test -p ash --test provider_sqlite_source copying_sqlite_session_executes_through_public_foreign_runtime -- --exact
+```
+
+The SQLite [entry module](../../../tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
+opens an in-memory connection, prepares `SELECT ?1`, binds 42, steps and copies
+the integer. The test checks
+`Completed(Completed(Ok(42), Closed), Closed)` and observes statement
+finalization before connection close. The
+[SQLite helper](../../../tests/provider_sqlite_source.rs) shows the complete
+public binding setup. The next common batch supplies basic arena lifecycle;
+arena allocation, references and layout evidence remain outside common support.
+
+These are moving-branch receipts until the execution record names each
+verified integration commit. They test the selected experiment, not current
+language semantics or a production architecture. Native adapters must uphold
+their ownership, borrowed-view, conversion and destruction contracts; execution
+tests do not prove foreign implementation correctness.
 
 Arena owners remain scoped and nontransportable. Aliases can share access while
 the owner remains live. Process storage transfer, callbacks into Ash, threads,

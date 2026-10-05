@@ -60,6 +60,7 @@ enum Expr {
     },
     Resource {
         success: Option<ConstructorId>,
+        failure: Option<ConstructorId>,
         handle: usize,
         identity: usize,
         initializer: usize,
@@ -185,6 +186,7 @@ impl Expr {
             }
             Self::Resource {
                 success,
+                failure,
                 handle,
                 identity,
                 initializer,
@@ -192,6 +194,7 @@ impl Expr {
                 source,
             } => Self::Resource {
                 success: *success,
+                failure: *failure,
                 handle: handle + offset,
                 identity: identity + offset,
                 initializer: initializer + offset,
@@ -1343,13 +1346,27 @@ impl Graph {
                     .ok_or(Failure::Invalid)?
                     .outcome()
                     .map(|outcome| ConstructorId::new(outcome, 0)),
+                failure: resource
+                    .acquisition
+                    .api()
+                    .ok_or(Failure::Invalid)?
+                    .outcome()
+                    .map(|outcome| ConstructorId::new(outcome, 1)),
                 handle: self.symbol(symbols, resource.handle.id(), source, budget)?,
                 identity: self.symbol(types, resource.acquisition.identity, source, budget)?,
                 initializer: index(resource.initializer),
                 body: index(resource.body),
                 source: resource.acquisition.span,
             },
-            Some(EffectOperation::Handler(handler)) => {
+            Some(
+                selected_operation @ (EffectOperation::Handler(_)
+                | EffectOperation::ProviderScope(_)),
+            ) => {
+                let (handler, provider) = match selected_operation {
+                    EffectOperation::Handler(handler) => (handler, None),
+                    EffectOperation::ProviderScope(scope) => (&scope.handler, Some(scope.as_ref())),
+                    _ => return Err(Failure::Invalid),
+                };
                 charge(budget, handler.clauses().len())?;
                 let mut clauses = Vec::new();
                 clauses
@@ -1403,9 +1420,72 @@ impl Graph {
                         captures,
                     });
                 }
-                Expr::Handler {
+                let handler = Expr::Handler {
                     body: index(handler.body()),
                     clauses,
+                };
+                if let Some(scope) = provider {
+                    let handler = self.push(handler, source, budget)?;
+                    let handle = self.symbol(symbols, scope.handle.id(), source, budget)?;
+                    let identity =
+                        self.symbol(types, scope.descriptor.identity(), source, budget)?;
+                    let state = self.symbol(symbols, scope.handler_state.id(), source, budget)?;
+                    let finish =
+                        self.symbol(symbols, scope.finish.parameter.id(), source, budget)?;
+                    let acquire =
+                        self.symbol(symbols, scope.acquire.parameter.id(), source, budget)?;
+                    let completed = self.push(
+                        Expr::Cleanup {
+                            body: handler,
+                            action: index(scope.finish.body),
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let with_finish = self.push(
+                        Expr::Bind {
+                            binder: finish,
+                            initializer: handle,
+                            body: completed,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let with_state = self.push(
+                        Expr::Bind {
+                            binder: state,
+                            initializer: handle,
+                            body: with_finish,
+                        },
+                        source,
+                        budget,
+                    )?;
+                    let acquired = self.push(
+                        Expr::Bind {
+                            binder: acquire,
+                            initializer: index(scope.initializer),
+                            body: index(scope.acquire.body),
+                        },
+                        source,
+                        budget,
+                    )?;
+                    // Completed carries the actual body value and independent
+                    // completion data. Both tuple projections must survive
+                    // resource-result and imported-summary reconstruction.
+                    let completion = self.push(Expr::Scalar, source, budget)?;
+                    let result_fields = copy_slice(&[with_state, completion], budget)?;
+                    let result = self.push(Expr::Tuple(result_fields), source, budget)?;
+                    Expr::Resource {
+                        success: Some(scope.descriptor.protocol().scope[1]),
+                        failure: Some(scope.descriptor.protocol().scope[0]),
+                        handle,
+                        identity,
+                        initializer: acquired,
+                        body: result,
+                        source,
+                    }
+                } else {
+                    handler
                 }
             }
             Some(EffectOperation::Request(request)) => Expr::Request {
@@ -1741,6 +1821,51 @@ impl Graph {
             .map_err(|_| Failure::Resource)?;
         self.positions.insert(code, expression);
         Ok(())
+    }
+
+    /// A provider's control handler corresponds to the exact handler equation
+    /// inside its resource result, rather than the enclosing Scope equation.
+    pub(super) fn position_provider_handler(
+        &mut self,
+        code: usize,
+        scope: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let Expr::Resource { body, .. } = self.expressions.get(scope).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        charge(budget, 1)?;
+        let Expr::Tuple(fields) = self.expressions.get(*body).ok_or(Failure::Invalid)? else {
+            return Err(Failure::Invalid);
+        };
+        let [body, _completion] = fields.as_slice() else {
+            return Err(Failure::Invalid);
+        };
+        let mut expression = *body;
+        // These are the two hidden state bindings emitted with the real scope.
+        for _ in 0..2 {
+            charge(budget, 1)?;
+            let Expr::Bind { body, .. } =
+                self.expressions.get(expression).ok_or(Failure::Invalid)?
+            else {
+                return Err(Failure::Invalid);
+            };
+            expression = *body;
+        }
+        charge(budget, 1)?;
+        let Expr::Cleanup { body, .. } =
+            self.expressions.get(expression).ok_or(Failure::Invalid)?
+        else {
+            return Err(Failure::Invalid);
+        };
+        let handler = *body;
+        charge(budget, 1)?;
+        if !matches!(self.expressions.get(handler), Some(Expr::Handler { .. })) {
+            return Err(Failure::Invalid);
+        }
+        self.position(code, handler, budget)
     }
 
     pub(super) fn start(&self, budget: &mut TypeWorkBudget) -> Result<Analysis<'_>, Failure> {
@@ -2828,12 +2953,9 @@ impl<'a> Analysis<'a> {
                                     self.link(slot, *body, creation, budget)?;
                                 }
                                 Expr::Resource {
-                                    success: Some(success),
+                                    failure: Some(failure),
                                     ..
-                                } if *constructor
-                                    == Some(ConstructorId::new(success.owner(), 1))
-                                    && *field == 0 =>
-                                {
+                                } if *constructor == Some(*failure) && *field == 0 => {
                                     self.atom(slot, Atom::Free, budget)?;
                                 }
                                 _ => {}
@@ -3325,6 +3447,7 @@ mod tests {
             };
             graph.expressions[3] = Expr::Resource {
                 success: None,
+                failure: None,
                 handle: 0,
                 identity: 1,
                 initializer: 0,
@@ -3538,6 +3661,7 @@ mod tests {
                 },
                 4 => Expr::Resource {
                     success: None,
+                    failure: None,
                     handle: 7,
                     identity: 8,
                     initializer: 0,
@@ -3681,6 +3805,7 @@ mod tests {
         ]);
         graph.expressions.push(Expr::Resource {
             success: None,
+            failure: None,
             handle: 1,
             identity: 2,
             initializer: 0,
@@ -3841,6 +3966,79 @@ mod tests {
     }
 
     #[test]
+    fn provider_scope_result_keeps_body_tuple_and_independent_completion() {
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let completed = ConstructorId::new(family, 1);
+        let refused = ConstructorId::new(family, 0);
+        let source = crate::source::SourceFile::new("scope-result.ash", "x").unwrap();
+        let span = source
+            .span(crate::source::ByteRange::new(0, 1).unwrap())
+            .unwrap();
+        let graph = graph(vec![
+            Expr::Scalar,
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Tuple(vec![1, 2]),
+            Expr::Resource {
+                success: Some(completed),
+                failure: Some(refused),
+                handle: 9,
+                identity: 10,
+                initializer: 0,
+                body: 3,
+                source: span,
+            },
+            Expr::Project {
+                value: 4,
+                field: 0,
+                constructor: Some(completed),
+            },
+            Expr::Project {
+                value: 5,
+                field: 0,
+                constructor: None,
+            },
+            Expr::Project {
+                value: 5,
+                field: 1,
+                constructor: None,
+            },
+            Expr::Project {
+                value: 4,
+                field: 0,
+                constructor: Some(refused),
+            },
+            Expr::Slot,
+            Expr::Slot,
+        ]);
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let body = analysis.slot(1, 0, budget)?;
+            let marker = Atom::Resource(99, 0);
+            analysis.atom(body, marker, budget)?;
+            let body_result = analysis.slot(6, 0, budget)?;
+            let completion = analysis.slot(7, 0, budget)?;
+            let refusal = analysis.slot(8, 0, budget)?;
+            analysis.close(budget)?;
+            assert!(
+                analysis
+                    .dependencies(body_result, budget)?
+                    .contains(&marker)
+            );
+            assert!(!analysis.dependencies(completion, budget)?.contains(&marker));
+            assert!(!analysis.dependencies(refusal, budget)?.contains(&marker));
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        run(&mut TypeWorkBudget::with_limit(measured.used())).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(measured.used() - 1)),
+            Err(Failure::Resource)
+        ));
+    }
+
+    #[test]
     fn restored_native_result_keeps_success_projection_without_reacquiring() {
         let success = ConstructorId::new(
             crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1),
@@ -3849,6 +4047,7 @@ mod tests {
         let mut graph = graph(vec![Expr::Scalar, Expr::Slot, Expr::Slot, Expr::Slot]);
         graph.expressions.push(Expr::Resource {
             success: Some(success),
+            failure: Some(ConstructorId::new(success.owner(), 1)),
             handle: 2,
             identity: 3,
             initializer: 0,
@@ -3958,6 +4157,7 @@ mod tests {
         ]);
         graph.expressions.push(Expr::Resource {
             success: None,
+            failure: None,
             handle: 1,
             identity: 2,
             initializer: 3,

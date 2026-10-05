@@ -496,6 +496,7 @@ struct LifecycleTemplateDraft {
 /// Core checking and native lineage checking. This is generic code, not an
 /// ordinary executable provider instance.
 struct CheckedLifecycleTemplate {
+    original: crate::core::provider::LifecycleOriginal,
     parameter_origin: std::sync::Arc<crate::core::provider::RetainedHandlerOrigin>,
     draft: LifecycleTemplateDraft,
     canonical: std::sync::Arc<crate::resolved::ResolvedRegistry>,
@@ -511,6 +512,90 @@ pub(crate) struct CheckedProviderGroup {
     declarations: Vec<CheckedProviderDeclaration>,
 }
 
+/// A local defining transaction's authenticated preparation view. It borrows
+/// the exact pending publication and grants no ordinary Core permission.
+pub(super) struct LocalProviderCodeView<'a> {
+    code: &'a CheckedProviderGroup,
+    _publication: &'a PendingEvidencePublication,
+    _facts: crate::resolved::ProviderExternalFacts<'a>,
+}
+
+/// One compiler transaction's checked local originals. Construction validates
+/// their exact pending selections and defining captures; this preparation can
+/// supply source copies but cannot supply final Core execution authority.
+pub(super) struct PreparedLocalProviderCode {
+    code: Arc<CheckedProviderGroup>,
+}
+impl std::fmt::Debug for PreparedLocalProviderCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedLocalProviderCode")
+            .field("module", &self.code.module)
+            .finish()
+    }
+}
+impl PreparedLocalProviderCode {
+    pub(super) fn prepare(
+        code: &Arc<CheckedProviderGroup>,
+        facts: crate::resolved::ProviderExternalFacts<'_>,
+        publication: &PendingEvidencePublication,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<Self>, TypeError> {
+        let _ = code.local_template_view(code.contracts(), facts, publication, work)?;
+        work.charge(2).map_err(|()| type_resource())?;
+        Ok(Arc::new(Self {
+            code: Arc::clone(code),
+        }))
+    }
+    pub(super) fn code(&self) -> &Arc<CheckedProviderGroup> {
+        &self.code
+    }
+    pub(super) fn template_source<'a>(
+        &self,
+        code: &'a Arc<CheckedProviderGroup>,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'a>, TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        if !Arc::ptr_eq(&self.code, code) {
+            return Err(invalid_state());
+        }
+        code.template_source_from_original(definition, family, work)
+    }
+}
+
+impl LocalProviderCodeView<'_> {
+    pub(super) fn template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        self.code
+            .template_source_from_original(definition, family, work)
+    }
+}
+
+/// Borrowed immutable code inputs. These views confer no instance authority;
+/// copying and final Core admission must establish the specialization relation.
+pub(super) struct ProviderTemplateSource<'a> {
+    pub(super) fact: &'a Arc<crate::resolved::ResourceTypeFact>,
+    pub(super) acquire: LifecycleTemplateSource<'a>,
+    pub(super) finish: LifecycleTemplateSource<'a>,
+    pub(super) handler: &'a crate::core::validate::CheckedHandlerTemplate,
+    pub(super) handler_occurrences: &'a [CheckedGlobalOccurrence],
+    pub(super) methods: &'a [(MethodId, OperationId)],
+}
+
+pub(super) struct LifecycleTemplateSource<'a> {
+    pub(super) original: &'a crate::core::provider::LifecycleOriginal,
+    pub(super) program: &'a crate::core::UnvalidatedEffectProgram,
+    pub(super) body: NodeId,
+    pub(super) parameter: BinderId,
+    pub(super) occurrences: &'a [CheckedGlobalOccurrence],
+}
+
 /// Canonical body-free proof shared by declaration summaries and separately
 /// retained defining code. No typed program, source expression or recipe node
 /// graph is reachable from this certificate.
@@ -524,6 +609,7 @@ pub(crate) struct CheckedProviderContracts {
 }
 struct ProviderDeclarationContract {
     provider_application: std::sync::Arc<crate::interface::InterfaceApplication>,
+    methods: std::sync::Arc<[(MethodId, OperationId)]>,
     spelling: String,
     public: bool,
     fact: std::sync::Arc<crate::resolved::ResourceTypeFact>,
@@ -610,11 +696,20 @@ impl CheckedProviderContracts {
         committed: bool,
         work: &mut TypeWorkBudget,
     ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+        let mut authenticated_native_facts = crate::foreign::NativeAuthenticationMemo::default();
+        self.authenticate_with_native_memo(committed, &mut authenticated_native_facts, work)
+    }
+
+    /// Reuses only native self-authentication within one caller's admission.
+    /// Source origins remain authenticated against this contract's source table.
+    pub(crate) fn authenticate_with_native_memo<'a>(
+        &'a self,
+        committed: bool,
+        authenticated_native_facts: &mut crate::foreign::NativeAuthenticationMemo,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
         use crate::resolved::ResolvedBuildFailure as Failure;
-        // This call borrows immutable original facts. Reconstruct each fact's
-        // own canonical manifest once, while checking each registry occurrence
-        // and its source mapping below. No authority survives this call.
-        let mut authenticated_native_facts: Vec<&Arc<crate::foreign::ForeignModuleFact>> =
+        let mut authenticated_native_origins: Vec<&Arc<crate::foreign::ForeignModuleFact>> =
             Vec::new();
         work.charge(self.sources.len())
             .map_err(|()| Failure::TypeResource)?;
@@ -747,7 +842,8 @@ impl CheckedProviderContracts {
                     &lifecycle.canonical,
                     fact,
                     &self.sources,
-                    &mut authenticated_native_facts,
+                    authenticated_native_facts,
+                    &mut authenticated_native_origins,
                     work,
                 )?;
             }
@@ -762,7 +858,8 @@ impl CheckedProviderContracts {
                 declaration.handlers.canonical_registry(),
                 fact,
                 &self.sources,
-                &mut authenticated_native_facts,
+                authenticated_native_facts,
+                &mut authenticated_native_origins,
                 work,
             )?;
         }
@@ -830,6 +927,9 @@ impl CheckedProviderContracts {
     }
 }
 impl CheckedLifecycleTemplate {
+    fn original_authority(&self) -> &crate::core::provider::LifecycleOriginal {
+        &self.original
+    }
     fn authenticate_contract(
         &self,
         fact: &crate::resolved::ResourceTypeFact,
@@ -918,7 +1018,7 @@ impl CheckedLifecycleTemplate {
     }
 }
 
-fn contract_validation_failure(
+pub(super) fn contract_validation_failure(
     failure: crate::core::ValidationError,
 ) -> crate::resolved::ResolvedBuildFailure {
     if failure.reason() == crate::core::ValidationReason::Resource {
@@ -976,7 +1076,8 @@ fn authenticate_contract_native_registry<'a>(
         crate::module::ModuleId,
         std::sync::Arc<crate::source::SourceFile>,
     )],
-    authenticated: &mut Vec<&'a Arc<crate::foreign::ForeignModuleFact>>,
+    authenticated: &mut crate::foreign::NativeAuthenticationMemo,
+    authenticated_origins: &mut Vec<&'a Arc<crate::foreign::ForeignModuleFact>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
     use crate::resolved::ResolvedBuildFailure as Failure;
@@ -991,22 +1092,23 @@ fn authenticate_contract_native_registry<'a>(
         )
         .map_err(|()| Failure::TypeResource)?;
         registered |= native.effects.contains(&fact.interpreted.instance.effect());
-        work.charge(authenticated.len())
-            .map_err(|()| Failure::TypeResource)?;
-        if !authenticated
-            .iter()
-            .any(|previous| Arc::ptr_eq(previous, native))
-        {
-            native.authenticate(work).map_err(|failure| {
+        authenticated
+            .authenticate(native, work)
+            .map_err(|failure| {
                 if failure.is_resource_exhaustion() {
                     Failure::TypeResource
                 } else {
                     Failure::InvalidState
                 }
             })?;
-            // Origins belong to the same immutable native fact. The memo is
-            // confined to this authentication and this fixed source table;
-            // publish its entry only after both fact and origins authenticate.
+        work.charge(authenticated_origins.len())
+            .map_err(|()| Failure::TypeResource)?;
+        if !authenticated_origins
+            .iter()
+            .any(|previous| Arc::ptr_eq(previous, native))
+        {
+            // A caller's native memo cannot certify this source table. Retain
+            // origin evidence only after all source mappings authenticate here.
             let source_id = authenticate_contract_origin(&native.admission.origin, sources, work)?;
             work.charge(sources.len())
                 .map_err(|()| Failure::TypeResource)?;
@@ -1024,10 +1126,10 @@ fn authenticate_contract_native_registry<'a>(
                 authenticate_contract_origin(&access.origin, sources, work)?;
             }
             work.charge(1).map_err(|()| Failure::TypeResource)?;
-            authenticated
+            authenticated_origins
                 .try_reserve_exact(1)
                 .map_err(|_| Failure::TypeResource)?;
-            authenticated.push(native);
+            authenticated_origins.push(native);
         }
     }
     if !registered {
@@ -1038,6 +1140,7 @@ fn authenticate_contract_native_registry<'a>(
 
 struct CheckedProviderDeclaration {
     provider_application: std::sync::Arc<crate::interface::InterfaceApplication>,
+    methods: std::sync::Arc<[(MethodId, OperationId)]>,
     spelling: String,
     public: bool,
     fact: std::sync::Arc<crate::resolved::ResourceTypeFact>,
@@ -1056,6 +1159,140 @@ impl PartialEq for CheckedProviderGroup {
 impl Eq for CheckedProviderGroup {}
 
 impl CheckedProviderGroup {
+    /// Authenticates unpublished original code against this exact local
+    /// transaction. Empty slots alone do not authenticate their selected facts.
+    pub(super) fn local_template_view<'a>(
+        &'a self,
+        certificate: &Arc<CheckedProviderContracts>,
+        facts: crate::resolved::ProviderExternalFacts<'a>,
+        publication: &'a PendingEvidencePublication,
+        work: &mut TypeWorkBudget,
+    ) -> Result<LocalProviderCodeView<'a>, TypeError> {
+        if !Arc::ptr_eq(&self.contracts, certificate) || self.module != certificate.module {
+            return Err(invalid_state());
+        }
+        certificate
+            .authenticate(false, work)
+            .map_err(super::resolved_build_error)?;
+        work.charge(self.declarations.len())
+            .map_err(|()| type_resource())?;
+        for (declaration, contract) in self.declarations.iter().zip(&certificate.declarations) {
+            for (lifecycle, original) in [
+                (&declaration.acquire, &contract.acquire),
+                (&declaration.finish, &contract.finish),
+            ] {
+                lifecycle
+                    .externals
+                    .authenticate_pending(
+                        publication,
+                        facts,
+                        &original.canonical,
+                        self.module,
+                        work,
+                    )
+                    .map_err(contract_validation_failure)
+                    .map_err(super::resolved_build_error)?;
+            }
+            declaration
+                .handlers
+                .template
+                .authenticate_pending(
+                    publication,
+                    facts,
+                    contract.handlers.canonical_registry(),
+                    self.module,
+                    work,
+                )
+                .map_err(contract_validation_failure)
+                .map_err(super::resolved_build_error)?;
+        }
+        self.authenticate_code_relations(certificate, work)
+            .map_err(super::resolved_build_error)?;
+        Ok(LocalProviderCodeView {
+            code: self,
+            _publication: publication,
+            _facts: facts,
+        })
+    }
+
+    pub(super) fn template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        linked: &crate::resolved::ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        let mut certificate = None;
+        for (module, original) in linked.provider_contracts() {
+            work.charge(1).map_err(|()| type_resource())?;
+            if *module == self.module {
+                if certificate.replace(original).is_some() {
+                    return Err(invalid_state());
+                }
+            }
+        }
+        self.authenticate_code(certificate.ok_or_else(invalid_state)?, work)
+            .map_err(super::resolved_build_error)?;
+        self.template_source_from_original(definition, family, work)
+    }
+
+    /// Authenticates original code against the source import's exact body-free
+    /// certificate. Source checking does not materialize the complete linked
+    /// Core registry or gain executable permission from this view.
+    pub(super) fn imported_template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        self.authenticate_code(certificate, work)
+            .map_err(super::resolved_build_error)?;
+        self.template_source_from_original(definition, family, work)
+    }
+
+    fn template_source_from_original(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        work.charge(self.declarations.len())
+            .map_err(|()| type_resource())?;
+        let declaration = self
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)
+            .ok_or_else(invalid_state)?;
+        if declaration.fact.family != family || definition.module() != self.module {
+            return Err(invalid_state());
+        }
+        fn lifecycle(
+            entry: &CheckedLifecycleTemplate,
+        ) -> Result<LifecycleTemplateSource<'_>, TypeError> {
+            Ok(LifecycleTemplateSource {
+                original: entry.original_authority(),
+                program: &entry.draft.core,
+                body: entry.draft.body,
+                parameter: entry.draft.parameter,
+                occurrences: &entry
+                    .draft
+                    .staged_externals
+                    .as_ref()
+                    .ok_or_else(invalid_state)?
+                    .occurrences,
+            })
+        }
+        Ok(ProviderTemplateSource {
+            fact: &declaration.fact,
+            acquire: lifecycle(&declaration.acquire)?,
+            finish: lifecycle(&declaration.finish)?,
+            handler: &declaration.handlers.template,
+            handler_occurrences: &declaration.handlers.staged_externals.occurrences,
+            methods: &declaration.methods,
+        })
+    }
+
     /// Authenticates the separately supplied immutable code against the
     /// canonical certificate, then checks its actual entry and graph relations.
     pub(crate) fn authenticate_code(
@@ -1068,6 +1305,15 @@ impl CheckedProviderGroup {
             return Err(Failure::InvalidState);
         }
         certificate.authenticate(true, work)?;
+        self.authenticate_code_relations(certificate, work)
+    }
+
+    fn authenticate_code_relations(
+        &self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
+        use crate::resolved::ResolvedBuildFailure as Failure;
         work.charge(self.declarations.len())
             .map_err(|()| Failure::TypeResource)?;
         if self.declarations.len() != certificate.declarations.len() {
@@ -1076,6 +1322,7 @@ impl CheckedProviderGroup {
         for (code, contract) in self.declarations.iter().zip(&certificate.declarations) {
             if !Arc::ptr_eq(&code.fact, &contract.fact)
                 || !Arc::ptr_eq(&code.provider_application, &contract.provider_application)
+                || !Arc::ptr_eq(&code.methods, &contract.methods)
                 || code.public != contract.public
             {
                 return Err(Failure::InvalidState);
@@ -1230,6 +1477,10 @@ pub(super) fn check_module_provider_group(
             |compiler| compiler.check_provider_header(module, definition),
         )?);
     }
+    // One source-group admission may authenticate the same immutable native
+    // declaration through several phase registries. The session is dropped at
+    // this boundary; independent publication and final Core start fresh.
+    let native_authentication = crate::foreign::NativeAuthenticationSession::default();
     for (definition, header) in module.resources().iter().zip(&headers) {
         let mut acquire = with_module_provider_compiler(
             module,
@@ -1263,7 +1514,11 @@ pub(super) fn check_module_provider_group(
                 )
             },
         )?
-        .admit_from_defining_module(module, type_work)
+        .admit_from_defining_module_with_native_memo(
+            module,
+            Some(&native_authentication),
+            type_work,
+        )
         .map_err(module_provider_failure)?;
 
         let mut finish = with_module_provider_compiler(
@@ -1298,7 +1553,11 @@ pub(super) fn check_module_provider_group(
                 )
             },
         )?
-        .admit_from_defining_module(module, type_work)
+        .admit_from_defining_module_with_native_memo(
+            module,
+            Some(&native_authentication),
+            type_work,
+        )
         .map_err(module_provider_failure)?;
 
         let handler = with_module_provider_compiler(
@@ -1334,7 +1593,13 @@ pub(super) fn check_module_provider_group(
             module_sources.push((*id, source.id()));
         }
         let mut handlers = handler
-            .admit(module, &sources, &module_sources, type_work)
+            .admit_with_native_memo(
+                module,
+                &sources,
+                &module_sources,
+                Some(&native_authentication),
+                type_work,
+            )
             .map_err(module_provider_failure)?;
 
         let fact = Arc::new(
@@ -1366,7 +1631,16 @@ pub(super) fn check_module_provider_group(
             .try_reserve_exact(definition.spelling.len())
             .map_err(|_| type_resource())?;
         spelling.push_str(&definition.spelling);
+        type_work
+            .charge(header.methods.len())
+            .map_err(|()| type_resource())?;
+        let mut methods = Vec::new();
+        methods
+            .try_reserve_exact(header.methods.len())
+            .map_err(|_| type_resource())?;
+        methods.extend_from_slice(&header.methods);
         declarations.push(CheckedProviderDeclaration {
+            methods: Arc::from(methods.into_boxed_slice()),
             provider_application: Arc::new(
                 header
                     .provider_application
@@ -1431,6 +1705,7 @@ pub(super) fn check_module_provider_group(
             .map_err(|_| type_resource())?;
         spelling.push_str(&declaration.spelling);
         contracts.push(ProviderDeclarationContract {
+            methods: Arc::clone(&declaration.methods),
             provider_application: Arc::clone(&declaration.provider_application),
             spelling,
             public: declaration.public,
@@ -2399,7 +2674,7 @@ fn contract_error(span: Span, message: &'static str) -> TypeError {
     inference_failure(TypeReason::Argument, span, message)
 }
 
-fn nominal_arguments<'a>(
+pub(super) fn nominal_arguments<'a>(
     ty: &'a Type,
     budget: &mut TypeWorkBudget,
 ) -> Result<(NominalTypeId, Vec<&'a Type>), TypeError> {

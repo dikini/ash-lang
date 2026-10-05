@@ -1315,6 +1315,9 @@ pub(crate) struct KindEnvironments<'a> {
     row_resource_families: HashMap<NominalTypeId, (crate::types::ResourceDefinitionId, Span)>,
     row_resource_owners: HashMap<crate::types::ResourceDefinitionId, ResourceKindFact<'a>>,
     owner_registry: Option<&'a ResolvedRegistry>,
+    // Source modules retain local canonical records separately from imports.
+    // The borrowed body-free inventory supplies original imported owner formals.
+    imported_resource_owners: Option<&'a crate::resolved::ImportedFacts>,
     iota: HashMap<InterfaceId, InterfaceKindFact<'a>>,
     effects: Option<HashMap<crate::types::EffectId, &'a [crate::resolved::ResolvedTypeVariable]>>,
 }
@@ -1328,6 +1331,7 @@ impl<'a> KindEnvironments<'a> {
             row_resource_families: HashMap::new(),
             row_resource_owners: HashMap::new(),
             owner_registry: None,
+            imported_resource_owners: None,
             iota: HashMap::new(),
             effects: None,
         }
@@ -5396,6 +5400,7 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
 ) -> Result<(), KindFailure> {
     authenticate_declaration_order(module, constructor_payload_provenance, budget)?;
     let mut environments = KindEnvironments::new_with_registry(&module.registry);
+    environments.imported_resource_owners = Some(&module.imported);
     environments.install_effects(
         &module.registry,
         &module.effects,
@@ -7051,6 +7056,90 @@ fn check_expression_annotations<'a>(
     check_expression_work(work, registry, environments, budget)
 }
 
+/// Instance actuals are checked before its fresh identity enters delta. This
+/// borrows the defining owner record and reuses the tagged argument judgment.
+#[inline(never)]
+fn authenticate_provider_instance_arguments<'a>(
+    resource: &'a crate::resolved::ResolvedProviderResourceExpr,
+    registry: &'a ResolvedRegistry,
+    environments: &KindEnvironments<'a>,
+    span: Span,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    let owner = crate::resolved::OwnerId::Resource(resource.definition);
+    // Defining signatures in this registry are local. Imported family kinds
+    // were independently admitted from the original body-free fact inventory
+    // before source bodies; use those same immutable formals, not actuals.
+    let parameters = if let Some(family) = registry.resource_signature_family(resource.definition) {
+        if family != resource.family {
+            return Err(KindFailure::internal_cause(
+                span,
+                KindInternalCause::MissingOwnerBinder,
+            ));
+        }
+        let parameters = registry.defining_owner_parameters(owner).ok_or_else(|| {
+            KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+        })?;
+        registry
+            .authenticate_owner_signature(owner, Some(resource.family), parameters, budget)
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    KindFailure::resource(
+                        span,
+                        "resource owner authentication exceeded its type-work budget",
+                    )
+                } else {
+                    KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+                }
+            })?;
+        parameters
+    } else {
+        let original = environments
+            .imported_resource_owners
+            .and_then(|imported| imported.resource_fact(resource.family))
+            .filter(|original| {
+                original.id == resource.definition && original.family == resource.family
+            })
+            .ok_or_else(|| {
+                KindFailure::internal_cause(span, KindInternalCause::MissingOwnerBinder)
+            })?;
+        original.parameters.as_ref()
+    };
+    let Some(arguments) = resource.arguments.as_ref() else {
+        if environments
+            .row_resource_families
+            .contains_key(&resource.family)
+        {
+            return Err(KindFailure::Internal(KindStageFailure {
+                span,
+                message: "a row-bearing resource instance omitted its complete owner arguments"
+                    .to_owned(),
+                cause: None,
+            }));
+        }
+        // Row-free omitted arguments are inferred later from the once-checked
+        // initializer. The family and original defining slots are retained.
+        return Ok(());
+    };
+    if parameters.len().checked_sub(1) != Some(arguments.len()) {
+        return Err(KindFailure::Internal(KindStageFailure {
+            span,
+            message: "explicit resource instance arguments do not saturate the defining owner"
+                .to_owned(),
+            cause: None,
+        }));
+    }
+    for (argument, parameter) in arguments.iter().zip(parameters.iter().skip(1)) {
+        environments.expect_interface_argument(
+            argument,
+            &parameter.kind,
+            parameter.origin.primary_span(),
+            budget,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum BodyWork<'a> {
     Expression(&'a ResolvedExpr),
@@ -7144,6 +7233,13 @@ fn check_expression_work<'a>(
                 )?;
             }
             BodyWork::ProviderResourceBody(resource) => {
+                authenticate_provider_instance_arguments(
+                    resource,
+                    registry,
+                    environments,
+                    span,
+                    budget,
+                )?;
                 let parameters = std::slice::from_ref(&resource.identity);
                 authenticate_owner_parameters(registry, parameters, budget)?;
                 if resource.identity.kind != Kind::Type {

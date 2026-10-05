@@ -6,6 +6,7 @@ version = 4
 name = "ash"
 version = "0.0.0"
 dependencies = [
+ "ash-foreign-adapter",
  "ash-native-buffer",
  "fluent-bundle",
  "fluent-syntax",
@@ -20,6 +21,9 @@ dependencies = [
 [[package]]
 name = "ash-foreign-adapter"
 version = "0.0.0"
+dependencies = [
+ "ash",
+]
 
 [[package]]
 name = "ash-native-buffer"

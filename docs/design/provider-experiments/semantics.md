@@ -35,10 +35,47 @@ This section selects candidate P-1 for implementation. The studies below explain
 its roles; a previously open choice is resolved only to the extent stated here.
 P-1 is experimental, and does not change `spec/`. The
 [selected complete owner row arguments](#selected-complete-owner-row-arguments)
-extend this experimental contract; their compiler evidence remains pending.
+extend this experimental contract. The common Batch 0 integration records
+verified argument-carrier and declaration publication evidence in
+[execution](execution.md#current-checkpoint). Public SQLite and basic arena
+programs now have execution receipts on the moving common branch; their
+integration and the selected open-row control cases remain pending.
 P-1 tests S-01 first, then the
 remaining cases in [the execution record](execution.md). A successful scalar
 example alone does not establish success for DN-0036.
+
+### Implementation correspondence at the common checkpoint
+
+The moving common implementation uses the same ordered Type/Row actual vector
+for inferred Type-only instances and explicit mixed instances. Initializer
+checking precedes fresh identity admission. The copied lifecycle and handler
+forests retain the original occurrence, certificate and method evidence;
+specialization applies the actual substitution and freshens local identities.
+The compiler does not recheck source templates or select their implementations
+again for each instance.
+
+Prepared scope metadata grants no executable permission. Final Effect Core
+contains an admitted descriptor whose checker reconstructs original-node
+correspondence, argument kinds and saturation, lexical identities, catalog
+relocation and concrete computation rows. The public SQLite forest supplies
+positive transform evidence and mutations of a sealed copied node or another
+occurrence's proof supply rejection evidence. Those tests establish the checked
+boundaries they exercise; they are not a mechanized proof of all P-1 rules.
+
+Runtime scope boundaries own native guards. Source handles and borrowed state
+views identify the activation and do not copy that owner. Executable bindings
+authenticate the exact original manifest and admitted operation facts before
+associated acquisition. Native finish disposition determines consumed versus
+retained ownership even if report conversion fails. Safe native destruction at
+host teardown is separate from executing source completion.
+
+The existing Ash proofs cover their stated current-language models. No proof
+of the experimental descriptor, copied-forest correspondence or foreign adapter
+follows from those proofs. Adapter correctness, native ABI facts and safe
+destruction remain foreign assumptions checked by the recorded native tests.
+The open-Delta and per-request captured-control obligations remain pending at
+this checkpoint; the [execution record](execution.md#current-checkpoint)
+separates passing source cases, remaining failures and integrated deliveries.
 
 ### Declaration and instance
 

@@ -199,6 +199,42 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         imported: &ImportedFacts,
         constraint_work: &mut super::InterfaceConstraintBudget,
     ) -> Result<crate::resolved::ProviderDefiningFacts, TypeError> {
+        self.prepare_provider_defining_fact_views(
+            globals.iter(),
+            interfaces,
+            implementations,
+            imported,
+            constraint_work,
+        )
+    }
+
+    /// Retains only completed globals whose capture summaries have been
+    /// reconstructed from typed roots and exact selected evidence routes.
+    pub(super) fn prepare_provider_defining_facts_completed<'a>(
+        &mut self,
+        globals: impl ExactSizeIterator<Item = &'a super::CheckedGlobalScheme>,
+        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
+        implementations: &[CheckedImplementationFact],
+        imported: &ImportedFacts,
+        constraint_work: &mut super::InterfaceConstraintBudget,
+    ) -> Result<crate::resolved::ProviderDefiningFacts, TypeError> {
+        self.prepare_provider_defining_fact_views(
+            globals,
+            interfaces,
+            implementations,
+            imported,
+            constraint_work,
+        )
+    }
+
+    fn prepare_provider_defining_fact_views<'a>(
+        &mut self,
+        globals: impl ExactSizeIterator<Item = &'a super::CheckedGlobalScheme>,
+        interfaces: &[crate::resolved::SharedCheckedInterfaceFact],
+        implementations: &[CheckedImplementationFact],
+        imported: &ImportedFacts,
+        constraint_work: &mut super::InterfaceConstraintBudget,
+    ) -> Result<crate::resolved::ProviderDefiningFacts, TypeError> {
         let _ = imported;
         self.type_work
             .charge(globals.len().checked_mul(2).ok_or_else(type_resource)?)

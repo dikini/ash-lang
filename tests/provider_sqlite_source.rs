@@ -1,6 +1,6 @@
 use ash::{
     driver::{PipelineFailure, RunConfiguration, run_path},
-    elaborate::{ElaborationFailure, TypeError, check_module},
+    elaborate::check_module,
     foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
     lexer::lex,
     module::{ForeignRegistrationId, ModuleRoots, load_module_graph},
@@ -18,7 +18,244 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 #[test]
-fn copying_sqlite_public_driver_stops_at_pending_resource_admission() {
+fn copying_sqlite_session_executes_through_public_foreign_runtime() {
+    assert_copying_sqlite_session("entry.ash");
+}
+
+#[test]
+fn local_resource_definitions_execute_through_public_foreign_runtime() {
+    assert_copying_sqlite_session("local-entry.ash");
+}
+
+fn assert_copying_sqlite_session(name: &str) {
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Event, Observations, sqlite_binding};
+    use std::sync::Arc;
+
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+    ])
+    .unwrap();
+    let observations = Observations::default();
+    let binding = sqlite_binding(
+        Arc::clone(registrations.get("@foreign.sqlite").unwrap()),
+        observations.clone(),
+    )
+    .unwrap();
+    let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+    let result = run_path_with_foreign_runtime(
+        RunConfiguration {
+            entry: fixture(name),
+            roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+        },
+        &mut runtime,
+    )
+    .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+    assert_eq!(
+        result.value_display(),
+        "Completed(Completed(Ok(42), Closed), Closed)"
+    );
+    for (operation, count) in [
+        ("open", 1),
+        ("prepare", 1),
+        ("bind_int64", 1),
+        ("step", 2),
+        ("column_int64", 1),
+        ("finalize", 1),
+        ("close", 1),
+    ] {
+        assert_eq!(
+            observations.calls(operation),
+            count,
+            "native call count for {operation}"
+        );
+    }
+    let events = observations.events();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, Event::FaultInjected { .. }))
+    );
+    let position = |name| {
+        events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event, Event::Call { operation, code: 0 } if *operation == name,
+                )
+            })
+            .unwrap()
+    };
+    assert!(position("finalize") < position("close"));
+    assert_eq!(runtime.retained_owner_count(), 0);
+}
+
+#[test]
+fn repeated_and_simultaneous_sqlite_scopes_resolve_their_actual_activations() {
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Event, Observations, sqlite_binding};
+    use std::sync::Arc;
+
+    let completed = "Completed(Completed(Ok(42), Closed), Closed)";
+    for (name, expected, opens) in [
+        (
+            "repeated-entry.ash",
+            format!("({completed}, {completed})"),
+            2,
+        ),
+        ("simultaneous-entry.ash", completed.to_owned(), 1),
+    ] {
+        let registrations = ForeignRegistrations::new([
+            provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+            sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+        ])
+        .unwrap();
+        let observations = Observations::default();
+        let binding = sqlite_binding(
+            Arc::clone(registrations.get("@foreign.sqlite").unwrap()),
+            observations.clone(),
+        )
+        .unwrap();
+        let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+        let result = run_path_with_foreign_runtime(
+            RunConfiguration {
+                entry: fixture(name),
+                roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+            },
+            &mut runtime,
+        )
+        .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+        assert_eq!(result.value_display(), expected, "{name}");
+        assert_eq!(observations.calls("open"), opens, "{name}");
+        assert_eq!(observations.calls("close"), opens, "{name}");
+        for operation in ["prepare", "bind_int64", "finalize"] {
+            assert_eq!(observations.calls(operation), 2, "{name}: {operation}");
+        }
+        assert_eq!(observations.calls("step"), 4, "{name}");
+        assert_eq!(observations.calls("column_int64"), 2, "{name}");
+        assert!(
+            !observations
+                .events()
+                .iter()
+                .any(|event| matches!(event, Event::FaultInjected { .. }))
+        );
+        assert_eq!(runtime.retained_owner_count(), 0, "{name}");
+    }
+}
+
+#[test]
+fn refused_statement_acquisition_executes_no_statement_body_or_finish() {
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Event, Observations, sqlite_binding};
+    use std::sync::Arc;
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+    ])
+    .unwrap();
+    let observations = Observations::default();
+    let binding = sqlite_binding(
+        Arc::clone(registrations.get("@foreign.sqlite").unwrap()),
+        observations.clone(),
+    )
+    .unwrap();
+    let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+    let result = run_path_with_foreign_runtime(
+        RunConfiguration {
+            entry: fixture("refused-entry.ash"),
+            roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+        },
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(
+        result.value_display(),
+        "Completed(NotAcquired(EmptySql), Closed)"
+    );
+    assert_eq!(observations.calls("open"), 1);
+    assert_eq!(observations.calls("prepare"), 1);
+    assert_eq!(observations.calls("bind_int64"), 0);
+    assert_eq!(observations.calls("finalize"), 0);
+    assert_eq!(observations.calls("close"), 1);
+    assert!(
+        !observations
+            .events()
+            .iter()
+            .any(|event| matches!(event, Event::FaultInjected { .. }))
+    );
+    assert_eq!(runtime.retained_owner_count(), 0);
+}
+
+#[test]
+fn resource_initializer_executes_once_in_the_preceding_scope() {
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Observations, sqlite_binding};
+    use std::sync::Arc;
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+    ])
+    .unwrap();
+    let observations = Observations::default();
+    let binding = sqlite_binding(
+        Arc::clone(registrations.get("@foreign.sqlite").unwrap()),
+        observations.clone(),
+    )
+    .unwrap();
+    let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+    let result = run_path_with_foreign_runtime(
+        RunConfiguration {
+            entry: fixture("initializer-once-entry.ash"),
+            roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+        },
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(result.value_display(), "(Completed(42, Closed), 1)");
+    assert_eq!(observations.calls("open"), 1);
+    assert_eq!(observations.calls("close"), 1);
+    assert_eq!(runtime.retained_owner_count(), 0);
+}
+
+#[test]
+fn imported_resource_report_dependencies_do_not_require_a_client_type_annotation() {
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Observations, sqlite_binding};
+    use std::sync::Arc;
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+    ])
+    .unwrap();
+    let observations = Observations::default();
+    let binding = sqlite_binding(
+        Arc::clone(registrations.get("@foreign.sqlite").unwrap()),
+        observations.clone(),
+    )
+    .unwrap();
+    let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+    let result = run_path_with_foreign_runtime(
+        RunConfiguration {
+            entry: fixture("hidden-report-entry.ash"),
+            roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+        },
+        &mut runtime,
+    )
+    .unwrap();
+    assert_eq!(result.value_display(), "42");
+    assert_eq!(observations.calls("open"), 1);
+    assert_eq!(observations.calls("close"), 1);
+    assert_eq!(runtime.retained_owner_count(), 0);
+}
+
+#[test]
+fn static_foreign_registration_does_not_authorize_native_execution() {
     let roots = ModuleRoots::empty().with_foreign_registrations(
         ForeignRegistrations::new([
             provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
@@ -26,66 +263,60 @@ fn copying_sqlite_public_driver_stops_at_pending_resource_admission() {
         ])
         .unwrap(),
     );
-    // Declaration checking is covered separately below. The client still reaches
-    // the pending resource-instance admission boundary; S-01 runtime is pending.
-    let graph = load_module_graph(&fixture("entry.ash"), &roots).unwrap();
-    let mut checked: Vec<CheckedModule> = Vec::new();
-    for loaded in graph.modules() {
-        let dependencies = loaded
-            .dependencies()
-            .iter()
-            .map(|edge| {
-                DependencyExports::new(
-                    edge,
-                    checked
-                        .iter()
-                        .find(|module| module.module() == edge.target())
-                        .unwrap()
-                        .exports(),
-                )
-                .unwrap()
-            })
-            .collect::<Vec<_>>();
-        let resolved = resolve_module(loaded, &dependencies).unwrap();
-        if loaded.id() == graph.entry() {
-            let main = resolved
-                .definitions()
-                .iter()
-                .find_map(|definition| {
-                    let ResolvedDefinitionKind::Equational(global) = &definition.kind else {
-                        return None;
-                    };
-                    (global.interface.name.spelling == "main").then_some(global)
-                })
-                .unwrap();
-            assert!(matches!(
-                main.equations[0].body.kind,
-                ResolvedExprKind::ProviderResource(_)
-            ));
-            assert!(matches!(
-                check_module(resolved),
-                Err(TypeError::Internal(ElaborationFailure::InvalidState))
-            ));
-        } else {
-            checked.push(check_module(resolved).unwrap());
-        }
-    }
     let failure = run_path(RunConfiguration {
         entry: fixture("entry.ash"),
         roots,
     })
-    .expect_err("resource-instance admission and native execution remain pending");
-    assert_eq!(failure.reason_code(), "type.internal");
+    .expect_err("an executable binding is required before native acquisition");
     assert!(!failure.is_source_rejection());
     assert!(
         matches!(
             failure.pipeline_failure(),
-            Some(PipelineFailure::Typing(TypeError::Internal(
-                ElaborationFailure::InvalidState
-            )))
+            Some(PipelineFailure::Runtime(
+                ash::eval::RuntimeFailure::ForeignBinding
+            ))
         ),
-        "expected the pending resource-instance checker guard: {failure:?}"
+        "missing executable authority must reject before acquisition: {failure:?}"
     );
+
+    use ash::driver::run_path_with_foreign_runtime;
+    use ash::foreign::runtime::ForeignRuntime;
+    use ash_foreign_adapter::{Observations, sqlite_binding};
+    use std::sync::Arc;
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
+    ])
+    .unwrap();
+    // Equal schema, registration coordinates and spelling do not authenticate
+    // a separately authored allocation as the original source registration.
+    let substitute = Arc::new(sqlite_manifest(ForeignRegistrationId::new(2)).unwrap());
+    assert_eq!(
+        substitute.as_ref(),
+        registrations.get("@foreign.sqlite").unwrap().as_ref()
+    );
+    let observations = Observations::default();
+    let binding = sqlite_binding(substitute, observations.clone()).unwrap();
+    let mut runtime = ForeignRuntime::new(vec![binding]).unwrap();
+    let failure = run_path_with_foreign_runtime(
+        RunConfiguration {
+            entry: fixture("entry.ash"),
+            roots: ModuleRoots::empty().with_foreign_registrations(registrations),
+        },
+        &mut runtime,
+    )
+    .expect_err("equal names and schemas cannot substitute executable authority");
+    assert!(
+        matches!(
+            failure.pipeline_failure(),
+            Some(PipelineFailure::Runtime(
+                ash::eval::RuntimeFailure::ForeignBinding
+            ))
+        ),
+        "{failure:?}"
+    );
+    assert_eq!(observations.calls("open"), 0);
+    assert_eq!(runtime.retained_owner_count(), 0);
 }
 
 #[test]

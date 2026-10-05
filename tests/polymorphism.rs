@@ -138,6 +138,7 @@ fn runtime_class(program: &ValidatedProgram, event: &TraceEvent) -> &'static str
 fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
+        Value::NativeStateView(_) => "native-state-view",
         Value::Integer(_) => "integer",
         Value::Boolean(_) => "boolean",
         Value::Unit => "unit",
@@ -159,6 +160,7 @@ const fn runtime_failure_class(failure: RuntimeFailure) -> &'static str {
         RuntimeFailure::UnexpectedRecursiveBinding => "runtime.unexpected-recursive-binding",
         RuntimeFailure::EnvironmentCapacity => "runtime.environment-capacity",
         RuntimeFailure::InvalidControlState => "runtime.invalid-control-state",
+        RuntimeFailure::ForeignBinding => "runtime.foreign-binding",
         RuntimeFailure::HeapCapacity => "runtime.heap-capacity",
         RuntimeFailure::CapturedControlCapacity => "runtime.captured-control-capacity",
         RuntimeFailure::ResourceCapacity => "runtime.resource-capacity",
@@ -682,6 +684,7 @@ fn polymorphic_method_evidence_uses_only_the_existing_runtime_inventory() {
         RuntimeFailure::UnexpectedRecursiveBinding,
         RuntimeFailure::EnvironmentCapacity,
         RuntimeFailure::InvalidControlState,
+        RuntimeFailure::ForeignBinding,
         RuntimeFailure::HeapCapacity,
         RuntimeFailure::CapturedControlCapacity,
         RuntimeFailure::InvalidLocation,

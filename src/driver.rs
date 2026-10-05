@@ -9,8 +9,9 @@ use crate::{
     },
     diagnostic::{Diagnostic, SourceLabel, compare_source_spans},
     elaborate::{
-        EffectElaborator, Elaborator, TypeError, check_module_with_budget,
-        checked_program_contains_effect_syntax, link_modules_with_budget,
+        EffectElaborator, Elaborator, ProviderCodeAvailability, TypeError,
+        check_module_with_budget_and_provider_codes, checked_program_contains_effect_syntax,
+        link_modules_with_budget,
     },
     eval::{Evaluation, ObservedHeap, RuntimeFailure, Value, evaluate, evaluate_effect},
     evidence_validation::{
@@ -630,6 +631,31 @@ pub fn run_path(configuration: RunConfiguration) -> Result<Observation, FileFail
         validate_modules,
         evaluate,
         true,
+        None,
+    )
+}
+
+/// Executes a modular Ash graph with authenticated executable foreign bindings.
+///
+/// The configuration retains its source registrations. The runtime must bind
+/// those original entries; equal names do not authorize native dispatch. It is
+/// borrowed so retained native owners remain quarantined until host teardown.
+///
+/// # Errors
+/// Returns the same input, compiler and runtime failures as [`run_path`], plus
+/// foreign binding or conversion failures before the associated native use.
+pub fn run_path_with_foreign_runtime(
+    configuration: RunConfiguration,
+    runtime: &mut crate::foreign::runtime::ForeignRuntime,
+) -> Result<Observation, FileFailure> {
+    run_path_with_consumers_internal(
+        configuration,
+        &mut InterfaceConstraintBudget::default(),
+        validate_interface_evidence_with_budget,
+        validate_modules,
+        evaluate,
+        true,
+        Some(runtime),
     )
 }
 
@@ -660,6 +686,7 @@ where
         validator,
         evaluator,
         false,
+        None,
     )
 }
 
@@ -691,6 +718,7 @@ where
         validator,
         evaluator,
         false,
+        None,
     )
 }
 
@@ -701,6 +729,7 @@ fn run_path_with_consumers_internal<I, V, E>(
     validator: V,
     evaluator: E,
     select_effect_core: bool,
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -724,6 +753,7 @@ where
         validator,
         evaluator,
         select_effect_core,
+        runtime,
     );
     match result {
         Err(FileFailure::Pipeline(mut context))
@@ -743,6 +773,7 @@ fn run_graph_with_consumers<I, V, E>(
     validator: V,
     evaluator: E,
     select_effect_core: bool,
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure>
 where
     I: FnOnce(
@@ -763,6 +794,7 @@ where
         HashMap::with_capacity(graph.modules().len());
     let mut resolution_type_work = TypeWorkBudget::default();
     let mut checking_type_work = TypeWorkBudget::default();
+    let mut provider_codes = ProviderCodeAvailability::default();
     let mut coverage_work = UsefulnessBudget::default();
     for module in graph.modules() {
         let dependencies = module
@@ -795,14 +827,21 @@ where
         })
         .map_err(FileFailure::from)?;
         drop(dependencies);
-        let checked_module = check_module_with_budget(
+        let checked_module = check_module_with_budget_and_provider_codes(
             resolved,
+            &provider_codes,
             &mut checking_type_work,
             &mut coverage_work,
             constraint_work,
         )
         .map_err(PipelineFailure::Typing)
         .map_err(FileFailure::from)?;
+        if let Some(code) = checked_module.provider_code() {
+            provider_codes
+                .retain(module.id(), code, &mut checking_type_work)
+                .map_err(PipelineFailure::Typing)
+                .map_err(FileFailure::from)?;
+        }
         checked_by_module.insert(module.id(), checked.len());
         checked.push(checked_module);
     }
@@ -887,7 +926,12 @@ where
                 .map_err(PipelineFailure::Typing)
                 .map_err(FileFailure::from)?
         {
-            return finish_effect_observation(&validated_interfaces, &sources, &module_sources);
+            return finish_effect_observation(
+                &validated_interfaces,
+                &sources,
+                &module_sources,
+                runtime,
+            );
         }
         let mut elaborator = Elaborator::for_module_program(&validated_interfaces)
             .map_err(TypeError::Internal)
@@ -926,6 +970,7 @@ fn finish_effect_observation(
     validated_interfaces: &ValidatedInterfaceProgram,
     sources: &[&SourceFile],
     module_sources: &[(ModuleId, SourceId)],
+    runtime: Option<&mut crate::foreign::runtime::ForeignRuntime>,
 ) -> Result<Observation, FileFailure> {
     let mut elaborator = EffectElaborator::for_module_program(validated_interfaces)
         .map_err(TypeError::Internal)
@@ -945,9 +990,12 @@ fn finish_effect_observation(
     let validated = validate_effect_modules(unchecked, sources, module_sources)
         .map_err(PipelineFailure::Validation)
         .map_err(FileFailure::from)?;
-    let evaluation = evaluate_effect(&validated)
-        .map_err(PipelineFailure::Runtime)
-        .map_err(FileFailure::from)?;
+    let evaluation = match runtime {
+        Some(runtime) => crate::eval::evaluate_effect_with_foreign_runtime(&validated, runtime),
+        None => evaluate_effect(&validated),
+    }
+    .map_err(PipelineFailure::Runtime)
+    .map_err(FileFailure::from)?;
     let (value, heap) = evaluation.into_observation_parts();
     Ok(Observation {
         value,
@@ -1026,6 +1074,7 @@ const fn projection_reason(error: ProjectionError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use crate::elaborate::check_module_with_budget;
     use std::{
         cell::{Cell, RefCell},
         fs,

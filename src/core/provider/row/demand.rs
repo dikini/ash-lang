@@ -54,6 +54,157 @@ pub(super) struct DirectDemandProof {
 }
 
 impl DirectDemandProof {
+    /// Realizes the authenticated flat vocabulary. Capture inputs are explicit
+    /// obligations, never guessed empty. The capture-independent case uses
+    /// exactly this engine with an empty required input domain.
+    pub(super) fn realize(
+        &self,
+        types: &HashMap<crate::types::TypeVariableId, crate::types::Type>,
+        rows: &HashMap<crate::types::TypeVariableId, EffectRow>,
+        captures: &HashMap<CaptureInputId, EffectRow>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(EffectRow, Vec<EffectRow>), ValidationError> {
+        fn expression(
+            expression: &DemandExpression,
+            atoms: &[EffectRow],
+            work: &mut TypeWorkBudget,
+        ) -> Result<EffectRow, ValidationError> {
+            let mut output = EffectRow::empty();
+            for atom in &expression.atoms {
+                charge(work, 1)?;
+                let row = atoms.get(atom.0).ok_or_else(resource)?;
+                output = output
+                    .union_with_budget(row, work)
+                    .map_err(|()| resource())?
+                    .map_err(|_| {
+                        ValidationError::new(crate::core::ValidationReason::EffectRow, None)
+                    })?;
+            }
+            Ok(output)
+        }
+        charge(
+            work,
+            self.atoms
+                .len()
+                .checked_add(self.pending.len())
+                .ok_or_else(resource)?,
+        )?;
+        let mut atoms = Vec::new();
+        atoms
+            .try_reserve_exact(self.atoms.len())
+            .map_err(|_| resource())?;
+        let mut seen = std::collections::HashSet::new();
+        for atom in &self.atoms {
+            charge(work, 1)?;
+            let actual = match atom {
+                DemandAtom::Ordinary(row) => {
+                    crate::types::substitute_effect_and_template_rows_with(
+                        row,
+                        types,
+                        rows,
+                        &HashMap::new(),
+                        |cells| work.charge(cells),
+                        || (),
+                    )
+                    .map_err(|()| resource())?
+                    .map_err(|_| {
+                        ValidationError::new(crate::core::ValidationReason::EffectRow, None)
+                    })?
+                }
+                DemandAtom::Capture(input) => {
+                    charge(work, 2)?;
+                    seen.try_reserve(1).map_err(|_| resource())?;
+                    seen.insert(*input);
+                    clone_effect_row_with_budget(
+                        captures.get(input).ok_or_else(|| {
+                            ValidationError::new(
+                                crate::core::ValidationReason::ResourceEscape,
+                                None,
+                            )
+                        })?,
+                        work,
+                    )
+                    .map_err(|()| resource())?
+                }
+                DemandAtom::Remove {
+                    input,
+                    effect,
+                    absent,
+                } => {
+                    let row: &EffectRow = atoms.get(input.0).ok_or_else(resource)?;
+                    let mut arguments = Vec::new();
+                    charge(
+                        work,
+                        effect
+                            .arguments()
+                            .len()
+                            .checked_mul(2)
+                            .ok_or_else(resource)?,
+                    )?;
+                    arguments
+                        .try_reserve_exact(effect.arguments().len())
+                        .map_err(|_| resource())?;
+                    for argument in effect.arguments() {
+                        arguments.push(crate::types::IterativeArgumentOwner::new(
+                            crate::types::substitute_kinded_argument_with(
+                                argument,
+                                types,
+                                rows,
+                                |cells| work.charge(cells),
+                            )
+                            .map_err(|()| resource())?
+                            .map_err(|_| {
+                                ValidationError::new(crate::core::ValidationReason::EffectRow, None)
+                            })?,
+                        ));
+                    }
+                    let mut actual = Vec::new();
+                    actual
+                        .try_reserve_exact(arguments.len())
+                        .map_err(|_| resource())?;
+                    actual.extend(
+                        arguments
+                            .into_iter()
+                            .map(crate::types::IterativeArgumentOwner::into_inner),
+                    );
+                    let effect =
+                        EffectInstance::new_kinded(effect.effect(), actual.into_boxed_slice());
+                    match row
+                        .remove_exact_with_budget(&effect, work)
+                        .map_err(|()| resource())?
+                    {
+                        Ok(row) => row,
+                        Err(EffectRowError::Missing) if *absent => {
+                            clone_effect_row_with_budget(row, work).map_err(|()| resource())?
+                        }
+                        Err(_) => {
+                            return Err(ValidationError::new(
+                                crate::core::ValidationReason::EffectRow,
+                                None,
+                            ));
+                        }
+                    }
+                }
+            };
+            atoms.push(actual);
+        }
+        charge(work, captures.len())?;
+        if seen.len() != captures.len() || captures.keys().any(|input| !seen.contains(input)) {
+            return Err(ValidationError::new(
+                crate::core::ValidationReason::ResourceEscape,
+                None,
+            ));
+        }
+        let direct = expression(&self.direct, &atoms, work)?;
+        let mut pending = Vec::new();
+        pending
+            .try_reserve_exact(self.pending.len())
+            .map_err(|_| resource())?;
+        for row in &self.pending {
+            pending.push(expression(row, &atoms, work)?);
+        }
+        Ok((direct, pending))
+    }
     fn intern(
         &mut self,
         atom: DemandAtom,
@@ -542,10 +693,10 @@ impl DirectDemandProof {
                     _ => None,
                 })
                 .ok_or_else(|| invalid(program.root))?;
-            let EffectExprKind::Operation(EffectOperation::Handler(handler)) =
-                &node(program, handler_node)?.kind
-            else {
-                return Err(invalid(handler_node));
+            let handler = match &node(program, handler_node)?.kind {
+                EffectExprKind::Operation(EffectOperation::Handler(handler)) => handler,
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => &scope.handler,
+                _ => return Err(invalid(handler_node)),
             };
             charge(work, handler.clauses().len())?;
             let clause = handler
@@ -757,7 +908,9 @@ impl DirectDemandProof {
             let mut expression = DemandExpression::default();
             if !matches!(
                 equation.operation,
-                RowEquationOperation::Empty | RowEquationOperation::Handler { .. }
+                RowEquationOperation::Empty
+                    | RowEquationOperation::Handler { .. }
+                    | RowEquationOperation::ProviderScope { .. }
             ) {
                 for input in &recipe.edges[equation.inputs.clone()] {
                     let input = Self::copy(&proof.nodes[input.0], work)?;
@@ -801,6 +954,38 @@ impl DirectDemandProof {
                         let clause = Self::copy(&proof.nodes[clause.0], work)?;
                         expression = proof.union(expression, &clause, work)?;
                     }
+                }
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                    let body = recipe.node_equations[scope
+                        .handler
+                        .body()
+                        .index()
+                        .map_err(|_| invalid(equation.node))?]
+                    .ok_or_else(|| invalid(equation.node))?;
+                    let body = Self::copy(&proof.nodes[body.0], work)?;
+                    expression = proof.remove(&body, scope.handler.effect(), true, work)?;
+                    for root in scope
+                        .handler
+                        .clauses()
+                        .iter()
+                        .map(|clause| clause.body())
+                        .chain([scope.acquire.body, scope.finish.body])
+                    {
+                        let root = recipe.node_equations
+                            [root.index().map_err(|_| invalid(equation.node))?]
+                        .ok_or_else(|| invalid(equation.node))?;
+                        let row = Self::copy(&proof.nodes[root.0], work)?;
+                        expression = proof.union(expression, &row, work)?;
+                    }
+                    expression =
+                        proof.remove(&expression, scope.descriptor.native_effect(), true, work)?;
+                    let initializer = recipe.node_equations[scope
+                        .initializer
+                        .index()
+                        .map_err(|_| invalid(equation.node))?]
+                    .ok_or_else(|| invalid(equation.node))?;
+                    let initializer = Self::copy(&proof.nodes[initializer.0], work)?;
+                    expression = proof.union(expression, &initializer, work)?;
                 }
                 EffectExprKind::Operation(EffectOperation::Resource(scope)) => {
                     let api = scope
