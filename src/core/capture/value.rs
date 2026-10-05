@@ -2015,6 +2015,7 @@ pub(super) struct Analysis<'a> {
     contexts: Vec<Vec<Transition>>,
     context_indices: HashMap<Vec<Transition>, usize>,
     slots: Vec<Slot>,
+    watched_pairs: HashSet<(usize, usize)>,
     indices: HashMap<(usize, usize), usize>,
     roots: HashMap<usize, usize>,
     revision: usize,
@@ -2687,6 +2688,7 @@ impl<'a> Analysis<'a> {
             contexts,
             context_indices,
             slots: Vec::new(),
+            watched_pairs: HashSet::new(),
             indices: HashMap::new(),
             roots: HashMap::new(),
             revision: 0,
@@ -2792,14 +2794,25 @@ impl<'a> Analysis<'a> {
         reader: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        charge(budget, self.slots[source].readers.len() + 1)?;
-        if !self.slots[source].readers.contains(&reader) {
-            self.slots[source]
-                .readers
-                .try_reserve(1)
-                .map_err(|_| Failure::Resource)?;
-            self.slots[source].readers.push(reader);
+        // Slots retain their exact expression and creation context. Index only
+        // this dependency pair; the ordered list still controls notification.
+        charge(budget, 1)?;
+        let pair = (source, reader);
+        if self.watched_pairs.contains(&pair) {
+            return Ok(());
         }
+        // Admit and reserve both retained entries before changing membership.
+        // A work/storage refusal cannot publish half a dependency relation.
+        charge(budget, 2)?;
+        self.watched_pairs
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.slots[source]
+            .readers
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.watched_pairs.insert(pair);
+        self.slots[source].readers.push(reader);
         Ok(())
     }
 
@@ -3339,6 +3352,130 @@ mod tests {
             targets: HashMap::new(),
             metadata: HashMap::new(),
             evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn watched_pairs_keep_creation_contexts_notification_order_and_failed_insertion_atomic() {
+        let graph = graph(vec![Expr::Slot]);
+        let mut setup = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
+        let mut slots = Vec::new();
+        for root in 1..=6 {
+            let context = analysis
+                .context(0, Transition::Root(root), &mut setup)
+                .unwrap();
+            slots.push(analysis.slot(0, context, &mut setup).unwrap());
+        }
+        let [source, other_source, first, second, fresh, prefilled] = slots.as_slice() else {
+            panic!("six exact slots")
+        };
+        assert_eq!(
+            analysis.slots[*source].key.0,
+            analysis.slots[*other_source].key.0
+        );
+        assert_ne!(
+            analysis.slots[*source].key.1,
+            analysis.slots[*other_source].key.1
+        );
+        analysis.watch(*source, *second, &mut setup).unwrap();
+        analysis.watch(*source, *first, &mut setup).unwrap();
+        analysis.watch(*source, *second, &mut setup).unwrap();
+        analysis.watch(*other_source, *first, &mut setup).unwrap();
+        assert_eq!(analysis.slots[*source].readers, vec![*second, *first]);
+        assert_eq!(analysis.slots[*other_source].readers, vec![*first]);
+        for (prefix, fresh) in [(0, *fresh), (9, *prefilled)] {
+            let mut duplicate = TypeWorkBudget::with_limit(prefix + 1);
+            duplicate.charge(prefix).unwrap();
+            analysis.watch(*source, *first, &mut duplicate).unwrap();
+            assert_eq!(duplicate.used(), prefix + 1);
+            let before_pairs = analysis.watched_pairs.len();
+            let before_readers = analysis.slots[*source].readers.clone();
+            let mut short = TypeWorkBudget::with_limit(prefix + 2);
+            short.charge(prefix).unwrap();
+            assert!(matches!(
+                analysis.watch(*source, fresh, &mut short),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(short.used(), prefix + 1);
+            assert_eq!(analysis.watched_pairs.len(), before_pairs);
+            assert_eq!(analysis.slots[*source].readers, before_readers);
+            let mut exact = TypeWorkBudget::with_limit(prefix + 3);
+            exact.charge(prefix).unwrap();
+            analysis.watch(*source, fresh, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + 3);
+            let mut expected = before_readers;
+            expected.push(fresh);
+            assert_eq!(analysis.slots[*source].readers, expected);
+        }
+        analysis.pending.clear();
+        for slot in &mut analysis.slots {
+            slot.queued = false;
+        }
+        analysis.atom(*source, Atom::Unknown, &mut setup).unwrap();
+        assert_eq!(
+            analysis.pending.iter().copied().collect::<Vec<_>>(),
+            vec![*second, *first, *fresh, *prefilled]
+        );
+        assert_eq!(analysis.slots[*source].atoms, vec![Atom::Unknown]);
+        assert!(analysis.slots[*other_source].atoms.is_empty());
+        analysis.pending.clear();
+        for slot in &mut analysis.slots {
+            slot.queued = false;
+        }
+        analysis
+            .atom(*other_source, Atom::Resource(99, 0), &mut setup)
+            .unwrap();
+        assert_eq!(
+            analysis.pending.iter().copied().collect::<Vec<_>>(),
+            vec![*first]
+        );
+    }
+
+    #[test]
+    fn repeated_wide_watch_dependencies_retry_at_exact_work_without_reordering() {
+        const WIDTH: usize = 96;
+        let graph = graph(vec![Expr::Slot]);
+        let run = |budget: &mut TypeWorkBudget| {
+            let mut analysis = Analysis::new(&graph, budget)?;
+            let source = analysis.slot(0, 0, budget)?;
+            let mut readers = Vec::new();
+            for site in 1..=WIDTH {
+                let context = analysis.context(0, Transition::Root(site), budget)?;
+                let reader = analysis.slot(0, context, budget)?;
+                analysis.watch(source, reader, budget)?;
+                readers.push(reader);
+            }
+            // Repeated graph visits observe the same exact pair, not a new
+            // notification or an analysis-wide authority conclusion.
+            for _ in 0..WIDTH {
+                for reader in readers.iter().rev() {
+                    analysis.watch(source, *reader, budget)?;
+                }
+            }
+            assert_eq!(analysis.slots[source].readers, readers);
+            assert_eq!(analysis.watched_pairs.len(), WIDTH);
+            analysis.pending.clear();
+            for slot in &mut analysis.slots {
+                slot.queued = false;
+            }
+            analysis.atom(source, Atom::Unknown, budget)?;
+            assert_eq!(
+                analysis.pending.iter().copied().collect::<Vec<_>>(),
+                readers
+            );
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        // Repeated membership is bounded by pair visits, independently of fanout.
+        assert!(measured.used() < 2 * WIDTH * WIDTH);
+        let mut short = TypeWorkBudget::with_limit(measured.used() - 1);
+        assert!(matches!(run(&mut short), Err(Failure::Resource)));
+        for _ in 0..2 {
+            let mut exact = TypeWorkBudget::with_limit(measured.used());
+            run(&mut exact).unwrap();
+            assert_eq!(exact.used(), measured.used());
         }
     }
 
