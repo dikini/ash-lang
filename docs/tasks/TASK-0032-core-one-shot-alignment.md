@@ -3559,3 +3559,27 @@ These four components are retained for the next full capture Current/history
 and ownership join; whole C3 remains open.
 
 Evidence: [actual frozen gate](../../target/core-rich-capture-integration-20261005/root-c3-gate-v1-evidence.json), [dependency supplement](../../target/core-rich-capture-integration-20261005/root-dependency-supplement-v1/review.json) and [public acceptance](../../target/core-rich-capture-integration-20261005/root-dependency-supplement-v1/acceptance.json). Final audit, documentation checks, independent review and unsigned commit verification are recorded separately.
+
+The capture Current/event component passed its capture-only integration gate:
+1,066 registered modules and 13,560 ordered reports, with one validated
+receipt hit, zero productive compilation and 1,065 unchanged parent
+artifact/log pairs. The complete path recorded three actual dependency
+queries and one compiler version query. Metadata retained all 616 original
+historical query records, four accepted C3 query records and three older
+query records separately from the current 613-module closure; no historical
+query was rerun or relabelled.
+
+The component retains the full current contract, private plans and rows and
+constructs the rich allocating event at the same canonical actual Core
+capture endpoint under its stated current guards and provenance. Current
+issued-ticket provenance and retained registry history derive allocation
+freshness. Its seven source checks are recorded separately from the
+original 28 public checks. The two retained original-parent failures and
+two generic negative proofs preserve their original scope.
+
+This is a bounded capture component. Whole C1–C5 completion counts remain
+unchanged, whole C3 remains open and the separately drafted resume component
+is excluded. Final audit, actual documentation checks, independent review
+and unsigned commit verification are recorded separately.
+
+Evidence: [actual capture-only gate](../../target/core-capture-current-integration-20261005/root-capture1-gate-v1-evidence.json), [dependency supplement](../../target/core-capture-current-integration-20261005/root-dependency-supplement-v1/review.json) and [public acceptance](../../target/core-capture-current-integration-20261005/root-dependency-supplement-v1/acceptance.json).

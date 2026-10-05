@@ -1070,3 +1070,4 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichRegistryOrigins.
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichContextTicketDomain.olean" CoreCallableRichContextTicketDomain.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureOrigin.olean" CoreCallableRichCaptureOrigin.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCoreAlignment.olean" CoreCallableRichCaptureCoreAlignment.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCurrentEvents.olean" CoreCallableRichCaptureCurrentEvents.lean
