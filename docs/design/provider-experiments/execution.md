@@ -2884,3 +2884,45 @@ The four larger SQLite default-budget refusals, deferred fourteen-operation
 TEXT migration, trusted foreign contracts and unproved general correspondence
 remain explicit limitations. No retry, close_v2 substitution, raised source
 limit, production-semantic adoption or main merge is included.
+
+
+## Separate generic cost delivery (2026-10-05)
+
+The common control delivery remains verified at `b04ff1c`. Common and SQLite
+agreed to deliver generic compiler cost repairs against its twelve-operation
+contract before the pending fourteen-operation String/TEXT package. Common
+owns shared compiler, Core, capture, provider checks, runtime and integration
+merges. SQLite owns library, adapter and programs. Cargo windows remain serial.
+
+All forty coherent String/TEXT working files, including the four unchanged
+larger copying, reset and persistence programs and their tests, are preserved
+with exact pins in `provider-cost-isolation-112/preservation.json` and its
+`coherent-atomic14-owned-source.tar.gz` archive. They are pending work and will
+be restored and reconciled after this delivery. Their observed default-limit
+refusals are retained as contrary evidence; this split does not satisfy those
+programs' acceptance or establish a completed String/TEXT delivery.
+
+The generic repairs retain original identities and ordered evidence, paid and
+fallible work, lexical watches and late value propagation. Original-coordinate
+mutation regressions accompany the occurrence index. Independent Core
+reconstruction remains required. Verification, unsigned commit, original-branch
+merge and integrated verification are pending at this preparation point.
+
+
+Receipts 112 and 113 verify this isolated twelve-operation snapshot: 1,595
+library cases, 139 connected public cases and 43 architecture cases pass with
+no ignores. All-targets checking, workspace Clippy with warnings denied and
+workspace rustdoc with warnings denied pass. The connected cases include
+independent Core validation, method evidence, module admission, owner rows,
+control, retention, native SQLite sessions and basic arena lifecycle. Fixed
+small-stack regression cases are included in the library run. Independent
+contract and quality reviews found no changed-contract blocker.
+
+These checks validate the shared cost repairs on this contract. The preserved
+fourteen-operation copying and persistence programs remain pending. Their work
+refusals locate an exhausted ledger; they do not prove whole-pipeline
+convergence or establish that all measured work is unnecessary. The next
+diagnosis records ordered value and control events on the unchanged reset
+program, with exact source pins and explicit truncation boundaries. No trace
+or speculative shortcut is part of this delivery. Unsigned integration and
+verification in the original worktree remain required.
