@@ -44,6 +44,7 @@ pub(in crate::core) struct HandlerFragmentEntry<'a> {
     pub(in crate::core) definition: &'a ResolvedResourceDefinition,
     pub(in crate::core) canonical: std::sync::Arc<crate::resolved::ResolvedRegistry>,
     pub(in crate::core) row_recipe: Option<&'a super::HandlerRowRecipeDraft>,
+    pub(in crate::core) fragment_locals: Vec<crate::types::NominalTypeId>,
     roots: Vec<NodeId>,
     root_clauses: HashMap<NodeId, usize>,
     type_parameters: HashSet<TypeVariableId>,
@@ -260,12 +261,12 @@ impl<'a> HandlerFragmentEntry<'a> {
         if !type_parameters.insert(draft.hidden[0].0) {
             return Err(invalid(program.root));
         }
-        let imports = source_imports(
-            definition,
-            crate::resolved::ProviderExternalFacts {
+        let (imports, fragment_locals) = source_imports(
+            definition.handlers.iter().map(|clause| &clause.body),
+            Some(crate::resolved::ProviderExternalFacts {
                 imported: module.imported_facts(),
                 defining: draft.defining_facts.as_deref(),
-            },
+            }),
             work,
         )?;
         Ok(Self {
@@ -274,6 +275,7 @@ impl<'a> HandlerFragmentEntry<'a> {
             definition,
             canonical,
             row_recipe: None,
+            fragment_locals,
             roots,
             root_clauses,
             type_parameters,
@@ -296,12 +298,25 @@ impl<'a> HandlerFragmentEntry<'a> {
 
 /// Reconstruct the defining source VALUE inventory, including unused callable
 /// bodies. Traversal supplies correspondence only, never native privilege.
-fn source_imports<'a>(
-    definition: &'a ResolvedResourceDefinition,
-    facts: crate::resolved::ProviderExternalFacts<'_>,
+pub(super) fn source_fragment_locals(
+    source: &ResolvedExpr,
     work: &mut TypeWorkBudget,
-) -> Result<HashMap<crate::source::Span, &'a crate::resolved::ResolvedOccurrence>, ValidationError>
-{
+) -> Result<Vec<crate::types::NominalTypeId>, ValidationError> {
+    source_imports(std::iter::once(source), None, work).map(|(_, locals)| locals)
+}
+
+#[allow(clippy::type_complexity)]
+fn source_imports<'a>(
+    sources: impl ExactSizeIterator<Item = &'a ResolvedExpr>,
+    facts: Option<crate::resolved::ProviderExternalFacts<'_>>,
+    work: &mut TypeWorkBudget,
+) -> Result<
+    (
+        HashMap<crate::source::Span, &'a crate::resolved::ResolvedOccurrence>,
+        Vec<crate::types::NominalTypeId>,
+    ),
+    ValidationError,
+> {
     enum Task<'a> {
         Expression(&'a ResolvedExpr),
         Block(&'a crate::resolved::ResolvedBlock),
@@ -309,16 +324,12 @@ fn source_imports<'a>(
     }
     let mut pending = Vec::new();
     let mut found = HashMap::new();
-    charge(work, definition.handlers.len())?;
+    let mut fragment_locals = Vec::new();
+    charge(work, sources.len())?;
     pending
-        .try_reserve_exact(definition.handlers.len())
+        .try_reserve_exact(sources.len())
         .map_err(|_| resource())?;
-    pending.extend(
-        definition
-            .handlers
-            .iter()
-            .map(|clause| Task::Expression(&clause.body)),
-    );
+    pending.extend(sources.map(Task::Expression));
     while let Some(task) = pending.pop() {
         charge(work, 4)?;
         pending.try_reserve(3).map_err(|_| resource())?;
@@ -367,13 +378,16 @@ fn source_imports<'a>(
                     );
                 }
             }
-            Task::Declaration(ResolvedLocalDeclaration::Newtype(_)) => {}
+            Task::Declaration(ResolvedLocalDeclaration::Newtype(id)) => {
+                charge(work, 1)?;
+                fragment_locals.try_reserve(1).map_err(|_| resource())?;
+                fragment_locals.push(*id);
+            }
             Task::Expression(expression) => match &expression.kind {
                 ResolvedExprKind::Occurrence(occurrence) => {
-                    if occurrence
-                        .global_binder()
-                        .is_some_and(|binder| facts.global(binder).is_some())
-                    {
+                    if occurrence.global_binder().is_some_and(|binder| {
+                        facts.is_some_and(|facts| facts.global(binder).is_some())
+                    }) {
                         charge(work, 1)?;
                         found.try_reserve(1).map_err(|_| resource())?;
                         if found
@@ -452,7 +466,7 @@ fn source_imports<'a>(
             },
         }
     }
-    Ok(found)
+    Ok((found, fragment_locals))
 }
 
 pub(in crate::core) struct HandlerAssociations<'a> {
@@ -1137,6 +1151,16 @@ pub(in crate::core) struct RetainedHandlerStateAssociation {
     family: crate::types::NominalTypeId,
     parameters: Box<[TypeVariableId]>,
     state: crate::types::IterativeTypeOwner,
+}
+impl RetainedHandlerStateAssociation {
+    pub(in crate::core) fn borrowed(&self) -> DraftStateAssociation<'_> {
+        DraftStateAssociation {
+            definition: self.definition,
+            family: self.family,
+            parameters: &self.parameters,
+            state: &self.state,
+        }
+    }
 }
 impl HandlerAssociations<'_> {
     pub(in crate::core) fn retain(

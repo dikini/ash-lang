@@ -120,29 +120,8 @@ pub(in crate::core) fn authenticate_state_accesses<'a>(
     Ok(AuthenticatedProviderStateAccesses { program, nodes })
 }
 
-pub(crate) fn authenticate_plain_externals<'a>(
-    program: &'a UnvalidatedEffectProgram,
-    imported: &'a ImportedFacts,
-    sources: &[&SourceFile],
-    module_sources: &[(ModuleId, SourceId)],
-    canonical: &crate::resolved::ResolvedRegistry,
-    associations: &[DraftStateAssociation<'_>],
-    work: &mut TypeWorkBudget,
-) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
-    authenticate_plain_externals_context(
-        program,
-        imported,
-        None,
-        sources,
-        module_sources,
-        canonical,
-        associations,
-        None,
-        work,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn authenticate_plain_externals_with_defining<'a>(
     program: &'a UnvalidatedEffectProgram,
     imported: &'a ImportedFacts,
@@ -300,6 +279,7 @@ fn authenticate_plain_externals_context<'a>(
         &accesses,
         None,
         entry,
+        entry.map(|entry| entry.fragment_locals.as_slice()),
         None,
         work,
     )?;
@@ -714,6 +694,7 @@ impl AuthenticatedProviderExternals<'_> {
         call: NodeId,
         binder: BinderId,
         occurrence: NodeId,
+        allow_owned_scopes: bool,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ValidationError> {
         if !std::ptr::eq(self.program, program) {
@@ -734,7 +715,7 @@ impl AuthenticatedProviderExternals<'_> {
         closed_data_type(program, self.imported, &node(program, call)?.ty, call, work)?;
         if let Some(capture) = self.staged_captures.get(&occurrence) {
             capture
-                .check(&node(program, occurrence)?.ty, work)
+                .check(&node(program, occurrence)?.ty, allow_owned_scopes, work)
                 .map_err(|failure| match failure {
                     super::super::capture::Failure::Resource => resource(),
                     _ => invalid(call),
@@ -811,7 +792,7 @@ impl AuthenticatedProviderExternals<'_> {
             work,
         )?;
         capture
-            .check(&node(program, occurrence)?.ty, work)
+            .check(&node(program, occurrence)?.ty, allow_owned_scopes, work)
             .map_err(|failure| match failure {
                 super::super::capture::Failure::Resource => resource(),
                 _ => invalid(call),
@@ -1510,39 +1491,6 @@ fn canonical_scheme(
     Ok(body)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "independent draft, import, selection, source, association, and work authorities remain explicit"
-)]
-pub(crate) fn authenticate_staged_externals<'a>(
-    program: &'a UnvalidatedEffectProgram,
-    imported: &'a ImportedFacts,
-    publication: &crate::evidence::PendingEvidencePublication,
-    occurrences: &[ProviderExternalOccurrence<'_>],
-    sources: &[&SourceFile],
-    module_sources: &[(ModuleId, SourceId)],
-    canonical: &crate::resolved::ResolvedRegistry,
-    associations: &[DraftStateAssociation<'_>],
-    occurrence_module: ModuleId,
-    work: &mut TypeWorkBudget,
-) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
-    authenticate_staged_externals_context(
-        program,
-        imported,
-        None,
-        publication,
-        occurrences,
-        sources,
-        module_sources,
-        canonical,
-        associations,
-        occurrence_module,
-        None,
-        None,
-        work,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_staged_externals_with_defining<'a>(
     program: &'a UnvalidatedEffectProgram,
@@ -1555,9 +1503,28 @@ pub(crate) fn authenticate_staged_externals_with_defining<'a>(
     canonical: &crate::resolved::ResolvedRegistry,
     associations: &[DraftStateAssociation<'_>],
     occurrence_module: ModuleId,
+    definition: &crate::resolved::ResolvedResourceDefinition,
+    phase: super::LifecyclePhase,
     native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
+    if definition.id.module() != occurrence_module {
+        return Err(invalid(program.root));
+    }
+    // The source constructor has authenticated this exact original declaration.
+    // Reconstruct its phase inventory independently of candidate Core nodes.
+    // A canonical registry without lexical definitions admits no source locals.
+    let fragment_locals = if canonical.lexical_nominals().is_empty() {
+        Vec::new()
+    } else {
+        super::handler::source_fragment_locals(
+            match phase {
+                super::LifecyclePhase::Acquire => &definition.acquire,
+                super::LifecyclePhase::Finish => &definition.finish,
+            },
+            work,
+        )?
+    };
     authenticate_staged_externals_context(
         program,
         imported,
@@ -1570,11 +1537,13 @@ pub(crate) fn authenticate_staged_externals_with_defining<'a>(
         associations,
         occurrence_module,
         None,
+        Some(&fragment_locals),
         native_authentication,
         work,
     )
 }
 
+#[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
 pub(in crate::core) fn authenticate_handler_staged_externals<'a>(
     entry: &'a super::HandlerFragmentEntry<'a>,
     publication: &crate::evidence::PendingEvidencePublication,
@@ -1653,6 +1622,7 @@ pub(in crate::core) fn authenticate_handler_staged_externals<'a>(
         associations,
         entry.module.module(),
         Some(entry),
+        Some(&entry.fragment_locals),
         native_authentication,
         work,
     )
@@ -1674,6 +1644,7 @@ fn authenticate_staged_externals_context<'a>(
     associations: &[DraftStateAssociation<'_>],
     occurrence_module: ModuleId,
     entry: Option<&'a super::HandlerFragmentEntry<'a>>,
+    fragment_locals: Option<&[crate::types::NominalTypeId]>,
     native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
@@ -2108,6 +2079,7 @@ fn authenticate_staged_externals_context<'a>(
         &accesses,
         Some(&method_evidence),
         entry,
+        fragment_locals,
         native_authentication,
         work,
     )?;
@@ -2404,10 +2376,14 @@ impl ProviderSourceRelation {
     fn check(
         &self,
         actual: &Type,
+        allow_owned_scopes: bool,
         work: &mut TypeWorkBudget,
     ) -> Result<(), super::super::capture::Failure> {
         super::super::capture::CaptureValueSummary::check_provider_source_wrapper_call(
-            self, actual, work,
+            self,
+            actual,
+            allow_owned_scopes,
+            work,
         )
     }
 }
@@ -3463,15 +3439,12 @@ pub(crate) struct RetainedHandlerExternals {
     catalog: std::sync::Arc<super::super::dialect::MethodEvidenceCatalog>,
     evidence_anchors: Vec<RetainedHandlerEvidenceAnchor>,
     dictionary_nodes: Vec<(NodeId, RetainedHandlerDictionaryNode)>,
-    source_captures: HashMap<NodeId, ProviderSourceRelation>,
     types: HashMap<BinderId, IterativeTypeOwner>,
     globals: Vec<RetainedHandlerGlobal>,
     implementations: Vec<crate::resolved::ImportedImplementationFact>,
     defining_implementations: Vec<crate::resolved::CheckedImplementationFact>,
     occurrences: Vec<RetainedHandlerOccurrence>,
     dictionary_edges: HashMap<NodeId, (BinderId, NodeId)>,
-    dictionary_variables: HashSet<NodeId>,
-    dictionary_installers: HashSet<NodeId>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -3847,12 +3820,6 @@ struct RetainedHandlerOccurrence {
     binder: BinderId,
     arguments: IterativeArguments,
     rows: Vec<crate::types::EffectRow>,
-    methods: Vec<(
-        crate::interface::RequirementId,
-        crate::interface::MethodId,
-        usize,
-    )>,
-    adapters: Vec<super::super::capture::MethodAdapter>,
     spelling: String,
     origin: RetainedHandlerOrigin,
     import_span: Option<crate::source::Span>,
@@ -4136,8 +4103,6 @@ impl AuthenticatedProviderExternals<'_> {
                 binder: occurrence.global.binder(),
                 arguments: occurrence.arguments,
                 rows: occurrence.rows,
-                methods: occurrence.methods,
-                adapters: occurrence.adapters,
                 spelling: retain_handler_string(&source.spelling, work)?,
                 origin: RetainedHandlerOrigin::copy(&source.origin, work)?,
                 import_span: source.import_span,
@@ -4196,15 +4161,12 @@ impl AuthenticatedProviderExternals<'_> {
             catalog: std::sync::Arc::clone(&self.program.method_evidence),
             evidence_anchors,
             dictionary_nodes,
-            source_captures: self.staged_captures,
             types: self.types,
             globals,
             implementations,
             defining_implementations,
             occurrences,
             dictionary_edges: self.dictionary_edges,
-            dictionary_variables: self.dictionary_variables,
-            dictionary_installers: self.dictionary_installers,
         })
     }
 }

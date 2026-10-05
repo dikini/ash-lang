@@ -4,14 +4,16 @@
 //! the returned code against its independently admitted original certificate.
 //! Nothing in this map is retained by an executable Core descriptor.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+type CheckedProviderCodes = HashMap<ModuleId, Arc<CheckedProviderGroup>>;
 
 use super::{TypeError, invalid_state, provider::CheckedProviderGroup, type_resource};
 use crate::{module::ModuleId, types::TypeWorkBudget};
 
 #[derive(Debug, Default)]
 pub(crate) struct ProviderCodeAvailability {
-    codes: Option<Arc<RefCell<HashMap<ModuleId, Arc<CheckedProviderGroup>>>>>,
+    codes: Option<Rc<RefCell<CheckedProviderCodes>>>,
 }
 
 impl ProviderCodeAvailability {
@@ -21,7 +23,7 @@ impl ProviderCodeAvailability {
         if let Some(codes) = &self.codes {
             work.charge(1).map_err(|()| type_resource())?;
             Ok(Self {
-                codes: Some(Arc::clone(codes)),
+                codes: Some(Rc::clone(codes)),
             })
         } else {
             Ok(Self::default())
@@ -45,7 +47,7 @@ impl ProviderCodeAvailability {
             let mut codes = HashMap::new();
             codes.try_reserve(1).map_err(|_| type_resource())?;
             codes.insert(module, Arc::clone(code));
-            self.codes = Some(Arc::new(RefCell::new(codes)));
+            self.codes = Some(Rc::new(RefCell::new(codes)));
             return Ok(());
         }
         let mut codes = self

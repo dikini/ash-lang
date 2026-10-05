@@ -11,6 +11,7 @@ use crate::core::{NodeId, TypedBinder};
 use crate::elaborate::CorePatternBuffer;
 
 impl LifecycleTemplateDraft {
+    #[cfg(test)]
     pub(super) fn admit_from_defining_module(
         self,
         module: &crate::resolved::ResolvedModule,
@@ -54,6 +55,7 @@ impl LifecycleTemplateDraft {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn check_staged_externals(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -78,6 +80,7 @@ impl LifecycleTemplateDraft {
         clippy::too_many_arguments,
         reason = "the private draft entry retains independently supplied source, canonical, and association proof inputs"
     )]
+    #[cfg(test)]
     pub(super) fn check_staged_externals_with_associations(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -102,6 +105,7 @@ impl LifecycleTemplateDraft {
         .map(drop)
     }
 
+    #[cfg(test)]
     pub(super) fn admit(
         self,
         module: &crate::resolved::ResolvedModule,
@@ -364,6 +368,12 @@ impl LifecycleTemplateDraft {
             canonical,
             associations,
             definition.id.module(),
+            definition,
+            match self.phase {
+                Phase::Acquire => crate::core::provider::LifecyclePhase::Acquire,
+                Phase::Finish => crate::core::provider::LifecyclePhase::Finish,
+                _ => return Err(LifecycleDraftCheckError::InvalidEntry),
+            },
             native_authentication,
             work,
         )
@@ -381,6 +391,7 @@ impl LifecycleTemplateDraft {
         Ok(externals)
     }
 
+    #[cfg(test)]
     pub(super) fn check_plain_externals(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -405,6 +416,7 @@ impl LifecycleTemplateDraft {
         clippy::too_many_arguments,
         reason = "the private draft entry retains independently supplied source, canonical, and association proof inputs"
     )]
+    #[cfg(test)]
     pub(super) fn check_plain_externals_with_associations(
         &self,
         definition: &ResolvedResourceDefinition,
@@ -431,6 +443,7 @@ impl LifecycleTemplateDraft {
 }
 
 impl provider::CompiledHandlerDraft {
+    #[cfg(test)]
     pub(super) fn check(
         &self,
         module: &crate::resolved::ResolvedModule,
@@ -470,6 +483,7 @@ impl provider::CompiledHandlerDraft {
         .map_err(provider::LifecycleDraftCheckError::Core)
     }
 
+    #[cfg(test)]
     pub(super) fn admit(
         self,
         module: &crate::resolved::ResolvedModule,

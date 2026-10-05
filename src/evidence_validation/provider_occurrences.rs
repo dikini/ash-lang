@@ -4,8 +4,9 @@
 //! scope factory independently reconstructs their complete original relation.
 
 use super::{
-    EvidenceValidationFailure, MethodEvidenceInputs, build_method_evidence_catalog_from_inputs,
-    invalid_root, resource, same_argument_charged, type_resource,
+    EvidenceValidationFailure, LinkedInterfaceRegistry, MethodEvidenceInputs,
+    build_method_evidence_catalog_from_inputs, invalid_root, resource, same_argument_charged,
+    type_resource,
 };
 use crate::{
     core::dialect::{MethodEvidenceCatalog, MethodEvidenceOccurrence, MethodEvidenceOwner},
@@ -266,8 +267,9 @@ fn mapping_failure(failure: crate::core::BuildError, span: Span) -> EvidenceVali
 /// Builds all auxiliary evidence rows after copied occurrences have joined the
 /// linked source occurrences. Prepared copies remain immutable in source plans;
 /// final catalog shares their exact allocation pins and selected plan views.
-pub(crate) fn build_catalog_with_provider_copies<'a>(
+pub(super) fn build_catalog_with_provider_copies<'a>(
     program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
     copies: impl Iterator<Item = &'a CopiedProviderOccurrenceCatalog>,
     constraints: &mut InterfaceConstraintBudget,
     types: &mut TypeWorkBudget,
@@ -321,6 +323,7 @@ pub(crate) fn build_catalog_with_provider_copies<'a>(
     let mut catalog = build_method_evidence_catalog_from_inputs(
         MethodEvidenceInputs::Linked(program),
         occurrences,
+        Some(registry),
         constraints,
         types,
     )?;

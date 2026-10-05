@@ -81,6 +81,7 @@ impl RebuildExpression<EffectOperationFamily> for ProviderRealizedExpression<'_>
 }
 
 trait TransformFamily: CoreOperationFamily {
+    #[cfg(test)]
     fn rebuild_operation(
         builder: &mut CoreBuilder<Self>,
         remapped: &[Option<NodeId>],
@@ -1165,6 +1166,7 @@ fn rebuild_nonfold_node_with_context<F: TransformFamily>(
 
 /// Walk an unpublished draft without assigning it validated-program authority.
 /// Replacement roots are atomic: their obsolete source ABI children are omitted.
+#[cfg(test)]
 pub(crate) fn provider_draft_order(
     program: &super::UnvalidatedEffectProgram,
     replacements: &std::collections::HashSet<NodeId>,
@@ -1356,6 +1358,7 @@ fn retain_provider_pattern_binders(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_provider_draft_builder(
     program: &super::UnvalidatedEffectProgram,
     order: &[NodeId],
@@ -1369,6 +1372,7 @@ pub(crate) fn prepare_provider_draft_builder(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_provider_draft_builder_with_catalog(
     program: &super::UnvalidatedEffectProgram,
     order: &[NodeId],
@@ -1727,6 +1731,7 @@ pub(crate) fn provider_draft_type(
         .ty)
 }
 
+#[cfg(test)]
 fn rebuild_pattern<F: CoreOperationFamily>(
     builder: &mut CoreBuilder<F>,
     pattern: &CorePattern,

@@ -223,6 +223,14 @@ fn retain_row_payload_variables(
     Ok(())
 }
 
+/// Source-only row positions may remain ordinary registered inferences.
+/// Copying these coordinates claims no completed row receipt or Core authority.
+pub(in crate::elaborate) struct ProviderScopeCopyRows<'a> {
+    pub(in crate::elaborate) residual: &'a EffectRow,
+    pub(in crate::elaborate) pending: &'a HashMap<InferenceVariableId, EffectRow>,
+    pub(in crate::elaborate) nodes: &'a HashMap<NodeId, EffectRow>,
+}
+
 impl<F: CoreLoweringFamily> CoreElaborator<F> {
     pub(in crate::elaborate) fn prepare_scope_copy_plan(
         &mut self,
@@ -230,6 +238,29 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         actuals: &ResourceActuals,
         body: &ComputationType,
         rows: &crate::core::provider::ResolvedProviderHandlerRows,
+        module: crate::module::ModuleId,
+        origin: Span,
+    ) -> Result<PreparedScopeCopyPlan, TypeError> {
+        self.prepare_scope_copy_plan_with_rows(
+            source,
+            actuals,
+            body,
+            ProviderScopeCopyRows {
+                residual: rows.residual(),
+                pending: rows.pending(),
+                nodes: rows.node_rows(),
+            },
+            module,
+            origin,
+        )
+    }
+
+    pub(in crate::elaborate) fn prepare_scope_copy_plan_with_rows(
+        &mut self,
+        source: &super::super::provider::ProviderTemplateSource<'_>,
+        actuals: &ResourceActuals,
+        body: &ComputationType,
+        rows: ProviderScopeCopyRows<'_>,
         module: crate::module::ModuleId,
         origin: Span,
     ) -> Result<PreparedScopeCopyPlan, TypeError> {
@@ -283,7 +314,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .insert_cloned(hidden[0].0, &value, &mut self.type_work)?;
             let row =
                 crate::types::IterativeArgumentOwner::new(crate::types::KindedArgument::RowArg(
-                    clone_effect_row_with_budget(rows.residual(), &mut self.type_work)
+                    clone_effect_row_with_budget(rows.residual, &mut self.type_work)
                         .map_err(|()| type_resource())?,
                 ));
             phase
@@ -291,13 +322,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 .insert_cloned(hidden[1].0, &row, &mut self.type_work)?;
             if index == 2 {
                 self.type_work
-                    .charge(rows.pending().len())
+                    .charge(rows.pending.len())
                     .map_err(|()| type_resource())?;
                 phase
                     .pending
-                    .try_reserve(rows.pending().len())
+                    .try_reserve(rows.pending.len())
                     .map_err(|_| type_resource())?;
-                for (id, row) in rows.pending() {
+                for (id, row) in rows.pending {
                     phase.pending.insert(
                         *id,
                         clone_effect_row_with_budget(row, &mut self.type_work)
@@ -305,13 +336,13 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                     );
                 }
                 self.type_work
-                    .charge(rows.node_rows().len())
+                    .charge(rows.nodes.len())
                     .map_err(|()| type_resource())?;
                 phase
                     .node_rows
-                    .try_reserve(rows.node_rows().len())
+                    .try_reserve(rows.nodes.len())
                     .map_err(|_| type_resource())?;
-                for (node, row) in rows.node_rows() {
+                for (node, row) in rows.nodes {
                     phase.node_rows.insert(
                         *node,
                         clone_effect_row_with_budget(row, &mut self.type_work)

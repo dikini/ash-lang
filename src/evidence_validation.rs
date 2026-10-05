@@ -2,14 +2,14 @@
 
 mod provider_sources;
 use provider_sources::{
-    LinkedLexicalSource, authenticate_provider_source, retain_provider_lexical_owners,
+    LinkedLexicalSource, OriginalLexicalContext, authenticate_provider_source,
+    retain_provider_lexical_owners,
 };
 mod provider_prepass;
 pub(crate) use provider_prepass::{SourceProviderOccurrence, source_provider_occurrences};
 mod provider_occurrences;
-pub(crate) use provider_occurrences::{
-    CopiedProviderOccurrenceCatalog, build_catalog_with_provider_copies, copy_provider_occurrences,
-};
+use provider_occurrences::build_catalog_with_provider_copies;
+pub(crate) use provider_occurrences::{CopiedProviderOccurrenceCatalog, copy_provider_occurrences};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -2774,7 +2774,12 @@ pub(crate) fn validate_interface_evidence_with_budget(
         type_work,
         false,
     )?;
-    let method_evidence = build_core_method_evidence_catalog(&program, constraint_work, type_work)?;
+    let method_evidence = build_core_method_evidence_catalog_with_registry(
+        &program,
+        &linked_interfaces,
+        constraint_work,
+        type_work,
+    )?;
     validate_lexical_headers(
         &program,
         &linked_interfaces,
@@ -2885,6 +2890,7 @@ pub(crate) fn validate_interface_evidence_with_budget(
         }
         let catalog = build_catalog_with_provider_copies(
             &program,
+            &linked_interfaces,
             inventory.iter().flat_map(|source| {
                 preparation
                     .plan(source.resource.provider)
@@ -3057,18 +3063,40 @@ impl<'a> MethodEvidenceInputs<'a> {
         Ok(count)
     }
 }
+#[cfg(test)]
 fn build_core_method_evidence_catalog(
     program: &ResolvedModuleProgram,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
+    let mut kinds =
+        build_linked_kind_environments(program.registry(), type_work, program.result().span)?;
+    let registry = LinkedInterfaceRegistry::build_with_kinds(
+        program,
+        &mut kinds,
+        None,
+        constraint_work,
+        type_work,
+    )?;
+    build_core_method_evidence_catalog_with_registry(program, &registry, constraint_work, type_work)
+}
+
+fn build_core_method_evidence_catalog_with_registry(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
     build_method_evidence_catalog_from_inputs(
         MethodEvidenceInputs::Linked(program),
         Vec::new(),
+        Some(registry),
         constraint_work,
         type_work,
     )
 }
+
+#[cfg(test)]
 pub(crate) fn build_imported_method_evidence_catalog<'a>(
     facts: &crate::resolved::ImportedFacts,
     registry: &ResolvedRegistry,
@@ -3150,37 +3178,9 @@ pub(crate) fn build_provider_method_evidence_catalog<'a>(
             span,
         },
         occurrences,
+        None,
         constraint_work,
         type_work,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "closed imported selection validation retains independent route, goal, canonical kinds, and work authorities"
-)]
-pub(crate) fn validate_imported_closed_selection(
-    imported: &crate::resolved::ImportedFacts,
-    registry: &ResolvedRegistry,
-    module: ModuleId,
-    selection: &EvidenceSelection,
-    application: &InterfaceApplication,
-    constraint_work: &mut InterfaceConstraintBudget,
-    type_work: &mut TypeWorkBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    validate_provider_closed_selection(
-        crate::resolved::ProviderExternalFacts {
-            imported,
-            defining: None,
-        },
-        registry,
-        module,
-        selection,
-        application,
-        constraint_work,
-        type_work,
-        span,
     )
 }
 
@@ -3331,6 +3331,7 @@ pub(crate) fn validate_provider_closed_selection(
 fn build_method_evidence_catalog_from_inputs(
     inputs: MethodEvidenceInputs<'_>,
     supplied_occurrences: Vec<MethodEvidenceOccurrence>,
+    linked_registry: Option<&LinkedInterfaceRegistry>,
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
@@ -3561,6 +3562,7 @@ fn build_method_evidence_catalog_from_inputs(
     let mut occurrences = if let Some(program) = inputs.linked() {
         let mut collected = collect_method_evidence_occurrences(
             program,
+            linked_registry.ok_or_else(|| invalid_root(inputs.span()))?,
             &methods,
             &mut lexical_owners,
             constraint_work,
@@ -4912,6 +4914,7 @@ fn selection_has_lexical(
 
 fn retain_lexical_owners(
     source: &crate::resolved::ResolvedLexicalEvidence,
+    expected_rows: &[HashMap<TypeVariableId, crate::types::EffectRow>],
     methods: &[MethodEvidenceMethod],
     owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
     budget: &mut InterfaceConstraintBudget,
@@ -4935,7 +4938,16 @@ fn retain_lexical_owners(
         .iter()
         .zip(&source.application.arguments)
     {
-        if !same_argument_charged(checked, &resolved.ty, budget, source.span)? {
+        let qualified = crate::types::qualify_kinded_argument_with_row_contexts_with_budget(
+            &resolved.ty,
+            expected_rows.iter(),
+            type_work,
+        )
+        .map_err(|()| type_resource(source.span))?
+        .map_err(|_| invalid_root(source.span))?;
+        let qualified = qualified.map(crate::types::IterativeArgumentOwner::new);
+        let expected = qualified.as_deref().unwrap_or(&resolved.ty);
+        if !same_argument_charged(checked, expected, budget, source.span)? {
             return Err(invalid_root(source.span));
         }
     }
@@ -5113,6 +5125,7 @@ fn retain_lexical_owners(
 
 fn collect_method_evidence_occurrences(
     program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
     methods: &[MethodEvidenceMethod],
     lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
     constraint_work: &mut InterfaceConstraintBudget,
@@ -5127,6 +5140,12 @@ fn collect_method_evidence_occurrences(
                     for equation in &global.equations {
                         collect_method_evidence_expression_occurrences(
                             program,
+                            registry,
+                            Some(ExpectedEquation::Global {
+                                binder: checked.binder,
+                                arity: equation.patterns.len(),
+                            }),
+                            None,
                             owner,
                             &equation.body,
                             methods,
@@ -5143,6 +5162,15 @@ fn collect_method_evidence_occurrences(
                             ResolvedLocalDeclaration::Binding(binding) => {
                                 collect_method_evidence_expression_occurrences(
                                     program,
+                                    registry,
+                                    None,
+                                    binding
+                                        .annotation
+                                        .as_ref()
+                                        .filter(|annotation| {
+                                            may_have_source_row_context(&annotation.ty)
+                                        })
+                                        .map(LinkedLocalScope::Annotation),
                                     owner,
                                     &binding.initializer,
                                     methods,
@@ -5156,6 +5184,12 @@ fn collect_method_evidence_occurrences(
                                 for member in &group.members {
                                     collect_method_evidence_expression_occurrences(
                                         program,
+                                        registry,
+                                        None,
+                                        may_have_source_row_context(&member.annotation.ty)
+                                            .then_some(LinkedLocalScope::Annotation(
+                                                &member.annotation,
+                                            )),
                                         owner,
                                         &member.initializer,
                                         methods,
@@ -5169,26 +5203,32 @@ fn collect_method_evidence_occurrences(
                             ResolvedLocalDeclaration::Evidence(source) => {
                                 retain_lexical_owners(
                                     source,
+                                    &[],
                                     methods,
                                     lexical_owners,
                                     constraint_work,
                                     type_work,
                                 )?;
-                                for equation in source
-                                    .method_groups
-                                    .iter()
-                                    .flat_map(|group| &group.equations)
-                                {
-                                    collect_method_evidence_expression_occurrences(
-                                        program,
-                                        owner,
-                                        &equation.body,
-                                        methods,
-                                        &mut occurrences,
-                                        lexical_owners,
-                                        constraint_work,
-                                        type_work,
-                                    )?;
+                                for method in &source.method_groups {
+                                    for equation in &method.equations {
+                                        collect_method_evidence_expression_occurrences(
+                                            program,
+                                            registry,
+                                            None,
+                                            Some(LinkedLocalScope::Equation {
+                                                source,
+                                                method,
+                                                arity: equation.patterns.len(),
+                                            }),
+                                            owner,
+                                            &equation.body,
+                                            methods,
+                                            &mut occurrences,
+                                            lexical_owners,
+                                            constraint_work,
+                                            type_work,
+                                        )?;
+                                    }
                                 }
                             }
                             ResolvedLocalDeclaration::Newtype(_) => {}
@@ -5196,6 +5236,9 @@ fn collect_method_evidence_occurrences(
                     }
                     collect_method_evidence_expression_occurrences(
                         program,
+                        registry,
+                        None,
+                        None,
                         owner,
                         &global.body.result,
                         methods,
@@ -5215,6 +5258,12 @@ fn collect_method_evidence_occurrences(
                 for equation in &method.equations {
                     collect_method_evidence_expression_occurrences(
                         program,
+                        registry,
+                        Some(ExpectedEquation::Implementation {
+                            method: method.identity.ok_or_else(|| invalid_root(method.span))?,
+                            arity: equation.patterns.len(),
+                        }),
+                        None,
                         owner,
                         &equation.body,
                         methods,
@@ -5229,6 +5278,9 @@ fn collect_method_evidence_occurrences(
     }
     collect_method_evidence_expression_occurrences(
         program,
+        registry,
+        None,
+        None,
         None,
         program.result(),
         methods,
@@ -5244,10 +5296,24 @@ fn collect_method_evidence_occurrences(
     clippy::too_many_arguments,
     reason = "occurrence and lexical owner outputs retain independent constraint and type ledgers"
 )]
-fn collect_method_evidence_expression_occurrences(
-    program: &ResolvedModuleProgram,
+fn reserve_method_context_expressions(
+    pending: &mut Vec<(&ResolvedExpr, Option<usize>)>,
+    count: usize,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    charge(budget, count, span)?;
+    pending.try_reserve(count).map_err(|_| resource(span))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_method_evidence_expression_occurrences<'a>(
+    program: &'a ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    expected_equation: Option<ExpectedEquation>,
+    initial_equation: Option<LinkedLocalScope<'a>>,
     scope: Option<MethodEvidenceOwner>,
-    root: &ResolvedExpr,
+    root: &'a ResolvedExpr,
     methods: &[MethodEvidenceMethod],
     occurrences: &mut Vec<MethodEvidenceOccurrence>,
     lexical_owners: &mut Vec<crate::core::dialect::MethodEvidenceLexicalOwner>,
@@ -5257,8 +5323,19 @@ fn collect_method_evidence_expression_occurrences(
     let mut pending = Vec::new();
     charge(constraint_work, 1, root.span)?;
     pending.try_reserve(1).map_err(|_| resource(root.span))?;
-    pending.push(root);
-    while let Some(expression) = pending.pop() {
+    let mut row_contexts = Vec::new();
+    let initial_head = if let Some(equation) = initial_equation {
+        charge(constraint_work, 1, root.span)?;
+        row_contexts
+            .try_reserve(1)
+            .map_err(|_| resource(root.span))?;
+        row_contexts.push((equation, None));
+        Some(0)
+    } else {
+        None
+    };
+    pending.push((root, initial_head));
+    while let Some((expression, row_head)) = pending.pop() {
         charge(constraint_work, 1, expression.span)?;
         match &expression.kind {
             ResolvedExprKind::ProviderResource(resource) => {
@@ -5271,9 +5348,14 @@ fn collect_method_evidence_expression_occurrences(
                     constraint_work,
                     type_work,
                 )?;
-                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
-                pending.push(&resource.body);
-                pending.push(&resource.initializer);
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&resource.body, row_head));
+                pending.push((&resource.initializer, row_head));
             }
             ResolvedExprKind::Occurrence(occurrence) => match occurrence.term {
                 ResolvedTermName::Global(binder) => {
@@ -5392,15 +5474,15 @@ fn collect_method_evidence_expression_occurrences(
                 pending
                     .try_reserve(elements.len())
                     .map_err(|_| resource(expression.span))?;
-                pending.extend(elements.iter().rev());
+                pending.extend(elements.iter().rev().map(|child| (child, row_head)));
             }
             ResolvedExprKind::Apply(application) => {
                 charge(constraint_work, 2, expression.span)?;
                 pending
                     .try_reserve(2)
                     .map_err(|_| resource(expression.span))?;
-                pending.push(&application.argument);
-                pending.push(&application.function);
+                pending.push((&application.argument, row_head));
+                pending.push((&application.function, row_head));
             }
             ResolvedExprKind::Add(binary)
             | ResolvedExprKind::Multiply(binary)
@@ -5409,38 +5491,73 @@ fn collect_method_evidence_expression_occurrences(
                 pending
                     .try_reserve(2)
                     .map_err(|_| resource(expression.span))?;
-                pending.push(&binary.right);
-                pending.push(&binary.left);
+                pending.push((&binary.right, row_head));
+                pending.push((&binary.left, row_head));
             }
             ResolvedExprKind::Block(block) => {
                 charge(constraint_work, 1, expression.span)?;
                 pending
                     .try_reserve(1)
                     .map_err(|_| resource(expression.span))?;
-                pending.push(&block.result);
+                pending.push((&block.result, row_head));
                 for declaration in block.declarations.iter().rev() {
                     match declaration {
                         ResolvedLocalDeclaration::Evidence(source) => {
+                            let expected = provider_sources::lexical_context_rows(
+                                program,
+                                registry,
+                                source,
+                                EvidenceScope {
+                                    local_scopes: &[],
+                                    expected_equation,
+                                    owner: scope.map(|owner| match owner {
+                                        MethodEvidenceOwner::Global(binder) => {
+                                            RequirementOwner::Global(binder)
+                                        }
+                                        MethodEvidenceOwner::Implementation(method) => {
+                                            RequirementOwner::Impl(method.implementation())
+                                        }
+                                    }),
+                                    variables: &[],
+                                    lexical_sources: &[],
+                                    lexical_head: None,
+                                },
+                                &row_contexts,
+                                row_head,
+                                constraint_work,
+                                type_work,
+                            )?;
                             retain_lexical_owners(
                                 source,
+                                &expected,
                                 methods,
                                 lexical_owners,
                                 constraint_work,
                                 type_work,
                             )?;
-                            for equation in source
-                                .method_groups
-                                .iter()
-                                .rev()
-                                .flat_map(|group| group.equations.iter().rev())
-                            {
-                                reserve_expressions(
-                                    &mut pending,
-                                    1,
-                                    constraint_work,
-                                    equation.span,
-                                )?;
-                                pending.push(&equation.body);
+                            for method in source.method_groups.iter().rev() {
+                                for equation in method.equations.iter().rev() {
+                                    reserve_method_context_expressions(
+                                        &mut pending,
+                                        1,
+                                        constraint_work,
+                                        equation.span,
+                                    )?;
+                                    charge(constraint_work, 1, equation.span)?;
+                                    row_contexts
+                                        .try_reserve(1)
+                                        .map_err(|_| resource(equation.span))?;
+                                    let context = row_contexts.len();
+                                    row_contexts.push((
+                                        LinkedLocalScope::Equation {
+                                            source,
+                                            method,
+                                            arity: equation.patterns.len(),
+                                        },
+                                        row_head,
+                                    ));
+                                    pending.push((&equation.body, Some(context)));
+                                }
                             }
                         }
                         ResolvedLocalDeclaration::Binding(binding) => {
@@ -5448,16 +5565,43 @@ fn collect_method_evidence_expression_occurrences(
                             pending
                                 .try_reserve(1)
                                 .map_err(|_| resource(expression.span))?;
-                            pending.push(&binding.initializer);
+                            let annotation_head = if let Some(annotation) = &binding.annotation
+                                && may_have_source_row_context(&annotation.ty)
+                            {
+                                charge(constraint_work, 1, binding.span)?;
+                                row_contexts
+                                    .try_reserve(1)
+                                    .map_err(|_| resource(binding.span))?;
+                                let index = row_contexts.len();
+                                row_contexts
+                                    .push((LinkedLocalScope::Annotation(annotation), row_head));
+                                Some(index)
+                            } else {
+                                row_head
+                            };
+                            pending.push((&binding.initializer, annotation_head));
                         }
                         ResolvedLocalDeclaration::Recursive(group) => {
                             charge(constraint_work, group.members.len(), expression.span)?;
                             pending
                                 .try_reserve(group.members.len())
                                 .map_err(|_| resource(expression.span))?;
-                            pending.extend(
-                                group.members.iter().rev().map(|member| &member.initializer),
-                            );
+                            for member in group.members.iter().rev() {
+                                if !may_have_source_row_context(&member.annotation.ty) {
+                                    pending.push((&member.initializer, row_head));
+                                    continue;
+                                }
+                                charge(constraint_work, 1, group.span)?;
+                                row_contexts
+                                    .try_reserve(1)
+                                    .map_err(|_| resource(group.span))?;
+                                let index = row_contexts.len();
+                                row_contexts.push((
+                                    LinkedLocalScope::Annotation(&member.annotation),
+                                    row_head,
+                                ));
+                                pending.push((&member.initializer, Some(index)));
+                            }
                         }
                         ResolvedLocalDeclaration::Newtype(_) => {}
                     }
@@ -5468,30 +5612,65 @@ fn collect_method_evidence_expression_occurrences(
                 pending
                     .try_reserve(1)
                     .map_err(|_| resource(expression.span))?;
-                pending.push(&function.body.result);
+                pending.push((&function.body.result, row_head));
                 for declaration in function.body.declarations.iter().rev() {
                     match declaration {
                         ResolvedLocalDeclaration::Evidence(source) => {
+                            let expected = provider_sources::lexical_context_rows(
+                                program,
+                                registry,
+                                source,
+                                EvidenceScope {
+                                    local_scopes: &[],
+                                    expected_equation,
+                                    owner: scope.map(|owner| match owner {
+                                        MethodEvidenceOwner::Global(binder) => {
+                                            RequirementOwner::Global(binder)
+                                        }
+                                        MethodEvidenceOwner::Implementation(method) => {
+                                            RequirementOwner::Impl(method.implementation())
+                                        }
+                                    }),
+                                    variables: &[],
+                                    lexical_sources: &[],
+                                    lexical_head: None,
+                                },
+                                &row_contexts,
+                                row_head,
+                                constraint_work,
+                                type_work,
+                            )?;
                             retain_lexical_owners(
                                 source,
+                                &expected,
                                 methods,
                                 lexical_owners,
                                 constraint_work,
                                 type_work,
                             )?;
-                            for equation in source
-                                .method_groups
-                                .iter()
-                                .rev()
-                                .flat_map(|group| group.equations.iter().rev())
-                            {
-                                reserve_expressions(
-                                    &mut pending,
-                                    1,
-                                    constraint_work,
-                                    equation.span,
-                                )?;
-                                pending.push(&equation.body);
+                            for method in source.method_groups.iter().rev() {
+                                for equation in method.equations.iter().rev() {
+                                    reserve_method_context_expressions(
+                                        &mut pending,
+                                        1,
+                                        constraint_work,
+                                        equation.span,
+                                    )?;
+                                    charge(constraint_work, 1, equation.span)?;
+                                    row_contexts
+                                        .try_reserve(1)
+                                        .map_err(|_| resource(equation.span))?;
+                                    let context = row_contexts.len();
+                                    row_contexts.push((
+                                        LinkedLocalScope::Equation {
+                                            source,
+                                            method,
+                                            arity: equation.patterns.len(),
+                                        },
+                                        row_head,
+                                    ));
+                                    pending.push((&equation.body, Some(context)));
+                                }
                             }
                         }
                         ResolvedLocalDeclaration::Binding(binding) => {
@@ -5499,16 +5678,43 @@ fn collect_method_evidence_expression_occurrences(
                             pending
                                 .try_reserve(1)
                                 .map_err(|_| resource(expression.span))?;
-                            pending.push(&binding.initializer);
+                            let annotation_head = if let Some(annotation) = &binding.annotation
+                                && may_have_source_row_context(&annotation.ty)
+                            {
+                                charge(constraint_work, 1, binding.span)?;
+                                row_contexts
+                                    .try_reserve(1)
+                                    .map_err(|_| resource(binding.span))?;
+                                let index = row_contexts.len();
+                                row_contexts
+                                    .push((LinkedLocalScope::Annotation(annotation), row_head));
+                                Some(index)
+                            } else {
+                                row_head
+                            };
+                            pending.push((&binding.initializer, annotation_head));
                         }
                         ResolvedLocalDeclaration::Recursive(group) => {
                             charge(constraint_work, group.members.len(), expression.span)?;
                             pending
                                 .try_reserve(group.members.len())
                                 .map_err(|_| resource(expression.span))?;
-                            pending.extend(
-                                group.members.iter().rev().map(|member| &member.initializer),
-                            );
+                            for member in group.members.iter().rev() {
+                                if !may_have_source_row_context(&member.annotation.ty) {
+                                    pending.push((&member.initializer, row_head));
+                                    continue;
+                                }
+                                charge(constraint_work, 1, group.span)?;
+                                row_contexts
+                                    .try_reserve(1)
+                                    .map_err(|_| resource(group.span))?;
+                                let index = row_contexts.len();
+                                row_contexts.push((
+                                    LinkedLocalScope::Annotation(&member.annotation),
+                                    row_head,
+                                ));
+                                pending.push((&member.initializer, Some(index)));
+                            }
                         }
                         ResolvedLocalDeclaration::Newtype(_) => {}
                     }
@@ -5524,18 +5730,28 @@ fn collect_method_evidence_expression_occurrences(
                 pending
                     .try_reserve(child_count)
                     .map_err(|_| resource(expression.span))?;
-                pending.extend(matched.arms.iter().rev().map(|arm| &arm.body));
-                pending.push(&matched.scrutinee);
+                pending.extend(matched.arms.iter().rev().map(|arm| (&arm.body, row_head)));
+                pending.push((&matched.scrutinee, row_head));
             }
             ResolvedExprKind::Resource(acquisition) => {
-                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
-                pending.push(&acquisition.body);
-                pending.push(&acquisition.initializer);
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&acquisition.body, row_head));
+                pending.push((&acquisition.initializer, row_head));
             }
             ResolvedExprKind::Cleanup(cleanup) => {
-                reserve_expressions(&mut pending, 2, constraint_work, expression.span)?;
-                pending.push(&cleanup.body);
-                pending.push(&cleanup.action);
+                reserve_method_context_expressions(
+                    &mut pending,
+                    2,
+                    constraint_work,
+                    expression.span,
+                )?;
+                pending.push((&cleanup.body, row_head));
+                pending.push((&cleanup.action, row_head));
             }
             ResolvedExprKind::Perform(request) => {
                 if program
@@ -5545,7 +5761,7 @@ fn collect_method_evidence_expression_occurrences(
                 {
                     return Err(invalid_root(expression.span));
                 }
-                pending.push(&request.operand)
+                pending.push((&request.operand, row_head))
             }
             ResolvedExprKind::Handle(handler) => {
                 if program
@@ -5559,10 +5775,16 @@ fn collect_method_evidence_expression_occurrences(
                 pending
                     .try_reserve(child_count)
                     .map_err(|_| resource(expression.span))?;
-                pending.extend(handler.clauses.iter().rev().map(|clause| &clause.body));
-                pending.push(&handler.body);
+                pending.extend(
+                    handler
+                        .clauses
+                        .iter()
+                        .rev()
+                        .map(|clause| (&clause.body, row_head)),
+                );
+                pending.push((&handler.body, row_head));
             }
-            ResolvedExprKind::Resume(resume) => pending.push(&resume.value),
+            ResolvedExprKind::Resume(resume) => pending.push((&resume.value, row_head)),
             ResolvedExprKind::Discard(_) => {}
         }
     }
@@ -6268,6 +6490,8 @@ fn validate_definition<'a>(
         .ok_or_else(|| unknown(definition.span()))?;
     let variables = copy_kinded_parameter_ids(&scheme.type_parameters, budget, definition.span())?;
     let scope = EvidenceScope {
+        local_scopes: &[],
+        expected_equation: None,
         lexical_sources: &[],
         lexical_head: None,
         owner: Some(RequirementOwner::Global(binder)),
@@ -6281,11 +6505,19 @@ fn validate_definition<'a>(
                     .equations
                     .get(equation_index)
                     .ok_or_else(|| unknown(definition.span()))?;
+                let equation_scope = EvidenceScope {
+                    local_scopes: &[],
+                    expected_equation: Some(ExpectedEquation::Global {
+                        binder,
+                        arity: equation.patterns.len(),
+                    }),
+                    ..scope
+                };
                 validate_expression(
                     program,
                     registry,
                     group,
-                    scope,
+                    equation_scope,
                     &equation.body,
                     kind_environments,
                     budget,
@@ -6354,6 +6586,8 @@ fn validate_implementation<'a>(
                 .map(|(identity, _)| *identity),
         );
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(implementation.id())),
@@ -6365,11 +6599,19 @@ fn validate_implementation<'a>(
                 .equations
                 .get(equation_index)
                 .ok_or_else(|| unknown(method.span))?;
+            let equation_scope = EvidenceScope {
+                local_scopes: &[],
+                expected_equation: Some(ExpectedEquation::Implementation {
+                    method: checked_method.id,
+                    arity: equation.patterns.len(),
+                }),
+                ..scope
+            };
             validate_expression(
                 program,
                 registry,
                 group,
-                scope,
+                equation_scope,
                 &equation.body,
                 kind_environments,
                 budget,
@@ -6428,6 +6670,7 @@ fn validate_pending_expressions<'a, 'body>(
     let mut heads = Vec::new();
     let mut variables = Vec::new();
     let mut active_method_scope = None;
+    let track_provider_equations = program.registry().provider_contract_count() != 0;
     if let Some(block) = initial_block {
         schedule_lexical_block(
             pending,
@@ -6437,7 +6680,21 @@ fn validate_pending_expressions<'a, 'body>(
             (None, None),
             block,
             budget,
-            headers_only.then_some((program, registry, scope.variables, type_work)),
+            track_provider_equations,
+            OriginalLexicalContext {
+                equation: scope.expected_equation,
+                owner: scope.owner,
+                local_head: None,
+            },
+            Some((
+                program,
+                registry,
+                scope.variables,
+                scope.expected_equation,
+                scope.owner,
+                type_work,
+                headers_only,
+            )),
         )?;
     }
     while let Some(expression) = pending.pop() {
@@ -6494,6 +6751,7 @@ fn validate_pending_expressions<'a, 'body>(
             scope.variables
         };
         let scope = EvidenceScope {
+            local_scopes: &method_scopes,
             lexical_sources: &sources,
             lexical_head: head.0,
             variables: active_variables,
@@ -6507,6 +6765,8 @@ fn validate_pending_expressions<'a, 'body>(
                     registry,
                     resource_scope,
                     scope,
+                    &method_scopes,
+                    head.1,
                     kind_environments,
                     budget,
                     type_work,
@@ -6572,6 +6832,20 @@ fn validate_pending_expressions<'a, 'body>(
                 pending.push(binary.left.as_ref());
             }
             ResolvedExprKind::Block(block) => {
+                let original = OriginalLexicalContext {
+                    equation: scope.expected_equation,
+                    owner: scope.owner,
+                    local_head: head.1,
+                };
+                let header_scope = Some((
+                    program,
+                    registry,
+                    active_variables,
+                    original.equation,
+                    original.owner,
+                    &mut *type_work,
+                    headers_only,
+                ));
                 schedule_lexical_block(
                     pending,
                     &mut heads,
@@ -6580,10 +6854,26 @@ fn validate_pending_expressions<'a, 'body>(
                     head,
                     block,
                     budget,
-                    headers_only.then_some((program, registry, active_variables, type_work)),
+                    track_provider_equations,
+                    original,
+                    header_scope,
                 )?;
             }
             ResolvedExprKind::Function(function) => {
+                let original = OriginalLexicalContext {
+                    equation: scope.expected_equation,
+                    owner: scope.owner,
+                    local_head: head.1,
+                };
+                let header_scope = Some((
+                    program,
+                    registry,
+                    active_variables,
+                    original.equation,
+                    original.owner,
+                    &mut *type_work,
+                    headers_only,
+                ));
                 schedule_lexical_block(
                     pending,
                     &mut heads,
@@ -6592,7 +6882,9 @@ fn validate_pending_expressions<'a, 'body>(
                     head,
                     &function.body,
                     budget,
-                    headers_only.then_some((program, registry, active_variables, type_work)),
+                    track_provider_equations,
+                    original,
+                    header_scope,
                 )?;
             }
             ResolvedExprKind::Match(matched) => {
@@ -6854,7 +7146,15 @@ fn validate_occurrence<'a>(
 }
 
 #[derive(Clone, Copy)]
+enum ExpectedEquation {
+    Global { binder: BinderId, arity: usize },
+    Implementation { method: ImplMethodId, arity: usize },
+}
+
+#[derive(Clone, Copy)]
 struct EvidenceScope<'a> {
+    local_scopes: &'a [(LinkedLocalScope<'a>, Option<usize>)],
+    expected_equation: Option<ExpectedEquation>,
     owner: Option<RequirementOwner>,
     variables: &'a [TypeVariableId],
     lexical_sources: &'a [(LinkedLexicalSource<'a>, Option<usize>)],
@@ -6863,6 +7163,8 @@ struct EvidenceScope<'a> {
 
 impl EvidenceScope<'static> {
     const NONE: Self = Self {
+        local_scopes: &[],
+        expected_equation: None,
         owner: None,
         variables: &[],
         lexical_sources: &[],
@@ -6998,6 +7300,7 @@ fn validate_checked_selection_in_scope<'a>(
         &mut visited,
         &mut pending,
         budget,
+        type_work,
         span,
     )?;
     while let Some(goal) = pending.pop() {
@@ -7015,6 +7318,7 @@ fn validate_checked_selection_in_scope<'a>(
             &mut visited,
             &mut pending,
             budget,
+            type_work,
             span,
         )?;
     }
@@ -7039,6 +7343,7 @@ fn validate_evidence_node(
     visited: &mut HashSet<EvidenceNodeId>,
     pending: &mut PendingGoals,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<(), EvidenceValidationFailure> {
     charge(budget, 1, span)?;
@@ -7106,7 +7411,7 @@ fn validate_evidence_node(
                     span,
                 );
             }
-            let LinkedLexicalSource::Declared(source) = source else {
+            let LinkedLexicalSource::Declared(source, _) = source else {
                 unreachable!()
             };
             charge(budget, methods.len(), span)?;
@@ -7120,15 +7425,16 @@ fn validate_evidence_node(
             {
                 return Err(invalid_root(span));
             }
-            for (actual, expected) in source
-                .application
-                .arguments
-                .iter()
-                .zip(expected_application.arguments())
-            {
-                if !same_argument_charged(&actual.ty, expected, budget, span)? {
-                    return Err(invalid_root(span));
-                }
+            if !found.ok_or_else(|| invalid_root(span))?.same_application(
+                program,
+                registry,
+                expected_application,
+                scope,
+                budget,
+                type_work,
+                span,
+            )? {
+                return Err(invalid_root(span));
             }
             let mut supplied = HashSet::new();
             for method in &source.method_groups {
@@ -7247,8 +7553,16 @@ fn validate_evidence_node(
                 return Err(invalid_root(span));
             }
             if !exact_current
-                && identity_equal_lexical_source(scope, expected_application, budget, span)?
-                    .is_some()
+                && identity_equal_lexical_source(
+                    program,
+                    registry,
+                    scope,
+                    expected_application,
+                    budget,
+                    type_work,
+                    span,
+                )?
+                .is_some()
             {
                 return Err(invalid_root(span));
             }
@@ -7384,9 +7698,12 @@ fn first_identity_equal_abstract_requirement(
 }
 
 fn identity_equal_lexical_source(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
     scope: EvidenceScope<'_>,
     application: &InterfaceApplication,
     budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
     span: Span,
 ) -> Result<Option<crate::interface::LexicalEvidenceId>, EvidenceValidationFailure> {
     let mut head = scope.lexical_head;
@@ -7397,8 +7714,15 @@ fn identity_equal_lexical_source(
             .lexical_sources
             .get(index)
             .ok_or_else(|| invalid_root(span))?;
-        if source.same_application(application, budget, span)?
-            && found.replace(source.id()).is_some()
+        if source.same_application(
+            program,
+            registry,
+            application,
+            scope,
+            budget,
+            type_work,
+            span,
+        )? && found.replace(source.id()).is_some()
         {
             return Err(invalid_root(span));
         }
@@ -7544,21 +7868,6 @@ fn implementation_head_matches(
         budget,
         span,
     )
-}
-
-fn find_evidence_binding<'a>(
-    substitution: &'a [EvidenceSubstitution],
-    variable: TypeVariableId,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<Option<&'a EvidenceSubstitution>, EvidenceValidationFailure> {
-    for binding in substitution {
-        charge(budget, 1, span)?;
-        if binding.parameter() == variable {
-            return Ok(Some(binding));
-        }
-    }
-    Ok(None)
 }
 
 fn validate_type_with_application_policy(
@@ -7892,16 +8201,6 @@ fn same_origin_charged(
     }
 }
 
-fn reserve_type_pairs<'a>(
-    pending: &mut Vec<(&'a Type, &'a Type)>,
-    additional: usize,
-    budget: &mut InterfaceConstraintBudget,
-    span: Span,
-) -> Result<(), EvidenceValidationFailure> {
-    charge(budget, additional, span)?;
-    pending.try_reserve(additional).map_err(|_| resource(span))
-}
-
 struct TypeBuffer(Vec<Type>);
 
 impl TypeBuffer {
@@ -7909,6 +8208,7 @@ impl TypeBuffer {
         Self(Vec::new())
     }
 
+    #[cfg(test)]
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -7921,20 +8221,8 @@ impl TypeBuffer {
         self.0.push(ty);
     }
 
-    fn pop_owned(&mut self) -> Option<IterativeTypeOwner> {
-        self.0.pop().map(IterativeTypeOwner::new)
-    }
-
-    fn split_off(&mut self, at: usize) -> Self {
-        Self(self.0.split_off(at))
-    }
-
     fn into_boxed_slice(mut self) -> Box<[Type]> {
         std::mem::take(&mut self.0).into_boxed_slice()
-    }
-
-    fn into_one(mut self) -> Option<Type> {
-        (self.0.len() == 1).then(|| self.0.pop().expect("a singleton buffer has one type"))
     }
 }
 
@@ -7970,6 +8258,7 @@ fn evidence_replacements(
     }
     Ok(result)
 }
+#[cfg(test)]
 fn substitute_evidence_type(
     root: &Type,
     substitution: &[EvidenceSubstitution],
@@ -8161,10 +8450,37 @@ fn validate_requirement(
 }
 
 enum LinkedLocalScope<'a> {
+    Annotation(&'a crate::resolved::ResolvedType),
+    Equation {
+        source: &'a crate::resolved::ResolvedLexicalEvidence,
+        method: &'a crate::resolved::ResolvedImplementationMethodGroup,
+        arity: usize,
+    },
     Method(&'a crate::resolved::ResolvedImplementationMethodGroup),
     Nominal(NominalTypeId),
     Resource(&'a crate::resolved::ResolvedResourceExpr),
     ProviderResource(&'a crate::resolved::ResolvedProviderResourceExpr),
+}
+
+// The same fixed-size pure shape excluded by ordinary scheme qualification.
+// All other shapes retain only an original borrowed coordinate and are fully
+// traversed, with charges, only when a row-bearing lexical owner needs facts.
+fn may_have_source_row_context(ty: &Type) -> bool {
+    let atomic = |ty: &Type| {
+        matches!(
+            ty,
+            Type::Bytes
+                | Type::String
+                | Type::Int
+                | Type::Bool
+                | Type::Unit
+                | Type::Nominal(_)
+                | Type::Variable(_)
+                | Type::Inference(_)
+        )
+    };
+    !atomic(ty)
+        && !matches!(ty, Type::Function(domain, codomain) if atomic(domain) && atomic(codomain))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8183,6 +8499,37 @@ fn authenticate_lexical_header(
         .checked
         .get()
         .ok_or_else(|| invalid_root(source.span))?;
+    if checked.application.interface() != source.application.interface.id
+        || checked.application.arguments().len() != source.application.arguments.len()
+    {
+        return Err(invalid_root(source.span));
+    }
+    let expected = provider_sources::lexical_context_rows(
+        program, registry, source, scope, locals, local_head, budget, type_work,
+    )?;
+    for (actual, original) in checked
+        .application
+        .arguments()
+        .iter()
+        .zip(&source.application.arguments)
+    {
+        let qualified = crate::types::qualify_kinded_argument_with_row_contexts_with_budget(
+            &original.ty,
+            expected.iter(),
+            type_work,
+        )
+        .map_err(|()| type_resource(source.span))?
+        .map_err(|_| invalid_root(source.span))?;
+        let qualified = qualified.map(crate::types::IterativeArgumentOwner::new);
+        if !same_argument_charged(
+            actual,
+            qualified.as_deref().unwrap_or(&original.ty),
+            budget,
+            source.span,
+        )? {
+            return Err(invalid_root(source.span));
+        }
+    }
     let interface = registry
         .interface(program, checked.application.interface())
         .ok_or_else(|| unknown(source.span))?;
@@ -8291,16 +8638,36 @@ fn schedule_lexical_block<'a>(
     mut head: (Option<usize>, Option<usize>),
     block: &'a ResolvedBlock,
     budget: &mut InterfaceConstraintBudget,
+    track_provider_equations: bool,
+    original: OriginalLexicalContext,
     mut header_scope: Option<(
         &ResolvedModuleProgram,
         &LinkedInterfaceRegistry,
         &[TypeVariableId],
+        Option<ExpectedEquation>,
+        Option<RequirementOwner>,
         &mut TypeWorkBudget,
+        bool,
     )>,
 ) -> Result<(), EvidenceValidationFailure> {
     let start = pending.len();
-    let (additional, has_lexical_scope) =
-        block_schedule_shape(block, header_scope.is_some(), budget)?;
+    let include_nominals = header_scope
+        .as_ref()
+        .is_some_and(|(_, _, _, _, _, _, headers_only)| *headers_only)
+        || track_provider_equations;
+    let (additional, has_lexical_scope) = block_schedule_shape_with_annotation_check(
+        block,
+        include_nominals,
+        budget,
+        |annotation, budget| {
+            if let Some((program, registry, _, _, _, work, _)) = header_scope.as_mut() {
+                validate_original_annotation_row_formation(
+                    program, registry, annotation, original, budget, work,
+                )?;
+            }
+            Ok(())
+        },
+    )?;
     if !has_lexical_scope {
         schedule_counted_block(pending, block, additional, budget)?;
         if !sources.is_empty() || !method_scopes.is_empty() {
@@ -8312,16 +8679,27 @@ fn schedule_lexical_block<'a>(
     for declaration in &block.declarations {
         match declaration {
             ResolvedLocalDeclaration::Evidence(source) => {
-                if let Some((program, registry, variables, type_work)) = header_scope.as_mut() {
+                if let Some((
+                    program,
+                    registry,
+                    variables,
+                    expected_equation,
+                    owner,
+                    type_work,
+                    true,
+                )) = header_scope.as_mut()
+                {
                     authenticate_lexical_header(
                         program,
                         registry,
                         source,
                         EvidenceScope {
+                            local_scopes: method_scopes,
+                            expected_equation: *expected_equation,
                             lexical_sources: sources,
                             lexical_head: head.0,
                             variables,
-                            owner: None,
+                            owner: *owner,
                         },
                         method_scopes,
                         head.1,
@@ -8342,11 +8720,31 @@ fn schedule_lexical_block<'a>(
                         method_scopes.push((LinkedLocalScope::Method(method), head.1));
                     }
                     for equation in &method.equations {
+                        // Each supplied method checks its own equation row,
+                        // even when it has no contextual type parameters.
+                        let equation_head = if track_provider_equations {
+                            charge(budget, 2, equation.span)?;
+                            method_scopes
+                                .try_reserve(1)
+                                .map_err(|_| resource(equation.span))?;
+                            let index = method_scopes.len();
+                            method_scopes.push((
+                                LinkedLocalScope::Equation {
+                                    source,
+                                    method,
+                                    arity: equation.patterns.len(),
+                                },
+                                method_head.1,
+                            ));
+                            Some(index)
+                        } else {
+                            method_head.1
+                        };
                         reserve_expressions(pending, 1, budget, equation.span)?;
                         resize_lexical_heads(
                             heads,
                             pending.len() + 1,
-                            method_head,
+                            (method_head.0, equation_head),
                             budget,
                             equation.span,
                         )?;
@@ -8354,24 +8752,57 @@ fn schedule_lexical_block<'a>(
                     }
                 }
                 let next = sources.len();
-                sources.push((LinkedLexicalSource::Declared(source), head.0));
+                sources.push((
+                    LinkedLexicalSource::Declared(
+                        source,
+                        OriginalLexicalContext {
+                            local_head: head.1,
+                            ..original
+                        },
+                    ),
+                    head.0,
+                ));
                 head.0 = Some(next);
             }
             ResolvedLocalDeclaration::Binding(binding) => {
                 reserve_expressions(pending, 1, budget, binding.span)?;
-                resize_lexical_heads(heads, pending.len() + 1, head, budget, binding.span)?;
+                let binding_head = if let Some(annotation) = &binding.annotation
+                    && may_have_source_row_context(&annotation.ty)
+                {
+                    charge(budget, 2, binding.span)?;
+                    method_scopes
+                        .try_reserve(1)
+                        .map_err(|_| resource(binding.span))?;
+                    let index = method_scopes.len();
+                    method_scopes.push((LinkedLocalScope::Annotation(annotation), head.1));
+                    (head.0, Some(index))
+                } else {
+                    head
+                };
+                resize_lexical_heads(heads, pending.len() + 1, binding_head, budget, binding.span)?;
                 pending.push(&binding.initializer);
             }
             ResolvedLocalDeclaration::Recursive(group) => {
                 reserve_expressions(pending, group.members.len(), budget, group.span)?;
-                resize_lexical_heads(
-                    heads,
-                    pending.len() + group.members.len(),
-                    head,
-                    budget,
-                    group.span,
-                )?;
                 for member in &group.members {
+                    if !may_have_source_row_context(&member.annotation.ty) {
+                        resize_lexical_heads(heads, pending.len() + 1, head, budget, group.span)?;
+                        pending.push(&member.initializer);
+                        continue;
+                    }
+                    charge(budget, 2, group.span)?;
+                    method_scopes
+                        .try_reserve(1)
+                        .map_err(|_| resource(group.span))?;
+                    let index = method_scopes.len();
+                    method_scopes.push((LinkedLocalScope::Annotation(&member.annotation), head.1));
+                    resize_lexical_heads(
+                        heads,
+                        pending.len() + 1,
+                        (head.0, Some(index)),
+                        budget,
+                        group.span,
+                    )?;
                     pending.push(&member.initializer);
                 }
             }
@@ -8424,10 +8855,93 @@ fn schedule_block<'a>(
     schedule_counted_block(pending, block, additional, budget)
 }
 
+fn validate_original_annotation_row_formation(
+    program: &ResolvedModuleProgram,
+    registry: &LinkedInterfaceRegistry,
+    annotation: &crate::resolved::ResolvedType,
+    original: OriginalLexicalContext,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+) -> Result<(), EvidenceValidationFailure> {
+    let span = annotation.span;
+    let mut required = HashMap::new();
+    crate::types::qualify_scheme_row_replacements_with_budget(
+        &annotation.ty,
+        &HashMap::new(),
+        &mut required,
+        true,
+        work,
+    )
+    .map_err(|()| type_resource(span))?;
+    if required.is_empty() {
+        return Ok(());
+    }
+    charge(budget, 1, span)?;
+    let scheme = match (original.equation, original.owner) {
+        (Some(ExpectedEquation::Global { binder, .. }), Some(RequirementOwner::Global(owner)))
+            if binder == owner =>
+        {
+            &registry
+                .scheme(program, binder)
+                .ok_or_else(|| unknown(span))?
+                .value_type
+        }
+        (
+            Some(ExpectedEquation::Implementation { method, .. }),
+            Some(RequirementOwner::Impl(owner)),
+        ) if method.implementation() == owner => {
+            &registry
+                .implementation_method(program, method)
+                .ok_or_else(|| unknown(span))?
+                .scheme
+                .value_type
+        }
+        (None, Some(RequirementOwner::Global(binder))) => {
+            &registry
+                .scheme(program, binder)
+                .ok_or_else(|| unknown(span))?
+                .value_type
+        }
+        _ => return Err(invalid_root(span)),
+    };
+    let mut established = HashMap::new();
+    crate::types::qualify_scheme_row_replacements_with_budget(
+        scheme,
+        &HashMap::new(),
+        &mut established,
+        true,
+        work,
+    )
+    .map_err(|()| type_resource(span))?;
+    if !crate::types::rigid_row_requirements_entailed_with_budget(
+        &required,
+        std::slice::from_ref(&established),
+        work,
+    )
+    .map_err(|()| type_resource(span))?
+    {
+        return Err(invalid_root(span));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn block_schedule_shape(
     block: &ResolvedBlock,
     include_nominals: bool,
     budget: &mut InterfaceConstraintBudget,
+) -> Result<(usize, bool), EvidenceValidationFailure> {
+    block_schedule_shape_with_annotation_check(block, include_nominals, budget, |_, _| Ok(()))
+}
+
+fn block_schedule_shape_with_annotation_check(
+    block: &ResolvedBlock,
+    include_nominals: bool,
+    budget: &mut InterfaceConstraintBudget,
+    mut annotation_check: impl FnMut(
+        &crate::resolved::ResolvedType,
+        &mut InterfaceConstraintBudget,
+    ) -> Result<(), EvidenceValidationFailure>,
 ) -> Result<(usize, bool), EvidenceValidationFailure> {
     let mut additional = 1usize;
     let mut has_lexical_scope = false;
@@ -8443,14 +8957,28 @@ fn block_schedule_shape(
                         .ok_or_else(|| resource(block.span))?;
                 }
             }
-            ResolvedLocalDeclaration::Binding(_) => {
+            ResolvedLocalDeclaration::Binding(binding) => {
+                if let Some(annotation) = &binding.annotation {
+                    annotation_check(annotation, budget)?;
+                }
+                has_lexical_scope |= include_nominals
+                    && binding
+                        .annotation
+                        .as_ref()
+                        .is_some_and(|annotation| may_have_source_row_context(&annotation.ty));
                 additional = additional
                     .checked_add(1)
                     .ok_or_else(|| resource(block.span))?;
             }
             ResolvedLocalDeclaration::Recursive(group) => {
-                for _ in &group.members {
+                has_lexical_scope |= include_nominals
+                    && group
+                        .members
+                        .iter()
+                        .any(|member| may_have_source_row_context(&member.annotation.ty));
+                for member in &group.members {
                     charge(budget, 1, block.span)?;
+                    annotation_check(&member.annotation, budget)?;
                     additional = additional
                         .checked_add(1)
                         .ok_or_else(|| resource(block.span))?;
@@ -10145,7 +10673,7 @@ mod tests {
             )
             .unwrap_err()
             .reason(),
-            EvidenceValidationReason::InvalidEvidenceRoot
+            EvidenceValidationReason::UnknownIdentity
         );
     }
 
@@ -10170,6 +10698,8 @@ mod tests {
                 &registry,
                 &program.groups()[0],
                 EvidenceScope {
+                    local_scopes: &[],
+                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -10232,6 +10762,8 @@ mod tests {
                 &registry,
                 source,
                 EvidenceScope {
+                    local_scopes: &[],
+                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -10350,6 +10882,370 @@ mod tests {
     }
 
     #[test]
+    fn original_lexical_row_context_keeps_full_declared_lacks_equality() {
+        let source = concat!(
+            "effect H {\nop : Unit -> Unit\n}\n",
+            "interface Run<Key : Type, Rows : EffectRow> {\n",
+            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
+            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit ! {| Delta}\n",
+            "client callback = {\nnewtype Token = Token(Unit)\n",
+            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
+            "()\n}\nmain : Unit -> Int\nmain () = 42\n",
+        );
+        let program = entry_program(source);
+        validate_interface_evidence(entry_program(source))
+            .expect("a latent parameter row supplies its written exclusion");
+        validate_interface_evidence(entry_program(concat!(
+            "effect H {\nop : Unit -> Unit\n}\n",
+            "interface Run<Key : Type, Rows : EffectRow> {\n",
+            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
+            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
+            "client callback = {\nnewtype Token = Token(Unit)\n",
+            "let invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n",
+            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
+            "()\n}\n()\n}\nmain : Unit -> Int\nmain () = 42\n",
+        )))
+        .expect("a local written annotation uses the original enclosing formal contract");
+        let (group, scheme) = program
+            .groups()
+            .iter()
+            .find_map(|group| {
+                group
+                    .schemes()
+                    .iter()
+                    .find(|scheme| scheme.spelling == "client")
+                    .map(|scheme| (group, scheme))
+            })
+            .expect("client original");
+        let original = group
+            .definitions()
+            .iter()
+            .find_map(|definition| {
+                let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
+                    return None;
+                };
+                (global.interface.name.id == scheme.binder).then_some(global)
+            })
+            .expect("client source equation");
+        let ResolvedExprKind::Block(block) = &original.equations[0].body.kind else {
+            panic!("block");
+        };
+        let source = block
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                ResolvedLocalDeclaration::Evidence(source) => Some(source),
+                _ => None,
+            })
+            .expect("original lexical declaration");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .unwrap();
+        let context = OriginalLexicalContext {
+            equation: Some(ExpectedEquation::Global {
+                binder: scheme.binder,
+                arity: original.equations[0].patterns.len(),
+            }),
+            owner: Some(RequirementOwner::Global(scheme.binder)),
+            local_head: None,
+        };
+        let checked = &source
+            .checked
+            .get()
+            .expect("ordinary checked fact")
+            .application;
+        let run = |application: &InterfaceApplication, context| {
+            LinkedLexicalSource::Declared(source, context).same_application(
+                &program,
+                &registry,
+                application,
+                EvidenceScope::NONE,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+                source.span,
+            )
+        };
+        assert!(run(checked, context).unwrap());
+        assert!(
+            !run(checked, OriginalLexicalContext::NONE).unwrap(),
+            "retained checked facts cannot authenticate themselves"
+        );
+        let mut arguments = checked.arguments().to_vec();
+        let KindedArgument::RowArg(row) = &arguments[1] else {
+            panic!("row tag");
+        };
+        let tail = row.tail().unwrap();
+        let extra = crate::types::EffectInstance::new(
+            crate::types::EffectId::new(group.module(), u32::MAX),
+            Box::new([]),
+        );
+        let mut lacks = tail.lacks().to_vec();
+        lacks.push(extra);
+        arguments[1] = KindedArgument::RowArg(crate::types::EffectRow::open(
+            tail.variable(),
+            lacks.into_boxed_slice(),
+        ));
+        assert!(
+            !run(
+                &InterfaceApplication::new_kinded(
+                    checked.interface(),
+                    arguments.into_boxed_slice()
+                ),
+                context
+            )
+            .unwrap(),
+            "full equality rejects an additional exclusion absent from the original declaration"
+        );
+    }
+
+    #[test]
+    fn ordinary_annotation_formation_is_checked_without_a_lexical_owner() {
+        let program = entry_program(concat!(
+            "effect H {\nop : Unit -> Unit\n}\neffect J {\nop : Unit -> Unit\n}\n",
+            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
+            "client callback = {\nlet invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n()\n}\n()\n}\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        ));
+        validate_interface_evidence(entry_program(concat!(
+            "effect H {\nop : Unit -> Unit\n}\neffect J {\nop : Unit -> Unit\n}\n",
+            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
+            "client callback = {\nlet invoke : Unit -> Unit ! {H | Delta} = fn(ignored) {\n()\n}\n()\n}\n",
+            "main : Unit -> Int\nmain () = 42\n",
+        ))).expect("complete ordinary pipeline baseline");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .unwrap();
+        let (group, scheme) = program
+            .groups()
+            .iter()
+            .find_map(|group| {
+                group
+                    .schemes()
+                    .iter()
+                    .find(|scheme| scheme.spelling == "client")
+                    .map(|scheme| (group, scheme))
+            })
+            .unwrap();
+        let original = group
+            .definitions()
+            .iter()
+            .find_map(|definition| match definition.kind() {
+                ResolvedDefinitionKind::Equational(global)
+                    if global.interface.name.id == scheme.binder =>
+                {
+                    Some(global)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let variables = scheme
+            .scheme
+            .type_parameters
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let scope = EvidenceScope {
+            local_scopes: &[],
+            lexical_sources: &[],
+            lexical_head: None,
+            owner: Some(RequirementOwner::Global(scheme.binder)),
+            variables: &variables,
+            expected_equation: Some(ExpectedEquation::Global {
+                binder: scheme.binder,
+                arity: original.equations[0].patterns.len(),
+            }),
+        };
+        let run = |body: &ResolvedExpr| {
+            let mut work = TypeWorkBudget::default();
+            let mut environments =
+                build_linked_kind_environments(program.registry(), &mut work, body.span).unwrap();
+            validate_expression(
+                &program,
+                &registry,
+                group,
+                scope,
+                body,
+                &mut environments,
+                &mut InterfaceConstraintBudget::default(),
+                &mut work,
+                false,
+            )
+        };
+        run(&original.equations[0].body).expect("annotation uses the original H exclusion");
+        let mut altered = original.equations[0].body.clone();
+        let ResolvedExprKind::Block(block) = &mut altered.kind else {
+            panic!("body block");
+        };
+        let ResolvedLocalDeclaration::Binding(binding) = &mut block.declarations[0] else {
+            panic!("annotation binding");
+        };
+        let j = program
+            .registry()
+            .effects()
+            .iter()
+            .find(|effect| effect.spelling == "J")
+            .unwrap()
+            .id;
+        let row = crate::types::EffectRow::with_tail(
+            Box::new([crate::types::EffectInstance::new(j, Box::new([]))]),
+            crate::types::EffectRowVariable::rigid(variables[0]),
+            Box::new([]),
+        );
+        binding.annotation.as_mut().unwrap().ty = Type::function_computation(
+            Type::Unit,
+            crate::types::ComputationType::new(Type::Unit, row),
+        );
+        assert_eq!(
+            run(&altered).unwrap_err().reason(),
+            EvidenceValidationReason::InvalidEvidenceRoot,
+            "an unrelated canonical effect in a local annotation cannot add an original row premise"
+        );
+    }
+
+    #[test]
+    fn nested_original_annotation_cannot_authenticate_a_free_rigid_row_exclusion() {
+        let program = entry_program(concat!(
+            "effect H {\nop : Unit -> Unit\n}\n",
+            "interface Run<Key : Type, Rows : EffectRow> {\n",
+            "run : (Key, Unit -> Unit ! {| Rows}) -> Unit ! {H | Rows}\n}\n",
+            "client<Delta : EffectRow> : (Unit -> Unit ! {H | Delta}) -> Unit\n",
+            "client callback = {\nnewtype Token = Token(Unit)\n",
+            "with Run<Token, {| Delta}> {\nrun (ignored, callback) = callback ()\n}\n",
+            "()\n}\nmain : Unit -> Int\nmain () = 42\n",
+        ));
+        let (group, scheme) = program
+            .groups()
+            .iter()
+            .find_map(|group| {
+                group
+                    .schemes()
+                    .iter()
+                    .find(|scheme| scheme.spelling == "client")
+                    .map(|scheme| (group, scheme))
+            })
+            .expect("client original");
+        let original = group
+            .definitions()
+            .iter()
+            .find_map(|definition| {
+                let ResolvedDefinitionKind::Equational(global) = definition.kind() else {
+                    return None;
+                };
+                (global.interface.name.id == scheme.binder).then_some(global)
+            })
+            .expect("original client equation");
+        let ResolvedExprKind::Block(block) = &original.equations[0].body.kind else {
+            panic!("client block");
+        };
+        let source = block
+            .declarations
+            .iter()
+            .find_map(|declaration| match declaration {
+                ResolvedLocalDeclaration::Evidence(source) => Some(source),
+                _ => None,
+            })
+            .expect("original lexical declaration");
+        let registry =
+            LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
+                .unwrap();
+        let checked = &source
+            .checked
+            .get()
+            .expect("completed checked fact")
+            .application;
+        // Mutate only the authority coordinates. The retained checked fact,
+        // original lexical arguments and exact written annotation stay fixed.
+        let KindedArgument::TypeArg(key) = &checked.arguments()[0] else {
+            panic!("key type");
+        };
+        let locals = [
+            (
+                LinkedLocalScope::Nominal(key.outer_nominal().expect("local Token")),
+                None,
+            ),
+            (
+                LinkedLocalScope::Annotation(&original.interface.annotation),
+                Some(0),
+            ),
+        ];
+        let variables = scheme
+            .scheme
+            .type_parameters
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let context = OriginalLexicalContext {
+            equation: Some(ExpectedEquation::Global {
+                binder: scheme.binder,
+                arity: original.equations[0].patterns.len(),
+            }),
+            owner: Some(RequirementOwner::Global(scheme.binder)),
+            local_head: Some(1),
+        };
+        let scope = EvidenceScope {
+            local_scopes: &locals,
+            variables: &variables,
+            ..EvidenceScope::NONE
+        };
+        let same = |context| {
+            LinkedLexicalSource::Declared(source, context).same_application(
+                &program,
+                &registry,
+                checked,
+                scope,
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+                source.span,
+            )
+        };
+        assert!(
+            same(context).unwrap(),
+            "the original formal contract entails the nested annotation"
+        );
+        let unauthorized = OriginalLexicalContext {
+            equation: None,
+            owner: None,
+            local_head: Some(1),
+        };
+        assert!(
+            same(unauthorized).is_err(),
+            "a nested annotation cannot introduce H absence on a free rigid Delta"
+        );
+        assert!(
+            authenticate_lexical_header(
+                &program,
+                &registry,
+                source,
+                EvidenceScope {
+                    expected_equation: context.equation,
+                    owner: context.owner,
+                    ..scope
+                },
+                &locals,
+                Some(1),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .is_ok(),
+            "independent original header formation accepts established facts"
+        );
+        assert!(
+            authenticate_lexical_header(
+                &program,
+                &registry,
+                source,
+                scope,
+                &locals,
+                Some(1),
+                &mut InterfaceConstraintBudget::default(),
+                &mut TypeWorkBudget::default(),
+            )
+            .is_err(),
+            "header reconstruction cannot trust retained checked application facts"
+        );
+    }
+
+    #[test]
     fn lexical_node_method_and_equation_scans_have_exact_retry_boundaries() {
         let program = lexical_resource_program();
         let group = &program.groups()[0];
@@ -10369,8 +11265,13 @@ mod tests {
             )
             .expect("plan node");
         let selection = builder.finish(root, application.clone()).expect("plan");
-        let sources = [(LinkedLexicalSource::Declared(source), None)];
+        let sources = [(
+            LinkedLexicalSource::Declared(source, OriginalLexicalContext::NONE),
+            None,
+        )];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             owner: None,
             variables: &[],
             lexical_sources: &sources,
@@ -10397,6 +11298,7 @@ mod tests {
                 &mut HashSet::new(),
                 &mut PendingGoals::default(),
                 &mut budget,
+                &mut TypeWorkBudget::default(),
                 source.span,
             );
             if limit < WORK {
@@ -10431,6 +11333,7 @@ mod tests {
         let mut base = InterfaceConstraintBudget::default();
         retain_lexical_owners(
             source,
+            &[],
             &methods,
             &mut Vec::new(),
             &mut base,
@@ -10454,6 +11357,7 @@ mod tests {
         let mut wide = InterfaceConstraintBudget::default();
         retain_lexical_owners(
             source,
+            &[],
             &methods,
             &mut Vec::new(),
             &mut wide,
@@ -10477,6 +11381,7 @@ mod tests {
             let mut owners = Vec::new();
             let result = retain_lexical_owners(
                 source,
+                &[],
                 &methods,
                 &mut owners,
                 &mut budget,
@@ -10524,6 +11429,8 @@ mod tests {
                 (None, None),
                 block,
                 &mut budget,
+                false,
+                OriginalLexicalContext::NONE,
                 None,
             );
             if limit < WORK {
@@ -10568,8 +11475,13 @@ mod tests {
             };
             let read = &group.implementation_facts()[0];
             let need = &group.implementation_facts()[1];
-            let sources = [(LinkedLexicalSource::Declared(source), None)];
+            let sources = [(
+                LinkedLexicalSource::Declared(source, OriginalLexicalContext::NONE),
+                None,
+            )];
             let scope = EvidenceScope {
+                local_scopes: &[],
+                expected_equation: None,
                 owner: None,
                 variables: &[],
                 lexical_sources: &sources,
@@ -10700,8 +11612,13 @@ mod tests {
             for equation in &mut method.equations {
                 equation.name.binder = method.binder.id;
             }
-            let sources = [(LinkedLexicalSource::Declared(&source), None)];
+            let sources = [(
+                LinkedLexicalSource::Declared(&source, OriginalLexicalContext::NONE),
+                None,
+            )];
             let mut scope = EvidenceScope {
+                local_scopes: &[],
+                expected_equation: None,
                 owner: None,
                 variables: &variables,
                 lexical_sources: &sources,
@@ -10793,8 +11710,13 @@ mod tests {
         let source = first_lexical_source(&program);
         let application = &source.checked.get().expect("checked source").application;
         let methods = &group.interface_facts()[0].methods;
-        let sources = [(LinkedLexicalSource::Declared(source), None)];
+        let sources = [(
+            LinkedLexicalSource::Declared(source, OriginalLexicalContext::NONE),
+            None,
+        )];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             owner: None,
             variables: &[],
             lexical_sources: &sources,
@@ -10987,9 +11909,27 @@ mod tests {
             .expect("canonical method schemes and occurrence arguments should authenticate");
     }
 
+    fn catalog_registry_precheck_work(program: &ResolvedModuleProgram) -> (usize, usize) {
+        let mut constraints = InterfaceConstraintBudget::default();
+        let mut types = TypeWorkBudget::default();
+        let mut kinds =
+            build_linked_kind_environments(program.registry(), &mut types, program.result().span)
+                .unwrap();
+        LinkedInterfaceRegistry::build_with_kinds(
+            program,
+            &mut kinds,
+            None,
+            &mut constraints,
+            &mut types,
+        )
+        .unwrap();
+        (constraints.used(), types.used())
+    }
+
     #[test]
     fn linked_method_evidence_catalog_has_exact_independent_ledgers() {
         let program = polymorphic_method_program();
+        let (precheck_constraints, precheck_types) = catalog_registry_precheck_work(&program);
         let mut measured_constraint = InterfaceConstraintBudget::default();
         let mut measured_type = TypeWorkBudget::default();
         let catalog = build_core_method_evidence_catalog(
@@ -11016,7 +11956,9 @@ mod tests {
         // 87 + C + 2A + 2E + G + M + J + B + P = 107 constraint units;
         // type work rises by five carrier argument visits to 79.
         // The selected-row lookup map retains one additional two-cell key.
-        assert_eq!(constraint_work, 107 + 2);
+        // The helper also authenticates the linked registry. Production owns
+        // that registry already and does not repeat this precheck work.
+        assert_eq!(constraint_work, precheck_constraints + 107 + 2);
         // Domains retain four source-parameter records and six Kind nodes.
         assert_eq!(
             catalog
@@ -11033,7 +11975,7 @@ mod tests {
             }
         }
         assert_eq!(retained_kinds.used(), 6);
-        assert_eq!(type_work, 79 + 4 + 6 + 2);
+        assert_eq!(type_work, precheck_types + 79 + 4 + 6 + 2);
         drop(catalog);
 
         let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
@@ -11054,7 +11996,7 @@ mod tests {
                 .reason(),
             EvidenceValidationReason::TypeResourceExhausted,
         );
-        assert_eq!(type_short.used(), 75 + 4 + 6 + 2);
+        assert_eq!(type_short.used(), precheck_types + 75 + 4 + 6 + 2);
 
         for _ in 0..2 {
             let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
@@ -11167,6 +12109,7 @@ mod tests {
                 assert_eq!(
                     retain_lexical_owners(
                         &source,
+                        &[],
                         &methods,
                         &mut Vec::new(),
                         &mut InterfaceConstraintBudget::default(),
@@ -11258,8 +12201,12 @@ mod tests {
         // Seven outer visits, then shape(4), nominal scope(2), header(16),
         // source(2), expression/scope slots(9), four body/scope visits and
         // six generated entry-expression units. N and Int use three type cells.
-        assert_eq!(constraint_work, 7 + (4 + 2 + 16 + 2 + 9) + 4 + 6 + 2);
-        assert_eq!(type_work, 3);
+        // Four complete argument/tag comparisons are now charged separately.
+        assert_eq!(constraint_work, 7 + (4 + 2 + 16 + 2 + 9) + 4 + 6 + 2 + 4);
+        // The rigid-row gate visits BOTH complete Read<N, Int> TypeArgs,
+        // including the non-key Int. Each costs four worklist cells: initial
+        // argument push, argument visit, Type push and Type visit.
+        assert_eq!(type_work, 3 + 2 * 4);
         assert_eq!(
             run(constraint_work - 1, type_work)
                 .0
@@ -11363,6 +12310,7 @@ mod tests {
     #[test]
     fn widened_abstract_producer_lookup_has_an_exact_retry_boundary() {
         let program = widened_abstract_method_source_program();
+        let (precheck_constraints, precheck_types) = catalog_registry_precheck_work(&program);
         let mut measured_constraint = InterfaceConstraintBudget::default();
         let mut measured_type = TypeWorkBudget::default();
         let catalog = build_core_method_evidence_catalog(
@@ -11389,17 +12337,17 @@ mod tests {
         // producer lookups each read the exact W=2 selected-node method list;
         // D=2 domain scans were already charged and A=0:
         // 85 + L*W = 85 + 2*2 = 89.
-        const CONSTRAINT_WORK: usize = 85 + 2 * 2;
+        let constraint_work = precheck_constraints + 85 + 2 * 2;
         // Two complete abstract applications retain three additional Type
         // carrier cells each beyond their predecessor scalar form.
         // Each of the two domains also retains one admitted parameter record
         // and its Type-kind node.
-        const TYPE_WORK: usize = 38 + 2 * 2 + 2 * 2;
-        assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
-        assert_eq!(measured_type.used(), TYPE_WORK);
+        let type_work = precheck_types + 38 + 2 * 2 + 2 * 2;
+        assert_eq!(measured_constraint.used(), constraint_work);
+        assert_eq!(measured_type.used(), type_work);
         drop(catalog);
 
-        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
         assert_eq!(
             build_core_method_evidence_catalog(
                 &program,
@@ -11410,7 +12358,7 @@ mod tests {
             .reason(),
             EvidenceValidationReason::ConstraintResourceExhausted,
         );
-        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
         assert_eq!(
             build_core_method_evidence_catalog(
                 &program,
@@ -11422,16 +12370,16 @@ mod tests {
             EvidenceValidationReason::TypeResourceExhausted,
         );
         for _ in 0..2 {
-            let mut constraint_exact = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-            let mut type_exact = TypeWorkBudget::with_limit(TYPE_WORK);
+            let mut constraint_exact = InterfaceConstraintBudget::with_limit(constraint_work);
+            let mut type_exact = TypeWorkBudget::with_limit(type_work);
             let retry = build_core_method_evidence_catalog(
                 &program,
                 &mut constraint_exact,
                 &mut type_exact,
             )
             .expect("a fresh exact widened producer stage retries");
-            assert_eq!(constraint_exact.used(), CONSTRAINT_WORK);
-            assert_eq!(type_exact.used(), TYPE_WORK);
+            assert_eq!(constraint_exact.used(), constraint_work);
+            assert_eq!(type_exact.used(), type_work);
             drop(retry);
         }
     }
@@ -11471,6 +12419,7 @@ mod tests {
     #[test]
     fn concrete_adapter_source_catalog_has_an_exact_retry_boundary() {
         let program = concrete_monomorphic_source_program();
+        let (precheck_constraints, precheck_types) = catalog_registry_precheck_work(&program);
         let mut measured_constraint = InterfaceConstraintBudget::default();
         let mut measured_type = TypeWorkBudget::default();
         let catalog = build_core_method_evidence_catalog(
@@ -11492,16 +12441,16 @@ mod tests {
         // The common selected-row map adds two key cells; inspecting a
         // mono producer before classifying its prerequisite domains adds
         // seven independently charged canonical count/search cells.
-        const CONSTRAINT_WORK: usize = 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7;
+        let constraint_work = precheck_constraints + 122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7;
         // Three retained complete application arguments add three Type carrier
         // cells each to this concrete adapter source.
         // Four complete owner-argument retention slots accompany the copies.
-        const TYPE_WORK: usize = 45 + 4;
-        assert_eq!(measured_constraint.used(), CONSTRAINT_WORK);
-        assert_eq!(measured_type.used(), TYPE_WORK);
+        let type_work = precheck_types + 45 + 4;
+        assert_eq!(measured_constraint.used(), constraint_work);
+        assert_eq!(measured_type.used(), type_work);
         drop(catalog);
 
-        let mut constraint_short = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK - 1);
+        let mut constraint_short = InterfaceConstraintBudget::with_limit(constraint_work - 1);
         assert_eq!(
             build_core_method_evidence_catalog(
                 &program,
@@ -11512,7 +12461,7 @@ mod tests {
             .reason(),
             EvidenceValidationReason::ConstraintResourceExhausted,
         );
-        let mut type_short = TypeWorkBudget::with_limit(TYPE_WORK - 1);
+        let mut type_short = TypeWorkBudget::with_limit(type_work - 1);
         assert_eq!(
             build_core_method_evidence_catalog(
                 &program,
@@ -11524,16 +12473,16 @@ mod tests {
             EvidenceValidationReason::TypeResourceExhausted,
         );
         for _ in 0..2 {
-            let mut exact_constraint = InterfaceConstraintBudget::with_limit(CONSTRAINT_WORK);
-            let mut exact_type = TypeWorkBudget::with_limit(TYPE_WORK);
+            let mut exact_constraint = InterfaceConstraintBudget::with_limit(constraint_work);
+            let mut exact_type = TypeWorkBudget::with_limit(type_work);
             let retry = build_core_method_evidence_catalog(
                 &program,
                 &mut exact_constraint,
                 &mut exact_type,
             )
             .expect("a fresh exact concrete-source catalog retries");
-            assert_eq!(exact_constraint.used(), CONSTRAINT_WORK);
-            assert_eq!(exact_type.used(), TYPE_WORK);
+            assert_eq!(exact_constraint.used(), constraint_work);
+            assert_eq!(exact_type.used(), type_work);
             drop(retry);
         }
     }
@@ -14581,6 +15530,8 @@ mod tests {
                 &selection,
                 &application,
                 EvidenceScope {
+                    local_scopes: &[],
+                    expected_equation: None,
                     lexical_sources: &[],
                     lexical_head: None,
                     owner: None,
@@ -14891,6 +15842,8 @@ mod tests {
                 .expect("the valid linked registry should authenticate");
         let variables = [second.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(second.binder)),
@@ -14930,6 +15883,8 @@ mod tests {
                 .expect("the valid linked registry should authenticate");
         let variables = [first.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(first.binder)),
@@ -15030,6 +15985,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(implementation.id)),
@@ -15084,6 +16041,8 @@ mod tests {
             LinkedInterfaceRegistry::build(&program, &mut InterfaceConstraintBudget::default())
                 .expect("the valid linked registry should authenticate");
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -15153,6 +16112,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -15191,6 +16152,8 @@ mod tests {
         };
         let variables = [scope_parameter.0];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
@@ -15279,6 +16242,8 @@ mod tests {
             panic!("the generic implementation should retain one rigid parameter");
         };
         let implementation_scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(outer.id)),
@@ -15362,6 +16327,8 @@ mod tests {
         };
         let variables = [shadowed.scheme.type_parameters[0].0];
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Global(shadowed.binder)),
@@ -15479,6 +16446,8 @@ mod tests {
             .map(|parameter| parameter.id)
             .collect::<Vec<_>>();
         let scope = EvidenceScope {
+            local_scopes: &[],
+            expected_equation: None,
             lexical_sources: &[],
             lexical_head: None,
             owner: Some(RequirementOwner::Impl(current.id)),
@@ -16936,7 +17905,17 @@ mod tests {
                     (None, None),
                     block,
                     &mut budget,
-                    headers_only.then_some((&program, &registry, &[], &mut types)),
+                    false,
+                    OriginalLexicalContext::NONE,
+                    headers_only.then_some((
+                        &program,
+                        &registry,
+                        &[],
+                        None,
+                        None,
+                        &mut types,
+                        true,
+                    )),
                 );
                 if limit == 7 {
                     assert_eq!(

@@ -247,6 +247,38 @@ fn primary_span_with_work(origin: &Origin, work: &mut TypeWorkBudget) -> Result<
 }
 
 impl HandlerRowRecipeDraft {
+    /// Scalar original equation domains; this supplies no row solution.
+    pub(in crate::core) fn deferred_copy_counts(&self) -> (usize, usize) {
+        (self.nodes.len(), self.outputs.len())
+    }
+
+    pub(in crate::core) fn deferred_copy_domain(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(Vec<NodeId>, Vec<HandlerId>), super::ValidationError> {
+        super::charge(
+            work,
+            self.nodes
+                .len()
+                .checked_add(self.outputs.len())
+                .ok_or_else(super::resource)?,
+        )?;
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve_exact(self.nodes.len())
+            .map_err(|_| super::resource())?;
+        nodes.extend(self.nodes.iter().map(|equation| equation.node));
+        let mut handlers = Vec::new();
+        handlers
+            .try_reserve_exact(self.outputs.len())
+            .map_err(|_| super::resource())?;
+        handlers.extend(self.outputs.iter().map(|output| match output.owner {
+            HandlerOutputOwner::ProviderEntry { handler, .. }
+            | HandlerOutputOwner::Nested { handler, .. } => handler,
+        }));
+        Ok((nodes, handlers))
+    }
+
     pub(in crate::core) fn realize_direct(
         &self,
         types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
@@ -1241,6 +1273,17 @@ struct HandlerClauseRowContract {
     origin: super::external::RetainedHandlerOrigin,
 }
 
+impl HandlerRowContract {
+    pub(in crate::core) fn realize_direct(
+        &self,
+        types: &std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+        rows: &std::collections::HashMap<crate::types::TypeVariableId, EffectRow>,
+        captures: &std::collections::HashMap<CaptureInputId, EffectRow>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<EffectRow, super::ValidationError> {
+        self.demands.realize(types, rows, captures, work)
+    }
+}
 impl HandlerRowRecipeDraft {
     pub(in crate::core) fn defining_contract(
         &self,

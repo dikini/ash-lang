@@ -10,13 +10,20 @@ pub enum ResourceFailureCause {
     /// Host storage reservation failed; the API does not expose whether the
     /// cause was allocator refusal or an internal representation bound.
     StorageReservationFailed,
+    /// Resource admission failed, but the detecting boundary erased whether
+    /// work or storage caused the refusal.
+    ResourceAdmissionRefused,
     /// The runtime work ledger cannot admit the charge.
     WorkBudgetExhausted,
 }
 
-/// The storage or ledger whose additional units were requested.
+/// The resource whose admission failed, with units when the boundary knows them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeResource {
+    /// Foreign operation or codec admission whose work or storage cause is unavailable.
+    ForeignAdmission,
+    /// Foreign codec scratch and executable binding admission storage.
+    ForeignCodecStorage,
     /// Ordinary immutable packed byte storage.
     PackedBytes,
     /// Pending structural type destruction tasks.
@@ -68,6 +75,8 @@ impl RuntimeResource {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::ForeignAdmission => "foreign admission",
+            Self::ForeignCodecStorage => "foreign codec storage",
             Self::PackedBytes => "packed bytes",
             Self::TypeDisposal => "type disposal tasks",
             Self::KindDisposal => "kind disposal tasks",
@@ -102,6 +111,7 @@ impl ResourceFailureCause {
             Self::ConfiguredCapacity => "runtime.capacity-exhausted",
             Self::AllocatorRefused => "runtime.allocator-refused",
             Self::StorageReservationFailed => "runtime.storage-reservation-failed",
+            Self::ResourceAdmissionRefused => "runtime.resource-admission-refused",
             Self::WorkBudgetExhausted => "runtime.work-budget-exhausted",
         }
     }

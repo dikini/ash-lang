@@ -510,7 +510,6 @@ fn conditional_recipe_rejects_unused_pending_equality() {
 }
 
 #[test]
-#[ignore = "requires a candidate owner-row semantic and application extension beyond current Ash"]
 fn conditional_recipe_retains_actual_formal_open_demand() {
     let declarations = &SQLITE[..SQLITE.find("pub effect StatementOps").unwrap()];
     let resource_start = SQLITE.find("pub resource Connection<R>").unwrap();
@@ -519,11 +518,15 @@ fn conditional_recipe_retains_actual_formal_open_demand() {
         .replace("ConnectionOps<R>", "ConnectionOps<R, Rows>")
         .replace("ConnectionProvider<R>", "ConnectionProvider<R, Rows>")
         .replace("Connection<R>", "Connection<R, Rows>")
+        .replace("Native.Connection<R, Rows>", "Native.Connection<R>")
         .replace("pub effect ConnectionOps<R, Rows>", "pub effect ConnectionOps<R, Rows : EffectRow>")
         .replace("pub interface ConnectionProvider<R, Rows>", "pub interface ConnectionProvider<R, Rows : EffectRow>")
         .replace("pub resource Connection<R, Rows>", "pub resource Connection<R, Rows : EffectRow>")
         .replace("diagnostic : Connection<R, Rows> -> Error", "diagnostic : (Connection<R, Rows>, Unit -> Unit ! {| Rows}) -> Error")
-        .replace("diagnostic db => resume (ForeignError (perform Native.Connection<R>.diagnostic state))", "diagnostic (db, callback) => {\nlet ignored = callback ()\nresume MissingRow\n}");
+        .replace("diagnostic db => resume (ForeignError (perform Native.Connection<R>.diagnostic state))", "diagnostic (db, callback) => {\nlet ignored = callback ()\nresume MissingRow\n}")
+        .replace("Connection<R, Rows>", "Connection<R, {| Rows}>")
+        .replace("ConnectionOps<R, Rows>", "ConnectionOps<R, {| Rows}>")
+        .replace("ConnectionProvider<R, Rows>", "ConnectionProvider<R, {| Rows}>");
     let fixture = actual_fixture(&source);
     let draft = compile(&fixture.fixture, 0).expect("actual resource formal EffectRow demand");
     assert!(matches!(
