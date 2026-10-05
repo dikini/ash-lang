@@ -15,7 +15,6 @@ use crate::{
         match_implementation_application_head_against_canonical_goal,
         match_implementation_application_head_in_environment,
         same_kinded_argument_with_constraint_budget,
-        same_type_with_constraint_budget as same_semantic_type_with_constraint_budget,
     },
     kind::{
         CanonicalEnvironmentFailure, KindEnvironments, KindFailure,
@@ -36,6 +35,8 @@ use crate::{
     },
 };
 
+#[cfg(test)]
+use crate::interface::same_type_with_constraint_budget as same_semantic_type_with_constraint_budget;
 #[cfg(test)]
 use crate::types::extend_owner_type_children_with_charge;
 
@@ -245,6 +246,10 @@ pub(crate) struct PendingObligationMarker {
 }
 
 impl PendingObligationMarker {
+    /// The completed ordinary suffix includes this saved source suffix.
+    pub(crate) fn covers(self, nested: Self) -> bool {
+        self.pending_len <= nested.pending_len && self.determined_count <= nested.determined_count
+    }
     #[cfg(test)]
     const fn for_test(pending_len: usize, determined_count: usize) -> Self {
         Self {
@@ -731,8 +736,44 @@ impl PendingEvidencePublication {
         Ok((occurrence.selection, occurrence.method_arguments.len()))
     }
 
+    /// True absence is distinct from a malformed route for an existing slot.
+    pub(crate) fn capture_selection_if_present(
+        &self,
+        slot: usize,
+        method: Option<MethodId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<(&EvidenceSelection, usize)>, SelectionFailure> {
+        budget
+            .charge(
+                self.occurrences
+                    .len()
+                    .checked_add(1)
+                    .ok_or(SelectionFailure::TypeResource)?,
+            )
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        let indexed = self.slot_ids.contains_key(&slot);
+        let mut occurrences = self.occurrences.iter().filter(|occurrence| {
+            occurrence
+                .slot
+                .as_ref()
+                .is_some_and(|candidate| candidate.storage_id() == slot)
+        });
+        if occurrences.next().is_none() {
+            return if indexed {
+                Err(SelectionFailure::InvalidState)
+            } else {
+                Ok(None)
+            };
+        }
+        if !indexed || occurrences.next().is_some() {
+            return Err(SelectionFailure::InvalidState);
+        }
+        self.capture_selection(slot, method, budget).map(Some)
+    }
+
     /// Relocate private occurrence metadata without publishing any slots.
     /// This compatibility path rewrites type components while retaining row tails.
+    #[cfg(test)]
     pub(crate) fn relocate_types<R>(
         &mut self,
         rewrite: R,
@@ -996,6 +1037,7 @@ impl PendingEvidencePublication {
         Ok(PreflightedEvidencePublication { publication: self })
     }
 
+    #[cfg(test)]
     pub(crate) fn publish(self) -> Result<(), SelectionFailure> {
         self.prepare_publication()?.commit();
         Ok(())
@@ -3263,6 +3305,84 @@ impl EvidenceSelector {
         Ok(())
     }
 
+    pub(crate) fn capture_slot_present(
+        &self,
+        slot: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, SelectionFailure> {
+        budget
+            .charge(
+                self.selected
+                    .len()
+                    .checked_add(self.pending.len())
+                    .ok_or(SelectionFailure::TypeResource)?,
+            )
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        Ok(self.selected.iter().any(|occurrence| {
+            occurrence
+                .slot
+                .as_ref()
+                .is_some_and(|candidate| candidate.storage_id() == slot)
+        }) || self
+            .pending
+            .iter()
+            .any(|pending| pending.slot.storage_id() == slot))
+    }
+
+    /// Borrow an already selected immutable plan for one exact typed source
+    /// occurrence. This does not close obligations or select any implementation.
+    pub(crate) fn capture_selected(
+        &self,
+        slot: usize,
+        method: Option<MethodId>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(&EvidenceSelection, usize), SelectionFailure> {
+        budget
+            .charge(
+                self.selected
+                    .len()
+                    .checked_add(self.pending.len())
+                    .and_then(|n| n.checked_add(self.method_rigidities.len()))
+                    .ok_or(SelectionFailure::TypeResource)?,
+            )
+            .map_err(|()| SelectionFailure::TypeResource)?;
+        if self
+            .pending
+            .iter()
+            .any(|pending| pending.slot.storage_id() == slot)
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
+        let mut matches = self.selected.iter().enumerate().filter(|(_, occurrence)| {
+            occurrence
+                .slot
+                .as_ref()
+                .is_some_and(|candidate| candidate.storage_id() == slot)
+        });
+        let (index, occurrence) = matches.next().ok_or(SelectionFailure::InvalidState)?;
+        if matches.next().is_some()
+            || occurrence.checked_method != method
+            || !occurrence
+                .slot
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?
+                .is_empty()
+            || self
+                .method_rigidities
+                .iter()
+                .any(|rigidity| rigidity.selected_index == index)
+        {
+            return Err(SelectionFailure::InvalidState);
+        }
+        Ok((
+            occurrence
+                .selection
+                .as_ref()
+                .ok_or(SelectionFailure::InvalidState)?,
+            occurrence.method_arguments.len(),
+        ))
+    }
+
     pub(crate) fn prepare_publication<F>(
         &mut self,
         mut zonk: F,
@@ -5194,6 +5314,7 @@ fn retain_selection_cause(
     Ok(())
 }
 
+#[cfg(test)]
 fn same_type_with_constraint_budget(
     left: &Type,
     right: &Type,
@@ -6178,6 +6299,148 @@ mod tests {
         assert!(first.selection().is_none());
         assert!(first.method_arguments().is_empty());
         assert!(second.selection().is_some());
+    }
+
+    #[test]
+    fn actual_capture_selected_routes_refuse_wrong_method_slot_and_prior_corruption() {
+        let (_, method, _) = ids();
+        let slot = EvidenceSlot::empty();
+        let other = EvidenceSlot::empty();
+        let mut publication = publication_batch(&slot);
+        assert!(
+            publication
+                .capture_selection_if_present(
+                    other.storage_id(),
+                    None,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            matches!(
+                publication.capture_selection_if_present(
+                    slot.storage_id(),
+                    Some(method),
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(SelectionFailure::InvalidState)
+            ),
+            "wrong method is malformed, not absence permitting fallback"
+        );
+        let mut selector = EvidenceSelector::new();
+        selector.selected.push(publication.occurrences.remove(0));
+        assert!(matches!(
+            selector.capture_selected(other.storage_id(), None, &mut TypeWorkBudget::unbounded()),
+            Err(SelectionFailure::InvalidState)
+        ));
+        assert!(matches!(
+            selector.capture_selected(
+                slot.storage_id(),
+                Some(method),
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(SelectionFailure::InvalidState)
+        ));
+        assert!(
+            selector
+                .capture_selected(slot.storage_id(), None, &mut TypeWorkBudget::unbounded())
+                .is_ok()
+        );
+        assert!(
+            slot.selection().is_none(),
+            "reading the immutable selected plan never publishes"
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        selector
+            .capture_selected(slot.storage_id(), None, &mut measured)
+            .unwrap();
+        let cost = measured.used();
+        assert!(cost > 0);
+        assert!(matches!(
+            selector.capture_selected(
+                slot.storage_id(),
+                None,
+                &mut TypeWorkBudget::with_limit(cost - 1)
+            ),
+            Err(SelectionFailure::TypeResource)
+        ));
+        assert!(
+            selector
+                .capture_selected(
+                    slot.storage_id(),
+                    None,
+                    &mut TypeWorkBudget::with_limit(cost)
+                )
+                .is_ok()
+        );
+        selector
+            .selected
+            .push(publication_batch(&slot).occurrences.remove(0));
+        assert!(
+            matches!(
+                selector.capture_selected(
+                    slot.storage_id(),
+                    None,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(SelectionFailure::InvalidState)
+            ),
+            "duplicate slot grants no route"
+        );
+        let mut malformed = publication_batch(&slot);
+        malformed.slot_ids.insert(slot.storage_id(), Some(method));
+        assert!(
+            matches!(
+                malformed.capture_selection_if_present(
+                    slot.storage_id(),
+                    None,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(SelectionFailure::InvalidState)
+            ),
+            "wrong prior slot authority never falls back"
+        );
+        for missing_occurrence in [true, false] {
+            let mut malformed = publication_batch(&slot);
+            if missing_occurrence {
+                malformed.occurrences.clear();
+            } else {
+                malformed.slot_ids.remove(&slot.storage_id());
+            }
+            let mut measured = TypeWorkBudget::unbounded();
+            assert!(
+                matches!(
+                    malformed.capture_selection_if_present(slot.storage_id(), None, &mut measured),
+                    Err(SelectionFailure::InvalidState)
+                ),
+                "one missing slot domain cannot permit current-selector fallback"
+            );
+            let cost = measured.used();
+            assert!(
+                cost > 0,
+                "the domain lookup is charged even for an orphan index"
+            );
+            for prefix in [0, 9] {
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    malformed.capture_selection_if_present(slot.storage_id(), None, &mut short),
+                    Err(SelectionFailure::TypeResource)
+                ));
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                assert!(matches!(
+                    malformed.capture_selection_if_present(slot.storage_id(), None, &mut exact),
+                    Err(SelectionFailure::InvalidState)
+                ));
+                assert_eq!(exact.used(), prefix + cost);
+            }
+            assert!(
+                slot.selection().is_none(),
+                "refused route lookup never publishes"
+            );
+        }
     }
 
     #[test]

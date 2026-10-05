@@ -12,6 +12,40 @@ use crate::types::{ConstructorId, NominalTypeId, TYPE_WORK_LIMIT, TypeWorkBudget
 /// A binding, conversion, or host-contract refusal before source publication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ForeignExecutionError(pub &'static str);
+
+/// The detected generic boundary reason, independent of an adapter's message.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForeignExecutionReason {
+    /// A malformed codec, unavailable binding, or violated host contract.
+    Binding,
+    /// A bounded work admission was refused.
+    WorkExhausted,
+    /// A fallible storage reservation was refused.
+    StorageRefused,
+    /// Resource admission failed without preserving a more precise cause.
+    ResourceRefused,
+}
+
+impl ForeignExecutionError {
+    /// Reserved generic marker for a detected work-bound refusal.
+    pub const WORK_EXHAUSTED: Self = Self("@ash.foreign/work-exhausted");
+    /// Reserved generic marker for a detected fallible storage refusal.
+    pub const STORAGE_REFUSED: Self = Self("@ash.foreign/storage-refused");
+    /// Reserved generic marker when work versus storage information was erased.
+    pub const RESOURCE_REFUSED: Self = Self("@ash.foreign/resource-refused");
+
+    /// Classifies only the exact reserved markers. Legacy messages remain
+    /// binding errors, including messages mentioning work or storage.
+    #[must_use]
+    pub fn reason(self) -> ForeignExecutionReason {
+        match self.0 {
+            "@ash.foreign/work-exhausted" => ForeignExecutionReason::WorkExhausted,
+            "@ash.foreign/storage-refused" => ForeignExecutionReason::StorageRefused,
+            "@ash.foreign/resource-refused" => ForeignExecutionReason::ResourceRefused,
+            _ => ForeignExecutionReason::Binding,
+        }
+    }
+}
 impl fmt::Display for ForeignExecutionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.0)
@@ -52,17 +86,18 @@ impl ForeignData {
     /// # Errors
     /// Rejects missing roots, forward edges, or excess codec work.
     pub fn new(nodes: Vec<ForeignDataNode>, root: usize) -> Result<Self, ForeignExecutionError> {
-        if nodes.len() > TYPE_WORK_LIMIT || root >= nodes.len() {
-            return Err(ForeignExecutionError(
-                "invalid foreign codec root or work bound",
-            ));
+        if root >= nodes.len() {
+            return Err(ForeignExecutionError("invalid foreign codec root"));
+        }
+        if nodes.len() > TYPE_WORK_LIMIT {
+            return Err(ForeignExecutionError::WORK_EXHAUSTED);
         }
         fn scalar_copy_work(node: &ForeignDataNode) -> Result<usize, ForeignExecutionError> {
             match node {
                 ForeignDataNode::Integer(integer) => {
                     usize::try_from(integer.magnitude_byte_length())
                         .map(|bytes| bytes.max(1))
-                        .map_err(|_| ForeignExecutionError("foreign codec integer work exhausted"))
+                        .map_err(|_| ForeignExecutionError::WORK_EXHAUSTED)
                 }
                 _ => Ok(0),
             }
@@ -71,41 +106,35 @@ impl ForeignData {
             .len()
             .checked_add(scalar_copy_work(&nodes[root])?)
             .filter(|work| *work <= TYPE_WORK_LIMIT)
-            .ok_or(ForeignExecutionError("foreign codec copy work exhausted"))?;
+            .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
         for (index, node) in nodes.iter().enumerate() {
             match node {
                 ForeignDataNode::Integer(integer) => {
                     let bytes = usize::try_from(integer.magnitude_byte_length())
-                        .map_err(|_| ForeignExecutionError("foreign codec integer work exhausted"))?
+                        .map_err(|_| ForeignExecutionError::WORK_EXHAUSTED)?
                         .max(1);
                     work = work
                         .checked_add(bytes)
                         .filter(|work| *work <= TYPE_WORK_LIMIT)
-                        .ok_or(ForeignExecutionError(
-                            "foreign codec integer work exhausted",
-                        ))?;
+                        .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                 }
                 ForeignDataNode::Bytes(bytes) => {
                     work = work
                         .checked_add(bytes.len())
                         .filter(|work| *work <= TYPE_WORK_LIMIT)
-                        .ok_or(ForeignExecutionError(
-                            "foreign codec packed byte work exhausted",
-                        ))?;
+                        .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                 }
                 ForeignDataNode::String(text) => {
                     work = work
                         .checked_add(text.len())
                         .filter(|work| *work <= TYPE_WORK_LIMIT)
-                        .ok_or(ForeignExecutionError(
-                            "foreign codec packed byte work exhausted",
-                        ))?;
+                        .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                 }
                 ForeignDataNode::Tuple(children) => {
                     work = work
                         .checked_add(children.len())
                         .filter(|work| *work <= TYPE_WORK_LIMIT)
-                        .ok_or(ForeignExecutionError("foreign codec work exhausted"))?;
+                        .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                     if children.iter().any(|child| *child >= index) {
                         return Err(ForeignExecutionError(
                             "foreign codec tuple has a forward edge",
@@ -115,9 +144,7 @@ impl ForeignData {
                         work = work
                             .checked_add(scalar_copy_work(&nodes[*child])?)
                             .filter(|work| *work <= TYPE_WORK_LIMIT)
-                            .ok_or(ForeignExecutionError(
-                                "foreign codec expanded copy work exhausted",
-                            ))?;
+                            .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                     }
                 }
                 ForeignDataNode::Constructor(_, Some(child)) if *child >= index => {
@@ -129,9 +156,7 @@ impl ForeignData {
                     work = work
                         .checked_add(scalar_copy_work(&nodes[*child])?)
                         .filter(|work| *work <= TYPE_WORK_LIMIT)
-                        .ok_or(ForeignExecutionError(
-                            "foreign codec expanded copy work exhausted",
-                        ))?;
+                        .ok_or(ForeignExecutionError::WORK_EXHAUSTED)?;
                 }
                 _ => {}
             }
@@ -290,11 +315,11 @@ impl ForeignRuntime {
     pub fn new(bindings: Vec<ForeignRuntimeBinding>) -> Result<Self, ForeignExecutionError> {
         let mut work = TypeWorkBudget::default();
         work.charge(bindings.len())
-            .map_err(|_| ForeignExecutionError("foreign binding work exhausted"))?;
+            .map_err(|_| ForeignExecutionError::WORK_EXHAUSTED)?;
         let mut identities = std::collections::HashSet::new();
         identities
             .try_reserve(bindings.len())
-            .map_err(|_| ForeignExecutionError("foreign binding storage exhausted"))?;
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
         for binding in &bindings {
             if !identities.insert(binding.manifest.id()) {
                 return Err(ForeignExecutionError(
@@ -330,9 +355,13 @@ impl ForeignRuntime {
         module: &ForeignModuleFact,
         work: &mut TypeWorkBudget,
     ) -> Result<(), ForeignExecutionError> {
-        module
-            .authenticate(work)
-            .map_err(|_| ForeignExecutionError("foreign fact authentication failed"))?;
+        module.authenticate(work).map_err(|error| {
+            if error.is_resource_exhaustion() {
+                ForeignExecutionError::RESOURCE_REFUSED
+            } else {
+                ForeignExecutionError("foreign fact authentication failed")
+            }
+        })?;
         let binding = self.binding(module)?;
         for operation in &module.operations {
             binding.operation_key(module, operation)?;
@@ -432,7 +461,7 @@ impl ForeignRuntime {
     ) -> Result<(), ForeignExecutionError> {
         self.quarantine
             .try_reserve(live_owners)
-            .map_err(|_| ForeignExecutionError("native quarantine storage exhausted"))
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)
     }
     pub(crate) fn quarantine(
         &mut self,
@@ -440,7 +469,7 @@ impl ForeignRuntime {
     ) -> Result<(), ForeignExecutionError> {
         self.quarantine
             .try_reserve(1)
-            .map_err(|_| ForeignExecutionError("native quarantine storage exhausted"))?;
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
         self.quarantine.push(owner);
         Ok(())
     }

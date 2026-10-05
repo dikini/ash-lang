@@ -982,7 +982,7 @@ mod tests {
                 usefulness_shapes(
                     &[],
                     &[WitnessPattern::Wildcard],
-                    &[ty.clone()],
+                    std::slice::from_ref(&ty),
                     &registry,
                     USEFULNESS_STATE_LIMIT,
                     &mut UsefulnessBudget::default()

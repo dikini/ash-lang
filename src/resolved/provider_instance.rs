@@ -31,6 +31,30 @@ impl ProviderInstanceSlot {
         self.0.get().map(AsRef::as_ref)
     }
 
+    #[cfg(test)]
+    pub(crate) fn retain_for_test(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepared_for_test(&self) -> Option<Arc<PreparedProviderInstance>> {
+        self.0.get().map(Arc::clone)
+    }
+
+    /// Keep the exact empty original occurrence within source preparation.
+    /// Ordinary Clone continues to freshen empty source slots.
+    pub(crate) fn retain_unpublished(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, ResolvedBuildFailure> {
+        work.charge(1)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        if self.get().is_some() {
+            return Err(ResolvedBuildFailure::InvalidState);
+        }
+        Ok(Self(Arc::clone(&self.0)))
+    }
+
     fn storage_id(&self) -> usize {
         Arc::as_ptr(&self.0) as usize
     }
@@ -102,6 +126,26 @@ impl PendingProviderInstancePublication {
         self.plans
             .push((ProviderInstanceSlot(Arc::clone(&slot.0)), plan));
         Ok(())
+    }
+
+    /// Finalize source-owned preparation after normal typing, before any slot
+    /// is filled. Shared plan ownership cannot authorize a mutable replacement.
+    pub(crate) fn finalize_unpublished<E>(
+        &mut self,
+        mut update: impl FnMut(&mut PreparedProviderInstance) -> Result<(), E>,
+        invalid: fn() -> E,
+    ) -> Result<(), E> {
+        for (slot, plan) in &mut self.plans {
+            if slot.get().is_some() || !self.slots.contains(&slot.storage_id()) {
+                return Err(invalid());
+            }
+            update(Arc::get_mut(plan).ok_or_else(invalid)?)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.plans.len()
     }
 
     /// Preflights every original slot before any plan or evidence publication.

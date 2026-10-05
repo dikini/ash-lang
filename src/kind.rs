@@ -4050,6 +4050,7 @@ impl<'a> KindEnvironments<'a> {
 
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)] // Type and kind borrows belong to different source environments.
     fn resource_argument_inputs<'environment, 'ty>(
         &'environment self,
         ty: &'ty Type,

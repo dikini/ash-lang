@@ -230,30 +230,6 @@ impl Drop for CorePatternRow {
 
 struct OwnedTypeSequence(std::vec::IntoIter<Type>);
 
-struct OwnedTypeBuffer(Vec<Type>);
-
-impl OwnedTypeBuffer {
-    fn try_reserve(&mut self, additional: usize) -> Result<(), std::collections::TryReserveError> {
-        self.0.try_reserve(additional)
-    }
-
-    fn push(&mut self, ty: Type) {
-        self.0.push(ty);
-    }
-
-    fn into_boxed_slice(mut self) -> Box<[Type]> {
-        std::mem::take(&mut self.0).into_boxed_slice()
-    }
-}
-
-impl Drop for OwnedTypeBuffer {
-    fn drop(&mut self) {
-        for ty in self.0.drain(..) {
-            discard_type_iteratively(ty);
-        }
-    }
-}
-
 impl OwnedTypeSequence {
     fn next(&mut self) -> Option<Type> {
         self.0.next()
@@ -452,6 +428,7 @@ enum ValidationCause {
     MissingLocalScope,
     ScopeMissingChild,
     MissingCaptureRequirement,
+    #[cfg(test)]
     MissingRootRequirements,
     MissingNodeRequirements,
     MissingGeneratedTypeBinder,
@@ -664,15 +641,22 @@ enum ValidationCause {
 }
 
 impl ValidationError {
-    fn row_union_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
+    pub(in crate::core) fn row_union_failure(
+        error: crate::types::EffectRowError,
+        node: Option<NodeId>,
+    ) -> Self {
         Self::with_cause(
             match error {
                 crate::types::EffectRowError::Ambiguous => ValidationCause::RowUnionAmbiguous,
                 crate::types::EffectRowError::Missing => ValidationCause::RowUnionMissing,
                 crate::types::EffectRowError::Infinite => ValidationCause::RowUnionInfinite,
             },
-            Some(node),
+            node,
         )
+    }
+
+    pub(crate) fn is_row_union_ambiguous(&self) -> bool {
+        self.cause == Some(ValidationCause::RowUnionAmbiguous)
     }
 
     fn row_removal_failure(error: crate::types::EffectRowError, node: NodeId) -> Self {
@@ -734,6 +718,7 @@ impl ValidationError {
             ValidationCause::MissingLocalScope => "missing-local-scope",
             ValidationCause::ScopeMissingChild => "scope-missing-child",
             ValidationCause::MissingCaptureRequirement => "missing-capture-requirement",
+            #[cfg(test)]
             ValidationCause::MissingRootRequirements => "missing-root-requirements",
             ValidationCause::MissingNodeRequirements => "missing-node-requirements",
             ValidationCause::MissingGeneratedTypeBinder => "missing-generated-type-binder",
@@ -1294,9 +1279,11 @@ impl ValidationError {
                 (ValidationCause::MissingCaptureRequirement, Some(node)) => {
                     Message::core_validation_missing_capture_requirement_node(node)
                 }
+                #[cfg(test)]
                 (ValidationCause::MissingRootRequirements, None) => {
                     Message::core_validation_missing_root_requirements()
                 }
+                #[cfg(test)]
                 (ValidationCause::MissingRootRequirements, Some(node)) => {
                     Message::core_validation_missing_root_requirements_node(node)
                 }
@@ -2672,8 +2659,9 @@ impl ValidationError {
                 | ValidationCause::MissingLocalScope
                 | ValidationCause::ScopeMissingChild
                 | ValidationCause::MissingCaptureRequirement
-                | ValidationCause::MissingRootRequirements
                 | ValidationCause::MissingNodeRequirements => ValidationReason::Scope,
+                #[cfg(test)]
+                ValidationCause::MissingRootRequirements => ValidationReason::Scope,
                 ValidationCause::MissingGeneratedTypeBinder
                 | ValidationCause::UnresolvedCoreInference
                 | ValidationCause::TypeScopeMissingChild
@@ -3054,6 +3042,7 @@ pub(super) fn validate_effect_family(
 /// The caller retains an unpublished draft: native phase/affine proof, checked
 /// external environments and whole-module publication remain separate.
 /// External globals are intentionally rejected by ordinary graph/scope checks.
+#[cfg(test)]
 pub(crate) fn validate_provider_structure(
     program: UnvalidatedCoreProgram<super::effect::EffectOperationFamily>,
     sources: &[&SourceFile],
@@ -3076,6 +3065,7 @@ pub(crate) fn validate_provider_structure(
 
 /// Checks an actual multi-root handler draft against its immutable defining
 /// module. This is conditional structural checking, not executable admission.
+#[cfg(test)]
 pub(crate) fn check_provider_handler_structure(
     draft: &super::provider::HandlerFragmentDraft,
     module: &crate::resolved::ResolvedModule,
@@ -3086,6 +3076,7 @@ pub(crate) fn check_provider_handler_structure(
     check_provider_handler_context(draft, module, sources, module_sources, None, work)
 }
 
+#[cfg(test)]
 pub(crate) fn check_provider_handler_staged_structure(
     draft: &super::provider::HandlerFragmentDraft,
     module: &crate::resolved::ResolvedModule,
@@ -3105,6 +3096,7 @@ pub(crate) fn check_provider_handler_staged_structure(
     )
 }
 
+#[cfg(test)]
 fn check_provider_handler_context(
     draft: &super::provider::HandlerFragmentDraft,
     module: &crate::resolved::ResolvedModule,
@@ -3182,6 +3174,23 @@ impl CheckedHandlerTemplate {
                 Some(self.draft.program.root),
             ));
         }
+        work.charge(self.admission.associations.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        let mut associations = Vec::new();
+        associations
+            .try_reserve_exact(self.admission.associations.len())
+            .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
+        associations.extend(
+            self.admission
+                .associations
+                .iter()
+                .map(|association| association.borrowed()),
+        );
+        super::provider::check_original_state_access_associations(
+            &self.draft.program,
+            &associations,
+            work,
+        )?;
         for expected in &self.original_nodes {
             expected.authenticate_source_node(&self.draft.program, work)?;
         }
@@ -3231,10 +3240,14 @@ impl CheckedHandlerTemplate {
     ) -> &[super::provider::projection::NodeProjection] {
         &self.original_clauses
     }
-    pub(in crate::core) fn original_externals(
-        &self,
-    ) -> &std::sync::Arc<super::provider::RetainedHandlerExternals> {
-        &self.admission.externals
+    pub(crate) fn needs_actual_captures(&self) -> bool {
+        !self.admission.rows.discards().is_empty()
+    }
+    pub(in crate::core) fn original_row_contract(&self) -> &super::provider::HandlerRowContract {
+        &self.admission.contract
+    }
+    pub(in crate::core) fn original_capture(&self) -> &super::capture::ConditionalCaptureGraph {
+        &self.admission.capture
     }
     pub(in crate::core) fn original_recipe(&self) -> &super::provider::HandlerRowRecipeDraft {
         &self.admission.rows
@@ -3254,6 +3267,7 @@ impl CheckedHandlerTemplate {
             .externals
             .authenticate_pending(publication, facts, canonical, module, work)
     }
+    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
     pub(crate) fn prepare_rows(
         &self,
         types: &HashMap<crate::types::TypeVariableId, Type>,
@@ -3261,6 +3275,7 @@ impl CheckedHandlerTemplate {
         body_answer: &Type,
         body_effects: &EffectRow,
         provided: &EffectInstance,
+        actual: Option<super::capture::ActualProviderCapture>,
         work: &mut TypeWorkBudget,
     ) -> Result<super::provider::ResolvedProviderHandlerRows, ValidationError> {
         super::provider::specialization::prepare_handler_rows(
@@ -3270,6 +3285,7 @@ impl CheckedHandlerTemplate {
             body_answer,
             body_effects,
             provided,
+            actual,
             work,
         )
     }
@@ -3431,6 +3447,7 @@ pub(in crate::core) fn check_provider_external_structure(
     accesses: &super::provider::AuthenticatedProviderStateAccesses<'_>,
     method_evidence: Option<&super::provider::AuthenticatedProviderMethodEvidence<'_>>,
     entry: Option<&super::provider::HandlerFragmentEntry<'_>>,
+    fragment_locals: Option<&[crate::types::NominalTypeId]>,
     native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
@@ -3456,6 +3473,7 @@ pub(in crate::core) fn check_provider_external_structure(
     validator.provider_state_accesses = Some(accesses);
     validator.provider_method_evidence = method_evidence;
     validator.provider_handler_entry = entry;
+    validator.provider_fragment_locals = fragment_locals;
     let result = (|| {
         for binder in types.keys() {
             validator.charge_type_work(1)?;
@@ -3614,6 +3632,7 @@ struct Validator<'program, 'source, F: CoreOperationFamily = PureOperationFamily
     provider_state_accesses:
         Option<&'program super::provider::AuthenticatedProviderStateAccesses<'program>>,
     provider_handler_entry: Option<&'program super::provider::HandlerFragmentEntry<'program>>,
+    provider_fragment_locals: Option<&'program [crate::types::NominalTypeId]>,
     type_work: Cell<usize>,
     #[cfg(test)]
     owner_parameter_index_work: Cell<usize>,
@@ -3774,6 +3793,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_method_evidence: None,
             provider_state_accesses: None,
             provider_handler_entry: None,
+            provider_fragment_locals: None,
             type_work: Cell::new(0),
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
@@ -8817,7 +8837,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         self.charge_type_work(budget.used())?;
         result
             .map_err(|()| ValidationError::new(ValidationReason::Resource, Some(node)))?
-            .map_err(|error| ValidationError::row_union_failure(error, node))
+            .map_err(|error| ValidationError::row_union_failure(error, Some(node)))
     }
 
     fn remove_effect_row_charged(
@@ -11791,8 +11811,11 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
     }
 
     fn validate_local_scope_bijection(&self) -> Result<(), ValidationError> {
-        let scope_count = self.program.registry.lexical_nominals().len();
-        if scope_count == 0 {
+        let registry_locals = self.program.registry.lexical_nominals();
+        let scope_count = self
+            .provider_fragment_locals
+            .map_or(registry_locals.len(), <[_]>::len);
+        if scope_count == 0 && registry_locals.is_empty() {
             return Ok(());
         }
         self.charge_type_work(
@@ -11804,13 +11827,27 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         expected
             .try_reserve(scope_count)
             .map_err(|_| ValidationError::new(ValidationReason::Resource, None))?;
-        expected.extend(
-            self.program
-                .registry
-                .lexical_nominals()
-                .iter()
-                .map(|nominal| nominal.id),
-        );
+        if let Some(locals) = self.provider_fragment_locals {
+            // This inventory comes from the independently retained original
+            // phase source, never from the candidate Core introductions.
+            self.charge_type_work(self.program.nodes.len())?;
+            for owner in locals {
+                if !self
+                    .program
+                    .registry
+                    .nominal(*owner)
+                    .is_some_and(|nominal| nominal.id.is_lexical())
+                    || !expected.insert(*owner)
+                {
+                    return Err(ValidationError::with_cause(
+                        ValidationCause::UnexpectedLocalScope,
+                        None,
+                    ));
+                }
+            }
+        } else {
+            expected.extend(registry_locals.iter().map(|nominal| nominal.id));
+        }
         let mut introduced = HashSet::new();
         introduced
             .try_reserve(expected.len())
@@ -14768,6 +14805,7 @@ impl<'program, 'source> Validator<'program, 'source, super::effect::EffectOperat
             .ok_or_else(|| ValidationError::with_cause(ValidationCause::MissingRootRow, Some(root)))
     }
 
+    #[allow(clippy::too_many_arguments)] // Independent source, actual and work authorities stay explicit.
     fn validate_effect_handler(
         &self,
         id: NodeId,
@@ -23791,6 +23829,102 @@ mod tests {
                 .expect("a fresh exact retry should validate");
             assert_eq!(retry.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
             assert_eq!(owners.len(), 1);
+        }
+    }
+
+    #[test]
+    fn contextual_fragment_local_scope_inventory_preserves_structural_refusals() {
+        let fixture = || {
+            LinkedCoreValidationFixture::compile(
+                "",
+                "main : Unit -> Int\nmain () = {\nnewtype Left = Left(Int)\nnewtype Right = Right(Int)\nmatch (Left(40), Right(2)) {\n(Left(left), Right(right)) => left + right\n}\n}\n",
+                &[],
+            )
+        };
+        let original = fixture();
+        // Authenticate the owner IDs before any candidate Core mutation. The
+        // transient fragment context must never infer them from scope nodes.
+        let owners = original
+            .program
+            .registry
+            .lexical_nominals()
+            .iter()
+            .map(|nominal| nominal.id)
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 2);
+        let sources = linked_fixture_sources(&original);
+        let mut positive =
+            Validator::new_modules(&original.program, &sources, &original.module_sources).unwrap();
+        positive.contextual_registry = Some(&original.program.registry);
+        positive.provider_fragment_locals = Some(&owners);
+        run_module_validation_phases_for_test(&mut positive)
+            .expect("actual local-owner body accesses must remain scoped");
+        for mutation in 0..5 {
+            let mut candidate = fixture();
+            let scopes = candidate
+                .program
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(index, stored)| {
+                    if let PureExprKind::Computation(PureComputation::LocalNominalScope(scope)) =
+                        &stored.kind
+                    {
+                        Some((index, *scope))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(scopes.len(), 2);
+            let phase_owners = candidate
+                .program
+                .registry
+                .lexical_nominals()
+                .iter()
+                .map(|nominal| nominal.id)
+                .collect::<Vec<_>>();
+            let mut expected = phase_owners.clone();
+            match mutation {
+                0 => {
+                    candidate.program.nodes[scopes[0].0].kind =
+                        PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode))
+                }
+                1 => {
+                    candidate.program.nodes[scopes[1].0].kind =
+                        PureExprKind::Computation(PureComputation::LocalNominalScope(
+                            crate::core::LocalNominalScopeNode::new(
+                                scopes[0].1.owner(),
+                                scopes[1].1.body(),
+                            ),
+                        ))
+                }
+                2 => expected.clear(),
+                3 => expected.push(phase_owners[0]),
+                4 => {
+                    expected[0] =
+                        crate::types::NominalTypeId::lexical(phase_owners[0].module(), u32::MAX)
+                }
+                _ => unreachable!(),
+            }
+            let sources = linked_fixture_sources(&candidate);
+            let mut validator =
+                Validator::new_modules(&candidate.program, &sources, &candidate.module_sources)
+                    .unwrap();
+            validator.contextual_registry = Some(&candidate.program.registry);
+            validator.provider_fragment_locals = Some(&expected);
+            let error = validator
+                .validate_local_scope_bijection()
+                .expect_err("source fragment context cannot excuse a forged introduction");
+            assert_eq!(
+                error.cause,
+                Some(match mutation {
+                    0 => ValidationCause::MissingLocalScope,
+                    1 => ValidationCause::DuplicateLocalScope,
+                    _ => ValidationCause::UnexpectedLocalScope,
+                }),
+                "mutation {mutation}"
+            );
         }
     }
 

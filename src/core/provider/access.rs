@@ -221,6 +221,41 @@ pub(crate) fn check_state_access_associations(
     Ok(())
 }
 
+/// Reconstruct the retained defining association against the original owner's
+/// canonical signature before checking its actual state-access nodes. The native
+/// index only borrows already authenticated facts; no native self-proof runs.
+pub(crate) fn check_original_state_access_associations(
+    program: &UnvalidatedEffectProgram,
+    associations: &[DraftStateAssociation<'_>],
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    charge(work, associations.len())?;
+    for association in associations {
+        charge(work, 2)?;
+        let signature = program
+            .registry
+            .owner_signature(crate::resolved::OwnerId::Resource(association.definition))
+            .ok_or_else(|| invalid(program.root))?;
+        charge(
+            work,
+            association
+                .parameters
+                .len()
+                .checked_add(signature.parameters.len())
+                .ok_or_else(resource)?,
+        )?;
+        if signature.parameters.as_ref() != association.parameters
+            || program
+                .registry
+                .resource_signature_family(association.definition)
+                != Some(association.family)
+        {
+            return Err(invalid(program.root));
+        }
+    }
+    check_state_access_associations(program, associations, work)
+}
+
 struct Substitutions(HashMap<TypeVariableId, Type>);
 impl Substitutions {
     fn insert_unique_cloned(

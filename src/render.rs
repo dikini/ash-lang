@@ -108,7 +108,11 @@ fn runtime_json_resource(
         runtime_json_string(writer, value)?;
         fragment(writer, b"}")?;
     }
-    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+    if matches!(
+        failure.cause,
+        crate::eval::ResourceFailureCause::StorageReservationFailed
+            | crate::eval::ResourceFailureCause::ResourceAdmissionRefused
+    ) {
         runtime_json_fact_start(writer, prefix, "underlying_cause", "resource-cause")?;
         runtime_json_string(writer, "undetermined")?;
         fragment(writer, b"}")?;
@@ -195,7 +199,11 @@ fn resource_details(
     fragment(writer, b"resource: ")?;
     fragment(writer, failure.resource.label().as_bytes())?;
     fragment(writer, b"\n")?;
-    if failure.cause == crate::eval::ResourceFailureCause::StorageReservationFailed {
+    if matches!(
+        failure.cause,
+        crate::eval::ResourceFailureCause::StorageReservationFailed
+            | crate::eval::ResourceFailureCause::ResourceAdmissionRefused
+    ) {
         fragment(writer, b"underlying cause: undetermined\n")?;
     }
     for (label, amount) in [

@@ -105,6 +105,12 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
+Latest integrated common checkpoint is `642bb6b0d2536849d0c281783af60fec7a79ae3e`.
+The following Batch 0–2 entries and dated intermediate Batch 3 entries retain
+their historical evidence. The connected common delivery below supersedes its
+older control-failure summaries; it is not integrated until its delivery record
+names an original-branch merge and fresh checks.
+
 The 2026-10-04 common-support workstream supersedes the paused task below.
 The recovery commit preserves compiler, native adapter, fixtures and tracking
 without claiming a build or executed resource instance. Separate proof-tooling
@@ -173,24 +179,83 @@ implementation. `batch-2-native-05.log` passes thirty-two adapter unit cases and
 arena cases. `batch-2-check-05.log` passes all-targets compilation; the strict
 bidirectional carrier inventory passes in `batch-2-architecture-01.log`.
 Independent arena manifest/runtime review and changed-document checks pass.
-Arena source awaits its unsigned delivery commit and original-worktree checks;
-typed allocation and references are excluded.
+Batch 2 is complete on the original branch at unsigned merge
+`53db4ebb050fdcb12df84857ab8b45adfa6b2cb6`, integrating common commit
+`eb14326`. Original-worktree receipts `batch-2-integrated-public.log`,
+`batch-2-integrated-native.log` and `batch-2-integrated-check.log` pass the same
+four arena, ten SQLite, thirty-two adapter unit and nine physical arena cases,
+and all-targets compilation. Public-test dependency records authenticate the
+original fixture root; all twenty-one unrelated file pins remain unchanged.
+`batch-2-integration.md` and its companion JSON retain commands, source hashes,
+merge parents, runnable capability and limitations. Independent arena work starts
+from this original integration commit. Typed allocation and references remain
+excluded.
 
 The imported S-01 receipt establishes executed library-defined scopes within
 that program. It does not establish the selected open-row callback,
 capture-dependent discard, retained dependency quarantine or complete copied
 local dictionaries and nominals. One conditional handler callback test is
-still explicitly ignored until those obligations are implemented. Existing
-native adapter tests observe native backing separately from an Ash session.
+now admitted by the moving Batch 3 source, but its required distinct-capture
+witness remains incomplete. Existing native adapter tests observe native
+backing separately from an Ash session.
 
-Batch 3 public receipts now establish capture/resume without native
-reacquisition, genuine SQLite consumed completion failure, separately injected
-consumed and retained reports, and safe retained-owner host destruction. Six of
-ten cases pass in `batch-3-control-public-01.log`; the formal open-row callback,
-its lacks-condition negative, owned discard, and the distinct captured-demand
-witness remain failing. The latter fixture initially used a source-effectful
-finish forbidden by the selected synchronous lifecycle; it must instead observe
-a valid source cleanup obligation without changing that profile.
+Batch 3's `batch-3-control-public-07.log` passes thirteen of fourteen control
+cases and both retained-dependency cases. It establishes the formal open-Delta
+callback under its existing lacks conditions, curried and closed implementation
+contexts, capture/resume without reacquisition, owned discard with outer-resource
+cleanup before statement finalization and connection close, repeated activations,
+and ordinary-handler precedence. Genuine SQLite consumed completion failure
+remains separate from injected consumed and retained reports. The finite
+same-sigma/same-epsilon distinct-capture-demand witness still fails pending
+actual request-port realization; no diverging prefix substitutes for it.
+
+`batch-3-library-regressions-07.log` passes 1,534 library cases, with one new
+static fixture failure and one advanced callback still ignored. The static
+fixture omitted the required value graph and captured-segment cut. The corrected
+fixture passes fresh `batch-3-static-fixture-09.log`; the full receipt is retained
+as failed evidence. After connected actual-capture realization and source
+warning cleanup, `batch-3-actual-c-check-15.log` passes all-targets compilation.
+`batch-3-actual-c-public-15.log` passes thirteen of fifteen control cases; the
+finite capture-demand witness and mixed local helper case still fail.
+`batch-3-actual-c-library-16.log` passes 113 provider cases and fails the finite
+witness and mixed publication rollback harness. No cases remain ignored in that
+filtered run; the formal open-row admission case passes. These failures require
+ordinary body-evidence closure and handler result-analysis investigation before
+a new connected verification. No Batch 3 delivery is integrated.
+
+The common branch now includes the independently verified packed-value delivery
+from original unsigned merge `8adf4b2eb1ae4e031e4837fc9256411c51bcb3f5`.
+Reconciliation retained both source histories and pinned the uncommitted common
+changes before applying them. SQLite-specific SQL fixture arguments now use the
+new built-in copying values; resource control topology is unchanged.
+
+Fresh `batch-3-reconciled-check-21.log` passes all-targets compilation.
+`batch-3-reconciled-public-21.log` passes fourteen of seventeen control cases,
+including the repaired mixed local helper. Its failures are the finite captured
+control witness, a latent ordinary method answer, and the lexical row fixture.
+The latter initially omitted the current language's required local nominal key;
+a corrected Token-key fixture reaches checking but still fails in
+`batch-3-reconciled-lexical-23.log`. No new local-key semantics were introduced.
+The unchanged constrained positive and eleven authority mutations pass in
+`batch-3-reconciled-constrained-21.log`.
+
+`batch-3-reconciled-library-23.log` passes 113 provider cases and fails the
+finite witness and mixed publication rollback assertion. The separately attempted
+owner-vector Core test matched zero cases and supplies no verification evidence;
+its corrected invocation remains required. Debugger receipts23 place the finite
+and latent-answer failures in final independent provider-scope admission. The
+finite witness has already passed source capture realization and solved-row
+comparison; final capture reconstruction fails before its row comparison. The
+latent answer's final body type is Int, while copied lifecycle substitution
+comparison fails. Exact graph domain and retained substitution investigation
+remain implementation work, not semantic authority.
+
+`batch-3-reconciled-retention-22.log` passes all three retained-dependency and
+completion-conversion cases. The additional injected test observes actual Rust
+storage destruction for consumed completion and the same retained storage until
+safe dependency-ordered host teardown. A conversion failure produces a runtime
+binding diagnostic without automatically retrying source completion. These are
+moving-source receipts. Batch 3 remains uncommitted and unintegrated.
 
 Both cases in `batch-3-retention-public-01.log` pass. A test-only generic native
 binding owns unique Rust storage and explicitly injects retained dispositions.
@@ -2158,6 +2223,11 @@ preserving bidirectional inventory and narrow mutation checks.
 
 ### Conditional row and capture retention
 
+The inspection below records the earlier provisional-template checkpoint. Its
+uses of “current” refer to that inspected source, rather than the integrated
+common implementation. The [current checkpoint](#current-checkpoint) records
+later checked recipes and the remaining actual request-input work.
+
 Read-only inspection confirms that the current fragment entry authenticates a
 provisional graph. Provider resumes contribute their operand rows, and direct
 demands are compared with ordinary least-output reconstruction. Hidden rho is
@@ -2333,6 +2403,11 @@ acyclic retention remain required evidence. This approves the experimental
 direction, not its implementation; current pinned B3 drafts are unaffected.
 
 ### Runtime boundary after validated T1
+
+This dependency map records the earlier T1 inspection before executable foreign
+bindings and provider activations. Its evaluator limitations describe that
+checkpoint. The [current checkpoint](#current-checkpoint) records integrated
+SQLite/arena execution and later control observations.
 
 R1 receives admitted descriptors and executable templates, exact provided and
 interpreted instances, operand paths, native operation registrations, owned and
@@ -2557,3 +2632,221 @@ ignore, 142 passing public cases, 41 architecture cases, and unchanged work
 limits. Integrated verification is the next gate.
 Larger copying and persistence execution must be measured again after this
 delivery. No default limit increase or source workaround is admitted.
+
+## Common control checkpoint (2026-10-05)
+
+The shared lookup, watcher, and edge deliveries are integrated on the original
+branch. The latest unsigned integration is
+`642bb6b0d2536849d0c281783af60fec7a79ae3e`; its fresh original checks pass
+all-targets compilation, 131 capture cases, and 136 public cases. These deliveries
+preserve the selected work limit and are complete separately from B3.
+
+B3 remains uncommitted. A Rust row trace identified stale effect metadata after
+committing the last deferred cleanup-row solution. Marking the existing builder
+rewrite demand on successful completion restores the ordinary zonk. The finite
+same-arguments/same-body-row/different-capture witness and the exact, one-short,
+and prefilled completion-budget case pass. A connected run passes 17 of 19
+control cases and all ten codec cases, including actual payload admission refusal.
+The two control failures retain contrary evidence: a fixture used invalid
+single-line function blocks, and lexical owner row qualification lacked its
+original context. The fixture is corrected and the independently reviewed
+qualification repair is under fresh compilation; neither is yet a passing claim.
+
+SQLite's complete copying and session runs after the edge merge pass four of
+seven and seven of eight cases respectively. The reset copying program still
+refuses at the unchanged 327680 work limit. A temporary bounded diagnostic
+reconciles 141440 initial units plus 186240 admitted units, with zero table
+overflow. Repeated capture specializations all observe changed revisions, so
+this evidence does not justify skipping them. Root removed the diagnostic and
+restored all six compiler files and all 48 pending SQLite file hashes exactly.
+Native/library work remains SQLite-owned; root owns shared compiler, Core,
+capture, provider checking, generic runtime, and shared merges. Cargo windows
+are serial. Native Clippy after the separate finish-dispatch observer passes;
+that observer is pending SQLite work, not part of the integrated edge delivery.
+
+Receipts live under the common evidence directory in
+`batch-3-committed-cleanup-row-rewrite-44/` and
+`batch-3-sqlite-capture-cost-45/`. The next integration gate is complete connected
+control/validation verification and relevant realistic SQLite regression evidence,
+followed by an unsigned common commit, a real merge into the original branch,
+and fresh checks there. Experimental execution does not alter normative Ash.
+
+## Connected common delivery preparation (2026-10-05)
+
+Fresh connected receipt68 passes all 1,577 library cases, with no ignored cases,
+and all 44 selected public cases: 21 control, ten codec, three retained-owner,
+and ten runtime-diagnostic cases. This includes formal open Delta with its
+established exclusions and the separate finite same-substitution,
+same-scalar-body-row witness with different captured-control demands. Actual
+capture/resume does not reacquire native owners. Owned discard performs source
+completion in structural order; outer-resource cleanup precedes its release.
+Consumed and retained dispositions remain distinct. Retained owners lose source
+access and remain quarantined with dependencies until host teardown.
+
+The final-answer path uses ordinary enclosing typing for both capture-free and
+conditional resource bodies. Only admitted actual values and the original
+checked occurrence supply specialization inputs. Final Core independently
+reconstructs owner kinds, complete tagged arguments, table coverage, identity
+scope, evidence and actual control rows. Original whole declarations provide
+rigid-row exclusions; a nested annotation must entail them rather than create
+new ones. The same constraints remain checked after both transforms.
+
+An unpublished acquired owner is destroyed before a failed publication returns.
+Injected publication failures test that boundary separately from real native
+failures. Source-only deferred cleanup equations close before executable Core;
+successful closure demands the ordinary builder rewrite. The 64-KiB and
+256-KiB regressions retain their original bounds. Outlining discard and binding
+completion preserves executable order, ownership and charged work while removing
+large debug dispatcher frames; it does not raise a depth or work limit.
+
+The current-B3 realistic SQLite probe61 executes every supplied copying/session
+case: four of seven copying cases and seven of eight session cases pass. Four
+larger cases refuse with `TypeResourceExhausted`. Diagnostic70 measures the reset
+program against the actual formatted common source: 146,059 initial units plus
+181,621 admitted units reach the unchanged 327,680 limit, with one refusal and
+no diagnostic-table overflow. The profile retains exact original function and
+evidence identities; changed revisions do not justify memoizing dynamic capture
+results. This evidence does not establish complete copying or persistence
+support. All twenty temporarily overlaid files, all 91 preserved file hashes,
+and both Git diffs were restored exactly. SQLite's uncommitted native/library
+work remains separate.
+
+The quality gate found two test-style Clippy diagnostics, repaired without a
+lint waiver. A valid ordinary bare-Delta annotation then reproduced loss of an
+already established enclosing exclusion; public receipt71 records that failure.
+Normalization is being repaired without adding exclusions or weakening row
+equality. Connected checks and final quality, architecture, independent review,
+unsigned commit, real original-branch merge and fresh integrated verification
+remain required before Batch 3 is a completed delivery.
+
+Common owns shared compiler, Core, capture, provider checking, manifests and
+generic runtime changes. SQLite owns its library and native adapter. Arena owns
+independent arena backing/bindings/private codec and arena-only candidate
+paragraphs, transferred as pinned patches. Layout, references, typed allocation
+and transactional borrowed-operation publication remain later arena work.
+Cargo windows and integration merges are serial. Consumers start from the
+verified original integration, then merge its next exact tip before delivering
+independent changes; no uncommitted common snapshot is a delivered dependency.
+
+Receipts and reviews remain under
+`~/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`, including
+`batch-3-current-cost-profile-70/`, `batch-3-owner-row-final-contract-review-68/`
+and `batch-3-formatted-binding-delivery-review-69/`. These are tested experimental
+properties and explicit foreign assumptions, not a completed correspondence
+proof, accepted production architecture or current language semantics.
+
+### Final preparation corrections
+
+Common verification72 passes format, metadata, workspace/all-target build,
+workspace/all-features Clippy and all 1,577 library cases. Its architecture run
+passes forty of forty-one cases. The strict inventory identifies one missing
+shared-map alias and two stale source coordinates for existing borrowed
+carriers. Those exact entries are corrected; the inventory remains strict.
+
+The public bare-row regression first rejects during typing in receipt71.
+Normalizing its checking type fixes that phase, but receipt76 then passes 21 of
+22 control cases: independent Core rejects the local initializer/binder type
+comparison. The scheduler retained a second raw annotation for binding
+completion. Both owned views now use the same entailed enclosing-row
+normalization before task publication. Neither inferred initializer types nor
+weaker Core equality replace the declared annotation. Independent reviews find
+no changed authority or partial publication. Fresh execution remains the gate.
+
+A focused private boundary regression checks two established contexts, nested
+forall shielding, every work cut at zero and prefilled ledgers, and exact fresh
+retry. This observes the source preparation publication boundary unavailable
+through the public budget API. Its coarse unknown tuple provenance does not
+exercise provenance rebuilding failure; no such coverage claim follows.
+
+### Connected correction verification
+
+Receipt77 passes all 1,578 library cases with no ignored cases and all 45
+selected public cases: 22 control, ten codec, three retention, and ten runtime
+diagnostic cases. The bare local annotation now passes source checking and
+independent Core validation. Its arbitrary-exclusion negatives remain rejected.
+The private two-context work-cut and forall-shielding regression also passes.
+Both annotation preparations retain the complete declared type and authenticate
+existing row facts; their added structural work remains charged. The legacy
+provenance shape reader stays bounded by the admitted type copy and retains its
+existing host scratch-allocation convention. No recoverable global OOM guarantee
+or provenance rebuilding-failure test is claimed.
+
+Full common verification78 is the next gate, including the corrected strict
+inventory. The original branch remains `642bb6b0`; no Batch 3 commit or merge
+has occurred at this checkpoint. The 23 unrelated and planning files in the
+original worktree remain pinned separately. Required integrated verification
+will run `CARGO_BUILD_JOBS=1 cargo xtask verify` there after the real unsigned
+merge. Later arena Layout/Ref/family/publication candidates and SQLite's
+14-operation String/TEXT migration remain separate deliveries.
+
+### Final shared SQLite regression probe (2026-10-05, receipt 81)
+
+The latest common source, including the rigid-row annotation and retained binder
+normalization corrections, was checked against SQLite's frozen minimal executable
+TEXT/copying/persistence inputs. The public copying suite passes 4 of 7 cases and
+the session suite passes 7 of 8. The same four larger programs stop with
+`TypeResourceExhausted` under the unchanged default Type work limit of 327680.
+This is regression evidence for the shared repair, not a completed SQLite library
+delivery. The temporary fourteen-operation manifest and twelve SQLite-owned
+inputs were restored after the run. All ninety preserved file pins and both
+staged and unstaged differences match their pre-probe state.
+
+The command was `CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test
+provider_sqlite_copying --test provider_sqlite_sessions --no-fail-fast`. The
+external receipt is `batch-3-realistic-final-probe-81/results.json` under the
+common evidence directory. No limit, assertion, compiler policy, or native
+ownership rule changed for this probe. Common integration still awaits the
+strict scanner import-graph correction and the complete verification gate.
+
+### Strict carrier correction (2026-10-05, receipts 82–86)
+
+The architecture gate exposed a scanner defect in inherited `Arc` imports, not
+a change in provider ownership. Exact module import routes now reach the
+standard shared wrapper, including reexports through modules with no carrier
+fields. Lexical local types retain their own ownership, nearer explicit imports
+win, and actual borrowed payloads remain mixed. Repeated import routes must make
+strict progress; conflicting or cyclic routes refuse. The single earlier
+`PreparedLocalProviderCode.code` mixed-retention override is corrected to its
+source-derived shared retention. Productive compiler/runtime behavior and work
+limits are unchanged by this test-inventory repair.
+
+The focused inherited-wrapper witness first failed in receipt 82. Ten scanner
+cases pass after independent review in receipt 85, and the complete strict
+bidirectional field/retention inventory passes in receipt 86. No inventory check
+was suppressed. Full connected verification and original integration remain
+required. The source is held stable for that gate.
+
+## Verified common delivery before integration (2026-10-05)
+
+The required common checks pass against the restored twelve-operation SQLite
+contract. Receipts 87, 89, 90 and 91 together cover all 1,578 library cases, all
+102 Ash integration binaries, all 43 architecture checks, the remaining native
+workspace tests, formatting, all-target builds, strict Clippy and strict rustdoc.
+No library case is ignored. Public suites include 22 control cases, basic SQLite
+and arena execution, complete owner rows, retention and runtime diagnostics.
+
+The broad gate 87 is not a passing receipt: it stopped at an artifact containing
+the temporary TEXT manifest. Exact source restoration had preserved old mtimes,
+so Cargo reused the probe's normal library. Fresh mtimes on exactly six restored
+inputs rebuilt that library without a source, contract or assertion change; the
+passive import check passes in receipt 88. Gate 89 then exposed six stale literal
+formula guards. Their owning unit probes already passed: the test helper now
+pays a separate measured registry precheck before unchanged catalog work. The
+guards now name that precheck and pass all four cases in receipt 90. Limits,
+inner formulas and all-cut/retry assertions are unchanged. Receipt 91 passes the
+45 remaining Ash integration binaries and native workspace, plus final format
+and strict Clippy checks. The two expensive source-only architecture checks
+reuse their receipt-87 passes on byte-identical productive source. The final
+original-branch `cargo xtask verify` will run every check without those skips.
+
+Independent contract, runtime quality, scanner and documentation reviews accept
+this bounded delivery. The finite source witness is separate from the formal
+open-Delta callback and supplies executed observation, not a general proof.
+Original integration and its fresh whole gate are the next checkpoint.
+
+Larger SQLite copying/persistence programs retain the four default-work-budget
+refusals observed in receipt 81. The fourteen-operation TEXT migration and
+associated cost work remain separate shared follow-ons. Typed arena allocation,
+Layout, references, containment, borrowing, sharing and storage families belong
+to the independent arena workstream. No DN-0037 or DN-0038 implementation is
+included, and no experimental rule is promoted into `spec/` or `main`.

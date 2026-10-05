@@ -1254,12 +1254,11 @@ impl CoreBuilder<EffectOperationFamily> {
         if let Err(error) = result {
             while let Some((index, previous, output)) = undo.pop() {
                 drop(std::mem::replace(&mut self.nodes[index].effects, previous));
-                if let Some(output) = output {
-                    if let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                if let Some(output) = output
+                    && let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
                         &mut self.nodes[index].kind
-                    {
-                        drop(std::mem::replace(&mut scope.handler_output.effects, output));
-                    }
+                {
+                    drop(std::mem::replace(&mut scope.handler_output.effects, output));
                 }
             }
             return Err(error);

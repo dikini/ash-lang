@@ -651,6 +651,8 @@ enum Frame {
         node: NodeId,
         environment: Environment,
         registration: Option<RegistrationKey>,
+        // Exact successful resource activation; ordinary and hook handlers have none.
+        provider: Option<ActivationKey>,
     },
     Request {
         node: NodeId,
@@ -714,6 +716,140 @@ struct RegistrationKey(u32);
 #[derive(Debug)]
 struct CapturedContinuation {
     frames: Vec<Frame>,
+}
+
+// An explicit first handler is the segment's selected cut. A mismatched
+// clause identity is malformed control, never a nonselected interpreter.
+fn selected_handler_for_discard(
+    program: &ExecutableProgram,
+    captured: &CapturedContinuation,
+    handler: HandlerId,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, RuntimeFailure> {
+    charge_effect_work(work, 1, RuntimePhase::Capture)?;
+    let Some(Frame::HandlerBoundary { node, .. }) = captured.frames.first() else {
+        return Ok(false);
+    };
+    let actual = match program.node(*node) {
+        Some(ExecutableNode::Effect(expression)) => match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Handler(boundary)) => boundary.id(),
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                scope.handler().id()
+            }
+            _ => return Err(RuntimeFailure::InvalidControlState),
+        },
+        _ => return Err(RuntimeFailure::InvalidControlState),
+    };
+    if actual != handler {
+        return Err(RuntimeFailure::InvalidControlState);
+    }
+    Ok(true)
+}
+
+// Prove retention against the structural owner path before discard transfers
+// any frame. These scalar coordinates never carry or clone native ownership.
+fn retained_provider_handlers_for_discard(
+    program: &ExecutableProgram,
+    outer: &[Frame],
+    captured: &CapturedContinuation,
+    selected_handler_present: bool,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<(NodeId, ActivationKey)>, RuntimeFailure> {
+    let mut enclosing = Vec::new();
+    let mut owners = Vec::new();
+    let mut handlers = Vec::new();
+    let mut retained = Vec::new();
+    charge_effect_work(work, outer.len(), RuntimePhase::Capture)?;
+    for frame in outer {
+        if let Frame::ProviderBoundary(boundary) = frame
+            && boundary.phase == ProviderPhase::Body
+        {
+            charge_effect_work(work, owners.len().saturating_add(2), RuntimePhase::Capture)?;
+            if boundary.owner.is_none() || owners.contains(&boundary.key) {
+                return Err(RuntimeFailure::InvalidControlState);
+            }
+            reserve_control(&mut owners, 1, RuntimeResource::CaptureInspection, false)?;
+            reserve_control(&mut enclosing, 1, RuntimeResource::CaptureInspection, false)?;
+            owners.push(boundary.key);
+            enclosing.push((boundary.node, boundary.key));
+        }
+    }
+    let mut pending = Vec::new();
+    charge_effect_work(work, 1, RuntimePhase::Capture)?;
+    reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+    pending.push((captured, 0usize, enclosing.len(), selected_handler_present));
+    while let Some((capture, next, base, selected)) = pending.last_mut() {
+        if *next == capture.frames.len() {
+            let base = *base;
+            pending.pop();
+            enclosing.truncate(base);
+            continue;
+        }
+        let capture = *capture;
+        let selected = *selected;
+        let index = *next;
+        *next += 1;
+        charge_effect_work(work, 1, RuntimePhase::Capture)?;
+        match &capture.frames[index] {
+            Frame::ProviderBoundary(boundary) => {
+                charge_effect_work(work, owners.len().saturating_add(2), RuntimePhase::Capture)?;
+                if boundary.phase != ProviderPhase::Body
+                    || boundary.owner.is_none()
+                    || owners.contains(&boundary.key)
+                {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                reserve_control(&mut owners, 1, RuntimeResource::CaptureInspection, false)?;
+                reserve_control(&mut enclosing, 1, RuntimeResource::CaptureInspection, false)?;
+                owners.push(boundary.key);
+                enclosing.push((boundary.node, boundary.key));
+            }
+            Frame::HandlerBoundary {
+                node,
+                provider: Some(key),
+                registration,
+                ..
+            } => {
+                charge_effect_work(
+                    work,
+                    handlers.len().saturating_add(1),
+                    RuntimePhase::Capture,
+                )?;
+                if registration.is_some() || handlers.contains(key) {
+                    return Err(RuntimeFailure::InvalidControlState);
+                }
+                reserve_control(&mut handlers, 1, RuntimeResource::CaptureInspection, false)?;
+                handlers.push(*key);
+                // Every nested captured segment has its own selected cut.
+                if !(selected && index == 0) {
+                    charge_effect_work(
+                        work,
+                        enclosing.len().saturating_add(1),
+                        RuntimePhase::Capture,
+                    )?;
+                    if enclosing.iter().rev().find(|(_, found)| found == key)
+                        != Some(&(*node, *key))
+                    {
+                        return Err(RuntimeFailure::InvalidControlState);
+                    }
+                    reserve_control(&mut retained, 1, RuntimeResource::CaptureInspection, false)?;
+                    retained.push((*node, *key));
+                }
+            }
+            Frame::ClauseBoundary {
+                handler,
+                continuation: Some(nested),
+                ..
+            } => {
+                charge_effect_work(work, 1, RuntimePhase::Capture)?;
+                let selected = selected_handler_for_discard(program, nested, *handler, work)?;
+                reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
+                pending.push((nested, 0, enclosing.len(), selected));
+            }
+            _ => {}
+        }
+    }
+    Ok(retained)
 }
 
 // Rust allocations cannot represent a non-zero `Frame` vector whose byte
@@ -878,6 +1014,16 @@ impl<'runtime> Machine<'runtime> {
         // Captured-cell accounting already includes every nested continuation.
         // Reserve the complete flattening workspace before detaching any owner.
         if self.frames.try_reserve(self.captured_cells).is_err() {
+            // No acquisition can capture its fresh guard or acquire a newer
+            // dependent. Dispose it while its older borrowed owners still live,
+            // even if the remaining forest must be preserved on refusal.
+            for frame in self.frames.iter_mut().rev() {
+                if let Frame::ProviderBoundary(boundary) = frame
+                    && boundary.phase == ProviderPhase::Acquire
+                {
+                    drop(boundary.owner.take());
+                }
+            }
             // Releasing an enclosing owner while an inaccessible retained child
             // remains would violate the host contract. Preserve the entire
             // forest on a teardown-allocation refusal, as disposal does.
@@ -894,6 +1040,13 @@ impl<'runtime> Machine<'runtime> {
             match &mut frame {
                 Frame::ProviderBoundary(boundary) => {
                     if let Some(owner) = boundary.owner.take() {
+                        if boundary.phase == ProviderPhase::Acquire {
+                            // Source acquisition has not published the guard or
+                            // entered a body that could acquire a dependent.
+                            // Older borrowed owners still live in outer frames.
+                            drop(owner);
+                            continue;
+                        }
                         // Acquisition reserved capacity for every live owner.
                         self.foreign_runtime
                             .as_mut()
@@ -912,7 +1065,7 @@ impl<'runtime> Machine<'runtime> {
                 }
                 Frame::ClauseBoundary { continuation, .. } => {
                     if let Some(mut continuation) = continuation.take() {
-                        self.frames.extend(continuation.frames.drain(..));
+                        self.frames.append(&mut continuation.frames);
                     }
                 }
                 _ => {}
@@ -1447,6 +1600,7 @@ impl<'runtime> Machine<'runtime> {
             node: scope.body,
             environment: environment.clone(),
             registration: Some(key),
+            provider: None,
         });
         self.live_registrations = live;
         self.next_registration = next;
@@ -2285,14 +2439,25 @@ impl<'runtime> Machine<'runtime> {
         else {
             return Err(RuntimeFailure::InvalidControlState);
         };
-        let selected_handler_present = matches!(captured.frames.first(),Some(Frame::HandlerBoundary{node,..}) if self.handler(*node).is_some_and(|boundary|boundary.id()==handler));
+        let selected_handler_present = selected_handler_for_discard(
+            &self.program,
+            captured,
+            handler,
+            &mut self.instantiation_work,
+        )?;
         let mut pending = Vec::new();
         let mut count = 0usize;
         let mut owners = 0usize;
-        let mut enclosing_handlers = 0usize;
         let mut registrations = Vec::new();
-        let mut retained_registration_handlers = Vec::new();
         let mut associated = Vec::new();
+        let retained_provider_handlers = retained_provider_handlers_for_discard(
+            &self.program,
+            &self.frames[..boundary_index],
+            captured,
+            selected_handler_present,
+            &mut self.instantiation_work,
+        )?;
+        let enclosing_handlers = retained_provider_handlers.len();
         charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Capture)?;
         reserve_control(&mut pending, 1, RuntimeResource::CaptureInspection, false)?;
         pending.push(captured);
@@ -2310,7 +2475,7 @@ impl<'runtime> Machine<'runtime> {
                     Some(usize::MAX - count),
                 )
             })?;
-            for (frame_index, frame) in capture.frames.iter().enumerate() {
+            for frame in &capture.frames {
                 match frame {
                     Frame::CleanupCompletion { .. } | Frame::CloseCompletion => {
                         return Err(RuntimeFailure::InvalidControlState);
@@ -2352,31 +2517,17 @@ impl<'runtime> Machine<'runtime> {
                     }
                     Frame::ResourceBoundary { .. } | Frame::CleanupBoundary { .. } => owners += 1,
                     Frame::HandlerBoundary {
-                        node, registration, ..
+                        node,
+                        provider,
+                        registration,
+                        ..
                     } => {
                         self.handler(*node)
                             .ok_or(RuntimeFailure::InvalidControlState)?;
-                        let selected = selected_handler_present
-                            && std::ptr::eq(capture, captured)
-                            && frame_index == 0;
-                        if !selected {
-                            enclosing_handlers = enclosing_handlers
-                                .checked_add(1)
-                                .ok_or(RuntimeFailure::InvalidControlState)?;
-                            if let Some(key) = registration {
-                                charge_effect_work(
-                                    &mut self.instantiation_work,
-                                    1,
-                                    RuntimePhase::Capture,
-                                )?;
-                                reserve_control(
-                                    &mut retained_registration_handlers,
-                                    1,
-                                    RuntimeResource::RegistrationIdentities,
-                                    false,
-                                )?;
-                                retained_registration_handlers.push(*key);
-                            }
+                        if self.provider_scope(*node).is_some() != provider.is_some()
+                            || provider.is_some() && registration.is_some()
+                        {
+                            return Err(RuntimeFailure::InvalidControlState);
                         }
                     }
                     Frame::ProviderBoundary(boundary) => {
@@ -2399,13 +2550,12 @@ impl<'runtime> Machine<'runtime> {
                 return Err(RuntimeFailure::InvalidControlState);
             }
         }
-        // Each retained registration handler is unwound before its exact owner.
-        // Admit all membership work before consuming the captured frame forest.
+        // Closing membership lookup is infallible after transfer. Admit its
+        // complete comparison bound before consuming any captured frame.
         charge_effect_work(
             &mut self.instantiation_work,
-            registrations
-                .len()
-                .checked_mul(retained_registration_handlers.len())
+            count
+                .checked_mul(enclosing_handlers)
                 .ok_or(RuntimeFailure::InvalidControlState)?,
             RuntimePhase::Capture,
         )?;
@@ -2458,15 +2608,13 @@ impl<'runtime> Machine<'runtime> {
                     ..
                 } => work.append(&mut nested.frames),
                 Frame::RegistrationBoundary {
-                    key,
                     handler_active,
                     pending_invocations,
                     ..
                 } => {
-                    // The original retained handler boundary clears this flag
-                    // when it structurally unwinds; discarded invocations do
-                    // not retain their resumptions or abandoned body results.
-                    *handler_active = retained_registration_handlers.contains(key);
+                    // Generated hook handlers are ordinary captured handlers,
+                    // so no handler or invocation survives owned discard.
+                    *handler_active = false;
                     *pending_invocations = 0;
                     closing.push(frame);
                 }
@@ -2483,14 +2631,12 @@ impl<'runtime> Machine<'runtime> {
                     closing.push(frame)
                 }
                 Frame::CleanupBoundary { .. } => closing.push(frame),
-                Frame::HandlerBoundary { .. } => {
-                    // These are the original non-owning handler frames. Keep
-                    // their structural order and environments for completion,
-                    // including user handlers nearer than provider handlers.
-                    let selected = selected_handler_present && work.is_empty();
-                    if !selected {
-                        closing.push(frame);
-                    }
+                Frame::HandlerBoundary {
+                    node,
+                    provider: Some(key),
+                    ..
+                } if retained_provider_handlers.contains(&(*node, *key)) => {
+                    closing.push(frame);
                 }
                 _ => {}
             }
@@ -2725,6 +2871,7 @@ fn dispatch_entry(
                             node,
                             environment,
                             registration: None,
+                            provider: None,
                         },
                     ),
                     EffectOperation::Resume(resume) => Transition::suspend(
@@ -4195,6 +4342,391 @@ mod tests {
             .unwrap();
     }
 
+    // Private path-proof witnesses use unique counted test payloads. Actual
+    // native admission/execution is covered by the public provider fixtures.
+    fn association_test_owner(
+        runtime: &mut crate::foreign::runtime::ForeignRuntime,
+        node: NodeId,
+        key: ActivationKey,
+        drops: std::rc::Rc<std::cell::Cell<usize>>,
+    ) -> Frame {
+        #[derive(Debug)]
+        struct Payload(std::rc::Rc<std::cell::Cell<usize>>);
+        impl crate::foreign::runtime::NativeResourceOwner for Payload {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+        }
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let owner = runtime
+            .guard(
+                Box::new(Payload(drops)),
+                NominalTypeId::new(crate::module::ModuleId::new(0), 0),
+                Vec::new(),
+            )
+            .unwrap();
+        Frame::ProviderBoundary(Box::new(ProviderBoundary {
+            node,
+            key,
+            environment: Environment::new(),
+            owner: Some(owner),
+            quarantined_owner: None,
+            phase: ProviderPhase::Body,
+            finished: None,
+            saved: None,
+            discarded: false,
+        }))
+    }
+
+    fn association_test_handler(node: NodeId, key: Option<ActivationKey>) -> Frame {
+        Frame::HandlerBoundary {
+            node,
+            environment: Environment::new(),
+            registration: None,
+            provider: key,
+        }
+    }
+
+    #[test]
+    fn provider_discard_association_rejects_wrong_and_non_enclosing_owners_before_transfer() {
+        let (program, other_node, _) = registration_fixture();
+        let machine = Machine::new_effect(&program);
+        let node = machine.registration(other_node).unwrap().body;
+        let handler = machine.handler(node).unwrap().id();
+        let key = ActivationKey(7);
+        for case in [
+            "wrong-key",
+            "wrong-node",
+            "absent",
+            "unguarded",
+            "non-body",
+            "duplicate-owner",
+            "duplicate-handler",
+            "sibling",
+            "before-owner",
+        ] {
+            let drops = std::rc::Rc::new(std::cell::Cell::new(0));
+            let mut runtime = crate::foreign::runtime::ForeignRuntime::default();
+            let owner = association_test_owner(&mut runtime, node, key, std::rc::Rc::clone(&drops));
+            let mut frames = vec![owner, association_test_handler(node, Some(key))];
+            let mut created = 1;
+            match case {
+                "wrong-key" => {
+                    let Frame::HandlerBoundary { provider, .. } = &mut frames[1] else {
+                        unreachable!()
+                    };
+                    *provider = Some(ActivationKey(8));
+                }
+                "wrong-node" => {
+                    let Frame::HandlerBoundary { node, .. } = &mut frames[1] else {
+                        unreachable!()
+                    };
+                    *node = other_node;
+                }
+                "absent" => {
+                    frames.remove(0);
+                }
+                "unguarded" => {
+                    let Frame::ProviderBoundary(owner) = &mut frames[0] else {
+                        unreachable!()
+                    };
+                    drop(owner.owner.take());
+                }
+                "non-body" => {
+                    let Frame::ProviderBoundary(owner) = &mut frames[0] else {
+                        unreachable!()
+                    };
+                    owner.phase = ProviderPhase::Finish;
+                }
+                "duplicate-owner" => {
+                    frames.insert(
+                        1,
+                        association_test_owner(&mut runtime, node, key, std::rc::Rc::clone(&drops)),
+                    );
+                    created += 1;
+                }
+                "duplicate-handler" => frames.push(association_test_handler(node, Some(key))),
+                "sibling" => {
+                    let owner = frames.remove(0);
+                    let interpreter = frames.remove(0);
+                    frames.push(Frame::ClauseBoundary {
+                        handler,
+                        owner: ResumeId::new(0),
+                        registration: None,
+                        continuation: Some(CapturedContinuation {
+                            frames: vec![owner],
+                        }),
+                    });
+                    frames.push(Frame::ClauseBoundary {
+                        handler,
+                        owner: ResumeId::new(1),
+                        registration: None,
+                        continuation: Some(CapturedContinuation {
+                            frames: vec![association_test_handler(node, None), interpreter],
+                        }),
+                    });
+                }
+                "before-owner" => frames.swap(0, 1),
+                _ => unreachable!(),
+            }
+            let captured = CapturedContinuation { frames };
+            let before = drops.get();
+            assert_eq!(
+                retained_provider_handlers_for_discard(
+                    &machine.program,
+                    &[],
+                    &captured,
+                    false,
+                    &mut TypeWorkBudget::unbounded()
+                ),
+                Err(RuntimeFailure::InvalidControlState),
+                "{case}"
+            );
+            assert_eq!(drops.get(), before, "rejected inspection released {case}");
+            assert!(
+                !captured.frames.is_empty(),
+                "rejected inspection consumed {case}"
+            );
+            drop(captured);
+            assert_eq!(
+                drops.get(),
+                created,
+                "each unique test guard drops once for {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_discard_association_tracks_same_site_activations_and_each_selected_cut() {
+        let (program, registration_node, _) = registration_fixture();
+        let machine = Machine::new_effect(&program);
+        let node = machine.registration(registration_node).unwrap().body;
+        let handler = machine.handler(node).unwrap().id();
+        let first = ActivationKey(7);
+        let second = ActivationKey(8);
+        let drops = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runtime = crate::foreign::runtime::ForeignRuntime::default();
+        let captured = CapturedContinuation {
+            frames: vec![
+                association_test_owner(&mut runtime, node, first, std::rc::Rc::clone(&drops)),
+                association_test_handler(node, Some(first)),
+                association_test_owner(&mut runtime, node, second, std::rc::Rc::clone(&drops)),
+                association_test_handler(node, Some(second)),
+            ],
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        let expected = vec![(node, first), (node, second)];
+        assert_eq!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &[],
+                &captured,
+                false,
+                &mut measured
+            )
+            .unwrap(),
+            expected
+        );
+        let exact = measured.used();
+        assert!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &[],
+                &captured,
+                false,
+                &mut TypeWorkBudget::with_limit(exact - 1)
+            )
+            .is_err()
+        );
+        assert_eq!(drops.get(), 0);
+        assert_eq!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &[],
+                &captured,
+                false,
+                &mut TypeWorkBudget::with_limit(exact)
+            )
+            .unwrap(),
+            expected
+        );
+        drop(captured);
+        assert_eq!(drops.get(), 2);
+        let inherited = CapturedContinuation {
+            frames: vec![
+                association_test_owner(&mut runtime, node, first, std::rc::Rc::clone(&drops)),
+                Frame::ClauseBoundary {
+                    handler,
+                    owner: ResumeId::new(0),
+                    registration: None,
+                    continuation: Some(CapturedContinuation {
+                        frames: vec![
+                            association_test_handler(node, None),
+                            association_test_handler(node, Some(first)),
+                        ],
+                    }),
+                },
+            ],
+        };
+        assert_eq!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &[],
+                &inherited,
+                false,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap(),
+            vec![(node, first)]
+        );
+        drop(inherited);
+        assert_eq!(drops.get(), 3);
+        let outer = vec![association_test_owner(
+            &mut runtime,
+            node,
+            first,
+            std::rc::Rc::clone(&drops),
+        )];
+        let nonselected = CapturedContinuation {
+            frames: vec![
+                association_test_handler(node, None),
+                association_test_handler(node, Some(first)),
+            ],
+        };
+        assert_eq!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &outer,
+                &nonselected,
+                true,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap(),
+            vec![(node, first)]
+        );
+        drop(nonselected);
+        let selected = CapturedContinuation {
+            frames: vec![association_test_handler(node, Some(first))],
+        };
+        assert!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &outer,
+                &selected,
+                true,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+            .is_empty()
+        );
+        let nested = CapturedContinuation {
+            frames: vec![Frame::ClauseBoundary {
+                handler,
+                owner: ResumeId::new(0),
+                registration: None,
+                continuation: Some(selected),
+            }],
+        };
+        assert!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &outer,
+                &nested,
+                false,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+            .is_empty()
+        );
+        drop(nested);
+        drop(outer);
+        assert_eq!(drops.get(), 4);
+    }
+
+    #[test]
+    fn discard_rejects_mismatched_selected_handlers_at_root_and_nested_cuts() {
+        let (program, node, environment) = registration_fixture();
+        let machine = Machine::new_effect(&program);
+        let handler_node = machine.registration(node).unwrap().body;
+        let handler = machine.handler(handler_node).unwrap().id();
+        let wrong = HandlerId::new(handler.value().checked_add(1).unwrap());
+        let captured = CapturedContinuation {
+            frames: vec![Frame::HandlerBoundary {
+                node: handler_node,
+                environment,
+                registration: None,
+                provider: None,
+            }],
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        assert!(
+            selected_handler_for_discard(&machine.program, &captured, handler, &mut measured)
+                .unwrap()
+        );
+        let exact = measured.used();
+        assert!(
+            selected_handler_for_discard(
+                &machine.program,
+                &captured,
+                handler,
+                &mut TypeWorkBudget::with_limit(exact - 1)
+            )
+            .is_err()
+        );
+        assert!(
+            selected_handler_for_discard(
+                &machine.program,
+                &captured,
+                handler,
+                &mut TypeWorkBudget::with_limit(exact)
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            selected_handler_for_discard(
+                &machine.program,
+                &captured,
+                wrong,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        assert_eq!(captured.frames.len(), 1);
+        let forest = CapturedContinuation {
+            frames: vec![Frame::ClauseBoundary {
+                handler: wrong,
+                owner: ResumeId::new(0),
+                continuation: Some(captured),
+                registration: None,
+            }],
+        };
+        assert_eq!(
+            retained_provider_handlers_for_discard(
+                &machine.program,
+                &[],
+                &forest,
+                false,
+                &mut TypeWorkBudget::unbounded()
+            ),
+            Err(RuntimeFailure::InvalidControlState)
+        );
+        let Frame::ClauseBoundary {
+            continuation: Some(nested),
+            ..
+        } = &forest.frames[0]
+        else {
+            panic!("failed inspection consumed the nested continuation");
+        };
+        assert_eq!(nested.frames.len(), 1);
+    }
+
     fn registration_fixture() -> (ValidatedEffectProgram, NodeId, Environment) {
         let program = effect_program(
             "effect Adjust {\npublish : Int -> Int\n}\nmain : Unit -> Int\nmain () = hook Adjust {\nregister Adjust (fn(value) {\nvalue + 1\n}) {\n42\n}\n}\n",
@@ -4383,6 +4915,7 @@ mod tests {
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
+            provider: None,
         });
         assert_eq!(
             machine.registration_owner(RegistrationKey(0), handler_node, 1),
@@ -4519,6 +5052,7 @@ mod tests {
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
+            provider: None,
         });
         assert_eq!(
             machine.return_request(request, &Instantiation::default(), integer("3")),
@@ -4587,6 +5121,7 @@ mod tests {
             node: handler_node,
             environment: environment.clone(),
             registration: Some(RegistrationKey(0)),
+            provider: None,
         });
         assert_eq!(
             machine.return_resume(resume, integer("4")),
@@ -4622,6 +5157,7 @@ mod tests {
             node: handler_node,
             environment,
             registration: Some(RegistrationKey(0)),
+            provider: None,
         };
         assert_eq!(
             machine.return_from(stale, integer("42")),
@@ -4735,6 +5271,7 @@ mod tests {
             node: handler_node,
             environment,
             registration: Some(RegistrationKey(0)),
+            provider: None,
         });
         let events = machine.effect_trace.clone();
         let result = if resume_transition {
@@ -6966,3 +7503,7 @@ mod tests {
             .expect("evaluator conversion erasure must fit a small stack");
     }
 }
+
+#[cfg(test)]
+#[path = "provider_publication_tests.rs"]
+mod provider_publication_tests;
