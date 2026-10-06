@@ -166,14 +166,12 @@ pub type StepResult = Row
 The library maps native operation results into these constructors in its checked
 handlers; it cannot add constructors to the native error nominal. Thus the S-01
 fixture's `MissingRow` and `UnexpectedRow` branches have type `Error`.
-`OpenConfig` initially has `InMemory` and `File(Bytes)` cases. `SqlText` wraps
-independent `Bytes`. The shared copying-value batch replaces the initial
-integer-list representation with the built-in packed type described
-[below](#selected-copying-values-and-literals-sqlite-workstream). At that batch
-boundary SQL and paths still use checked UTF-8 bytes; the following SQLite batch
-migrates them to `String`. Malformed SQL, empty SQL and paths are actual inputs,
-not native operation IDs standing in for SQL text. Neither boundary silently
-narrows integers.
+`OpenConfig` has `InMemory` and `File(String)` cases. `SqlText` wraps
+independent `String`. The shared copying-value batch removed the initial
+integer-list representation; the SQLite copying batch uses built-in packed
+Bytes for BLOBs and String for SQL, paths, TEXT and diagnostics. Malformed SQL,
+empty SQL and paths are actual inputs, not native operation IDs standing in for
+SQL text. Native conversion never silently narrows integers.
 
 The first registered SQLite module has the following complete ordinary data
 shapes. Constructor identities and field order are manifest facts; codec
@@ -181,7 +179,7 @@ dispatch uses those identities rather than searching for spellings at each call.
 
 ```text
 pub type OpenConfig = InMemory
-| File(Bytes)
+| File(String)
 pub type InputFault = BadIndex
 | BadInteger
 | BadBytes
@@ -190,11 +188,12 @@ pub type InputFault = BadIndex
 | BadSql
 | MultipleStatements
 | BadPath
+| BadText
 pub type ProtocolFault = NotPrepared
 | NotRow
 | AfterDone
 | ClosedOwner
-pub type Error = NativeFailure(Int, Bytes)
+pub type Error = NativeFailure(Int, String)
 | InputFailure(InputFault)
 | ProtocolFailure(ProtocolFault)
 | ConversionFailure
@@ -216,6 +215,8 @@ pub type Acquire<State, E> = Acquired(State)
 pub type Finish<State, E> = Consumed
 | ConsumedFailure(E)
 | Retained(State, E)
+pub type TextOrNull = NullText
+| TextValue(String)
 ```
 
 The two state families are public opaque native nominal families of kinds
@@ -228,10 +229,10 @@ checking and runtime postcondition tokens are required even if a client
 constructs a `Consumed` value.
 
 `NativeFailure` stores the exact native result code and a copied diagnostic as
-independent bytes. Input/protocol faults map the safe adapter's structured
+independent String. Input/protocol faults map the safe adapter's structured
 failure before native use. Native column-kind rejection is `ColumnTypeMismatch`;
-a failed native conversion is `ConversionFailure`; an actual recoverable native
-copy-allocation failure is `AllocationFailure`. Internal Ash work/storage
+a failed native conversion is `ConversionFailure`; actual SQLite allocation failure remains `NativeFailure` with its native code;
+`AllocationFailure` is reserved and unused by this adapter. Internal Ash work/storage
 exhaustion remains a terminal runtime failure and is never relabeled by this
 codec. Empty SQL maps to `Refused(EmptySql)`; malformed SQL maps to a
 `PrepareFailure`. Failed open maps to `OpenFailure`, finalize error to consumed
@@ -240,10 +241,10 @@ state token. These wrappers keep the error families distinct without duplicate
 constructor names in the registered module.
 
 The shared-batch codec admits bounded packed bytes and produces independent
-packed copies from native diagnostics/output. The initial `MoreBytes`/
+packed Bytes/String copies from native diagnostics/output. The initial `MoreBytes`/
 `EmptyBytes` family is removed from the manifest and source re-exports. `File` requires a valid owned UTF-8 path
 with no embedded zero; `InMemory` supplies the native `:memory:` filename.
-`SqlText` remains a source newtype over these bytes; preparation passes their
+`SqlText` is a source newtype over String; preparation passes their
 checked explicit length and rejects multiple statements. Empty `BlobBytes` is a
 BLOB and `NullBytes` is SQL null. Neither turns into the other through a null
 host slice pointer. Source error mapping adds only the library protocol cases
@@ -254,7 +255,7 @@ Registered native modules define canonical `OpenConfig`, error, `Result`,
 library. `Bytes` is a built-in type. The SQLite source module re-exports
 configuration and
 lifecycle-error families, maps native operation results into source result
-families, and wraps SQL bytes in its own `SqlText`. The native module does not
+families, and wraps SQL String in its own `SqlText`. The native module does not
 import the SQLite source module. Exact first signatures are:
 
 ```text
@@ -265,7 +266,7 @@ Native.Connection<R>.diagnostic:
 Native.Connection<R>.close:
   Native.ConnectionState<R> -> Native.Finish<Native.ConnectionState<R>, Native.CloseError>
 Native.Statement<S,C>.prepare:
-  (Native.ConnectionState<C>, Bytes) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
+  (Native.ConnectionState<C>, String) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
 Native.Statement<S,C>.bind_int:
   (Native.StatementState<S,C>, Int, Int) -> Native.Result<Unit>
 Native.Statement<S,C>.step:
@@ -282,6 +283,10 @@ Native.Statement<S,C>.reset:
   Native.StatementState<S,C> -> Native.Result<Unit>
 Native.Statement<S,C>.clear_bindings:
   Native.StatementState<S,C> -> Native.Result<Unit>
+Native.Statement<S,C>.bind_text:
+  (Native.StatementState<S,C>, Int, Native.TextOrNull) -> Native.Result<Unit>
+Native.Statement<S,C>.column_text:
+  (Native.StatementState<S,C>, Int) -> Native.Result<Native.TextOrNull>
 ```
 
 These are pure operation arrows inside their respective parameterized native
@@ -2460,3 +2465,116 @@ payloads and the published root. Repeated scalar references cannot amplify copy
 work beyond that bound. The copying adapter admits byte-copy work before reserving the output
 buffer. Sharing an already immutable payload does not require a bytewise copy,
 but it does not permit a binding to publish an unbounded codec graph.
+
+### SQLite copying profile and conversion outcomes
+
+The copying batch migrates the previously delivered packed byte interface to
+`SqlText(String)`, `File(String)` and `NativeFailure(Int, String)` diagnostics.
+Built-in Bytes remains the BLOB representation. The registered module appends
+`TextOrNull = NullText | TextValue(String)` after existing nominal declarations,
+appends BadText after the existing InputFault constructors, and appends native
+Statement bind_text/column_text operations at ordinals 9/10. Existing operation,
+constructor and resource identities in the packed-batch registration remain.
+The source library exposes exact StatementOps<S,C> methods for all scalar/byte/
+text binds and columns, reset and clear_bindings. Checked handlers map the native
+Result and StepResult families into the library families without adding native
+constructors or extra effects.
+
+SQL, paths and bound TEXT reject NUL before native use. Parameter indices require
+positive representable C indices; column indices require nonnegative representable
+C indices and an available row. A representable positive parameter index outside
+the prepared statement's parameter set reaches SQLite and preserves its native
+SQLITE_RANGE result (code 25); the adapter does not add a parameter-count query.
+Ash Int remains arbitrary at the generic codec;
+only the SQLite binding performs checked signed 64-bit conversion. Refusal returns
+BadInteger for the value or BadIndex/BadColumn for its operand position. BLOB/TEXT
+lengths use checked C int conversion. Inputs use SQLITE_TRANSIENT copying calls.
+
+The adapter checks current-row/index/storage-kind preconditions before copying or
+converting a column. Integer rejects null; nullable TEXT/BLOB admit only their
+storage kind or null. This ordering repairs the counterexample where requesting
+an integer from malformed TEXT returned InvalidUtf8 instead of wrong-kind. Native
+TEXT uses its explicit byte length, preserves embedded NUL, and rejects invalid
+UTF-8 without replacement. Copies become ordinary independent Ash values before
+publication and remain valid after reset/finalize/close.
+
+InputFault mappings are BadPath for path NUL; BadSql for SQL NUL/length;
+MultipleStatements for unused non-whitespace SQL; BadIndex for parameter index;
+BadColumn for column index; BadBytes for BLOB length; BadText for TEXT length/NUL;
+and ColumnTypeMismatch for incompatible storage kind. ProtocolFailure distinguishes
+NotPrepared for binding outside preparation, NotRow for columns without a row,
+AfterDone for stepping a completed statement, and ClosedOwner for closed native
+connection state. A failed statement requires reset before reuse. Empty SQL keeps
+EmptySql acquisition refusal; genuine native errors keep their exact code and
+strictly copied UTF-8 diagnostics. Invalid native UTF-8 produces ConversionFailure.
+Source `AllocationFailure` remains reserved; this adapter uses NativeFailure for
+actual SQLite NOMEM and terminal internal resource outcomes for host copy refusal.
+
+A bounded native output copy checks byte length before fallible buffer reservation.
+It records OutputCopied only after a successful native-to-host copy. That event
+measures the native copy, not all subsequent host allocations or codec work.
+Generic codec admission independently bounds nodes, edges, packed bytes and every
+large-integer copy. Host work/storage refusal is terminal; it never substitutes
+for an ordinary SQLite result. The existing global host-allocation assumption is
+unchanged.
+
+Reset returns to preparation and preserves bound values, including when it reports
+a prior native execution error. Clear-bindings is a separate prepared-state call.
+Finalize consumes the statement even when returning a preceding error, so the
+source envelope preserves both body and consumed completion errors. Refused close
+retains the same connection guard with source access removed. No source retry or
+close_v2 substitution is introduced. Host teardown remains a separate transition.
+
+### Bounded capture analysis for ordinary copying helpers
+
+The copying fixtures retain exact StatementProvider evidence through ordinary
+polymorphic helpers. Capture specialization replaces a captured abstract method
+port only when its canonical requirement and method identities match a supplied
+binding. Inert alias, merge, type-application and evidence occurrences preserve
+that route; unmatched captures retain their lexical creation context. Every
+matching key matters, including distinct methods sharing the same graph port.
+
+The implementation indexes original evidence positions by exact port and by
+canonical requirement/method key before analysis. Capture specialization uses
+the port index; installing selected method bindings uses the canonical key
+index. Both visit every matching position in original order instead of scanning
+unrelated evidence. Duplicate keys and ports are not collapsed, and destination
+specialization and argument contexts remain the same. This changes bounded work, not capture
+equations, authority or effect rows. Index allocation and construction charge the
+same cumulative ledger and may refuse. The fixed type and depth limits remain
+unchanged. The public copying and session programs are the capability witnesses;
+focused internal identity cases cover shared ports, duplicate canonical keys
+at distinct ports, inert aliases and unmatched lexical captures that public
+programs do not directly construct.
+
+### Diagnostic admission and terminal foreign failures
+
+The selected SQLite binding supplies an explicit diagnostic byte bound when it
+opens the connection. Its private native guard carries that bound through open,
+operation and completion diagnostics. A diagnostic scan stops at its first NUL
+and reads at most the admitted payload plus one terminator/prefix probe. A
+nonzero prefix beyond the bound proves only a minimum required length. It causes
+work refusal before payload allocation or UTF-8 conversion; no diagnostic is
+truncated or replaced. Complete admitted diagnostics require valid UTF-8 and
+fallible independent storage reservation. Ordinary low-level native callers may
+select a different explicit bound; native guard code imports no compiler work
+constant.
+
+Diagnostic-copy refusal retains its native operation and exact status separately
+from its copy cause. The Ash binding maps detected work and host-storage refusal
+to terminal internal outcomes, not source `AllocationFailure` or an invented
+native code. Invalid admitted diagnostic UTF-8 maps to `ConversionFailure`.
+Actual native failure, including SQLite NOMEM, yields `NativeFailure` when its
+diagnostic is admitted; otherwise the terminal copy failure dominates publication
+while native metadata and observations retain the original code. Finalization
+already consumes the statement and refused close already retains the connection
+before reporting. Report failure cannot undo either postcondition.
+
+Generic failure classification is owned by the common workstream after the
+lookup handoff. The prepared interface distinguishes contract/binding failure,
+detected work refusal, detected storage refusal, and admission whose work/storage
+cause was erased. Its phases follow acquisition, access and completion. An
+erased cause must not falsely name storage; quantities remain absent when the
+interface supplies none. This requirement and its public lifecycle witnesses are
+transferred for common review and integration. They do not authorize concurrent
+SQLite changes to the generic evaluator or validation policy.
