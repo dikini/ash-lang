@@ -4367,3 +4367,60 @@ fixtures. The agreed order is verified common delivery, unsigned merge preservin
 both histories into `codex/provider-experiments`, integrated verification, then
 SQLite's preserving import. No merge targets `main`. This remains the bounded
 DN-0036 experiment; it creates no current Ash semantics or whole-contract proof.
+
+
+### Integrated prepared lookup and capture checkpoint (2026-10-06, receipt 232)
+
+Unsigned common commit `e59d231679cfa98759deed3a0574c2458a22cefc` is integrated
+by unsigned merge `cfc69030566c6d0a53df0ca8e3ae2f4f0e9e8e52` into
+`codex/provider-experiments`. The merge preserves both parents, original tip
+`754a25f54b436711af85bf35257bba3a870377a4` and the common commit. The merge tree
+matches the common commit tree exactly. The delivery contains only capture control, capture values,
+the precise borrowed-owner architecture census entry and this execution record.
+All broader SQLite library, manifest, native and fixture working changes stay
+outside it. All 26 unrelated original drafts retain their bytes and status.
+
+Receipt 232 executes the unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify`
+in the original worktree at the merge. Formatting, metadata, all-targets build,
+strict all-feature workspace lint, all-targets/all-feature tests and rustdoc
+pass. The outer Ash library reports 1,631 passes; architecture reports 43.
+All 117 reported summary blocks have zero failures and zero ignores; these
+include nested fresh-child reruns and do not count unique tests. This gate
+covers the original SQLite S-01, arena lifecycle, owner rows, callbacks/control,
+retention, independent Core, modules, transforms and deep-input cases. It does
+not include the separate, uncommitted expanded SQLite package.
+
+The explicit return is `2026-10-06T18:41:14.326689+00:00`, after 1,115.645
+seconds. Raw log SHA-256 is
+`6f0e10bbd3b86b795ea526e0b1f4ccca4fd142bd72aa0729dac6a1631036b904`
+in `prepared-type-capture-delivery-232/` under the common evidence directory.
+The common working package and empty index, the complete SQLite worktree and
+the original unrelated working files and empty index remain unchanged, with no
+active verification engine. Commit objects carry no GPG signatures. Independent
+contract, concrete documentation, measured-result and integration reviews pass.
+
+SQLite imports this verified delivery by unsigned merge
+`f13e95060ebe5690288d48374dd4f9fd68e91cae`, preserving both its existing
+history and all 43 other owned files. Its execution record merges additively;
+the refreshed coherent 44-file snapshot records that deliberate tracking change.
+Common retains compiler, Core, capture, provider checking, generic runtime and
+shared merge ownership. SQLite retains library, manifest, native adapters,
+fixtures and its execution evidence. Cargo, LSP, formatter and merge windows
+remain serial. Further common updates arrive through the original branch.
+
+SQLite subsequently attempts all four original programs on its imported branch
+under normal limits, without instrumentation. Resume passes; copying, persistence
+and bound NUL each fail with `Typing(Internal(TypeResourceExhausted))`. All
+three worktrees retain their complete source pins, heads, statuses and indexes,
+with no active engine at the return. Those logs confirm outcomes, not a finer
+failure location. The exact completed owner attribution remains receipt 229.
+
+The three larger normal-budget failures remain unresolved, with the exact
+matched residuals recorded above. This is verified partial compiler progress,
+not complete SQLite library acceptance or an intrinsic lower-bound proof.
+Primitive-input precision, productive cursor borrowing and local method lookup
+accounting remain separately unmeasured candidates. No production work quota,
+depth limit, source assertion, language rule or foreign assumption changes.
+This remains bounded DN-0036 experimental evidence. Later typed arena allocation,
+Layout, references, containment, borrowing, sharing and storage families remain
+separate, as do DN-0037 and DN-0038.
