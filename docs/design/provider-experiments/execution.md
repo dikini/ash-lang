@@ -6,6 +6,58 @@
 > This record assigns work and evidence. It has no independent semantic or
 > architectural authority and leaves the current tree when this work finishes.
 
+## Current SQLite checkpoint (2026-10-06)
+
+The selected shared compiler repair is isolated in unsigned common commit
+`e59d231679cfa98759deed3a0574c2458a22cefc` and integrated by unsigned merge
+`cfc69030566c6d0a53df0ca8e3ae2f4f0e9e8e52` into
+`codex/provider-experiments`. Its unfiltered `CARGO_BUILD_JOBS=1 cargo xtask
+verify` passes all six gates, including 1,631 parent library tests. The exact
+three compiler and architecture files were reviewed before integration; the
+fourth file records the evidence. SQLite imports that branch through unsigned
+merge `f13e95060ebe5690288d48374dd4f9fd68e91cae`, preserving both histories,
+all forty-three other SQLite-owned files and its existing evidence document.
+The imported worktree is clean, and the coherent forty-four-file snapshot and
+archive are refreshed.
+
+Four fresh exact original program tests then run with one Cargo job, one test
+thread and normal work limits. Captured resume passes. Copying, bound-NUL copying
+and transaction/reopen persistence each fail with
+`Typing(Internal(TypeResourceExhausted))`. All four cases are attempted; no
+program, assertion or validation check is replaced. The uninstrumented failures
+identify the typing boundary, without reestablishing the finer initialization
+location observed before these repairs.
+
+The [combined diagnostic measurement](#prepared-type-lookup-and-structural-capture-installation-2026-10-06)
+uses the same original programs and a matched baseline. Its remaining excess
+over normal allowances is:
+
+| Program | Source checking | Independent Core | Final elaboration |
+| --- | ---: | ---: | ---: |
+| Copying | 1,088,459 | 13,888 | 0 |
+| Bound-NUL copying | 1,088,459 | 13,883 | 0 |
+| Persistence | 313,146 | 715,758 | 49,298 |
+| Captured resume | 0 | 0 | 0 |
+
+These are separate budget owners. Ordinary Type work remains limited to 327,680,
+independent Core to 983,040 and parser depth to 128. Diagnostic completion is
+distinct from normal-limit acceptance. The shared repair makes substantial
+progress; the three larger programs still block the final SQLite delivery.
+
+The normal-program return is `2026-10-06T18:48:04.483885+00:00`, after 69.460
+seconds. All Common, integration and SQLite file guards, heads, statuses and
+indexes remain unchanged, with no engines. Exact commands, raw logs, return and
+independent audit remain in `sqlite-2026-10-05/handoff/verified232-import-normal-programs/`
+under the external evidence archive. The import receipt and refreshed owned-file
+snapshot remain adjacent to that directory.
+
+Common owns further shared compiler, Core, capture, provider checking and generic
+runtime changes. SQLite owns the adapter, Ash library, fixtures, examples and
+documentation. Further compiler requirements go to Common; Cargo windows and
+integration operations remain serial. Combined review and the verified unsigned
+SQLite merge back into `codex/provider-experiments` follow normal acceptance of
+the original larger programs. This remains bounded DN-0036 experiment evidence.
+
 ## SQLite copying workstream (2026-10-05)
 
 Authorized implementation starts from integration commit `53db4eb` in
