@@ -1562,6 +1562,11 @@ impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
                 pending.push(child);
             }
         }
+        // The complete traversal collected no binding that can remove a variable.
+        if preparation.bound.is_empty() {
+            charge(budget, 1)?;
+            return Ok(());
+        }
         charge(
             budget,
             preparation
@@ -4905,6 +4910,49 @@ mod tests {
             .unwrap();
         assert_eq!(actual.variables, expected.variables);
         assert_eq!(actual.identities, expected.identities);
+    }
+
+    #[test]
+    fn requested_metadata_empty_completed_bindings_preserve_large_metadata_and_seeded_membership() {
+        use super::super::{
+            dialect::ArenaId, effect::EffectExprKind, type_ops::TypeAbstractionNode,
+        };
+        use crate::types::Kind;
+        let mut nodes =
+            metadata_recipe_nodes(&[(1200..1264).collect(), vec![]], &[vec![], vec![0]]);
+        let Type::Tuple(elements) = &mut nodes[0].ty else {
+            unreachable!()
+        };
+        let mut expanded = std::mem::take(elements).into_vec();
+        expanded.extend([Type::Int, Type::Bool, Type::Unit, Type::String]);
+        *elements = expanded.into_boxed_slice();
+        let seed = [1500, 1200, 1201];
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        for _ in 0..2 {
+            requested_metadata_matches(&mut owner, 1, &seed);
+            let actual = owner.collect(1, &mut TypeWorkBudget::unbounded()).unwrap();
+            let expected = metadata_reference(&nodes, 1, &[]);
+            assert_eq!(actual.variables, expected.variables);
+            assert_eq!(actual.identities, expected.identities);
+            assert_eq!(actual.variables.len(), 64);
+        }
+        assert!(!requested_metadata_compact(&owner, 1));
+        drop(owner);
+        nodes[1].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                vec![(TypeVariableId::generated(1200), Kind::Type)],
+                NodeId::new(ArenaId::new(0), 0),
+            )),
+        ));
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        requested_metadata_matches(&mut owner, 1, &seed);
+        let mut actual = metadata_seed(&seed);
+        owner
+            .retain_into(&mut actual, 1, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert!(!actual.identities.contains(&TypeVariableId::generated(1200)));
+        assert!(actual.identities.contains(&TypeVariableId::generated(1500)));
+        assert!(actual.identities.contains(&TypeVariableId::generated(1201)));
     }
 
     #[test]

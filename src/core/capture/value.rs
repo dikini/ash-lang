@@ -3759,7 +3759,11 @@ impl<'a> Analysis<'a> {
                 if !ready {
                     return Ok(false);
                 }
-                for atom in copy_slice(&self.slots[function].atoms, budget)? {
+                // Atom storage is append-only; preserve the original prefix while routing.
+                let atom_count = self.slots[function].atoms.len();
+                charge(budget, atom_count)?;
+                for atom_index in 0..atom_count {
+                    let atom = self.slots[function].atoms[atom_index];
                     match atom {
                         Atom::Closure(target, creation) => {
                             let Expr::Function {
@@ -3838,7 +3842,10 @@ impl<'a> Analysis<'a> {
             } => {
                 fixed_setup = false;
                 let value = self.slot(*value, context, budget)?;
-                for atom in copy_slice(&self.slots[value].atoms, budget)? {
+                let atom_count = self.slots[value].atoms.len();
+                charge(budget, atom_count)?;
+                for atom_index in 0..atom_count {
+                    let atom = self.slots[value].atoms[atom_index];
                     match atom {
                         Atom::Aggregate(target, creation) => {
                             match &self.graph.expressions[target] {
@@ -3977,8 +3984,9 @@ impl<'a> Analysis<'a> {
                     bindings,
                 }
                 .install_inputs(budget)?;
-                let atoms = copy_slice(&visit.analysis.slots[value].atoms, budget)?;
-                for atom in atoms {
+                let atom_count = visit.analysis.slots[value].atoms.len();
+                for atom_index in 0..atom_count {
+                    let atom = visit.analysis.slots[value].atoms[atom_index];
                     visit = visit.route_atom(atom, budget)?;
                 }
             } // ASH_INPUT169_END_EVALUATE
@@ -4299,7 +4307,8 @@ impl<'a> Analysis<'a> {
             if let Some(reader) = self.current {
                 self.watch(slot, reader, budget)?;
             }
-            for atom in copy_slice(&self.slots[slot].atoms, budget)? {
+            // This walk only reads atoms; watches above change reader lists, not values.
+            for &atom in &self.slots[slot].atoms {
                 charge(budget, 1)?;
                 let fields = match atom {
                     Atom::Resource(..) => {
@@ -4838,6 +4847,51 @@ mod tests {
     }
 
     #[test]
+    fn evidence_self_source_snapshot_keeps_unknown_and_late_resource_dependencies() {
+        let mut graph = evidence_completion_graph();
+        let Expr::Evidence { value, .. } = &mut graph.expressions[6] else {
+            unreachable!()
+        };
+        *value = 6;
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        analysis.slot(8, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let owner = Atom::Resource(8, 0);
+        let handle = analysis.indices[&(2, 0)];
+        assert!(analysis.slots[handle].atoms.contains(&owner));
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, owner, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.atom(evidence, Atom::Unknown, &mut work).unwrap();
+        analysis.current = Some(evidence);
+        analysis.evaluate(evidence, &mut work).unwrap();
+        assert_eq!(analysis.slots[evidence].atoms, vec![Atom::Unknown, owner]);
+        analysis.current = None;
+        analysis.close(&mut work).unwrap();
+        let creation = analysis
+            .context(0, Transition::Root(190), &mut work)
+            .unwrap();
+        analysis.slot(8, creation, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let late = Atom::Resource(8, creation);
+        let handle = analysis.indices[&(2, creation)];
+        assert!(analysis.slots[handle].atoms.contains(&late));
+        analysis.atom(argument, late, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(
+            analysis.slots[evidence].atoms,
+            vec![Atom::Unknown, owner, late]
+        );
+        assert_eq!(
+            analysis.dependencies(evidence, &mut work).unwrap(),
+            vec![owner, late]
+        );
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs.contains(&(evidence, evidence)));
+    }
+
+    #[test]
     fn evidence_completion_keeps_late_dictionary_owners_and_exact_closure_readers() {
         let graph = evidence_completion_graph();
         let mut work = TypeWorkBudget::unbounded();
@@ -5056,11 +5110,11 @@ mod tests {
         let revision = measured.revision;
         let slots = measured.slots.len();
         // ASH_INPUT169_BEGIN_COST
-        // Paid input-phase guard and value-port lookup, singleton value copy,
-        // Function guard and completed-key lookup; dynamic routes still run.
-        let mut duplicate = TypeWorkBudget::with_limit(6);
+        // Paid input-phase guard and value-port lookup, Function guard and
+        // completed-key lookup; dynamic routes still run without a value copy.
+        let mut duplicate = TypeWorkBudget::with_limit(4);
         measured.evaluate(evidence, &mut duplicate).unwrap();
-        assert_eq!(duplicate.used(), 6);
+        assert_eq!(duplicate.used(), 4);
         // ASH_INPUT169_END_COST
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slots);
@@ -5221,11 +5275,11 @@ mod tests {
         let slot_count = measured.slots.len();
         let edges = measured.edge_pairs.clone();
         let watches = measured.watched_pairs.clone();
-        // Two existing slots+watches, one argument visit, a singleton atom copy,
+        // Two existing slots+watches, one argument visit, a paid atom visit,
         // and one completed-transfer lookup: no context or edge reconstruction.
-        let mut duplicate = TypeWorkBudget::with_limit(8);
+        let mut duplicate = TypeWorkBudget::with_limit(7);
         measured.evaluate(call, &mut duplicate).unwrap();
-        assert_eq!(duplicate.used(), 8);
+        assert_eq!(duplicate.used(), 7);
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slot_count);
         assert_eq!(measured.edge_pairs, edges);
@@ -7354,8 +7408,8 @@ mod tests {
                     analysis.dependencies(result, budget).map(|_| ())
                 }
             };
-            // Two singleton copy_slice owners cost two each, plus pop and atom visits.
-            let prefix = if shape == 0 { 0 } else { 6 };
+            // The singleton root costs two; its pop and borrowed atom visit cost one each.
+            let prefix = if shape == 0 { 0 } else { 4 };
             for limit in [0, prefix + WIDTH - 1] {
                 let mut budget = TypeWorkBudget::with_limit(limit);
                 assert!(matches!(run(&mut budget), Err(Failure::Resource)));
@@ -8494,7 +8548,16 @@ mod tests {
             analysis.current = Some(evidence);
             (analysis, evidence)
         };
-        let (mut measured, evidence) = setup();
+        let setup_with_live_value = || {
+            let (mut analysis, evidence) = setup();
+            let mut work = TypeWorkBudget::unbounded();
+            let value = analysis.indices[&(0, 0)];
+            let argument = analysis.indices[&(1, 0)];
+            analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            (analysis, evidence)
+        };
+        let (mut measured, evidence) = setup_with_live_value();
         let mut exact = TypeWorkBudget::unbounded();
         measured.evaluate(evidence, &mut exact).unwrap();
         assert_eq!(
@@ -8505,7 +8568,7 @@ mod tests {
         let mut saw_completed_inputs = false;
         for prefix in [0, 13] {
             for available in 0..exact.used() {
-                let (mut refused, evidence) = setup();
+                let (mut refused, evidence) = setup_with_live_value();
                 let mut short = TypeWorkBudget::with_limit(prefix + available);
                 short.charge(prefix).unwrap();
                 assert!(matches!(
@@ -8533,13 +8596,22 @@ mod tests {
                     SlotPreparation::EvidenceInputsInstalled
                 );
                 assert_eq!(refused.watched_pairs, measured.watched_pairs);
+                assert_eq!(
+                    refused.slots[evidence].atoms,
+                    measured.slots[evidence].atoms
+                );
             }
         }
         assert!(saw_pending && saw_completed_inputs);
+        // Keep the empty-input boundary separate from genuine live routing.
+        let (mut measured, evidence) = setup();
+        measured
+            .evaluate(evidence, &mut TypeWorkBudget::unbounded())
+            .unwrap();
         let mut warm = TypeWorkBudget::unbounded();
         measured.evaluate(evidence, &mut warm).unwrap();
-        // Empty live input still pays phase guard, exact value port and atom copy.
-        assert_eq!(warm.used(), 3);
+        // Empty live input pays only the phase guard and exact value port.
+        assert_eq!(warm.used(), 2);
         for available in 0..warm.used() {
             let mut short = TypeWorkBudget::with_limit(available);
             assert!(matches!(

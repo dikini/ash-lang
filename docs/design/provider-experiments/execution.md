@@ -4143,3 +4143,86 @@ Typed arena allocation, Layout, references, containment, borrowing, sharing and
 storage families remain later arena work. DN-0037 and DN-0038 remain separate.
 These are tested implementation properties under DN-0036 and foreign adapter
 assumptions, not current Ash semantics or a mechanized whole-P-1 proof.
+
+
+### Follow-on reductions in registry and capture work (2026-10-06)
+
+This common delivery changes three shared files. Contextual registry ordering
+merges natural nondecreasing runs after deriving every fallible key. Equal keys
+retain source order; full module identities remain part of the ordering. All
+registry, provenance, kind, owner, row and fragment checks still run. The new
+run storage, boundaries, comparisons and transfers remain fallible and charged.
+Descending input can pay extra run bookkeeping; the change does not promise a
+saving for every registry.
+
+Function metadata skips survivor filtering only after the complete traversal
+has established an empty binding collection. Capture dependency walks borrow atoms;
+Call, Project and Evidence routing read the original fixed prefix from
+append-only slots. Call and Project retain their per-atom admission charge.
+Later visits still observe appended atoms through the original watches and
+live propagation. No cached live result, ownership duplication,
+validation waiver, quota increase or depth increase is introduced.
+
+Separate diagnostic receipts 199b, 200 and 201b attribute the reductions.
+Natural merging saves 400 units in each of six copying-program registry checks,
+reducing their enclosing structure-check total from 35,367 to 32,967. Empty-bound
+filtering reduces the selected final copying value graph by 101 units, persistence by 257 and
+resume by 72; a shared 13-node graph instead costs three extra units. Removing
+atom snapshots reduces the completed resume entry capture from 76,510 to
+75,700. These are distinct source-pinned measurements, not an additive estimate
+of remaining work. Failed capture prefixes remain incomplete measurements and
+do not establish the work required for completion.
+
+Receipt 202 passed all-targets checking, then exposed three outdated library
+cost witnesses. Receipt 203 adjusts only those tests: two warm tariffs now
+reflect the removed snapshots, and the input-phase refusal witness uses genuine
+live routing after publication. Exact cut, no-publication, watch and retry
+checks remain; the empty-input and malformed-port cases remain separate.
+Independent source review confirms every production byte is unchanged by this
+correction. Receipt 203 passes the three focused tests and all 1,625 library tests,
+with no failures or ignores. Its combined public command stops at a 450-second
+harness timeout during the architecture census; this is incomplete verification,
+not a failed assertion. Receipt 203b gives architecture its own window: all 43
+checks pass in 434.29 seconds. The remaining eleven public binaries pass 153
+outer tests, and native adapter suites pass 60. A filtered child probe is not
+counted again. Formatting passes. Strict Clippy then finds a complex fixture
+tuple type in the new ordering test. Receipt 203c names that tuple with a local
+type alias; every production byte, fixture value and assertion remains unchanged.
+The affected test and final quality results are recorded with integration.
+
+The fourteen-operation SQLite package remains incomplete: its control, copying
+and session binaries report 14 passes and three typing-resource failures. The
+failed original programs are copied Unicode/BLOB/null values, bound NUL input
+and transaction/reopen persistence. Both control cases pass. No larger program
+is replaced with a smaller acceptance witness, and none of these failures is
+ignored. The package stays outside the common commit.
+
+Two source-only follow-ups remain unimplemented. A consuming private registry
+phase could move the completed owner map between qualified lifecycle fragments;
+actual registry/source/native identity and lexical/external eligibility must be
+observed first. Canonical comparisons and all fragment checks stay. Separately,
+copying startup needs disjoint original-call attribution of context creation,
+fresh capture specialization, dictionary routing and dependencies inside its
+first value close. Its analyser allocation is only 258 units; the large failed
+prefix is propagation work. Persistence stops before that startup and needs a
+separate control-preparation measurement. Neither study establishes a fitting
+cost, a completed optimization or a reason to raise the limit.
+
+Common retains shared compiler, Core, capture, provider checking, generic runtime
+and merge ownership. SQLite retains its matching manifest, native adapter,
+library and expanded fixtures. Those working changes remain outside this
+common commit. The agreed order is verified common commit, unsigned merge into
+`codex/provider-experiments`, integrated verification, then SQLite's preserving
+import. This work remains DN-0036 experimental evidence; it creates no current
+Ash semantics or whole-contract proof. Typed arena allocation, references and
+borrowing remain later arena work; DN-0037 and DN-0038 remain separate.
+
+Receipt 203c passes the affected ordering law, formatting, strict workspace
+all-targets Clippy and rustdoc with warnings denied. Its explicit return at
+`2026-10-06T12:09:51.112645+00:00` preserves all 1,240 input pins, branch HEAD,
+status and the empty index, with no active engine. The test-only repairs let
+the unchanged library, public and native evidence transfer. The raw failures,
+source reversals, independent reviews and returns remain in
+`connected-efficiency-delivery-202/`, `203/`, `203b/` and `203c/` under the common
+evidence directory. The unsigned merge and integrated full verification are
+still required before naming this a completed delivery.
