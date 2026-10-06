@@ -6066,3 +6066,89 @@ and persistence failures remain outstanding. Later arena allocation, Layout,
 references, containment, borrowing, sharing and storage families remain separate.
 These are tested DN-0036 experimental properties and foreign assumptions, not
 current Ash semantics or a mechanized whole-P-1 correspondence proof.
+
+
+### Prepared type lookup and structural capture installation (2026-10-06)
+
+This delivery reuses the type selector already built during capture-analysis
+startup. A consuming `TypeUniverseBuilder` publishes `PreparedTypeUniverse`,
+which retains the original borrowed type order and scalar ordinal buckets.
+Queries still pay for hashing, bucket lookup and every original full equality
+comparison. Hashes select candidates; original equality determines identity.
+Normalized function equality, the first original ordinal and unresolved argument
+behavior remain. The owner admits no mutable preparation view or second builder
+publication. Independent final Core constructs and checks its own analysis.
+
+The value analyser separates structural installation from observation. An actual
+Function constructor installs its original capture coordinates and edges without
+subscribing to capture values it never reads. Actual Evidence and Call transfers
+use consuming temporary loans carrying full current-inclusive coordinates and
+completion stamps. Actual queue-owned Alias and Merge routes retain their
+edge-owned notifications without repeating the same observing lookup. Input
+readiness, late owners, Unknown propagation, dependencies, structural order,
+fallible publication and useful notifications remain. No work quota, depth
+limit, final validation check or runtime ownership contract changes.
+
+The complete common value delta includes the earlier retained Function capture
+installation from receipt 208b. It excludes the expanded SQLite package,
+diagnostic observers, raised diagnostic ceilings, context interning, processed
+Call prefixes and subsequent primitive-input, cursor and method-accounting
+candidates. Those candidates remain separate investigations.
+
+Receipt 228 executes the selected three source files under production limits.
+The Ash library reports 1,631 passes, the sixteen affected public integration
+binaries report 230 distinct passes, the larger exact SQLite resume case passes,
+architecture reports 43, and native adapters report 60. All-targets build,
+formatting, strict all-feature workspace Clippy and warning-denied rustdoc pass.
+Nested fresh-child summaries are not added to these counts. Its explicit return
+is `2026-10-06T18:00:15.704991+00:00`, after 1,046.087 seconds, with all 1,240
+common and 1,250 SQLite source pins, branch heads, statuses and indexes restored.
+No candidate or verification engine remains. The independently reviewed source
+and actual quality receipts are evidence, not language or design authority.
+
+Receipt 229 runs all four original larger programs to completion under a
+reversible diagnostic ceiling. It compares to fresh receipt 227 with fixed-width
+temporary paths; strict pairing permits only the recorded PID literal difference.
+Every original program assertion executes. The four other budget owners match
+exactly. These are actual combined measurements, not sums of isolated savings.
+
+| Program | Source checking: baseline → selected | Independent Core: baseline → selected |
+| --- | ---: | ---: |
+| Copying | 1,599,733 → 1,416,139 | 1,492,198 → 996,928 |
+| Persistence | 690,310 → 640,826 | 2,657,855 → 1,698,798 |
+| Resume | 214,886 → 210,195 | 382,963 → 306,117 |
+| Bound NUL | 1,599,733 → 1,416,139 | 1,492,193 → 996,923 |
+
+The production ceilings remain 327,680 for each ordinary Type-work owner and
+983,040 for independent Core. Copying still exceeds source checking by
+1,088,459 and Core by 13,888; bound NUL has the same source deficit and a 13,883
+Core deficit. Persistence exceeds source checking by 313,146, final elaboration
+by 49,298 and Core by 715,758. Resume also passes separately under production
+limits in receipt 228. Diagnostic completion does not admit the other three
+programs under production limits. No smaller program replaces them.
+
+The largest observed prepared selector has 410 original types, ordered-vector
+capacity 512 and outer bucket capacity 448. Its capacity-derived payload
+estimates are 4,096 bytes for borrowed type slots and 14,336 for bucket pairs;
+the retained ordinal lengths occupy 3,280 bytes, and the owner header is 72.
+These figures exclude child-vector spare capacity, allocator/control/slack bytes
+and peak process memory. Publication ordinals identify diagnostic records, not
+budget-owner authority. The change extends the lifetime of already constructed,
+paid, fallibly allocated scalar buckets; it creates no second index or owned
+Type tree. Full comparison, cold hashing and publication charges remain.
+
+The explicit return is `2026-10-06T18:12:59.226126+00:00`, after 47.019 seconds.
+All four strict input, owner and storage readers pass; all common and SQLite
+pins, heads, statuses and indexes are restored, with normal ceilings, no helper,
+no retained overlay and no active engine. Raw results and exact reversals remain
+in `selected-quality-228/` and `selected-interaction-check-229/` under the common
+evidence directory. Independent source and actual-results reviews are required
+before integration; the integration commit and final original-branch gate remain
+pending at this preparation checkpoint.
+
+Common owns shared compiler, Core, capture, provider checking, generic runtime
+and merge coordination. SQLite owns library, manifest, native adapters and
+fixtures. The agreed order is verified common delivery, unsigned merge preserving
+both histories into `codex/provider-experiments`, integrated verification, then
+SQLite's preserving import. No merge targets `main`. This remains the bounded
+DN-0036 experiment; it creates no current Ash semantics or whole-contract proof.
