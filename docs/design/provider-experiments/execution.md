@@ -4203,9 +4203,11 @@ actual registry/source/native identity and lexical/external eligibility must be
 observed first. Canonical comparisons and all fragment checks stay. Separately,
 copying startup needs disjoint original-call attribution of context creation,
 fresh capture specialization, dictionary routing and dependencies inside its
-first value close. Its analyser allocation is only 258 units; the large failed
-prefix is propagation work. Persistence stops before that startup and needs a
-separate control-preparation measurement. Neither study establishes a fitting
+first value close. For the original copying graph with 64 evidence entries, value-analyser
+initialization costs 258 units. Startup includes symbolic/global root seeding
+and the first value close; their live work still needs separate attribution.
+Persistence stops before value startup and needs a separate control-preparation
+measurement. Neither study establishes a fitting
 cost, a completed optimization or a reason to raise the limit.
 
 Common retains shared compiler, Core, capture, provider checking, generic runtime
@@ -4224,5 +4226,58 @@ status and the empty index, with no active engine. The test-only repairs let
 the unchanged library, public and native evidence transfer. The raw failures,
 source reversals, independent reviews and returns remain in
 `connected-efficiency-delivery-202/`, `203/`, `203b/` and `203c/` under the common
-evidence directory. The unsigned merge and integrated full verification are
-still required before naming this a completed delivery.
+evidence directory. At that checkpoint, the unsigned merge and integrated full verification
+remained required before naming a completed delivery.
+
+
+### Integrated registry and capture reductions (2026-10-06, receipt 204)
+
+Unsigned common commit `b87e9a5d186f27855729a05afc426fee0a142bef` is integrated
+by unsigned merge `2f9cb30d8349ff4db191b7d7670be0fe53651974` into
+`codex/provider-experiments`. The merge parents are original tracking
+`4fcf6bc9bec16a95a3c806856c3ae86aeb8ea8c6` and the common commit. The commit
+contains only the three shared source files and this execution record. Both
+histories are preserved. SQLite's 44 package files and all 26 unrelated original
+working files remain outside the common delivery and retain their pinned bytes.
+
+The three reductions are natural registry merging, filtering after a completed
+empty binding collection, and reading capture atoms without temporary snapshots.
+Their isolated measurements and limits are recorded above. The exact producer,
+phase-publication, watch, prefix, retry, kind, authority and independent-validation
+obligations remain. Registry run storage is bounded and fallible. Fresh runtime
+identities, non-owning state access, generic provider dispatch and ownership
+completion contracts remain unchanged. No Ash work quota or depth limit rises.
+
+The independent contract review remains an evidence receipt, not a source of
+Ash semantics. The larger SQLite package remains 14
+passes and three original typing-resource failures; this common merge does not
+complete those copying, NUL-input or persistence cases. The source-only registry
+phase and live-startup investigations remain unimplemented.
+
+
+Receipt 204 runs the unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` in
+the original worktree at the merge commit. Formatting, metadata, all-targets
+workspace build, strict all-feature lint, all-targets/all-feature tests and
+rustdoc pass. The outer Ash library reports 1,625 passes; architecture reports
+43. All 117 reported test summary blocks have zero failures and zero
+ignores. That block count includes fresh-child summaries and does not count
+unique tests. The gate executes the original SQLite S-01, basic arena lifecycle,
+owner rows, callback/control, retention, independent Core, module, transform and
+deep-input paths.
+
+The explicit return is `2026-10-06T12:26:57.476488+00:00`, after 929.652
+seconds. Log SHA-256 is `fea87be85994d9c790f4ffb647354f2c485400bee561a9ba1f0968d319a78855` in
+`registry-capture-integrated-final-gate-204/`. All 1228 tracked inputs and
+26 unrelated working-file pins match; branch HEAD, status and the empty
+index are unchanged, with no active verification engine. The merge uses checked
+subprocess orchestration and preserves both parents, all unrelated drafts and
+the expanded SQLite working package.
+
+Common owns shared compiler, Core, capture, provider checking, generic runtime
+and merge coordination. SQLite's next import starts from this integrated
+commit and the documentation-only tracking tip, preserving its fourteen-operation
+manifest, matching native adapter, library and fixtures. Its copying, bound-NUL
+and persistence failures remain outstanding. Later arena allocation, Layout,
+references, containment, borrowing, sharing and storage families remain separate.
+These are tested DN-0036 experimental properties and foreign assumptions, not
+current Ash semantics or a mechanized whole-P-1 correspondence proof.
