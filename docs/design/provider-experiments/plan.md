@@ -61,12 +61,27 @@ unsigned merge commit into `codex/provider-experiments`; main is excluded.
 Deliveries 1–3 above are integrated. Batch 0 merged at `c38b9d2`, SQLite S-01
 at `7c97a45`, and the basic arena lifecycle at `53db4eb`. Independent SQLite
 and arena work starts from those original-branch integration commits. Delivery
-4 remains active; passing moving-source cases are recorded separately from
-integration in [execution](execution.md#current-checkpoint).
+4 is integrated at `3f9dd75`, with the complete original-branch gate recorded in
+[execution](execution.md#current-checkpoint). The separate generic cost delivery
+is integrated at `c97e0f3` and verified by receipt 116. The current common
+follow-on consolidates measured source preparation and capture work, preserving
+exact Type/row identities and independent Core checks. Its ten shared source and
+regression files are checked separately against the original twelve-operation
+SQLite contract. Receipts 182–184 pass library, connected public and
+architecture checks, then the focused test correction, strict lint and rustdoc.
+Unsigned integration and fresh original-worktree
+verification are required before this becomes a completed shared delivery.
 
-Root owns serial Cargo commands, tracking, unsigned commits and merges.
-Independent agents own disjoint Core, evidence and owner metadata files during
-Batch 0. Review the final diff and actual evidence after their changes converge.
+The String/TEXT manifest, executable adapter, source library and larger programs
+remain preserved SQLite-owned work. Their passing cases and three default-budget
+typing refusals stay separate from this generic delivery and from the verified
+common lifecycle/control delivery. No work or depth limit changes.
+
+Common owns shared compiler, Core, capture, provider checking and generic runtime
+changes after the SQLite handoff. SQLite owns its library, manifest and native
+adapter work and supplies executable evidence. Root coordinates serial Cargo
+windows, tracking, unsigned commits and real original-branch merges. Independent
+reviews and private studies may proceed in parallel without shared-file writes.
 An implementation obstacle does not authorize changing the selected semantics.
 
 SQLite-specific work after S-01 includes the remaining copying/API cases.

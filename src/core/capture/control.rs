@@ -17,6 +17,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    hash::{DefaultHasher, Hasher},
     sync::Arc,
 };
 
@@ -29,7 +30,7 @@ use crate::{
     types::{
         EffectInstance, EffectRow, EffectRowVariable, KindedArgument, Type, TypeVariableId,
         TypeWorkBudget, clone_effect_row_with_budget, clone_type_with_budget,
-        rebuild_effect_row_with_budget, same_type_with_budget,
+        hash_type_with_budget, rebuild_effect_row_with_budget, same_type_with_budget,
         substitute_type_and_row_variables_with,
     },
 };
@@ -296,12 +297,9 @@ impl Control {
                 pending
                     .try_reserve(value.targets.len())
                     .map_err(|_| Failure::Resource)?;
-                pending.extend(
-                    value
-                        .targets
-                        .iter()
-                        .map(|target| graph.callables[*target].body),
-                );
+                for target in &value.targets {
+                    pending.push(graph.callables.get(*target, budget)?.body);
+                }
             }
             Self::Handler { body, clauses, .. } => {
                 charge(budget, clauses.len() + 1)?;
@@ -1178,41 +1176,188 @@ fn provider_resource_survives(
     Ok(matches && !escaped)
 }
 
+// Buckets restrict candidate comparisons; only full equality admits a duplicate.
+// The constructor owns this index, and the borrowed first-occurrence vector stays authoritative.
+fn retain_type_universe_entry<'a>(
+    types: &mut Vec<&'a Type>,
+    buckets: &mut HashMap<u64, Vec<usize>>,
+    ty: &'a Type,
+    hash: u64,
+    budget: &mut TypeWorkBudget,
+) -> Result<bool, Failure> {
+    charge(budget, 1)?;
+    if let Some(ordinals) = buckets.get_mut(&hash) {
+        for ordinal in ordinals.iter() {
+            charge(budget, 1)?;
+            let previous = types.get(*ordinal).ok_or(Failure::Invalid)?;
+            if same_type_with_budget(previous, ty, budget).map_err(|_| Failure::Resource)? {
+                return Ok(false);
+            }
+        }
+        charge(budget, 2)?;
+        types.try_reserve(1).map_err(|_| Failure::Resource)?;
+        ordinals.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let ordinal = types.len();
+        types.push(ty);
+        ordinals.push(ordinal);
+    } else {
+        charge(budget, 3)?;
+        let mut ordinals = Vec::new();
+        ordinals.try_reserve(1).map_err(|_| Failure::Resource)?;
+        buckets.try_reserve(1).map_err(|_| Failure::Resource)?;
+        types.try_reserve(1).map_err(|_| Failure::Resource)?;
+        ordinals.push(types.len());
+        types.push(ty);
+        buckets.insert(hash, ordinals);
+    }
+    Ok(true)
+}
+
+// This constructor-local owner exposes no mutable universe or phase view.
+// Entries only append, and consuming it ends the Unit admission proof.
+struct TypeUniverseBuilder<'a> {
+    ordered: Vec<&'a Type>,
+    buckets: HashMap<u64, Vec<usize>>,
+    unit: UnitPhase,
+}
+
+enum UnitPhase {
+    Unseen,
+    Admitted,
+}
+
+// Constructed only by the actual Unit match; cold admission uses this borrow.
+struct UnitOccurrence<'a> {
+    original: &'a Type,
+}
+
+impl<'a> TypeUniverseBuilder<'a> {
+    fn new() -> Self {
+        Self {
+            ordered: Vec::new(),
+            buckets: HashMap::new(),
+            unit: UnitPhase::Unseen,
+        }
+    }
+
+    fn admit(&mut self, original: &'a Type, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        // Pay the new kind classification, including on the full non-Unit path.
+        charge(budget, 1)?;
+        match original {
+            Type::Unit => self.admit_unit(UnitOccurrence { original }, budget),
+            _ => self.retain_original(original, budget),
+        }
+    }
+
+    fn admit_unit(
+        &mut self,
+        unit: UnitOccurrence<'a>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        charge(budget, 1)?;
+        match self.unit {
+            UnitPhase::Admitted => Ok(false),
+            UnitPhase::Unseen => {
+                // Admit the scalar phase entry before original fallible work.
+                // Full successful equality or retention establishes Unit here.
+                charge(budget, 1)?;
+                let retained = self.retain_original(unit.original, budget)?;
+                self.unit = UnitPhase::Admitted;
+                Ok(retained)
+            }
+        }
+    }
+
+    fn retain_original(
+        &mut self,
+        original: &'a Type,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let mut hasher = DefaultHasher::new();
+        hash_type_with_budget(original, &mut hasher, budget).map_err(|_| Failure::Resource)?;
+        retain_type_universe_entry(
+            &mut self.ordered,
+            &mut self.buckets,
+            original,
+            hasher.finish(),
+            budget,
+        )
+    }
+
+    fn into_ordered(self) -> Vec<&'a Type> {
+        self.ordered
+    }
+}
+
+/// Complete original-code inputs, consumed before any query state is created.
+/// The borrowed graph fixes the identity of both the flag and ordered row inventory.
+struct ControlCodeInventory<'a> {
+    graph: &'a SummaryGraph,
+    has_resource: bool,
+    owner_rows: Vec<&'a EffectRow>,
+}
+
+impl<'a> ControlCodeInventory<'a> {
+    fn prepare(graph: &'a SummaryGraph, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, graph.code.len())?;
+        let mut has_resource = false;
+        let mut owner_rows = Vec::new();
+        for code in &graph.code {
+            match code {
+                Control::Resource { effect, .. } => {
+                    has_resource = true;
+                    if let Some(effect) = &effect.effect {
+                        retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
+                    }
+                }
+                Control::Request(request)
+                | Control::Handler {
+                    effect: request, ..
+                } => {
+                    if let Some(effect) = &request.effect {
+                        retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
+                    }
+                }
+                Control::Registration { .. } | Control::Cleanup { .. } => {
+                    has_resource = true;
+                }
+                _ => {}
+            }
+        }
+        Ok(Self {
+            graph,
+            has_resource,
+            owner_rows,
+        })
+    }
+}
+
 impl<'a> Analysis<'a> {
     pub(super) fn new(
         graph: &'a SummaryGraph,
         seed: Option<&'a Type>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
-        charge(budget, graph.code.len())?;
-        let has_resource = graph.code.iter().any(|code| {
-            matches!(
-                code,
-                Control::Resource { .. } | Control::Registration { .. } | Control::Cleanup { .. }
-            )
-        });
-        let mut types: Vec<&Type> = Vec::new();
-        let mut owner_rows = Vec::new();
-        charge(budget, graph.code.len())?;
-        for code in &graph.code {
-            if let Control::Request(request)
-            | Control::Handler {
-                effect: request, ..
-            }
-            | Control::Resource {
-                effect: request, ..
-            } = code
-                && let Some(effect) = &request.effect
-            {
-                retain_owner_row_universe(effect.arguments(), &mut owner_rows, budget)?;
-            }
-        }
+        Self::from_code_inventory(ControlCodeInventory::prepare(graph, budget)?, seed, budget)
+    }
+
+    fn from_code_inventory(
+        inventory: ControlCodeInventory<'a>,
+        seed: Option<&'a Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, Failure> {
+        let ControlCodeInventory {
+            graph,
+            has_resource,
+            mut owner_rows,
+        } = inventory;
+        let mut universe = TypeUniverseBuilder::new();
         let mut pending = Vec::new();
         pending
             .try_reserve(graph.types.0.len() + graph.callables.len())
             .map_err(|_| Failure::Resource)?;
         pending.extend(graph.types.0.iter());
-        pending.extend(graph.callables.iter().map(|callable| &callable.ty));
+        graph.callables.extend_types(&mut pending, budget)?;
         if let Some(seed) = seed {
             charge(budget, 1)?;
             pending.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1220,18 +1365,9 @@ impl<'a> Analysis<'a> {
         }
         while let Some(ty) = pending.pop() {
             charge(budget, 1)?;
-            let mut found = false;
-            for previous in &types {
-                if same_type_with_budget(previous, ty, budget).map_err(|_| Failure::Resource)? {
-                    found = true;
-                    break;
-                }
-            }
-            if found {
+            if !universe.admit(ty, budget)? {
                 continue;
             }
-            types.try_reserve(1).map_err(|_| Failure::Resource)?;
-            types.push(ty);
             match ty {
                 Type::Application(a, b) | Type::Function(a, b) => {
                     pending.try_reserve(2).map_err(|_| Failure::Resource)?;
@@ -1289,6 +1425,7 @@ impl<'a> Analysis<'a> {
                 _ => {}
             }
         }
+        let types = universe.into_ordered();
         let mut contexts = Vec::new();
         contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
         contexts.push(Context {
@@ -1626,7 +1763,7 @@ impl<'a> Analysis<'a> {
     ) -> Result<usize, Failure> {
         let mut pending = Vec::new();
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
-        pending.push((&self.graph.callables[target].ty, actual));
+        pending.push((&self.graph.callables.get(target, budget)?.ty, actual));
         let mut bindings = Vec::new();
         let mut row_equations = Vec::new();
         while let Some((formal, actual)) = pending.pop() {
@@ -2005,7 +2142,7 @@ impl<'a> Analysis<'a> {
         let mut pending = Vec::new();
         let mut visited = HashSet::new();
         for target in targets {
-            let callable = graph.callables.get(*target).ok_or(Failure::Invalid)?;
+            let callable = graph.callables.get(*target, budget)?;
             let source = graph
                 .data
                 .as_ref()
@@ -2091,7 +2228,7 @@ impl<'a> Analysis<'a> {
                         charge(budget, 1)?;
                         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
                         pending.push((
-                            graph.callables.get(target).ok_or(Failure::Invalid)?.body,
+                            graph.callables.get(target, budget)?.body,
                             substituted,
                             invoked,
                         ));
@@ -2378,7 +2515,7 @@ impl<'a> Analysis<'a> {
                             next.context = context;
                             next.value_context = value_context;
                             next.position = Position {
-                                code: self.graph.callables[target].body,
+                                code: self.graph.callables.get(target, budget)?.body,
                                 next: 0,
                             };
                             Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
@@ -3791,6 +3928,7 @@ impl<'a> Analysis<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::CallableSlots;
     use super::*;
     use crate::core::capture::Callable;
     use crate::{
@@ -3834,7 +3972,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: vec![],
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![Type::function_computation(
                 Type::Unit,
                 crate::types::ComputationType::new(Type::Unit, EffectRow::empty()),
@@ -4290,7 +4428,7 @@ mod tests {
             data: Some(std::sync::Arc::new(
                 super::super::value::provider_capture_graph_for_test(None, false),
             )),
-            callables: vec![],
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![]),
             code: vec![
                 Control::Return,
@@ -4387,14 +4525,15 @@ mod tests {
         let source = SourceFile::new("wide-targets", "x").unwrap();
         let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
         let ty = || Type::Function(Box::new(Type::Unit), Box::new(Type::Unit));
-        let graph = SummaryGraph {
+        let mut graph = SummaryGraph {
             effects: true,
             data: None,
             callables: vec![Callable {
                 body: 0,
                 ty: ty(),
                 result: Value::default(),
-            }],
+            }]
+            .into(),
             types: TypeArguments(vec![ty()]),
             code: vec![
                 Control::Return,
@@ -4436,6 +4575,19 @@ mod tests {
         for _ in 0..2 {
             run(false, &mut TypeWorkBudget::with_limit(measured.used())).unwrap();
         }
+        graph.callables.positions.push(None);
+        for target in [1, 2] {
+            let Control::Call { value, .. } = &mut graph.code[1] else {
+                unreachable!()
+            };
+            value.targets = vec![target];
+            let mut analysis =
+                Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+            assert!(matches!(
+                analysis.discover(&[1], None, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+        }
     }
 
     #[test]
@@ -4443,7 +4595,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: vec![],
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![]),
             code: vec![Control::Return],
         };
@@ -4563,7 +4715,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: vec![],
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![]),
             code: vec![Control::Return],
         };
@@ -5224,7 +5376,7 @@ mod tests {
         let mut graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: vec![],
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![]),
             code: vec![
                 Control::Return,
@@ -5723,7 +5875,8 @@ mod tests {
                 body: 0,
                 ty: formal,
                 result: Value::default(),
-            }],
+            }]
+            .into(),
             types: TypeArguments(vec![actual]),
             code: vec![Control::Call {
                 value: Value {
@@ -5781,7 +5934,7 @@ mod tests {
                 let mut graph = SummaryGraph {
                     effects: true,
                     data: None,
-                    callables: Vec::new(),
+                    callables: CallableSlots::default(),
                     types: TypeArguments(Vec::new()),
                     code: vec![
                         Control::Return,
@@ -5876,7 +6029,8 @@ mod tests {
                     ty: callback(closed(identity)),
                     result: Value::default(),
                 },
-            ],
+            ]
+            .into(),
             types: TypeArguments(vec![
                 relay(closed(owner_a), closed(owner_b), closed(owner_a)),
                 callback(open(row_e)),
@@ -5986,7 +6140,8 @@ mod tests {
                         body: 0,
                         ty: formal,
                         result: Value::default(),
-                    }],
+                    }]
+                    .into(),
                     types: TypeArguments(vec![actual]),
                     code: vec![Control::Call {
                         value: Value::default(),
@@ -6072,7 +6227,8 @@ mod tests {
                     ),
                 ),
                 result: Value::default(),
-            }],
+            }]
+            .into(),
             types: TypeArguments(vec![Type::Function(Box::new(pure()), Box::new(Type::Int))]),
             code: vec![Control::Call {
                 value: Value::default(),
@@ -6107,7 +6263,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             types: TypeArguments(Vec::new()),
             code: Vec::new(),
         };
@@ -6169,6 +6325,440 @@ mod tests {
     }
 
     #[test]
+    fn type_universe_collision_keeps_complete_owner_rows_and_first_ordinals() {
+        use crate::types::{Kind, ResourceDefinitionId};
+        let module = ModuleId::new(0);
+        let owner = ResourceDefinitionId::new(module, 0);
+        let effect = EffectId::new(module, 0);
+        let excluded = EffectId::new(module, 1);
+        let row = |tail, payload| {
+            EffectRow::with_tail(
+                Box::new([EffectInstance::new(effect, Box::new([Type::Int]))]),
+                EffectRowVariable::rigid(TypeVariableId::new(tail)),
+                Box::new([EffectInstance::new(excluded, Box::new([payload]))]),
+            )
+        };
+        let owned =
+            |family, row| Type::ResourceApply(family, Box::new([KindedArgument::RowArg(row)]));
+        let originals = vec![
+            owned(owner, row(0, Type::Int)),
+            owned(owner, row(1, Type::Int)),
+            owned(
+                owner,
+                EffectRow::with_tail(
+                    Box::new([EffectInstance::new(effect, Box::new([Type::Bool]))]),
+                    EffectRowVariable::rigid(TypeVariableId::new(0)),
+                    Box::new([EffectInstance::new(excluded, Box::new([Type::Int]))]),
+                ),
+            ),
+            owned(owner, row(0, Type::Bool)),
+            owned(ResourceDefinitionId::new(module, 1), row(0, Type::Int)),
+            Type::ResourceApply(owner, Box::new([KindedArgument::TypeArg(Type::Int)])),
+            Type::Forall(
+                Box::new([(TypeVariableId::new(2), Kind::Type)]),
+                Box::new(Type::Variable(TypeVariableId::new(2))),
+            ),
+            Type::Forall(
+                Box::new([(TypeVariableId::new(2), Kind::EffectRow)]),
+                Box::new(Type::Variable(TypeVariableId::new(2))),
+            ),
+            Type::Forall(
+                Box::new([(TypeVariableId::new(3), Kind::Type)]),
+                Box::new(Type::Variable(TypeVariableId::new(3))),
+            ),
+            Type::function(Type::Unit, Type::Int),
+            Type::EffectfulFunction(
+                Box::new(Type::Unit),
+                Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+            ),
+            owned(owner, row(0, Type::Int)),
+        ];
+        let mut types = Vec::new();
+        let mut buckets = HashMap::new();
+        for (ordinal, ty) in originals.iter().enumerate() {
+            let retained = retain_type_universe_entry(
+                &mut types,
+                &mut buckets,
+                ty,
+                0,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            assert_eq!(retained, ordinal < 10);
+        }
+        assert_eq!(types.len(), 10);
+        assert_eq!(buckets.get(&0).unwrap(), &(0..10).collect::<Vec<_>>());
+        for (retained, original) in types.iter().zip(&originals) {
+            assert!(std::ptr::eq(*retained, original));
+        }
+        // A forced collision must run exact equality and refuse a corrupt index.
+        buckets.get_mut(&0).unwrap().push(usize::MAX);
+        let fresh = Type::Bytes;
+        assert!(matches!(
+            retain_type_universe_entry(
+                &mut types,
+                &mut buckets,
+                &fresh,
+                0,
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(types.len(), 10);
+
+        // Every refusal before a new colliding entry commits preserves the prior universe.
+        let first = Type::Int;
+        let next = &originals[0];
+        for prefix in [0, 9] {
+            let seed = || {
+                let mut types = Vec::new();
+                let mut buckets = HashMap::new();
+                retain_type_universe_entry(
+                    &mut types,
+                    &mut buckets,
+                    &first,
+                    0,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap();
+                (types, buckets)
+            };
+            let (mut measured_types, mut measured_buckets) = seed();
+            let mut measured = TypeWorkBudget::unbounded();
+            measured.charge(prefix).unwrap();
+            retain_type_universe_entry(
+                &mut measured_types,
+                &mut measured_buckets,
+                next,
+                0,
+                &mut measured,
+            )
+            .unwrap();
+            let cost = measured.used() - prefix;
+            for available in 0..cost {
+                let (mut types, mut buckets) = seed();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    retain_type_universe_entry(&mut types, &mut buckets, next, 0, &mut short,),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(types.len(), 1);
+                assert!(std::ptr::eq(types[0], &first));
+                assert_eq!(buckets.get(&0).unwrap(), &[0]);
+                let mut retry = TypeWorkBudget::with_limit(prefix + cost);
+                retry.charge(prefix).unwrap();
+                assert!(
+                    retain_type_universe_entry(&mut types, &mut buckets, next, 0, &mut retry,)
+                        .unwrap()
+                );
+                assert_eq!(retry.used(), prefix + cost);
+                assert_eq!(buckets.get(&0).unwrap(), &[0, 1]);
+            }
+        }
+    }
+
+    #[test]
+    fn complete_code_inventory_preserves_nested_owner_rows_and_hidden_resource_gates() {
+        let module = ModuleId::new(0);
+        let source = SourceFile::new("code-inventory", "x").unwrap();
+        let span = source.span(ByteRange::new(0, 1).unwrap()).unwrap();
+        let nested = EffectRow::open(
+            EffectRowVariable::rigid(TypeVariableId::new(0)),
+            Box::new([]),
+        );
+        let excluded_nested = EffectRow::open(
+            EffectRowVariable::rigid(TypeVariableId::new(2)),
+            Box::new([]),
+        );
+        let outer = EffectRow::with_tail(
+            Box::new([EffectInstance::new_kinded(
+                EffectId::new(module, 1),
+                Box::new([KindedArgument::RowArg(nested)]),
+            )]),
+            EffectRowVariable::rigid(TypeVariableId::new(1)),
+            Box::new([EffectInstance::new_kinded(
+                EffectId::new(module, 2),
+                Box::new([KindedArgument::RowArg(excluded_nested)]),
+            )]),
+        );
+        let instance = EffectInstance::new_kinded(
+            EffectId::new(module, 0),
+            Box::new([KindedArgument::RowArg(outer)]),
+        );
+        let request = Request::effect(&instance, span, &mut TypeWorkBudget::unbounded()).unwrap();
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Return,
+                Control::Request(request.clone()),
+                Control::Handler {
+                    body: 0,
+                    effect: request.clone(),
+                    clauses: Vec::new(),
+                    owning_resource: None,
+                },
+                Control::Resource {
+                    body: 0,
+                    effect: request.clone(),
+                },
+                Control::Registration {
+                    body: 0,
+                    source: span,
+                },
+                Control::Cleanup {
+                    body: 0,
+                    action: 0,
+                    row_type: 0,
+                    source: span,
+                },
+                Control::Request(request.clone()),
+                Control::Request(Request::unknown(span)),
+            ],
+        };
+        let mut expected_rows = Vec::new();
+        for ordinal in [1, 2, 3, 6] {
+            let request = match &graph.code[ordinal] {
+                Control::Request(request)
+                | Control::Handler {
+                    effect: request, ..
+                }
+                | Control::Resource {
+                    effect: request, ..
+                } => request,
+                _ => unreachable!(),
+            };
+            let effect = request.effect.as_ref().unwrap();
+            let KindedArgument::RowArg(outer) = &effect.arguments()[0] else {
+                unreachable!()
+            };
+            let KindedArgument::RowArg(nested) = &outer.known()[0].arguments()[0] else {
+                unreachable!()
+            };
+            // Canonical formation copies every known member into the tail's
+            // lacks set. The copied member owns a distinct nested row which
+            // must also be retained; the two equal rows are not one pointer.
+            let lacks = outer.tail().unwrap().lacks();
+            assert_eq!(lacks.len(), 2);
+            assert_eq!(lacks[0].effect(), EffectId::new(module, 1));
+            assert_eq!(lacks[1].effect(), EffectId::new(module, 2));
+            let KindedArgument::RowArg(known_lacks_nested) = &lacks[0].arguments()[0] else {
+                unreachable!()
+            };
+            let KindedArgument::RowArg(excluded_nested) = &lacks[1].arguments()[0] else {
+                unreachable!()
+            };
+            assert!(!std::ptr::eq(nested, known_lacks_nested));
+            // Explicit expected LIFO order: outer, last lacks argument,
+            // canonical known-member lacks argument, known argument.
+            expected_rows.extend([outer, excluded_nested, known_lacks_nested, nested]);
+        }
+        let run = |budget: &mut TypeWorkBudget| {
+            let inventory = ControlCodeInventory::prepare(&graph, budget)?;
+            assert!(std::ptr::eq(inventory.graph, &graph));
+            assert!(inventory.has_resource);
+            assert_eq!(inventory.owner_rows.len(), 16);
+            for (actual, expected) in inventory.owner_rows.iter().zip(&expected_rows) {
+                assert!(std::ptr::eq(*actual, *expected));
+            }
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        for prefix in [0, 9] {
+            for available in 0..measured.used() {
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(run(&mut short), Err(Failure::Resource)));
+                let mut retry = TypeWorkBudget::with_limit(prefix + measured.used());
+                retry.charge(prefix).unwrap();
+                run(&mut retry).unwrap();
+                assert_eq!(retry.used(), prefix + measured.used());
+            }
+        }
+        // Each hidden resource-bearing variant independently requires the Value graph.
+        // A Request/Handler alone retains owner rows without granting that flag.
+        for code in [
+            Control::Resource {
+                body: 0,
+                effect: request.clone(),
+            },
+            Control::Registration {
+                body: 0,
+                source: span,
+            },
+            Control::Cleanup {
+                body: 0,
+                action: 0,
+                row_type: 0,
+                source: span,
+            },
+        ] {
+            let graph = SummaryGraph {
+                effects: true,
+                data: None,
+                callables: CallableSlots::default(),
+                types: TypeArguments(Vec::new()),
+                code: vec![code],
+            };
+            let inventory =
+                ControlCodeInventory::prepare(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+            assert!(inventory.has_resource);
+            assert!(matches!(
+                Analysis::from_code_inventory(inventory, None, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+        }
+        let graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots::default(),
+            types: TypeArguments(Vec::new()),
+            code: vec![
+                Control::Request(request.clone()),
+                Control::Handler {
+                    body: 0,
+                    effect: request,
+                    clauses: Vec::new(),
+                    owning_resource: None,
+                },
+            ],
+        };
+        let inventory =
+            ControlCodeInventory::prepare(&graph, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(!inventory.has_resource);
+        assert_eq!(inventory.owner_rows.len(), 8);
+        Analysis::from_code_inventory(inventory, None, &mut TypeWorkBudget::unbounded()).unwrap();
+    }
+
+    #[test]
+    fn type_universe_hash_preserves_constructor_order_and_owner_row_domain() {
+        use crate::types::ResourceDefinitionId;
+        let owner = ResourceDefinitionId::new(ModuleId::new(0), 0);
+        let row = EffectRow::open(
+            EffectRowVariable::rigid(TypeVariableId::new(0)),
+            Box::new([]),
+        );
+        let mut graph = SummaryGraph {
+            effects: true,
+            data: None,
+            callables: CallableSlots {
+                positions: vec![
+                    None,
+                    Some(Callable {
+                        body: 0,
+                        ty: Type::Unit,
+                        result: Value::default(),
+                    }),
+                    None,
+                ],
+                absent_unit: Type::Unit,
+            },
+            types: TypeArguments(vec![
+                Type::ResourceApply(owner, Box::new([KindedArgument::RowArg(row)])),
+                Type::function(Type::Unit, Type::Int),
+                Type::function(Type::Unit, Type::Int),
+                Type::Unit,
+                Type::Unit,
+            ]),
+            code: Vec::new(),
+        };
+        let seed = Type::Unit;
+        let run = |budget: &mut TypeWorkBudget| {
+            let analysis = Analysis::new(&graph, Some(&seed), budget)?;
+            assert_eq!(analysis.types.len(), 4);
+            // Seed is popped first; later Unit roots and the function child
+            // retain that exact borrowed representative, never a canonical copy.
+            assert!(std::ptr::eq(analysis.types[0], &seed));
+            assert!(std::ptr::eq(analysis.types[1], &graph.types.0[2]));
+            assert_eq!(analysis.types[2], &Type::Int);
+            assert!(std::ptr::eq(analysis.types[3], &graph.types.0[0]));
+            let Type::ResourceApply(_, arguments) = &graph.types.0[0] else {
+                unreachable!()
+            };
+            let KindedArgument::RowArg(row) = &arguments[0] else {
+                unreachable!()
+            };
+            assert_eq!(analysis.owner_rows.len(), 1);
+            assert!(std::ptr::eq(analysis.owner_rows[0], row));
+            Ok::<(), Failure>(())
+        };
+        let mut measured = TypeWorkBudget::unbounded();
+        run(&mut measured).unwrap();
+        for prefix in [0, 9] {
+            let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
+            short.charge(prefix).unwrap();
+            assert!(matches!(run(&mut short), Err(Failure::Resource)));
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                exact.charge(prefix).unwrap();
+                run(&mut exact).unwrap();
+                assert_eq!(exact.used(), prefix + measured.used());
+            }
+        }
+        let later = Type::Unit;
+        let mut measured_owner = TypeUniverseBuilder::new();
+        let mut cold = TypeWorkBudget::unbounded();
+        assert!(measured_owner.admit(&seed, &mut cold).unwrap());
+        assert_eq!(cold.used(), 8); // pop is owned by the constructor, not this API
+        let mut warm = TypeWorkBudget::unbounded();
+        assert!(!measured_owner.admit(&later, &mut warm).unwrap());
+        assert_eq!(warm.used(), 2);
+        assert!(std::ptr::eq(measured_owner.into_ordered()[0], &seed));
+        for prefix in [0, 9] {
+            for available in 0..cold.used() {
+                let mut refused = TypeUniverseBuilder::new();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    refused.admit(&seed, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(matches!(refused.unit, UnitPhase::Unseen));
+                assert!(refused.ordered.is_empty());
+                assert!(refused.buckets.is_empty());
+            }
+            let mut retry = TypeUniverseBuilder::new();
+            let mut exact = TypeWorkBudget::with_limit(prefix + cold.used());
+            exact.charge(prefix).unwrap();
+            assert!(retry.admit(&seed, &mut exact).unwrap());
+            assert_eq!(exact.used(), prefix + cold.used());
+            assert!(matches!(retry.unit, UnitPhase::Admitted));
+            for available in 0..warm.used() {
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    retry.admit(&later, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(matches!(retry.unit, UnitPhase::Admitted));
+                assert_eq!(retry.ordered.len(), 1);
+                assert!(std::ptr::eq(retry.ordered[0], &seed));
+            }
+            let mut duplicate = TypeWorkBudget::with_limit(prefix + warm.used());
+            duplicate.charge(prefix).unwrap();
+            assert!(!retry.admit(&later, &mut duplicate).unwrap());
+            assert_eq!(duplicate.used(), prefix + warm.used());
+            assert!(std::ptr::eq(retry.into_ordered()[0], &seed));
+        }
+        let unseeded = Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(std::ptr::eq(
+            unseeded.types[0],
+            &graph.callables.absent_unit
+        ));
+        drop(unseeded);
+        graph.callables.positions.swap(1, 2);
+        let genuine = Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(std::ptr::eq(
+            genuine.types[0],
+            &graph.callables.positions[2].as_ref().unwrap().ty
+        ));
+    }
+
+    #[test]
     fn row_type_universe_preflights_nullary_known_and_lacks_visits() {
         const WIDTH: usize = 96;
         let instance =
@@ -6182,7 +6772,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![Type::function_computation(
                 Type::Unit,
                 ComputationType::new(Type::Int, row),
@@ -6195,7 +6785,8 @@ mod tests {
                 Analysis::new(&graph, None, &mut budget),
                 Err(Failure::Resource)
             ));
-            assert_eq!(budget.used(), usize::from(limit != 0));
+            // The complete hash now admits each nullary row member before universe publication.
+            assert_eq!(budget.used(), limit);
         }
         let mut measured = TypeWorkBudget::unbounded();
         Analysis::new(&graph, None, &mut measured).unwrap();
@@ -6228,7 +6819,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             types: TypeArguments(Vec::new()),
             code: Vec::new(),
         };
@@ -6287,7 +6878,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             types: TypeArguments(vec![Type::Int, Type::Bool]),
             code: Vec::new(),
         };
@@ -6418,7 +7009,8 @@ mod tests {
                         ty: callback(EffectRow::singleton(instance(Type::Variable(identity)))),
                         result: Value::default(),
                     },
-                ],
+                ]
+                .into(),
                 types: TypeArguments(vec![
                     Type::function_computation(
                         callback(actual.clone()),
@@ -6515,7 +7107,8 @@ mod tests {
                 body: 0,
                 ty: function(Type::Variable(variable)),
                 result: Value::default(),
-            }],
+            }]
+            .into(),
             types: TypeArguments(vec![function(Type::Bool)]),
             code: vec![
                 Control::Return,
@@ -6587,7 +7180,7 @@ mod tests {
         let graph = SummaryGraph {
             effects: true,
             data: None,
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             types: TypeArguments(Vec::new()),
             code: Vec::new(),
         };
