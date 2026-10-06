@@ -459,6 +459,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture/control.rs::ControlCodeInventory.graph", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::ControlCodeInventory.owner_rows", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::TypeUniverseBuilder.ordered", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::PreparedTypeUniverse.ordered", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::UnitOccurrence.original", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/dialect.rs::IterativeArgumentBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::OperationTypeMetadata.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
