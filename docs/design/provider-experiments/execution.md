@@ -153,6 +153,76 @@ codex/provider-experiments remain outstanding. Compiler work and parser depth
 limits stay 327,680 and 128, and validation requirements remain unchanged. This
 is bounded DN-0036 experiment evidence, not normative language adoption.
 
+### Diagnostic completion and completed cost attribution, 2026-10-06
+
+Common retains the Function capture-coordinate installation repair from receipt
+208b as working changes after all eight connected quality gates in receipt 209
+pass, including 1,626 library tests and forty-three architecture tests. This
+repair is not yet integrated into the tracking branch or the SQLite worktree.
+The following diagnostics use that retained baseline; they include no later
+specialization, registry or type-universe candidate.
+
+At the user's request, receipt 214 temporarily raises the Type work ceiling
+from 327,680 to 20,971,520 to measure complete original programs. Independent
+Core keeps its existing three-times multiplier, so its diagnostic allowance is
+62,914,560 instead of 983,040. Parser/depth limits, algorithms, validation and
+all original test assertions remain unchanged. Four fresh exact tests pass:
+copying, bound-NUL copying, transaction/reopen persistence and captured resume.
+These are diagnostic completion results, not production-budget acceptance.
+
+Each program reports six separate completed budget owners. Resolution,
+module linking and linked-interface validation remain below their production
+allowances. The larger owners consume:
+
+| Program | Source checking (allowance 327,680) | Final elaboration (allowance 327,680) | Independent Core (allowance 983,040) |
+| --- | ---: | ---: | ---: |
+| Copying | 1,599,733 | 166,007 | 1,492,198 |
+| Bound-NUL copying | 1,599,733 | 166,007 | 1,492,193 |
+| Persistence | 690,310 | 376,978 | 2,657,847 |
+| Captured resume | 214,886 | 103,866 | 382,963 |
+
+Copying and its NUL alternative exceed source checking by 1,272,053 units;
+their independent Core deficits are 509,158 and 509,153. Persistence exceeds
+source checking by 362,630, final elaboration by 49,298 and independent Core
+by 1,674,807. These owners have separate budgets; their deficits are not added.
+The completed work is substantially larger than the measured local capture
+savings. The diagnostic demonstrates finite completion of these cases without
+establishing that all charged computation is necessary.
+
+Receipt 215 composes the same temporary ceiling and owner endpoints with the
+existing capture/control observer. Copying passes its runtime assertions and
+strict trace projection: 520 complete coarse calls and 490 complete value-close
+pairs. Its source entry capture phase uses 1,445,150 units, including control
+analysis at 1,405,433. The constructor's 873,938 units contain initial value
+startup at 868,597: initialization 258, symbolic root seeding 2,072 and first
+closure 866,267. These nested costs are not added. Within that closure the four
+observed disjoint helper intervals use context 89,705, capture specialization
+184,725, dictionary routing 1,251 and dependencies 70; the remaining 590,516
+units need further attribution. Only two value-analysis constructors are
+observed, both initial startup children; the copying trace provides no successful
+focused snapshot setup evidence.
+
+Persistence also passes its runtime assertions and reproduces all six receipt
+214 owner totals. Its observer reaches the fixed 1,024-call capacity and the
+strict reader rejects the censored trace. Receipt 215 stops before resume and
+NUL copying; receipt 214 remains their completion evidence. No complete
+persistence phase attribution is inferred from the rejected projection.
+
+The actual returns are 2026-10-06T14:42:57.225672+00:00 for receipt 214 and
+2026-10-06T14:49:23.067706+00:00 for receipt 215. Both restore all 1,240 Common
+and forty-four SQLite source pins, HEAD, status and index, remove observers,
+restore the production ceiling 327,680 and leave no engines. SQLite independently
+checks raw test summaries, owner uniqueness, arithmetic, source restoration and
+strict projections. Raw evidence remains in common-resource-support-2026-10-04/
+completion-deficit-214/ and completed-startup-cost-215/; independent audits remain
+in sqlite-2026-10-05/handoff/completion-deficit214-independent-results.json and
+completed-startup215-independent-results.json under the external evidence archive.
+
+The next repair must address dominant completed capture/control work and the
+separate persistence owners. Original default-budget acceptance, combined review
+and verified unsigned SQLite integration remain outstanding. This journal records
+bounded experiment evidence and does not change Ash semantics or production policy.
+
 ## Previous checkpoint after the first verified common import
 
 Latest integrated common code checkpoint is `5991e3d882b4a161c137fb826e73e79c149d550a`,
