@@ -112,6 +112,49 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
+The latest integrated shared code is unsigned real merge
+`2f9cb30d8349ff4db191b7d7670be0fe53651974`, with unsigned documentation
+tracking tip `754a25f54b436711af85bf35257bba3a870377a4`. Receipt 204 passes
+all six mandatory `CARGO_BUILD_JOBS=1 cargo xtask verify` checks in
+`codex/provider-experiments`. The SQLite workstream independently verifies the unsigned objects,
+parents, exact file scope, raw results and preservation receipts. This shared
+cost delivery is complete; it does not complete the fourteen-operation SQLite
+package.
+
+SQLite preserves its reviewed manifest, fixtures and evidence through unsigned
+checkpoint `ee28a511edf62d332071b63b1034565a0c1e8ea0`, then imports that
+verified tracking tip through unsigned real merge
+`f187cfac0f1ded087d016f8d20737075a6cc3e01`. Both execution journals are
+retained in full. The other forty-three coherent owned/reviewed paths remain
+byte-identical, the three imported compiler files match the verified source
+hashes, and the old generic stash remains untouched.
+
+Fresh post-import checks pass the 1,625-test Ash library and sixty native adapter
+tests. Seven selected public binaries report seventy-five passes and three
+failures; the original seventeen SQLite cases remain fourteen passes and three
+compiler work refusals in copying, bound-NUL and transaction/reopen persistence.
+The actual packaged text, resume and discard hosts pass with authenticated
+finalize and close reports and zero retained owners. The three larger hosts
+stop with TypeResourceExhausted before native observations. Their failure
+categories do not identify the current first refusing internal operation.
+
+The explicit post-import return is 2026-10-06T12:41:07.180735+00:00. All
+1,250 tracked and forty-four coherent pins, HEAD, status and the empty index
+remain unchanged, with no engines left. Evidence is retained under
+sqlite-2026-10-05/handoff/verified205-import-connected-checks-2026-10-06/,
+including exact commands, input hashes, raw logs and independent-audit.json.
+
+Common owns shared compiler, Core, capture, provider checking and generic runtime
+repair. The SQLite workstream owns the SQLite adapter, manifest, Ash library, fixtures, examples
+and documentation. Further generic requirements are handed to Common; there is
+no concurrent shared implementation. Original copying, NUL and persistence
+acceptance, combined review and verified unsigned SQLite integration back into
+codex/provider-experiments remain outstanding. Compiler work and parser depth
+limits stay 327,680 and 128, and validation requirements remain unchanged. This
+is bounded DN-0036 experiment evidence, not normative language adoption.
+
+## Previous checkpoint after the first verified common import
+
 Latest integrated common code checkpoint is `5991e3d882b4a161c137fb826e73e79c149d550a`,
 merging common commit `183e9d506f0e3a41833f29b3e614616345169074` with an unsigned
 merge preserving both histories. Receipt 186 passes the complete unfiltered
