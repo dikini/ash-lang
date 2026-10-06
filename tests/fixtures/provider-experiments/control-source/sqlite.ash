@@ -1,9 +1,8 @@
-import @builtin.string as TextOps
 import @foreign.sqlite as Native
 import provider as Provider
 pub import @foreign.sqlite (OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)
 
-pub newtype SqlText = SqlText(Bytes)
+pub newtype SqlText = SqlText(String)
 
 pub type Error = ForeignError(Native.Error)
 | MissingRow
@@ -82,7 +81,7 @@ pub memory : Unit -> OpenConfig
 memory () = InMemory
 
 pub select_parameter : Unit -> SqlText
-select_parameter () = SqlText (TextOps.to_utf8 "SELECT ?1")
+select_parameter () = SqlText "SELECT ?1"
 
 pub failing_query : Unit -> SqlText
-failing_query () = SqlText (TextOps.to_utf8 "SELECT abs(-9223372036854775808)")
+failing_query () = SqlText "SELECT abs(-9223372036854775808)"

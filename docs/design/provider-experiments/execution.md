@@ -128,12 +128,14 @@ reductions establish no full-program fit. Work and depth limits remain unchanged
 The next canonical-preparation measurement is a proposal, not delivered code or
 proof that a larger typing quota is necessary.
 
-SQLite now imports documentation tracking tip
-`4fcf6bc9bec16a95a3c806856c3ae86aeb8ea8c6` after independently verifying
-receipt 186 and preserving its thirty-four owned paths in unsigned checkpoint
-`fc6257f8c16c30d3abd5bf3c06f09820c20d6a7e`. The reviewed seven-file
-fourteen-operation packet is paired after this merge; no engines run during
-import, and executable fourteen-operation acceptance remains pending.
+SQLite imports documentation tracking tip
+`4fcf6bc9bec16a95a3c806856c3ae86aeb8ea8c6` through unsigned real merge
+`2c0e6737ff8ae54f40cdae227262c7940952d394`, whose other parent is the
+owned-work preservation checkpoint `fc6257f8c16c30d3abd5bf3c06f09820c20d6a7e`.
+Both execution journals are retained. Reviewed packet 187 now pairs the
+fourteen-operation manifest and fixtures with the preserved native adapter and
+nine-handler Ash library. No engines ran during import or pairing; executable
+fourteen-operation acceptance remains pending.
 
 ### Previous SQLite checkpoint, before this import
 
@@ -5617,3 +5619,199 @@ Typed arena allocation, Layout, references, containment, borrowing, sharing and
 storage families remain later arena work. DN-0037 and DN-0038 remain separate.
 These are tested implementation properties under DN-0036 and foreign adapter
 assumptions, not current Ash semantics or a mechanized whole-P-1 proof.
+
+## Verified common import and coherent SQLite pairing (2026-10-06)
+
+Common's explicit handoff grants the preserving import and exact packet 187
+pairing after receipt 186. Root first commits only the thirty-four owned paths
+unsigned as fc6257f, then merges verified tracking tip 4fcf6bc unsigned through
+2c0e673. The only conflict is the execution journal. Both complete original
+conflict bodies remain, with incoming current status and explicitly historical
+previous SQLite status. All thirty-three other owned paths retain exact bytes.
+The old generic stash117c831 remains untouched; no broad stage or restore occurs.
+
+The seven reviewed manifest and fixture paths match every packet base hash before
+application and every proposed hash afterward. The native fourteen-operation
+preflight and TEXT ordinals nine and ten match the manifest; Ash's nine ordered
+handlers match the fixture assertions. No production implementation beyond the
+SQLite-specific manifest changes. The index remains empty with reviewed changes
+unstaged; no Cargo, editor or proof engine runs. Source coherence is not executable
+acceptance, and the three realistic resource failures remain outstanding.
+
+Common's one-off failure review bounds canonical preparation by the observed
+742-unit prefix inside the 90677-unit provider-group interval. That prefix includes
+other admission work. The inclusive group interval cannot serve as a beneficiary
+estimate for canonical preparation. Association-plumbing estimates also do not
+justify migration. Both ownership-plumbing proposals are parked pending distinct
+observation of actual components. Common's next original-call diagnostic includes
+copying, persistence, resume and the previously unmeasured bound-NUL case. No
+shared cause, unknown fitting tail, filtering, unchecked cache or raised quota is
+inferred. Root keeps engines idle until the common measurement returns and grants
+the SQLite native, public and host window.
+
+## SQLite native, public and host verification after common import (2026-10-06)
+
+The first exclusive SQLite window checks the preserved fourteen-operation
+package after the verified common import. The all-targets workspace check passes.
+The native adapter passes all sixty tests: forty unit, nine arena and eleven TEXT
+cases. The seven selected public binaries report sixty-six passes and twelve
+failures. Three are the existing typing-work refusals in copying, its bound-NUL
+alternative and persistence. Nine control-source cases instead expose an omitted
+fixture migration: prepare now accepts String, while three control modules still
+supply Bytes. This is an API fixture mismatch, not evidence of compiler exhaustion.
+The first host commands select Rust 1.94 from their temporary working directory
+and stop before any Ash program runs. These harness receipts remain preserved.
+
+Common supplies reviewed packet 189 for precisely the three affected Ash control
+fixtures. It removes the UTF-8 conversion wrapper, changes SqlText's payload to
+String and preserves the SQL text, lifecycle, resources and control bodies. Root
+applies only those exact paths, with before images and hashes. The original
+forty-one coherent input paths remain unchanged; the preservation set expands to
+forty-four to include the supplement. There is no commit or merge of this packet.
+
+The second exclusive window runs only the affected control binary and executable
+hosts. All twenty-two control tests pass, with zero failures or ignores. Root
+builds sqlite_session in the workspace with Rust 1.97.1, then executes the binary
+against a private copy of the eight packaged Ash modules. Its private working
+directory isolates the persistence database. Text returns the copied Unicode
+value and both Closed completion reports. Resume returns the copied text and
+blob with both Closed reports. Discard returns 42. All three dispatch authenticated
+finalize and close calls successfully and report zero retained owners before
+host teardown.
+
+Copying, persistence and the separately derived bound-NUL entry each stop with
+Typing(Internal(TypeResourceExhausted)), before any native observation. They
+report zero retained owners. The NUL entry changes only the same text literal
+used by the public regression; it does not omit copying functionality. These
+host results reproduce the three public compiler refusals. They do not establish
+redundant computation, an infinite progression or a complete fitting cost.
+
+The second window returns explicitly at 2026-10-06T08:59:22.554216+00:00.
+All 1,250 tracked files and forty-four coherent input pins match. HEAD remains
+2c0e6737ff8ae54f40cdae227262c7940952d394, status is unchanged, the index is empty
+and no engine remains. Raw host values, types, observations, failure categories
+and log hashes are checked independently. Evidence is retained outside the
+repository under sqlite-2026-10-05/handoff/imported14-verification-2026-10-06/
+and control189-host-verification-2026-10-06/, including the unexecuted first host
+attempt and the second window's independent-audit.json.
+
+Common resumes the measured four-case original-call diagnostic for copying,
+persistence, resume and bound-NUL. It owns all shared compiler, Core, capture,
+provider checking and generic runtime changes. Root continues independent SQLite
+adapter, library, examples and documentation work and sends generic requirements
+to Common. Further reviewed generic support must be verified and merged into
+codex/provider-experiments before a preserving import into this worktree. The
+combined SQLite delivery still requires the original programs to pass, review and
+the required integration gates before its unsigned merge back. No compiler quota,
+parser depth or validation requirement changes.
+
+### Four-case final capture attribution (2026-10-06, receipt 191)
+
+Common's temporary seven-phase observer runs four fresh exact public cases.
+Copying, persistence and bound-NUL still refuse typing work; resume passes.
+Their final capture graphs all build successfully. The refusal occurs inside
+capture_control_roots, after finite-value preparation, value-graph construction
+and control compilation complete.
+
+| Case | Control-root work before | Work after | Observed interval | Result |
+| --- | ---: | ---: | ---: | --- |
+| Copying | 191,974 | 327,680 | 135,706 | Failed prefix |
+| Bound-NUL | 191,974 | 327,680 | 135,706 | Failed prefix |
+| Persistence | 319,033 | 327,680 | 8,647 | Failed prefix |
+| Resume | 160,071 | 214,677 | 54,606 | Complete |
+
+These intervals belong to each case's explicit borrowed work route and are not
+summed across analyses. A failed prefix does not reveal the unfinished cost or
+needed reduction. Copying and bound-NUL match these measured phase boundaries;
+that equality does not establish a shared semantic cause. The final finite-value
+stage costs 3,655 in copying and bound-NUL, 7,163 in persistence and 1,804 in
+resume. It is only one completed stage, not the whole capture analysis.
+
+Root independently checks raw hashes, all begin/end nesting, reader and selector
+hashes, phase projections and the four test exits. Common reverses the temporary
+observer, removes its helper and returns at 2026-10-06T09:10:46.750347+00:00.
+The receipt confirms 1,240 restored tracked/untracked inputs, unchanged HEAD,
+status and index, and no engines. Evidence is final-capture-cost-191/ in the
+common workstream archive; Root's independent audit is
+sqlite-2026-10-05/handoff/final-capture191-independent-results.json.
+
+The next shared investigation targets control-root analysis and must distinguish
+new facts and required progress from repeated scheduling or validation. Neither
+redundant computation nor infinite progression is established by this trace.
+Canonical and association ownership migrations remain parked. No productive
+repair, passing larger program, raised quota or weakened check is claimed.
+
+### Control-root construction attribution (2026-10-06, receipt 193)
+
+The next temporary observer separates control construction, initial value
+propagation, checking, discovery and focused checks. In the final copying and
+bound-NUL capture, ControlAnalysis::new begins at 194,411. Its initial
+value_graph_start begins at 199,752 and refuses at 327,680, admitting a
+127,928-unit prefix. Final control checking, discovery and focused checks are
+not reached. Persistence refuses in ControlAnalysis::new at 321,547 to 327,680,
+a 6,133-unit prefix, before initial value_graph_start begins. These distinct
+frontiers do not establish distinct causes; persistence may exhaust the same
+route earlier because less work remains.
+
+Resume completes construction with 22,360 units, including the initial value
+start's 19,659. Its subsequent check completes with 31,612 units, including
+normal discovery's 30,237; focused checks charge zero in that observed call.
+These inclusive parent and child intervals must not be added. A constructor
+that runs initial propagation cannot be treated wholly as immutable preparation.
+Global control-call replay cannot explain the three observed final refusals,
+which occur before control discovery. The next investigation targets initial
+value seeding and closure, and setup only through further measured attribution.
+
+Root independently checks raw hashes, all 67/103/107/67 nested begin/end pairs,
+reader and selector hashes, phase projections and exact case results. Common's
+return at 2026-10-06T09:29:55.037131+00:00 confirms 1,240 restored inputs,
+unchanged HEAD/status/index, an absent observer helper and no engines. Evidence
+is control-root-cost-193/ in the common archive; Root's audit is
+sqlite-2026-10-05/handoff/control-root193-independent-results.json. No remaining
+failed cost, productive repair, quota increase or acceptance waiver is inferred.
+
+## Verified registry and capture cost handoff (2026-10-06, receipts 199–205)
+
+Common's second shared repair replaces contextual registry sorting with paid
+stable natural-run merging, skips membership filtering only after a complete
+metadata traversal collects no bound variables, and removes temporary atom
+snapshots while retaining original prefix admission and live dependency routes.
+Measured successful calls show a 2,400-unit provider-group reduction, a 101-unit
+final copying value-graph reduction and an 810-unit completed resume-capture
+reduction. These belong to their recorded call routes and are not a summed
+fitting estimate. The first sorted-input candidate instead adds 396 units and is
+rejected. Failed prefixes reveal neither the remaining cost nor a required
+reduction. All three larger SQLite typing refusals remain.
+
+Root reviews the exact production files and minimal subsequent test corrections.
+Three stale snapshot-cost laws are corrected to actual warm costs and a genuine
+live Unknown-routing refusal witness, with every cut, phase, publication and
+retry invariant retained. A test tuple alias clears the sole lint error without
+changing fixture values, assertions or production. The combined paired-package
+checks pass the 1,625-test library, 43 architecture tests, public integration,
+sixty native adapter tests, format, strict workspace lint and rustdoc. The
+original SQLite program binaries still report fourteen passes and three failures.
+
+Unsigned Common commit b87e9a5d186f27855729a05afc426fee0a142bef is merged
+into codex/provider-experiments by real unsigned merge
+2f9cb30d8349ff4db191b7d7670be0fe53651974. Root independently verifies both
+objects, parents and the exact three source files plus execution journal. Receipt
+204 runs all six mandatory cargo xtask verify checks there with one build job.
+It exits zero, with 117 reported test-summary blocks containing zero failures or
+ignores; these include child output and are not a unique-test count. All 1,228
+tracked and twenty-six unrelated input pins, HEAD, status and index are preserved.
+The explicit no-engine return is 2026-10-06T12:26:57.476488+00:00. Raw log SHA is
+fea87be85994d9c790f4ffb647354f2c485400bee561a9ba1f0968d319a78855.
+
+Unsigned documentation-only tracking tip
+754a25f54b436711af85bf35257bba3a870377a4 preserves those source bytes and
+clarifies the measured stage boundaries. Common grants Root's preserving import.
+Root prepares an unsigned checkpoint of only the exact ten reviewed SQLite
+manifest/fixture paths and this owned journal before merging that verified tip.
+No old generic stash is reapplied. The native fourteen-operation package remains
+separate from the verified original twelve-operation shared gate. After the
+import, focused paired-package checks and further Common-owned compiler repair
+remain necessary before the original copying, bound-NUL and persistence programs
+can pass and the reviewed SQLite delivery can merge back unsigned. The shared
+compiler/Core/capture/provider/runtime ownership remains Common's. Compiler work,
+parser depth and validation requirements stay unchanged.

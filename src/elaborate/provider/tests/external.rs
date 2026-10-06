@@ -339,7 +339,7 @@ pub(super) fn nested_constrained_helper() -> String {
         "pub impl<A> Pass<Box<A>> where Pass<A> {\nfirst (Box value, ignored) = Box(first((value, ignored)))\nsecond (Box value) = Box(second value)\nthird (Box value) = Box(third value)\n}\n",
         "pub impl<A> Stamp<Box<A>> where Stamp<A> {\nstamp (Box value, tag) = Box(stamp((value, tag)))\n}\n",
     ));
-    for ty in ["Native.OpenConfig", "Native.CloseError", "Bytes"] {
+    for ty in ["Native.OpenConfig", "Native.CloseError", "String"] {
         helper.push_str(&format!("pub impl Pass<{ty}> {{\nfirst (value, ignored) = value\nsecond value = value\nthird value = value\n}}\npub impl Stamp<{ty}> {{\nstamp (value, ignored) = value\n}}\n"));
     }
     helper.push_str("pub normalize<X> : X -> X where Pass<X>, Stamp<X>\nnormalize value = stamp ((third(second(first((first((value, true)), ())))), 7))\n");
@@ -969,7 +969,7 @@ fn provider_external_constrained_local_forwarder_has_actual_source_overlay() {
 fn provider_external_constrained_local_statement_keeps_enclosing_association() {
     let source = constrained_statement_source().replace(
         "Renamed.normalize sql",
-        "{\nlet forward : Bytes -> Bytes = fn(value) {\nRenamed.normalize value\n}\nforward sql\n}",
+        "{\nlet forward : String -> String = fn(value) {\nRenamed.normalize value\n}\nforward sql\n}",
     );
     check_constrained_statement_fixture(&source, &constrained_statement_helper());
 }
@@ -1308,7 +1308,7 @@ fn constrained_statement_source() -> String {
 }
 
 fn constrained_statement_helper() -> String {
-    CONSTRAINED_HELPER.replace("Native.OpenConfig", "Bytes")
+    CONSTRAINED_HELPER.replace("Native.OpenConfig", "String")
 }
 
 #[test]
