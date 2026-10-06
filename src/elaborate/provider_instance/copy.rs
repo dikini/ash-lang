@@ -223,6 +223,36 @@ fn retain_row_payload_variables(
     Ok(())
 }
 
+fn retain_original_copy_payload_variables(
+    arguments: &[crate::types::KindedArgument],
+    body: &ComputationType,
+    residual: &EffectRow,
+    pending: &HashMap<InferenceVariableId, EffectRow>,
+    forbidden: &mut HashSet<TypeVariableId>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), TypeError> {
+    // The caller has completed all three unique sigma insertions. Their cloned
+    // payloads preserve these original identities; collect the union once.
+    work.charge(arguments.len()).map_err(|()| type_resource())?;
+    for argument in arguments {
+        match argument {
+            crate::types::KindedArgument::TypeArg(ty) => {
+                retain_type_payload_variables(ty, forbidden, work)?;
+            }
+            crate::types::KindedArgument::RowArg(row) => {
+                retain_row_payload_variables(row, forbidden, work)?;
+            }
+        }
+    }
+    retain_type_payload_variables(body.value(), forbidden, work)?;
+    retain_row_payload_variables(residual, forbidden, work)?;
+    // Read the final map after all original inserts, preserving winning values.
+    for row in pending.values() {
+        retain_row_payload_variables(row, forbidden, work)?;
+    }
+    retain_row_payload_variables(body.effects(), forbidden, work)
+}
+
 /// Source-only row positions may remain ordinary registered inferences.
 /// Copying these coordinates claims no completed row receipt or Core authority.
 pub(in crate::elaborate) struct ProviderScopeCopyRows<'a> {
@@ -306,20 +336,16 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
             if hidden[0].1 != Kind::Type || hidden[1].1 != Kind::EffectRow {
                 return Err(invalid_state());
             }
-            let value = crate::types::IterativeArgumentOwner::new(
-                crate::types::KindedArgument::TypeArg(self.clone_type(body.value())?),
-            );
-            phase
-                .sigma
-                .insert_cloned(hidden[0].0, &value, &mut self.type_work)?;
-            let row =
-                crate::types::IterativeArgumentOwner::new(crate::types::KindedArgument::RowArg(
-                    clone_effect_row_with_budget(rows.residual, &mut self.type_work)
-                        .map_err(|()| type_resource())?,
-                ));
-            phase
-                .sigma
-                .insert_cloned(hidden[1].0, &row, &mut self.type_work)?;
+            phase.sigma.insert_borrowed(
+                hidden[0].0,
+                crate::elaborate::BorrowedOwnerArgument::TypeArg(body.value()),
+                &mut self.type_work,
+            )?;
+            phase.sigma.insert_borrowed(
+                hidden[1].0,
+                crate::elaborate::BorrowedOwnerArgument::RowArg(rows.residual),
+                &mut self.type_work,
+            )?;
             if index == 2 {
                 self.type_work
                     .charge(rows.pending.len())
@@ -400,16 +426,14 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         // Actual replacements are immutable caller payloads. Fresh local
         // binders must not capture any free or forall-bound identity inside
         // them, including nested row members/lacks and pending row solutions.
-        for phase in &phases {
-            for payload in phase.sigma.types.as_map().values() {
-                retain_type_payload_variables(payload, &mut forbidden_types, &mut self.type_work)?;
-            }
-            for payload in phase.sigma.rows.values().chain(phase.pending.values()) {
-                retain_row_payload_variables(payload, &mut forbidden_types, &mut self.type_work)?;
-            }
-        }
-        retain_type_payload_variables(body.value(), &mut forbidden_types, &mut self.type_work)?;
-        retain_row_payload_variables(body.effects(), &mut forbidden_types, &mut self.type_work)?;
+        retain_original_copy_payload_variables(
+            actuals.arguments(),
+            body,
+            rows.residual,
+            &phases[2].pending,
+            &mut forbidden_types,
+            &mut self.type_work,
+        )?;
         for (phase, inventory) in phases.iter_mut().zip(inventories) {
             reserve_pair(
                 &mut phase.binders,
@@ -705,4 +729,271 @@ fn lower_scope_copies(
     })();
     transform::discharge_provider_draft_work(builder, work)?;
     result
+}
+
+#[cfg(test)]
+mod payload_collection_tests {
+    use super::*;
+    use crate::module::ModuleId;
+    use crate::types::{EffectId, EffectInstance, KindedArgument, ResourceDefinitionId};
+
+    fn variable(id: u32) -> TypeVariableId {
+        TypeVariableId::generated(id)
+    }
+
+    fn row(seed: u32) -> EffectRow {
+        let module = ModuleId::new(31);
+        EffectRow::with_tail(
+            Box::new([EffectInstance::new_kinded(
+                EffectId::new(module, seed),
+                Box::new([
+                    KindedArgument::TypeArg(Type::Variable(variable(seed))),
+                    KindedArgument::RowArg(EffectRow::open(
+                        EffectRowVariable::rigid(variable(seed + 1)),
+                        Box::new([EffectInstance::new(
+                            EffectId::new(module, seed + 1),
+                            Box::new([Type::Variable(variable(seed + 2))]),
+                        )]),
+                    )),
+                ]),
+            )]),
+            EffectRowVariable::rigid(variable(seed + 3)),
+            Box::new([EffectInstance::new(
+                EffectId::new(module, seed + 2),
+                Box::new([Type::Forall(
+                    Box::new([(
+                        variable(seed + 4),
+                        Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::EffectRow)),
+                    )]),
+                    Box::new(Type::Variable(variable(seed + 5))),
+                )]),
+            )]),
+        )
+    }
+
+    fn fixture() -> (Vec<KindedArgument>, ComputationType, EffectRow) {
+        let ty = Type::Forall(
+            Box::new([(variable(1), Kind::Type), (variable(2), Kind::EffectRow)]),
+            Box::new(Type::ResourceApply(
+                ResourceDefinitionId::new(ModuleId::new(31), 0),
+                Box::new([
+                    KindedArgument::TypeArg(Type::Function(
+                        Box::new(Type::Application(
+                            Box::new(Type::Variable(variable(3))),
+                            Box::new(Type::Variable(variable(4))),
+                        )),
+                        Box::new(Type::EffectfulFunction(
+                            Box::new(Type::Variable(variable(5))),
+                            Box::new(ComputationType::new(
+                                Type::Tuple(Box::new([Type::Variable(variable(6)), Type::Unit])),
+                                row(20),
+                            )),
+                        )),
+                    )),
+                    KindedArgument::RowArg(row(30)),
+                ]),
+            )),
+        );
+        (
+            vec![KindedArgument::TypeArg(ty), KindedArgument::RowArg(row(40))],
+            ComputationType::new(
+                Type::Forall(
+                    Box::new([(variable(7), Kind::Type)]),
+                    Box::new(Type::Variable(variable(8))),
+                ),
+                row(50),
+            ),
+            row(60),
+        )
+    }
+
+    fn phases(
+        arguments: &[KindedArgument],
+        body: &ComputationType,
+        residual: &EffectRow,
+    ) -> [PreparedPhaseCopy; 3] {
+        let mut phases = [
+            PreparedPhaseCopy::empty(),
+            PreparedPhaseCopy::empty(),
+            PreparedPhaseCopy::empty(),
+        ];
+        let mut work = TypeWorkBudget::unbounded();
+        for (index, phase) in phases.iter_mut().enumerate() {
+            for (ordinal, argument) in arguments.iter().enumerate() {
+                phase
+                    .sigma
+                    .insert_cloned(
+                        variable(1000 + index as u32 * 100 + ordinal as u32),
+                        argument,
+                        &mut work,
+                    )
+                    .unwrap();
+            }
+            let value = KindedArgument::TypeArg(
+                crate::types::clone_type_with_budget(body.value(), &mut work).unwrap(),
+            );
+            phase
+                .sigma
+                .insert_cloned(variable(2000 + index as u32), &value, &mut work)
+                .unwrap();
+            let row =
+                KindedArgument::RowArg(clone_effect_row_with_budget(residual, &mut work).unwrap());
+            phase
+                .sigma
+                .insert_cloned(variable(3000 + index as u32), &row, &mut work)
+                .unwrap();
+        }
+        phases
+    }
+
+    // The exact old collection order, retained only as the set-law oracle.
+    fn original_collection(
+        phases: &[PreparedPhaseCopy; 3],
+        body: &ComputationType,
+        forbidden: &mut HashSet<TypeVariableId>,
+        work: &mut TypeWorkBudget,
+    ) {
+        for phase in phases {
+            for payload in phase.sigma.types.as_map().values() {
+                retain_type_payload_variables(payload, forbidden, work).unwrap();
+            }
+            for payload in phase.sigma.rows.values().chain(phase.pending.values()) {
+                retain_row_payload_variables(payload, forbidden, work).unwrap();
+            }
+        }
+        retain_type_payload_variables(body.value(), forbidden, work).unwrap();
+        retain_row_payload_variables(body.effects(), forbidden, work).unwrap();
+    }
+
+    #[test]
+    fn original_copy_inputs_preserve_complete_forbidden_identity_union() {
+        let (arguments, body, residual) = fixture();
+        let mut phases = phases(&arguments, &body, &residual);
+        phases[2]
+            .pending
+            .insert(InferenceVariableId::new(0), row(70));
+        let seeded = HashSet::from([variable(900), variable(1), variable(70)]);
+        let mut original = seeded.clone();
+        let mut original_work = TypeWorkBudget::unbounded();
+        original_collection(&phases, &body, &mut original, &mut original_work);
+        let mut direct = seeded;
+        let mut direct_work = TypeWorkBudget::unbounded();
+        retain_original_copy_payload_variables(
+            &arguments,
+            &body,
+            &residual,
+            &phases[2].pending,
+            &mut direct,
+            &mut direct_work,
+        )
+        .unwrap();
+        assert_eq!(direct, original);
+        for id in [
+            1, 2, 3, 4, 5, 6, 7, 8, 20, 21, 22, 23, 24, 25, 30, 40, 50, 60, 70, 74, 75, 900,
+        ] {
+            assert!(
+                direct.contains(&variable(id)),
+                "missing original identity {id}"
+            );
+        }
+        assert!(direct_work.used() < original_work.used());
+        // Membership is the sole input to original fresh-Type collision checks.
+        assert_eq!(
+            (0..1000)
+                .filter(|id| !direct.contains(&variable(*id)))
+                .collect::<Vec<_>>(),
+            (0..1000)
+                .filter(|id| !original.contains(&variable(*id)))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn original_copy_inputs_use_final_pending_winner_and_keep_unique_sigma_guard() {
+        let body = ComputationType::new(Type::Unit, EffectRow::empty());
+        let residual = EffectRow::empty();
+        let mut phases = phases(&[], &body, &residual);
+        let key = InferenceVariableId::new(0);
+        phases[2].pending.insert(
+            key,
+            EffectRow::open(EffectRowVariable::rigid(variable(101)), Box::new([])),
+        );
+        phases[2].pending.insert(
+            key,
+            EffectRow::open(EffectRowVariable::rigid(variable(102)), Box::new([])),
+        );
+        let mut original = HashSet::new();
+        original_collection(
+            &phases,
+            &body,
+            &mut original,
+            &mut TypeWorkBudget::unbounded(),
+        );
+        let mut direct = HashSet::new();
+        retain_original_copy_payload_variables(
+            &[],
+            &body,
+            &residual,
+            &phases[2].pending,
+            &mut direct,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(direct, original);
+        assert!(!direct.contains(&variable(101)));
+        assert!(direct.contains(&variable(102)));
+        assert!(
+            phases[0]
+                .sigma
+                .insert_cloned(
+                    variable(2000),
+                    &KindedArgument::TypeArg(Type::Variable(variable(103))),
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn original_copy_input_collection_refusal_is_local_and_retry_preserves_union() {
+        let (arguments, body, residual) = fixture();
+        let phases = phases(&arguments, &body, &residual);
+        let mut expected = HashSet::from([variable(900)]);
+        let mut measured = TypeWorkBudget::unbounded();
+        retain_original_copy_payload_variables(
+            &arguments,
+            &body,
+            &residual,
+            &phases[2].pending,
+            &mut expected,
+            &mut measured,
+        )
+        .unwrap();
+        for limit in 0..measured.used() {
+            let mut scratch = HashSet::from([variable(900)]);
+            let mut short = TypeWorkBudget::with_limit(limit);
+            assert!(
+                retain_original_copy_payload_variables(
+                    &arguments,
+                    &body,
+                    &residual,
+                    &phases[2].pending,
+                    &mut scratch,
+                    &mut short
+                )
+                .is_err()
+            );
+            assert!(scratch.is_subset(&expected));
+            retain_original_copy_payload_variables(
+                &arguments,
+                &body,
+                &residual,
+                &phases[2].pending,
+                &mut scratch,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+            assert_eq!(scratch, expected);
+        }
+    }
 }

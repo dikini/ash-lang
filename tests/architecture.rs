@@ -456,6 +456,10 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture.rs::KindedArguments.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/core/capture.rs::Metadata.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::Analysis.owner_rows", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::ControlCodeInventory.graph", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::ControlCodeInventory.owner_rows", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::TypeUniverseBuilder.ordered", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::UnitOccurrence.original", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/dialect.rs::IterativeArgumentBuffer.0", FieldTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeTransientWork),
     kind_site!("src/core/dialect.rs::OperationTypeMetadata.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
     kind_site!("src/core/dialect.rs::OperationTypeMetadata.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreAdmissionCoreTypeCoreTree),
@@ -515,6 +519,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate.rs::$impl_TypeProvenance::$fn_aligns::Value.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$impl_TypeProvenance::$fn_aligns::Value.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$impl_TypeProvenance::$fn_aligns::Value.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::BorrowedOwnerArgument.RowArg.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/elaborate.rs::BorrowedOwnerArgument.TypeArg.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::BorrowedZonkRoot.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::BorrowedZonkRoot.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::InferenceOccurrenceRoot.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
@@ -689,8 +695,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/transform.rs::ProviderKindParameters.0", FieldProviderCoreOwned),
     kind_site!("src/core/validate.rs::CheckedHandlerTemplate.original_clauses", FieldProviderCoreOwned),
     kind_site!("src/core/validate.rs::CheckedHandlerTemplate.original_nodes", FieldProviderCoreOwned),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_160_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
-    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_160_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_161_1::Value.Argument.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
+    kind_site!("src/elaborate.rs::$fn_check_newtype_representation_cycles::$block_161_1::Value.Type.0", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork, Borrowed),
     kind_site!("src/elaborate.rs::CoreElaborator.pending_local_provider", FieldProviderCodeShared),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_codes", FieldProviderCodeShared),
     kind_site!("src/elaborate.rs::CoreElaborator.provider_instances", FieldProviderCodeShared),
@@ -711,6 +717,21 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.occurrences", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.original", FieldProviderInputsBorrow),
     kind_site!("src/elaborate/provider.rs::LifecycleTemplateSource.program", FieldProviderInputsBorrow),
+    kind_site!("src/elaborate/provider.rs::AvailableProviderGroup.code", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::CommittedOriginalGroup.code", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::GroupPreparationPhase.Committed.0", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::AvailableProviderComponent.original", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::CommittedOriginalComponent.original", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ComponentPreparationPhase.Committed.0", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::PreparedOriginalTemplate.declaration", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderGroupPreparation.code", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderGroupPreparation.phase", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderGroupPreparation.templates", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderOriginalPreparation.original", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderOriginalPreparation.phase", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::ProviderOriginalPreparation.template", FieldProviderCodeShared),
+    kind_site!("src/elaborate/provider.rs::CommittedOriginalGroup.certificate", FieldProviderContractShared),
+    kind_site!("src/elaborate/provider.rs::CommittedOriginalComponent.certificate", FieldProviderContractShared),
     kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.code", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::PreparedLocalProviderCode.originals", FieldProviderCodeShared),
     kind_site!("src/elaborate/provider.rs::PreparedProviderCode.Group.0", FieldProviderCodeShared),
@@ -1225,9 +1246,11 @@ const KIND_SITES: &[KindSite] = &[
     // summary construction and import retention; they own no summary tree.
     kind_site!("src/core/capture.rs::CaptureGraphVisits.seen", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeSummaryTree),
     kind_site!("src/core/capture.rs::CaptureValueSummary.graph", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
+    kind_site!("src/core/capture.rs::CallableSlots.positions", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
     kind_site!("src/core/capture.rs::SummaryGraph.callables", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
     kind_site!("src/core/capture.rs::SummaryGraph.code", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree, Shared),
     kind_site!("src/core/capture.rs::SummaryGraph.types", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
+    kind_site!("src/core/capture.rs::CallableSlots.absent_unit", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
     kind_site!("src/core/capture.rs::Callable.ty", FieldSummaryCarrierRetentionPreservedCarrierElaborationInferenceTypeSummaryTree),
     kind_site!("src/core/capture.rs::ImportedCallables.callables", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
     kind_site!("src/core/capture.rs::ImportedCallables.graphs", FieldBorrowedTransientCarrierRetentionPreservedCarrierResolutionResolutionTypeSummaryTree),
@@ -1236,6 +1259,8 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture.rs::CleanupRequirement.expected", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/core/capture.rs::CleanupRequirement.retained", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
     kind_site!("src/core/capture.rs::CleanupRequirement.row", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
+    // Requested-root metadata preparation borrows one exact typed Core forest.
+    kind_site!("src/core/capture.rs::FunctionMetadataPreparation.nodes", FieldBorrowedTransientCarrierRetentionPreservedCarrierCoreValidationCoreTypeCoreTree),
     kind_site!("src/core/capture.rs::Metadata.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture.rs::Metadata.Row.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture.rs::MethodAdapter.head_arguments", FieldTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTransientWork),
@@ -2287,6 +2312,9 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/types.rs::TypeHashTask.EffectRow.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeHashTask.Instance.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeHashTask.Instances.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
+    kind_site!("src/types.rs::TypeHashTask.Kind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::TypeHashTask.Parameter.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
+    kind_site!("src/types.rs::TypeHashTask.Parameters.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
     kind_site!("src/types.rs::TypeHashTask.Sequence.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::TypeHashTask.Visit.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationTypeTypeTree),
     kind_site!("src/types.rs::$fn_render_kind_with_budget::RenderedKind.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierTypeOperationKindKindTree),
@@ -7543,16 +7571,75 @@ fn relational_vector_owners_charge_before_allocation() {
         substitution_charge < substitution_insert,
         "complete substitution entries must be charged before entering the shared owner gate"
     );
-    let owner_insert = function_body(&elaboration, &["fn", "insert_cloned", "("]);
+    let tagged_insert = function_body(&elaboration, &["fn", "insert_cloned", "("]);
+    assert!(
+        tagged_insert.windows(10).any(|window| {
+            window
+                == [
+                    "self",
+                    ".",
+                    "insert_borrowed",
+                    "(",
+                    "parameter",
+                    ",",
+                    "argument",
+                    ",",
+                    "budget",
+                    ")",
+                ]
+        }),
+        "tagged owner arguments must enter the canonical borrowed insertion gate",
+    );
+    for operation in [
+        "try_reserve",
+        "clone_type_with_budget",
+        "clone_effect_row_with_budget",
+    ] {
+        assert!(
+            !tagged_insert.contains(&operation),
+            "tagged owner delegation must not allocate or clone before the canonical charge",
+        );
+    }
+    let owner_insert = function_body(&elaboration, &["fn", "insert_borrowed", "("]);
     let entry_charge = position(owner_insert, &["budget", ".", "charge", "(", "1", ")"]);
-    for storage in ["types", "rows"] {
+    let type_guard = position(
+        owner_insert,
+        &[
+            "self",
+            ".",
+            "types",
+            ".",
+            "as_map",
+            "(",
+            ")",
+            ".",
+            "contains_key",
+            "(",
+        ],
+    );
+    let row_guard = position(
+        owner_insert,
+        &["self", ".", "rows", ".", "contains_key", "("],
+    );
+    assert!(
+        entry_charge < type_guard && entry_charge < row_guard,
+        "canonical owner insertion must charge before checking either tag storage",
+    );
+    for (storage, clone) in [
+        ("types", "clone_type_with_budget"),
+        ("rows", "clone_effect_row_with_budget"),
+    ] {
         let reserve = position(
             owner_insert,
             &["self", ".", storage, ".", "try_reserve", "(", "1", ")"],
         );
         assert!(
-            entry_charge < reserve,
-            "each tagged owner substitution storage must charge before fallible reservation"
+            entry_charge < reserve && type_guard < reserve && row_guard < reserve,
+            "each tagged owner substitution storage must charge and reject duplicate keys before fallible reservation"
+        );
+        assert!(
+            reserve < position(owner_insert, &[clone, "("]),
+            "owned replacement cloning must follow its charged fallible reservation",
         );
         assert!(
             owner_insert[reserve..].contains(&"type_resource"),

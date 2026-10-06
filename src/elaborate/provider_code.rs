@@ -6,7 +6,7 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
-type CheckedProviderCodes = HashMap<ModuleId, Arc<CheckedProviderGroup>>;
+type CheckedProviderCodes = HashMap<ModuleId, Arc<super::provider::ProviderGroupPreparation>>;
 
 use super::{TypeError, invalid_state, provider::CheckedProviderGroup, type_resource};
 use crate::{module::ModuleId, types::TypeWorkBudget};
@@ -46,7 +46,10 @@ impl ProviderCodeAvailability {
             work.charge(2).map_err(|()| type_resource())?;
             let mut codes = HashMap::new();
             codes.try_reserve(1).map_err(|_| type_resource())?;
-            codes.insert(module, Arc::clone(code));
+            codes.insert(
+                module,
+                super::provider::ProviderGroupPreparation::new(Arc::clone(code), work)?,
+            );
             self.codes = Some(Rc::new(RefCell::new(codes)));
             return Ok(());
         }
@@ -57,7 +60,7 @@ impl ProviderCodeAvailability {
             .try_borrow_mut()
             .map_err(|_| invalid_state())?;
         if let Some(previous) = codes.get(&module) {
-            return if Arc::ptr_eq(previous, code) {
+            return if previous.matches_code(code) {
                 Ok(())
             } else {
                 Err(invalid_state())
@@ -65,7 +68,10 @@ impl ProviderCodeAvailability {
         }
         work.charge(1).map_err(|()| type_resource())?;
         codes.try_reserve(1).map_err(|_| type_resource())?;
-        codes.insert(module, Arc::clone(code));
+        codes.insert(
+            module,
+            super::provider::ProviderGroupPreparation::new(Arc::clone(code), work)?,
+        );
         Ok(())
     }
 
@@ -75,7 +81,7 @@ impl ProviderCodeAvailability {
         &self,
         module: ModuleId,
         work: &mut TypeWorkBudget,
-    ) -> Result<Option<Arc<CheckedProviderGroup>>, TypeError> {
+    ) -> Result<Option<Arc<super::provider::ProviderGroupPreparation>>, TypeError> {
         let Some(codes) = &self.codes else {
             return Ok(None);
         };

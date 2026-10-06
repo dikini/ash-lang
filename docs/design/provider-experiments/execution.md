@@ -112,6 +112,31 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
+Latest integrated common code checkpoint is `5991e3d882b4a161c137fb826e73e79c149d550a`,
+merging common commit `183e9d506f0e3a41833f29b3e614616345169074` with an unsigned
+merge preserving both histories. Receipt 186 passes the complete unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. All four
+original common deliveries and this separate preparation-cost delivery are
+complete. The ten shared source/regression files and tracking are merged into
+`codex/provider-experiments`; `main` is unchanged.
+
+The pending String/TEXT manifest, adapter, source library and larger programs
+remain preserved SQLite-owned work. Their seventeen-case evidence remains
+fourteen passes and three typing-resource refusals in copied Unicode/BLOB/null
+results, bound NUL input and transaction/reopen persistence. Partial work
+reductions establish no full-program fit. Work and depth limits remain unchanged.
+The next canonical-preparation measurement is a proposal, not delivered code or
+proof that a larger typing quota is necessary.
+
+SQLite now imports documentation tracking tip
+`4fcf6bc9bec16a95a3c806856c3ae86aeb8ea8c6` after independently verifying
+receipt 186 and preserving its thirty-four owned paths in unsigned checkpoint
+`fc6257f8c16c30d3abd5bf3c06f09820c20d6a7e`. The reviewed seven-file
+fourteen-operation packet is paired after this merge; no engines run during
+import, and executable fourteen-operation acceptance remains pending.
+
+### Previous SQLite checkpoint, before this import
+
 Latest integrated common code checkpoint is `c97e0f3fdb4ec0c1269015864a7ca4efeaa132fd`;
 the original branch's tracking tip is `7cf295ee266997be22ee54ae8ecb2323372f22c9`.
 SQLite imports that tip through unsigned merge
@@ -3310,6 +3335,151 @@ retains `execution115-readable-trace.md`, the fourteen drain intervals in
 `execution115-consumer-receipt.json`. Parent/child ledger lineage is absent;
 the reader does not sum those ledgers into a whole-program total.
 
+## Shared String/TEXT and cost checkpoint preparation (2026-10-05)
+
+The common row/control delivery is integrated and verified at `3f9dd75`; its
+tracking tip is `b04ff1c`. SQLite imported that tip with unsigned merge
+`3a60215`, preserving its pending library/adapter work. Common owns shared
+compiler, Core, capture, provider checking, generic runtime and shared merges.
+SQLite owns its library, native adapter and executable evidence. Cargo windows
+are explicit and serial; dependent work imports verified original-branch
+commits. No independent library completion is required before a shared repair
+can be delivered.
+
+SQLite transferred nineteen pinned native/library/program inputs and a separate
+completion-observation assertion patch. Common reconciled the fourteen-operation
+String/TEXT manifest with the matching binding, source library and existing
+fixtures. The native adapter run passes sixty cases. Connected receipt 97
+passes existing public control, retention, codec and Core cases, plus two new
+SQLite capture/resume/discard cases. Four larger copying/reuse/persistence
+programs still refuse at the unchanged type-work limit; this preparation is
+not an integrated String/TEXT delivery.
+
+Receipt 98 corrects a module path in the new malformed-coordinate test and
+passes 1,581 library cases, including original-coordinate refusal, unchanged
+unpublished slots and fresh retries. One nine-clause nested-helper case still
+refuses. Its trace reaches 21,579 units after checked catalog and imported ABI
+preparation, then exhausts work during repeated method-evidence anchor scans.
+The public copying target passes four cases and refuses three in generic
+capture work. The session target did not execute in receipt 98 because that
+probe command lacked `--no-fail-fast`; its receipt-97 result remains seven
+passes and one refusal.
+
+Receipts 99–103 reconcile the nine-operation handler table with its exact
+original operation and resume identities. The nine-clause nested helper and its
+malformed-coordinate cases now pass at the default work limit. Receipt 100
+passes all 1,585 then-current library cases after the transform ledger was
+recomputed from its actual indexed work. Receipts 102 and 103 pass the connected
+Core, control, retention, basic SQLite and arena checks. Receipt 103 passes all
+94 capture cases, including successful closure/evidence setup, late dictionary
+owners, exact creation and reader contexts, and refusal before completion.
+
+The productive repairs preserve original source coordinates, exact evidence and
+anchor predicates, lexical watches and append-only value facts. Immutable
+capture setup uses successful exact-coordinate completion records; ordered
+edges retain only the prefix already propagated to that exact target. These
+records do not store owner values or capture demands. Required cold derivation,
+lookups, retained records and propagation remain paid and fallible. The
+four larger public programs still refuse at the unchanged 327,680-unit type
+work limit. Passing internal boundaries do not establish their execution.
+
+Receipt 103 measures repeated metadata headers within the same immutable Core
+build. The persistence program reaches a 1,226-node build at 263,051 units;
+1,976 completed header visits cover 1,003 distinct nodes. The 973 repeated
+visits consume 16,391 units before a later partial refusal. This demonstrates
+repeated structural work, not the net saving of a proposed header projection.
+The temporary traces were removed using exact owned patches. Shared source is
+being prepared for another connected checkpoint; no String/TEXT or cost
+follow-on commit has been merged.
+
+Receipt 104 tests the proposed control-call replay explanation. The reset
+program completes initial value closure at 266,523 units. Its first ten control
+value queries consume 47,806 units, while thirteen known-successor transitions
+consume 2,103. No repeated known-successor transition or tail replay occurs
+before refusal. A control-successor completion record is therefore not the
+measured repair for this failure and has not been implemented.
+
+Receipt 105 applies the independently reviewed build-local metadata header
+projection. Production compiles through the public driver and the connected
+Core/control/retention/basic SQLite/arena checks pass. The same four larger
+programs still refuse. Full-library compilation stops at a new test fixture
+missing the required boxed Resource node; only that test wrapper is corrected,
+and full-library execution remains pending. The next diagnosis measures value
+expression setup and propagation separately. Function closure publication keeps
+its existing behavior, including empty captured slots.
+
+Receipt 106 restores the exact productive source before quality execution and
+passes all 1,590 library cases without ignores, including the corrected header
+fixture and fixed small-stack regressions. The connected Core, control,
+retention, basic SQLite and arena cases pass. The same four larger public
+programs still refuse. Exact value-graph traces have no identity, storage or
+counter overflow: the reset program spends 10,681 units repeating already
+successful Function setup, and 29,196 repeating Evidence evaluation. These are
+measured predecessor costs; they do not establish a safe shortcut or net saving.
+The following shared repair keeps late value facts, existing propagation and
+independent validation as required boundaries.
+
+Receipt 107 separates Evidence evaluation costs without changing its equations.
+The same four public programs refuse. The Unicode copying program spends 19,711
+units in 63 cold closure transfers and 8,933 in dictionary reads; the reset
+program spends 16,797 in 81 cold transfers and 12,664 in dictionary reads.
+Unknown-value dependency traversal contributes no work in these samples. Exact
+analysis and slot records report no omitted identities or counter overflow.
+Thus a repeated successful Evidence evaluation does not establish that its new
+closure transfer can be skipped. The diagnostic was removed by restoring the
+exact productive bytes with a fresh modification time. Static route reuse and
+work before value analysis remain separate hypotheses, not tested savings.
+
+Receipt 108 installs the independently reviewed normal queue setup completion
+for Alias, Merge and Function. Every ordered edge still propagates unread facts
+on every visit, while direct evaluations retain their original behavior.
+Completion is paid and recorded only after the entire original setup and current
+ordered propagation succeed. Fresh and focused slots start incomplete; terminal
+and cut authority remain separate. All 1,593 library cases pass without ignores,
+including late actual resource identities, every cold work cut, focused/restore
+cases and fixed small-stack regressions. The same four larger public programs
+still refuse. Connected control, retention, Core, basic SQLite and arena cases
+pass. All 43 architecture cases pass without ignores. This establishes this
+repair's tested boundaries, not completion of the larger-program delivery.
+
+Receipt 109 measures the original paid Type-work callsites and cold Evidence
+subphases. Each failing parent ledger reconciles its site charges exactly with
+its admitted total, without omitted parent calls or sites. The diagnostic omits
+many separate finite child ledgers, so these parent reports are not whole-program
+work totals. All probes were removed using exact source snapshots with fresh
+modification times, and their new diagnostic module was removed.
+
+The Unicode and reset samples contain respectively 63 and 83 cold Evidence
+slots, with only one cold transfer at each exact slot/context. Prior successful
+empty-source evaluations explain the earlier repeated-success label. Capture
+specialization consumes 14,821 and 11,923 units, while dictionary linking consumes
+3,537 and 3,003. A reviewed dictionary-link completion candidate has no reuse
+opportunity in these prefixes; it is withdrawn and preserved privately rather
+than retained as the required repair. The four larger public programs still
+refuse. Original immutable structural capture scans and required independent
+validation remain separate cost boundaries under investigation.
+
+The next connected checkpoint must retain all required larger programs and
+negative cases, remove temporary probes, complete independent review and
+architecture checks, commit and merge unsigned, and verify the integrated
+original branch. Original identities, full anchor validation, lexical watches,
+existing work/depth limits and unrelated drafts remain required invariants.
+
+
+Receipt 110 retained the same four public refusals and restored the exact
+productive receipt-108 source after a temporary capture-index probe. Complete
+copying graphs contained one duplicate among 104 capture entries; reset
+contained none among 59. Persistence stopped during graph construction, with
+five duplicates among 135 entries in its created prefix. Created entries and
+completed inventories are separate observations. The affected duplicate
+vectors disagree between forward first-occurrence and reverse last-occurrence
+order; a single deduplicated vector would change a consumer's discovery order.
+These counts do not justify a capture deduplication change. Evidence and the
+source-only assessment are retained in `provider-capture-duplicates-110/` and
+`/tmp/ash-function-capture-duplicates-analysis-20261005-frozen-01/`. No probe
+remains in productive source and no new execution capability is claimed.
+
+
 ## Separate generic cost delivery (2026-10-05)
 
 The common control delivery remains verified at `b04ff1c`. Common and SQLite
@@ -3350,6 +3520,73 @@ diagnosis records ordered value and control events on the unchanged reset
 program, with exact source pins and explicit truncation boundaries. No trace
 or speculative shortcut is part of this delivery. Unsigned integration and
 verification in the original worktree remain required.
+
+
+The coherent fourteen-operation preparation is restored after the separate
+cost commit `50f4b6b` and unsigned original-branch merge `c97e0f3`. Its generic
+compiler files include that verified common snapshot; pending package files
+retain their preserved contents. Integrated original-branch verification is
+still pending. The next diagnosis is the requested ordered trace on the
+unchanged reset program. No uncompiled bound-port or borrowed-projection
+candidate has been applied, and no larger-program acceptance is claimed.
+
+
+## Ordered reset execution trace and propagation review (115–117)
+
+The user requested actual ordered compiler execution before another long gate or
+optimization. The initial original-branch gate 114 was interrupted after 22.64 s;
+its partial log is preserved and it establishes no passing integrated result.
+
+Receipt 115 executes the unchanged 45-line reset entry through the existing public
+`sqlite_session` driver on the coherent fourteen-operation source snapshot. The
+entry SHA is 0979f33b5696c6f6cc799e8c5002caad079029eed67c94b4699d4f2e1578ed5b.
+Temporary streamed instrumentation preserves original charges and decisions and
+records early finite-ledger work, queue causes, contexts, fresh versus existing
+facts, container lengths/capacities, ordered continuation-state snapshots and
+refusal. Explicit terminal flush receipts record 364343 reset events and 326019
+short-TEXT control events, with no omissions, overflow or I/O failures. Independent
+Value, Control, integrity and SQLite extractions agree. Unbounded budgets are
+excluded and parent/child ledger lineage is absent; neither summed child work
+nor total allocated bytes is claimed.
+
+The reset entry still fails with `TypeResourceExhausted` before acquisition. Its
+exact compiler ledger 3 admits 327680 units, then refuses two. One Value analysis
+reaches an empty queue 13 times; later Control queries extend that same analysis.
+The refusal occurs during the fourteenth drain, with slot 2413 still being
+processed despite an empty pending queue. Original source 0 bytes 1692–1702 are
+`Sqlite.Err` on line 31 in `after_second`. Its context follows main → after_first
+→ after_second. The Control prefix has 218 distinct committed and popped states,
+25 existing-state suppressions, and no replay. No focused child analysis occurs.
+These observations establish finite progress to refusal, not whole-pipeline
+convergence or remaining-work sufficiency.
+
+The short TEXT control returns
+`Completed(Completed(Ok(TextValue("héllo 世界")), Closed), Closed)`, copies 13 input
+and output bytes, finalizes the statement, then closes the connection. Both
+processes retain zero native owners. The five existing-source overlays and added
+module are removed by exact fresh source restoration; all 37 before-source pins
+and all 40 coherent-source pins match. Raw logs, source pins, reproducible commands,
+terminal receipts and readable ordered timelines are under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/provider-ordered-execution-trace-115/`;
+independent reconstructions are the sibling `ordered-trace-*115` directories.
+
+The trace supports a narrow implementation candidate: propagation currently
+copies an ordered edge vector and each unread scalar Atom suffix before visiting
+them. Source review establishes that publishing an Atom does not mutate the
+current edge list or a distinct source's atoms; a self-edge sees existing
+membership. Fixed original counts and end positions therefore permit indexed
+Copy reads, preserving every original check, notification, order and complete
+cursor commit. Independent contract review approves this candidate; its source
+is applied only to the common worktree and has not yet been compiled. The
+historical successful reset prefix contains 18153 units of these physical copies;
+this is not a measured new-program saving or budget-fit claim. Existing exact
+work-cut/retry/self-edge/late-fact tests retain their obligations with formulas
+adjusted only for removed physical work. No work or depth limit is raised.
+
+Original merge c97e0f3 is now undergoing the complete gate 116. The verified
+cost-only handoff will be released to SQLite only after that gate passes.
+Connected verification 117 of the new propagation candidate remains pending.
+This work changes neither `spec/` nor the experimental authority of DN-0036.
 
 
 ## Verified shared cost integration and SQLite handoff (2026-10-05)
@@ -4419,3 +4656,964 @@ precedes the coordinated SQLite native, public and host window. Shared generic
 repairs remain common-owned; association-type migration and source-limit increases
 remain excluded. The realistic copying, NUL alternative and persistence resource
 failures remain pending acceptance, as does the verified SQLite delivery merge.
+
+## Common compiler records preserved at this import
+
+The following common-workstream records are retained alongside the SQLite
+records above. Each receipt keeps its original scope and limitations.
+
+
+## Borrowed propagation connected check (117)
+
+The diagnostic-free propagation candidate compiles and passes the complete
+1,595-case library run, including exact refusal cuts and fixed small-stack
+regressions. The eight connected common suites pass 139 cases, and SQLite
+capture/resume and owned discard pass both cases. The copying suite passes
+four cases and refuses three; the session suite passes seven and refuses one.
+The four unchanged larger cases still fail with typing work exhaustion before
+execution. These failures do not validate their required native observations
+and do not establish whole-pipeline convergence or budget fit. No assertions,
+fixtures or limits are weakened.
+
+The formatted candidate source SHA is
+`83823efc059483c139e91e927a94d98b2aa1fc2844993aa205721fdc582cbdda`.
+Formatting changes only two added test assertion layouts; the reviewed
+production change is identical. The 168.35-second serial window returns
+terminal failure because realistic acceptance remains incomplete, with all
+forty source pins unchanged and no active engine. Commands, full logs, exact
+source pins and return receipt are retained in
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/provider-borrowed-propagation-117/`.
+The candidate remains uncommitted common work. The integrated cost-only
+checkpoint stays verified at original tracking tip `7cf295e`. SQLite receives
+the next bounded workspace check window; reduced diagnostic variants will
+use the exact preceding compiler source to isolate program-shape effects.
+Original acceptance programs remain required.
+
+
+## Ready setup and helper isolation (123–124)
+
+The shared candidate now completes fixed Tuple, Cleanup, Bind, Recursive,
+Match and Resource setup only after their original readiness gates, watches,
+relations and ordered propagation succeed. Reactive Call, Project and Evidence
+inputs remain live. Connected receipt 123 passes 1,596 library cases, 139 common
+public cases, 43 architecture cases and both SQLite control cases. The unchanged
+copying suite still refuses three cases and the session suite one, all with
+typing work exhaustion before acquisition. The candidate remains uncommitted
+and unmerged. The separate late-constructor Match regression in receipt 124
+passes after completed Match setup; its existing projected arm still carries a
+new constructor payload's ownership. Work and depth limits remain unchanged.
+
+The equal-engine diagnostic comparison 124 restores the exact pre-117
+compiler and frozen ordered probes used in 115, 119 and 121. The staged reset
+program still completes when the exact original `read_cleared` declaration is
+restored unused. It reports all three copied answers, four steps, two resets,
+clear-bindings, statement finalization before connection close, and zero retained
+owners. Keeping every original helper signature and call site while staging
+only `read_cleared`'s internal Result forwarding still exhausts source checking
+work. These source variants preserve the native sequence but change pure
+dataflow; they do not replace original acceptance or establish general control
+convergence. The result rules out the restored declaration alone as the complete
+cause of the refusal. Detailed context and charged-work attribution remains
+required before the next repair.
+
+Receipt 124 returns after 108.69 seconds with all 46 current source pins and nine
+frozen input pins preserved, temporary instrumentation removed and no active
+engine. Source review, commands, full traces, native observations, source pins
+and terminal receipts are under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/provider-helper-isolation-trace-124/`.
+The verified original checkpoint remains tracking commit `7cf295ee` over code
+merge `c97e0f3`. Common continues to own shared compiler, Core, capture, provider
+checking, generic runtime and integration. SQLite retains library, adapter and
+program ownership. The next integration checkpoint requires unchanged larger
+program acceptance and connected independent validation, then an unsigned common
+commit, an unsigned original-branch merge and integrated verification before
+SQLite imports it. This remains DN-0036 evidence, not current Ash semantics or a
+mechanized P-1 proof.
+
+
+## Current preparation cost and typed reuse boundary (125–131)
+
+At receipt 131 the fourteen-operation package still refuses the same four
+unchanged larger copying, reset and persistence programs before acquisition.
+That public check passes both control cases, four copying cases and
+seven session cases. Three copying cases and one persistence case still exhaust
+typing work. These failures remain required acceptance cases. No work or depth
+limit, source program or assertion changes.
+
+Receipts 127–129, on the ready-setup candidate before the hash and scalar
+changes, separate these failures from the older pre-117 helper trace. Copying
+refuses during Function value routing; reset refuses
+during the final Value drain after Control discovery. Persistence refuses during
+static Match construction before that graph's Value activation. Receipt 128
+places the persistence graph's 1,226 nodes at 263,425 of 327,680 source-checking
+units before construction. Its completed free-value, metadata and abstract
+capture walks cost 8,824, 36,880 and 7,905 units respectively; the failed tail is
+not included. These are intervals within that existing ledger, not an
+addition across independent budgets or proof that all metadata work is redundant.
+
+The proposed bound-variable membership index is parked: receipt 129 predicts
+additional work of 72 units for copying, 56 for reset and 158 for persistence.
+A proposed zonk follow-up guard cannot reduce the measured intervals for these
+four cases because they already have empty row-solution maps. Readiness
+notification filtering has no beneficiaries before persistence's static refusal
+and no sufficient demonstrated benefit for the other cases. Lawful source
+optimizations are not automatically productive optimizations.
+
+Receipt 131 compiles the complete-Type universe hash index and scalar metadata
+root simplification. All five focused tests pass: complete hash equivalence,
+three type-universe cases and the metadata collector boundary. Hash collisions
+still require full equality; original first-occurrence order, complete owner
+arguments, kinds and row distinctions remain checked. Scalar metadata roots
+avoid unnecessary worklist and intermediate result allocation while compound
+roots retain the original complete walk and Forall shielding. This connected
+candidate does not complete the four larger programs and has not been committed
+or merged. Receipt 130 records the preceding failed test build caused by a
+missing test-only import, which receipt 131 corrects.
+
+The investigation following receipt 131 measures large preparation phases and
+repeated immutable provider authentication. At that checkpoint, template lookup
+re-authenticates original
+code, certificates and lifecycle associations. A proposed private prepared-data
+boundary would encode which obligations have completed, so specialization cannot
+accidentally re-enter preparation. Pending publication and committed publication
+must have distinct states: certificates retain publication slots, so the same
+allocation does not establish the same facts before and after publication.
+Successful committed preparation can retain exact immutable code and certificate
+identity; source import association, actual capture demands, copied identities
+and independent final Core reconstruction remain separate obligations. At receipt 131, this proposal is not an implemented or verified capability.
+
+Receipt directories `provider-zonk-cost-125`, `provider-ready-notify-cost-126`,
+`provider-current-refusal-127`, `provider-construction-cost-128`,
+`provider-metadata-filter-cost-129`, `provider-index-scalar-130` and
+`provider-index-scalar-131` are under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`.
+They retain commands, exact source pins, raw logs and explicit engine returns.
+Temporary diagnostic changes are restored before subsequent work. Original
+integration remains `7cf295ee` over `c97e0f3`; no new completed delivery is claimed.
+
+
+Receipt 132 verifies the same diagnostic-free hash/scalar candidate with all
+1,601 library cases, 139 connected public cases and 43 architecture cases
+passing. Deep-input, fixed-stack, owner-argument, publication and independent
+Core-validation regressions pass. This gate validates the connected changes;
+it does not supersede receipt 131's four required larger-program failures or
+establish their current refusal frontier. The source and return receipts are
+under `provider-index-scalar-connected-132/` in the same evidence directory.
+The candidate remains uncommitted and unmerged pending realistic acceptance.
+
+Receipt 133 compiled the temporary coarse preparation probe and passed its first
+capture/resume case. The runner then stopped because its parser required the
+terminal marker at the beginning of a line; Rust emitted that marker after the
+test name. The raw terminal and trace were complete. This remains a partial
+one-case receipt, with the failed runner result preserved.
+
+Receipt 134 corrects that parser and measures all seventeen unchanged copying,
+session and control cases in separate processes. Thirteen pass and the same
+four larger programs exhaust typing work. Independent readers validate thirty
+public-driver terminal receipts, contiguous sequences, zero omitted records,
+zero diagnostic failures and the exact aborted-phase counts. All forty-six
+production pins are restored and the temporary helper is removed before the
+explicit engine return.
+
+At receipt 134, the source ledger repeats complete original-code authentication
+four times in copying and its NUL case (7,236 units), six times in reset (10,854), and
+twelve times in persistence (21,708). Lifecycle state-association checks cost
+438, 621 and 1,360 additional units respectively. These are observed repeated
+invocations, not net savings or proof that every invocation can be removed.
+Copying now finishes static graph construction and refuses during initial
+Control analysis. Reset completes source capture, then refuses in source-plan
+preparation. Persistence still refuses during static graph construction. The
+earlier 127–129 frontiers do not describe this moving candidate.
+
+A private typed preparation candidate retains an exact original owner through
+available, committed and selected-template states. Its source and linked routes
+remain distinct; local component promotion does not require complete group code
+availability. Pending publication cannot be promoted using pointer identity
+alone. Per-instance substitution, fresh identities and capture demands remain
+separate, and independent import and final Core checking still reconstruct
+their own authority. Receipt 135 applies and builds that patch. Sixty-five of
+sixty-six connected provider cases pass; the new preparation test fails while
+linking its fixture, before reaching the owner checks. The public SQLite checks
+therefore have not run on this candidate. Independent source review finds no
+production blocker. Its cold storage, warm lookup and preparation costs require fresh
+measurement before any savings or completion claim.
+
+Receipt 136 corrects the fixture by linking its actual checked dependency graph
+while retaining the already-checked entry and published slots. It removes two
+immediately erased route wrappers; method arguments and certificate checks
+continue to distinguish source, pending and linked access. The preparation
+regression passes, including partial-stage publication and an exact remaining
+budget retry of the same owner. The unchanged reset and clear-bindings program
+now executes successfully through the public driver with its existing native,
+copy and completion assertions. All previously passing public cases still pass;
+the full result is fourteen passes and three typing refusals.
+Copying, its NUL variant and persistence still refuse before acquisition. No
+limit, program or assertion changed. This candidate remains uncommitted and
+unmerged, and the remaining refusal frontiers require fresh attribution.
+
+Receipts `provider-preparation-phases-133`, `provider-preparation-phases-134`,
+`preparation-phase-analysis-134`, `provider-typed-preparation-135` and
+`provider-typed-preparation-136` are in the same evidence directory. The
+integrated original branch remains `7cf295ee` over `c97e0f3`.
+
+
+Receipt 137 measures the diagnostic-free typed preparation candidate with the
+same five representative public programs. Original group authentication occurs
+once per source entry, at 1,809 units. Each selected template's state associations
+are checked once; later lookups retain the exact prepared owner. The four
+lifecycle input preparations cost 2,844 units in total. Sharing their immutable
+inputs offers at most 2,121 repeated units before new storage and lookup costs;
+this is not enough evidence to claim that a refused program will fit. Argument
+context matching has not run before the three remaining refusals, so retaining
+its lookup index is parked. All forty-seven production pins are restored.
+
+Receipt 138 separates initial Control universe preparation from Value graph
+setup and its first closure. Copying and its NUL variant complete the universe
+at 7,823 units and initial setup at 2,330 units. Their first Value closure then
+admits 122,905 units before refusing. This is an incomplete dynamic propagation
+cost, not removable immutable preparation. Persistence instead refuses inside
+Control universe preparation with only 3,828 units remaining; it never reaches
+Value graph setup. Its unknown remaining tail cannot be inferred from copying.
+Reset completes those phases at 5,141, 1,298 and 61,071 units respectively, and
+capture/resume completes them at 4,176, 1,004 and 20,931 units.
+
+The five programs retain their source, acceptance assertions and work limits.
+Independent readers validate contiguous trace sequences, exact terminal results,
+zero omitted records and diagnostic failures, and the expected aborted phases.
+The temporary diagnostic is removed, all forty-seven pins are restored, and the
+engine returns explicitly. The next investigation measures actual queue growth,
+new graph state and repeated visits within the first Value closure. It keeps
+immutable prepared facts separate from context-specific answers and processing
+progress. No additional overhead is accepted as necessary without that evidence.
+
+Receipts `provider-preparation-phases-137` and
+`provider-preparation-phases-138` are in the same evidence directory. The typed
+preparation candidate and passing reset program remain uncommitted and unmerged;
+original integration remains `7cf295ee` over `c97e0f3`.
+
+
+Receipt 138b checks the diagnostic-free typed preparation boundaries. All 66
+external-provider cases pass. Architecture enters its 43 cases but the combined
+240-second window expires during the checks; that result is incomplete, not a
+pass. All forty-seven input pins remain unchanged and no engines remain.
+
+Receipt 139 measures three unchanged public programs with a temporary bounded
+Value progression diagnostic. Resume and reset pass; copying still refuses.
+Their coarse traces are byte-identical to receipt 138. Independent readers
+validate all 501 per-close reports, post-flush status records and exact exclusive
+cost partitions, with zero omissions, diagnostic failures or unreconciled work.
+The initial copying closure grows from 276 to 4,402 slots and from 38 to 287
+contexts. Watch, edge and slot operations account for 74,482 disjoint units of
+its 122,905 admitted units; dependencies account for only 84. Evidence-kind
+visits cost 54,884 inclusive units, an overlapping view that cannot be added to
+those operation totals. Revisit counts do not prove unchanged-state repetition.
+Refusal occurs at the next queue-visit charge before evaluation begins. Both
+diagnostic helpers are removed, all forty-seven pins are restored and the
+engine returns explicitly.
+
+Receipt 140 applies the independently reviewed consumed Control code inventory.
+It classifies each original code entry once, deriving both resource presence and
+ordered owner rows before creating query state. The remaining type-universe and
+Analysis construction suffix stays unchanged. The candidate builds and all 106
+existing capture/control cases pass. Its new boundary test fails because the
+expected row inventory omits known-prefix members that the canonical open-row
+constructor also retains in the tail lacks set. The actual count is sixteen,
+not twelve. Public SQLite and architecture checks have not run after that
+failure. Correcting the fixture must preserve those rows and their original
+order; it does not authorize changing the productive traversal.
+
+The next Evidence-stage proposal carries a unique mutable Analysis borrow from
+successful capture transfer into residual dictionary routing. It can prove that
+an exact relation has already been installed before filtering repeat setup.
+Global ports outside the capture topology remain required by existing tests;
+a lazy-port replacement is unproved across focused snapshots and joined
+contexts. The proposed phase receipt is not implemented or verified yet.
+
+Receipts `provider-typed-preparation-boundaries-138b`,
+`provider-value-progression-139`, `value-progression-analysis-139` and
+`provider-control-inventory-140` are in the same evidence directory. These
+candidates remain uncommitted and unmerged.
+
+Receipts 141 and 141b validate the corrected canonical row fixture without
+changing the productive inventory. All 107 capture/control cases and all 43
+architecture cases pass. The architecture suite takes 517.52 seconds; receipt
+132 recorded 444.51 seconds with parallel test execution, so the shorter 138b
+timeout did not establish a regression. The guard implementation is unchanged.
+
+Cargo stops the initial public command after the copying binary fails. Receipt
+141 therefore establishes two control passes and five copying passes with two
+typing refusals, but does not execute sessions. Receipt 141b runs all eight
+sessions separately: seven pass and persistence still refuses during typing.
+Across the three binaries the result remains fourteen passes and three typing
+refusals. Copying, its NUL variant and persistence are incomplete; reset and
+capture/resume execute their unchanged native assertions. All forty-seven pins
+remain unchanged within each command window and both engines return explicitly.
+
+The next temporary observation checks exact current capture-installed dictionary
+relations before their original repeated routing. A successful phase receipt
+will need the same mutable Analysis loan and exact transfer coordinates;
+prepared topology membership alone cannot authorize skipping a relation.
+These candidates remain uncommitted and unmerged. Integration remains
+`7cf295ee` over `c97e0f3`.
+
+Receipt 142 observes current dictionary routing after successful capture
+specialization. Independent readers validate original coordinates, both indexed
+and physical ordered relations, successful cost records, setup/output endpoints
+and post-flush status. Resume completes 30 observed transfers with 110 routes,
+copying 114 with 882 routes, and reset 84 with 378 routes. Every observed route
+is covered by the completed capture transfer and physically ready; its repeated
+slot/link work costs five units. Zero omitted or partial records are reported.
+Copying still refuses later, so these are complete observed transfers rather
+than whole-program completion or net savings. All forty-seven pins are restored
+and the temporary helper is removed.
+
+Receipt 143 applies the consuming Evidence transfer phases. One exclusive
+Analysis borrow flows through reservation, capture installation, required
+residual routing and final output publication. Bound-port topology is immutable
+structure; only successful contextful installation permits filtering a repeated
+relation. Initial input watches, Unknown dependencies and late owner propagation
+remain live. The candidate builds and all 108 capture/control cases pass. The
+three public binaries run with `--no-fail-fast`: fourteen pass and the same three
+typing refusals remain. No larger program is recovered at this checkpoint.
+
+The candidate pays two new source guards per closure attempt, a membership
+lookup per route and fallible storage for each cold bound port. The observed old
+five-unit routes do not establish its net benefit. The next comparison measures
+actual closure costs and considers reusing the checked Evidence match once per
+visit. Source reviews establish no demonstrated identity or publication blocker;
+fresh architecture, small-stack and full quality checks remain required before
+integration. These changes remain uncommitted and unmerged.
+
+Receipt 144 compares the same four unchanged Ash programs across the preceding
+inventory baseline, receipt 143 and a candidate that carries the checked
+Evidence visit into each consuming transfer. Independent readers validate all
+twelve traces and their provenance. The completed first source closure costs
+20,931 units for resume at baseline and 20,577 with the checked visit; reset
+costs 61,071 and 59,833 respectively. These matched intervals save 354 and 1,238
+units. The guard savings include cold and warm attempts. Copying reaches
+different partial states at the same limit, which establishes no comparable
+whole-program savings or fit. Persistence reaches no Value closure.
+
+At the actual Control type-universe boundary, persistence has used 325,834 of
+327,680 units. It completes 300 visits costing 1,841 units and refuses during
+the next Application visit. The observed prefix contains 211 repeated Unit
+visits costing five units each. A private append-only universe builder could
+carry successful Unit admission as a variant and avoid repeating its hash and
+equality checks. Other types still require full collision equality and original
+traversal. Its proposed prefix saving accounts for new classification work and
+does not establish that the unobserved remainder fits. No limit increase or
+fixture reduction is authorized by this measurement.
+
+Receipt 145 retains the checked Evidence visit candidate. Only the actual
+Evidence expression match creates that visit, with its exact expression,
+context and bindings; one exclusive Analysis borrow carries it through closure
+transfer and publication. All 108 capture/control cases pass. The three public
+SQLite binaries execute all seventeen cases with `--no-fail-fast`: fourteen
+pass and copying, its NUL variant and persistence still refuse during typing.
+Both windows return explicitly with all forty-seven input pins preserved and
+no engine left running. Temporary diagnostics are removed. These improvements
+remain uncommitted and unmerged; fresh architecture, stack and quality checks
+are still required before integration.
+
+Receipt 146 applies the privately reviewed Unit admission owner. The builder
+owns the append-only ordered universe and hash buckets. Its actual Unit match
+introduces a private occurrence; successful full cold admission changes Unseen
+to Admitted. That state remains inside the same owner and permits later Unit
+occurrences to skip repeated hash and equality work. Consuming the builder
+returns the original ordered borrowed entries. All other types keep full hash,
+collision equality and child/owner-row traversal. New classification and phase
+work is charged before the associated operation, and allocation remains fallible.
+
+All 108 capture/control cases pass, including exact seed-first representative,
+mixed row/type arguments, collision comparisons and refused cold/warm admissions.
+All seventeen public SQLite cases execute: fourteen pass and the same three
+typing refusals remain. This receipt establishes no actual 330-unit saving or
+complete larger-program execution. It returns explicitly with all forty-seven
+pins unchanged and no engines active. The separate discovery that a provider
+call starts an ordinary Value analysis before replacing it with provider data
+is parked: measured first constructor failures have no actual seed, whereas
+that provider bridge supplies one, so it is outside the reached frontier.
+These follow-on changes remain uncommitted and unmerged.
+
+Receipt 147 observes the current Unit candidate with bounded temporary probes.
+The ordinary universe starts at the same recorded boundaries as receipt 144.
+Resume completes preparation in 2,774 units and copying in 5,570, reductions
+of 474 and 757 respectively. Resume's first Value closure still completes in
+20,577 units with the same reported final state. Copying uses the available
+124,360 closure units but remains incomplete at 4,507 slots, 295 contexts and
+960 pending slots; this partial state cannot establish whole-program savings.
+
+Persistence still starts its universe at 325,834 units. It now reaches visit
+372 and refuses during Unit admission. The completed prefix includes 263
+duplicate Unit admissions costing three units each. That longer prefix cannot
+be treated as the earlier 330-unit model or proof that the remainder fits.
+No Value closure runs for persistence. Independent raw, provenance and negative
+reader checks retain the pop/admit schema, finite caps, partial endpoints and
+post-flush status. The window returns explicitly with all forty-seven pins
+freshly restored, its temporary helper removed and no engines active.
+
+Receipt 148 prepares the complete ordered dictionary projection with each
+immutable capture topology. The result is Complete or an ordered Pending list
+of original binding and Graph evidence positions. Only a successful contextful
+capture installation consumes that result. All uncaptured matching global
+ports remain pending, including duplicate bindings and empty-capture cases.
+The membership set now belongs only to construction; the published topology
+retains the projection. Cold classification, residual retention and publication
+are paid and fallible. Dynamic watches, dependencies, output and completion
+stamps retain their original behavior.
+
+All 108 capture/control cases pass, including the extended ordered-residual and
+empty-capture boundary. All seventeen public cases execute: fourteen pass and
+copying, its NUL variant and persistence still refuse during typing. This is
+compiled phase processing evidence, not a net-saving or larger-program fit
+claim. The window returns explicitly with all forty-seven pins unchanged and
+no engines active. A misleading has_graph comment is corrected: logical query
+projections also retain graphs, so graph presence alone cannot establish ordinary
+capture admission. Imported symbolic roots also receive live actual captures;
+skipping them is unproved. Follow-on integration remains pending.
+
+Receipt 149 broadens verification of the current prepared-route candidate.
+The all-targets Ash build and all 1,604 Ash library cases pass, with no failures
+or ignored cases. This covers broader authority, kind, control and deep-input
+regressions than the capture slice. The window returns explicitly with all
+forty-seven input pins unchanged and no engines active. It does not change the
+three public typing refusals or establish integration; architecture and remaining
+connected quality gates are still required for the eventual shared delivery.
+
+Receipt 150 replaces fabricated non-callable records with explicit absent
+positions. Callable positions retain the original body, type and result; real
+Unit-typed callables remain present. Imports preserve dense coordinates and
+checked target access rejects absence. Type preparation retains one borrowed
+Unit witness at the original first-admission position instead of copying and
+traversing a dummy Unit for each absent callable. Presence processing, root
+preparation and allocation remain bounded and paid.
+
+All 108 capture/control cases pass, including imported offsets, genuine Unit
+callables, invalid absent targets and budget refusal. All seventeen public
+SQLite cases execute: fourteen pass and the same three typing refusals remain.
+The window returns explicitly with all forty-seven pins unchanged and no engines
+active. This establishes compiled behavior, not net cost reduction or complete
+larger-program execution. Fresh architecture, stack and broader quality checks
+are required for this representation change before shared integration.
+
+Receipt 151 verifies the current absent-callable representation with the
+all-targets Ash build and all 1,604 Ash library cases. Both pass, with no failures
+or ignored library cases. The fixed small-stack capture and evaluator gates in
+that library suite pass. The window returns explicitly with all forty-seven
+pins unchanged and no engines active. Public module/transform paths,
+architecture and the source runtime stack gate remain to be checked for the
+eventual shared delivery. The three larger public typing refusals remain.
+
+Receipt 152 checks twelve connected public binaries against the same candidate.
+Their 171 outer cases pass, with no failures or ignored cases; child stack
+subprocess summaries are not counted again. This includes the fresh 256 KiB
+source runtime gate, imported polymorphic and selected-evidence paths, identity
+and escape rejection, native authority and conversion failures, open callback
+and distinct captured-control demands, quarantine and structural completion.
+The actual SQLite baseline and arena lifecycle still execute through the public
+driver. All forty-seven pins remain unchanged and no engines remain active.
+The three larger SQLite typing refusals and final architecture/integration
+checks remain outstanding.
+
+Receipt 153's temporary frontier probe fails to compile before any test or
+measurement because its presence counter lacks an integer type annotation.
+The exact productive source is restored. Receipt 154 corrects only that
+diagnostic annotation and executes the unchanged resume, copying and persistence
+cases. Independent readers validate the bounded streams and reject five
+tampered traces. All forty-seven pins are restored, the helper is removed and
+no engines remain active.
+
+The original callable-value solver completes three passes in 3,655 units for
+copying's largest scope and 7,163 for persistence's largest scope. These are
+separate solver-scope observations, not budget identities. They do not support
+a large worklist repair as the main cost reduction. Persistence's immutable
+graph has 63 actual callable positions and 1,241 absent positions. Its current
+universe starts at 325,548 units, spends 1,369 preparing 112 roots, and refuses
+on visit 82 during EffectfulFunction admission at 327,680. No persistence Value
+closure executes.
+
+Copying's universe completes from 195,427 to 199,970, including 605 units of
+root preparation. Its first Value closure remains incomplete after the available
+125,380 units, with 4,590 slots and 924 pending slots. This longer failed prefix
+does not establish fit or comparable closure savings. Resume's first closure
+completes in 20,241 units with the same reported initial and final state as the
+earlier 20,577-unit interval. The conditional matched saving is 336 units; it
+does not establish the larger programs' cost. Remaining attribution separates
+ValueGraph construction, SummaryGraph compilation and pre-Control root selection.
+No work-limit increase is justified by these observations.
+
+Receipt 155 checks the restored productive source with strict workspace and
+all-targets Clippy. It passes with warnings denied. All forty-seven pins remain
+unchanged and no engines remain active. This quality check leaves the three
+typing refusals and final shared integration gates outstanding.
+
+Receipt 156 measures the original ValueGraph construction, control compilation
+and root selection without changing productive behavior. Resume passes; copying
+and persistence retain their typing refusals. All forty-seven pins and the exact
+productive sources are restored, the temporary helper is removed, and no engines
+remain active. Independent source readers check the unchanged bodies, paid
+operations and finite diagnostic storage; actual readers check provenance and
+reject tampered observations.
+
+Copying's final ValueGraph construction uses 30,033 units. Its disjoint detail
+costs are 3,966 for free-value collection, 16,122 for function metadata, 3,869 for
+abstract captures and 6,076 for remaining construction. The 148 units of bound
+filtering are included in metadata. Persistence's coarse construction uses
+68,677 units, followed by 11,040 for control compilation and 2,514 for root
+selection. Its detail stream omits 136 records after reaching its diagnostic
+cap; the observed 26,621 metadata units describe a completed prefix, not the
+whole construction. No product limit changes.
+
+All observed function-metadata roots are distinct. An exact-root memo therefore
+has no observed reuse. The next candidate studies composition of overlapping
+child summaries tied to the exact borrowed nodes and operation projection.
+It must preserve discovery order, complete subtree binding exclusion including
+prefilled metadata, fallible storage and bounded cold work. Prepared facts do
+not authorize reuse of live capture answers or completion authority. This is a
+pending simplification study, not a verified saving or integrated delivery.
+
+Receipt 157 starts the outstanding architecture check on the unchanged current
+candidate. After session interruption, its orchestration and test processes are
+absent and the log has no completion receipt. The recovery check finds all
+forty-seven pins unchanged and no engines active. This run remains unverified;
+its preserved prefix is not a passing architecture result. The temporary agent
+workspace is absent, so the next private candidate is reconstructed from the
+preserved source and source-law evidence in durable role-specific directories.
+
+Receipt 158 temporarily applies a reconstructed metadata candidate after exact
+forward and reverse pin checks. It uses an owner tied to the original nodes
+and operation projection, a consumed preparation loan, bounded complete scope
+facts and exact traversal fallback. Independent source-law and bounds reviews
+accept those representation boundaries. All 118 capture cases and 31 public
+control and owner-row cases pass, including the new scope, cyclic-order,
+refusal/retry and fixed-stack witnesses.
+
+The seventeen unchanged SQLite cases yield thirteen passes and four typing
+work refusals. Reset/clear regresses from the productive baseline's passing
+case; copying, its NUL variant and persistence remain refused. The candidate
+is not retained. All forty-seven pins and the three exact productive files are
+restored, with no engines active. Two unused operation parameters are also
+reported during compilation. The next comparison measures whole graph builds
+and their contained metadata intervals on both exact variants, including the
+reset regression. Source-law equivalence and phase encoding alone do not
+establish lower cost, program admission or a completed delivery.
+
+Receipt 159 compares the exact productive sources with the rejected receipt-158
+candidate using diagnostic wrappers that preserve the original bodies, charges
+and results. Four unchanged public cases run in fresh processes for each
+variant. Resume passes on both; productive reset passes and the rejected
+candidate refuses it. Copying and persistence retain typing work refusals.
+All eight strict readers accept complete owner and call coverage: neither
+diagnostic storage cap is reached. All forty-seven pins and the three exact
+productive files are restored, with no engines active.
+
+Copying's matched 556-node ValueGraph build increases from 30,033 to 40,986
+units. Its contained metadata increases from 16,122 to 27,075; the remaining
+13,911 units are identical. Reset's matched 376-node build increases from
+21,090 to 28,832, with metadata increasing from 11,798 to 19,540 and identical
+remaining work. Persistence's productive 1,226-node build completes in 68,677
+units, including 37,759 metadata units. The rejected candidate instead stops
+at the unchanged 327,680-unit ceiling during that build: its 81,399-unit
+observed prefix includes 55,069 metadata units and only ninety of the
+productive run's ninety-eight completed metadata calls. That prefix does not
+establish a complete cost or justify a larger limit.
+
+The source study identifies an overlap despite distinct requested roots:
+increasing original-node order checks a function body before an enclosing
+type abstraction requests the function node containing that body. The next
+private candidate studies summaries of completed requested roots with complete
+binding exclusions, reusing the existing original-header lookup where practical.
+A conservative decreasing-child-coordinate witness can qualify an independently
+acyclic summary; forward edges and cyclic inputs keep the structural reader.
+No eager per-descendant preparation protocol, limit increase or new semantic
+authority follows from this study. Actual savings and successful larger-program
+execution remain unverified.
+
+Receipt 160 temporarily applies the smaller requested-root candidate after
+exact forward and reverse pin checks. Its owner borrows the original nodes
+and operation projection. A consumed preparation state publishes complete
+requested-root facts or a structural recipe; it reuses the existing header
+lookup and pays a scalar summary index per retained header. Eight focused
+laws cover complete binding exclusion, cyclic and forward fallback, seen
+backedges, capacity, refusal/retry and fixed-stack traversal/disposal.
+
+All 116 capture cases and all 31 public control and owner-row cases pass.
+The unchanged seventeen SQLite cases give fourteen passes and the three
+existing typing work refusals in copying, NUL handling and persistence.
+Reset/clear passes, as do the capture/resume and discard cases. Compilation
+reports no warnings. All forty-seven pins and the three exact productive
+files are restored, with no engines active.
+
+These results establish focused nonregression, not net preparation savings or
+a completed delivery. The next matched measurement records complete graph
+construction and its contained metadata work, distinguishing direct warm-root
+reads from successful reuse of a previously requested descendant. Fresh
+architecture, aggregate checks and larger-program execution remain required
+before integration. No source or work limit changes.
+
+Receipt 162 measures the exact productive and requested-root variants using
+source-preserving wrappers and bounded completed-splice counters. All eight
+processes and strict readers complete; all owner and call details are covered.
+Every measured metadata call and graph build succeeds. Original node counts,
+requested-root order and nonmetadata work match. Resume and reset pass on both
+variants; copying and persistence retain typing work refusals elsewhere.
+
+The final copying graph build decreases from 30,033 to 29,463 units; contained
+metadata decreases from 16,122 to 15,552, with thirty completed descendant
+splices. Persistence decreases from 68,677 to 66,858, with metadata decreasing
+from 37,759 to 35,940 and eighty-eight descendant splices. The final resume
+and reset owners save 5,711 and 9,931 units with fifty-three and sixty-two
+descendant splices. There are no direct warm-root events. These are actual
+later-descendant beneficiaries, rather than repeated identical-root requests.
+
+The first three small helper owners instead add thirty-four, seventeen and
+392 metadata units. All cold preparation and publication costs are included
+in each owner interval. Do not add metadata to enclosing build work, infer
+a common budget from owner labels, or treat final-owner savings as a
+whole-pipeline quota or complete cost for the refused programs.
+
+Both exact patch directions and all forty-seven restored pins are verified.
+Independent raw readers reproduce the results and reject corrupted receipts.
+The exact receipt-160 source is then retained as uncommitted work in progress,
+supported by its unchanged fourteen-of-seventeen public frontier and measured
+local benefit. It is not an integrated delivery. Fresh architecture and
+aggregate validation remain required. The next measured seam is repeated
+context-path preparation within one value analysis; it must preserve distinct
+live capture and owner associations and must not cache source answers.
+
+Receipt 161 observes original context requests on the retained receipt-160
+work in progress. The source-preserving diagnostic keeps the original charged
+body, arguments and result. Resume passes and copying retains its typing work
+refusal. Both strict receipts have complete owner, request and key coverage.
+Copying makes 301 successful context requests with 5,033 units of whole-call
+work. All 301 keys are distinct: there are no prior-successful exact requests,
+existing-context returns or recursive-prefix branches in this observed prefix.
+Resume has two owners with 1,841 and 4,189 context units; their previously
+successful requests account for 376 and 1,515 units, respectively. These are
+separate original-call observations, not a shared quota or subphase attribution.
+
+Persistence retains its typing work refusal and emits no context events. The
+strict reader rejects the missing completed-owner checkpoint; this absence is
+not evidence of zero analysis or setup cost. The runner stops at that rejection,
+so reset is not run in receipt 161. All forty-seven source pins are restored,
+with no engines active. Independent readers reproduce the two complete receipts
+and reject corrupted logs. Exact-request preparation and borrowed recursive
+prefix lookup are parked: neither has a demonstrated beneficiary in the failing
+copying prefix, and persistence has no observation at this seam.
+
+Receipt 164 starts fresh architecture verification on the retained sources.
+The 360-second wall-time bound expires during the second source-scanner case;
+exit status is 124. The suite does not complete, so it supplies no architecture
+pass or diagnosed source failure. All forty-seven source pins remain unchanged,
+with no engines active. The final architecture gate requires a complete run
+with sufficient wall time. The next cost probe separates original value setup
+from edge propagation and observes existing budget charges by source location.
+No source-work limit or semantic authority changes.
+
+Receipt 167 combines two disposable source-preserving probes over the exact
+retained work in progress. All three narrow files pass forward/reverse checks
+and return to their original hashes; all forty-seven source pins are restored,
+with no engines active. Copying and persistence retain typing work refusals;
+resume passes. All applicable strict readers pass. Persistence has no observed
+close interval, and resume has no first-refusal histogram; neither absence is a
+zero-cost receipt.
+
+Copying's first close is an admitted 125,507-unit failure prefix, partitioned
+into 96,082 evaluation units, 19,684 edge-propagation units and 9,741 remaining
+queue/classification/publication units. Evidence evaluation contributes 49,044
+successful units plus a 136-unit failed prefix; call evaluation contributes
+24,468 units and function setup 13,432. Each partition uses the original budget
+before/end values and preserves every original operation and ordering. The
+unobserved tail cannot establish the full cost or a fitting program.
+
+The first-refusal charge histograms fill all 512 location slots. Omitted admitted
+observations are explicit: 145,277 for copying and 45,790 for persistence. The
+retained locations cannot rank the omitted locations. Moreover, validator and
+builder discharge sites transfer already measured work into enclosing budgets;
+whole-process histogram volumes combine local and transfer observations across
+independent budgets. They are useful location/frequency evidence, not a compiler
+quota, unique physical work total or isolated function cost. Independent readers
+reproduce the raw partitions and omission accounting and reject corrupted logs.
+
+The next targeted question is whether evidence specialization repeats the same
+immutable original binding/capture preparation. Exact dictionary identities and
+ordered binding positions must remain distinct from actual argument expressions,
+creation contexts and live dependencies. No cache or skip follows merely from a
+large evaluation interval, and the source-work limits remain unchanged.
+
+Receipt 168 measures original Evidence input prologues and capture-topology
+preparation on the retained sources. All three fresh public cases and strict
+readers complete. Copying and persistence retain typing work refusals; resume
+passes. All forty-seven source pins are restored, with no engines active.
+Copying has 366 successful prologues whose exact source coordinates and reader
+watches already exist, costing 7,320 units; 215 prologues witness an absent
+relation before execution and cost 9,663 units. These relation predicates bound
+idempotent-work opportunity; they do not certify prior completed preparation.
+The 1,024-detail pool omits 260 calls, while complete count/work counters remain
+available. Evidence evaluation encloses these prologue intervals.
+
+Copying has 114 exact-pair warm topology reads and eight cold preparations,
+with no completed same-function distinct-Evidence ordered-key projection
+witness. Resume likewise has no such witness. Projection sharing is parked.
+Resume has 206 complete-watch prologues costing 4,120 units and thirty missing
+relation prologues costing 1,370; its details are complete. Persistence has no
+Evidence checkpoint, which is absence rather than a zero-cost receipt.
+
+The next narrow candidate replaces the existing slot completion bit with
+distinct fixed-setup and Evidence-input phases. A consuming visit installs all
+original input watches before publishing the input-only phase. Reuse is limited
+to the same slot reader; every live atom and Unknown dependency still routes
+through the original dynamic operations. Cold guards and publication are paid.
+Connected verification and actual savings remain required before retention.
+
+Receipt 169 temporarily applies the exact Evidence-input phase candidate after
+verified forward/reverse pin checks. All 119 capture tests and all 31 public
+control and owner-row tests pass, including the three new phase laws. The
+unchanged seventeen SQLite cases remain fourteen passes and three typing work
+refusals in copying, NUL handling and persistence. Reset/clear and public
+capture/resume and discard still pass. Compilation reports no warnings.
+All forty-seven pins return to the retained receipt-160 sources, with no engines
+active. This candidate remains private and unretained. A matched comparison of
+original Evidence evaluation calls must include cold guards and publication
+before claiming net savings; the refused programs still have unobserved tails.
+
+Receipt 170 stops after the original copying run because the strict reader
+misses a metric prefixed by the test harness. The raw program still reports the
+same typing work refusal. The observer, source operations and charges are
+unchanged. A reader-only correction accepts the harness prefix while preserving
+schema and conservation checks; prefixed malformed records still fail. The
+interrupted receipt remains preserved, with all forty-seven source pins restored.
+
+Receipt 174 reuses that exact original copying stream after checking its source
+provenance, then runs the remaining five fresh comparison processes. All sixteen
+applicable reads and three comparisons pass independent review; corrupted raw
+streams fail. The original and candidate copying prefixes have 580 matching
+successful Evidence evaluations with identical ordered coordinates, readiness
+and semantic end states. Their measured work falls from 49,044 to 42,904 units:
+a net reduction of 6,140, including every cold guard and publication charge.
+Both closes still refuse work. Additional candidate progress has no matching
+original tail, so it establishes neither complete execution nor a fitting cost.
+Resume passes on both sources, with complete matching closes. Persistence has
+no Evidence checkpoint; its absence remains unobserved rather than zero cost.
+
+After source, regression and net-cost review, the receipt-169 Evidence-input
+phase is retained as uncommitted common work. The phase certifies installation
+of the exact original input coordinates and reader watches. It grants no whole
+capture, output, callable or final-Core validation authority. Live atoms and
+Unknown dependencies continue through the original operations. Source work and
+depth limits remain unchanged. This retention is not a completed delivery or
+integration checkpoint.
+
+The branch observations park further Evidence routing and topology sharing:
+copying has only 434 units of warm closure routing and no completed same-function
+distinct-Evidence projection witness. Persistence enters its final control type
+universe constructor after 324,039 admitted units; successful hashes account for
+only 797 units there. A hash cache has no demonstrated substantial beneficiary.
+The next investigation brackets original earlier module and provider operations.
+Earlier ValueGraph builds account for 9,123 of the 241,645 units admitted before
+the final build; the remaining prefix needs causal attribution before adding
+preparation metadata or reconsidering a work bound.
+
+Receipt 176 verifies the retained receipt-160 and receipt-169 sources together.
+`CARGO_BUILD_JOBS=1 cargo check --locked -p ash --all-targets` passes, followed
+by all 1,615 Ash library tests with zero failures or ignored cases. Compilation
+reports no warnings. All forty-seven source pins remain unchanged, with no
+engines active. This fresh baseline includes the deep-input and provider
+regressions; public integration, architecture and final merged verification
+remain separate gates.
+
+Receipt 175 cannot compile its temporary probe: two scalar counters read a
+private CoreBuilder field from elaboration. No Ash case executes and no earlier
+cost attribution follows. The guarded runner restores all forty-seven pins and
+removes its helper. Rust LSP navigation confirms the existing crate-visible
+`node_checkpoint` accessor returns the required node count. A separate corrected
+packet replaces only those two counter reads; the failed packet and raw evidence
+remain preserved. The retained productive baseline is unchanged.
+
+Receipt 177 executes the accessor-only corrected probe. All three fresh public
+cases and strict readers complete, with 72, 77 and 59 observed whole calls for
+copying, persistence and resume. Copying and persistence retain their typing
+work refusals; resume passes. All forty-seven source pins are restored and the
+temporary helper is removed. No active engine remains; the deactivated Rust LSP
+process is recorded separately as defunct, with no runnable work.
+
+Persistence's entry module-body interval is 118,823–327,679. Its first Global
+declaration completes at 119,371–181,408, costing 62,037 units; final completed-root
+capture starts at 229,422 and admits a 98,257-unit failure prefix. The cleanup-row
+guard at that final boundary completes with zero work. Copying's final capture
+starts at 152,267 and admits 175,413 units before refusal. These are inclusive
+original-call intervals; the refusal leaves an unobserved tail. Lexical nesting
+does not establish budget identity, and stage volumes must not be added into a
+compiler quota. The next selected boundary distinguishes original body checking
+from evidence closing and deferred resource completion. No further cache or
+limit change follows from this observation.
+
+Receipt 178 extends the same disposable original-call probe. All three fresh
+public cases and readers complete, with 116, 133 and 91 uncensored whole calls.
+Copying and persistence retain their typing work refusals; resume passes. The
+preservation set now includes every temporary patch input: all fifty source
+pins are restored and the helper is removed. No active engine remains.
+
+All three programs check the same two original provider definitions at
+6,488–97,165, costing 90,677 units. Persistence's first Global declaration has
+five complete scope-copy intervals costing 23,679 units within its 62,037-unit
+declaration. Its five copy plans cost 7,500 units. These original-call intervals
+do not establish which preparation inside copying is repeated. No deferred
+instance or actual-provider-capture call is observed in this path; this is
+absence at the instrumented seam, not a zero-cost claim for other analyses.
+The final module finish starts at 213,167 and enters completed-root capture at
+229,422, confirming the 16,255-unit preparation gap on the same source ledger.
+Provider admission and copied-template preparation are the next causal targets.
+Direct collection of caller identities remains a source-only consolidation
+candidate; no saving, cache or additional work allowance is claimed.
+
+
+### Copied input preparation consolidation (2026-10-06, receipts 180–181)
+
+The retained working source now collects the original Type/row payload identity
+union once after all three unique substitutions succeed. It preserves the final
+pending-row map, including its winning values. Freshening still avoids free and
+forall-bound identities, nested rows and lacks identities. All three owned
+substitutions, original occurrence checks and independent final Core admission
+remain. A private borrowed Type/Row input ADT supplies the same checked insertion
+path directly; it removes three temporary Type clones and three temporary row
+clones. It retains each required owned copy and both cross-kind duplicate guards.
+
+Receipt 180 passes six focused laws, including complete identity union, pending
+winners, cross-kind duplicates and every insertion work cut. Its complete public
+SQLite run observes 14 passes and the same three typing-resource refusals across
+17 cases. Native resume and discard assertions remain enabled and pass. Receipt
+181 applies the unchanged thirteen-boundary observer to that exact candidate.
+Each matched successful scope-plan call decreases: copying calls save 91 units;
+persistence calls save 510; resume calls save 202 across separate observed
+pipelines. Resume's first enclosing checked body saves 101 units. These are
+bounded call comparisons, not a combined compiler quota or full program fit.
+Provider-group work remains 90,677 units, and actual template-copy work is
+unchanged. The failed final capture prefixes grow by 91 and 511 units because
+preparation leaves more budget for them; neither is completed capture evidence.
+
+Both runs restore all 50 pinned inputs and remove temporary diagnostics. Source,
+bounds and actual-result reviews support retaining the two-file simplification
+as uncommitted work. The two borrowed carrier fields have explicit architecture
+inventory entries; their full gate remains pending. No work or depth limit rose.
+The next delivery isolates the ten generic source/test files against the original
+twelve-operation SQLite contract, preserving all pending SQLite manifest,
+adapter, library and program work. Required verification, unsigned integration
+and checks in the original worktree remain pending for this shared follow-on.
+
+
+### Separate shared follow-on verification (2026-10-06, receipts 182–184)
+
+Receipt 182 checks the isolated original twelve-operation contract with the ten
+generic source and regression files. Formatting and workspace all-targets
+checking pass. All 1,621 Ash library cases and 152 connected public cases pass,
+with zero failures or ignores. These include independent Core validation,
+method evidence, module admission, owner rows, control, retention, effects,
+original SQLite and basic arena native lifecycle assertions.
+
+The architecture run initially passes 41 of 43 cases and exposes two stale
+source-inventory assertions. Receipt 183 adds the owned summary carrier and its
+two cycle coordinates, and follows the borrowed input delegate into its
+canonical charged insertion for the relational check. All 43 architecture cases
+then pass. Its strict Clippy gate stops at one cfg-test range-loop lint; rustdoc
+does not run. The private correction changes only that test loop to enumeration.
+Receipt 184 passes formatting, workspace all-targets checking, the focused
+capacity law, strict workspace Clippy and rustdoc with warnings denied. Its
+explicit return restores all 54 pinned inputs, preserves status and the empty
+index, and leaves no active engine. No compiler behavior or limit changes in
+either verification repair.
+
+The raw results and exact source/restoration pins are retained in
+`shared-original12-gate-182/`, `shared-original12-gate-183/` and
+`shared-original12-gate-184/` under the common evidence directory; the final
+source export is pinned in `shared-lint-repair-184/export/`. The earlier
+fourteen-operation receipt 180 remains fourteen passes and three
+`TypeResourceExhausted` failures: copied Unicode/BLOB/null results, bound NUL
+input and transaction/reopen persistence. Isolating the original twelve-operation
+contract does not discharge those pending package obligations. Observed failed
+capture prefixes are incomplete work, not a cost-to-completion or fitting quota.
+
+To repeat the integrated S-01 and basic arena capabilities, use the root
+workspace with the coherent original manifest, adapter and source fixtures:
+
+```bash
+CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_source copying_sqlite_session_executes_through_public_foreign_runtime -- --exact
+CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_arena_source arena_acquires_queries_actual_usage_and_releases_through_public_driver -- --exact
+```
+
+The SQLite case observes nested successful completion with 42 and statement
+finalization before connection close. The arena case observes actual usage
+`(0, 64, 0, 4)` and release exactly once. The programs and public driver setup
+are linked in [the package instructions](README.md#reproducing-common-source-cases).
+Typed arena allocation and borrowing remain excluded. Reproduce the connected
+shared public gate with:
+
+```bash
+CARGO_BUILD_JOBS=1 cargo test --locked --no-fail-fast -p ash --test core_validation --test method_parameter_resources --test foreign_module_admission --test provider_control_source --test provider_retention_source --test provider_owner_rows --test provider_sqlite_source --test provider_arena_source --test effect_modules -- --test-threads=1
+```
+
+Root must preserve the pending package, review and commit the shared diff,
+perform the unsigned original-branch merge,
+and run fresh `CARGO_BUILD_JOBS=1 cargo xtask verify` there before naming a
+completed follow-on delivery. These cost repairs change no selected experiment
+contract or normative language semantics. They establish no mechanized
+whole-P-1 correspondence proof or completed String/TEXT package.
+
+
+### Integrated preparation-cost delivery (2026-10-06, receipt 186)
+
+Common commit `183e9d506f0e3a41833f29b3e614616345169074` is merged into the
+original branch by unsigned merge `5991e3d882b4a161c137fb826e73e79c149d550a`.
+The parents are original tracking `7cf295ee266997be22ee54ae8ecb2323372f22c9`
+and that common commit. The exact ten-file export is
+`shared-lint-repair-184/export/`, pinned by
+`2e482c55cf2dd5f0e244b8135cd36c70f4795e4ed84d254376c4cef5ea2bcadc`.
+Only the two root-owned tracking documents accompany those files. SQLite's
+manifest, adapter, library, examples and expanded fixtures stay outside this
+commit and remain preserved working changes.
+
+This delivery reuses immutable preparation through private data phases and
+consuming evidence. Capture input reuse requires the exact reader slot and
+context; live values, unknown demands, callable routing and actual captured
+control still undergo their original analysis. Bounded function metadata retains
+complete ordered sources or a certified bounded compact summary, with the
+original fallback. Copied Type/row inputs use one checked borrowed insertion
+route and the complete original dependency union, retaining all three required
+owned substitutions. No quota or depth limit rises. The measured reductions and
+incomplete failed prefixes remain distinguished in receipts 162, 174 and 181.
+
+Receipt 186 runs the unfiltered root workspace verification in the original
+worktree with one Cargo build job. Format, metadata, all-targets build, strict
+all-feature lint, all-targets/all-feature tests and rustdoc pass. The outer Ash
+library summary is 1,621 passes; architecture is 43 passes. All 117 reported test
+summary blocks have zero failures and zero ignores. That block count includes
+fresh-child summaries and is not a count of unique tests. Original SQLite S-01,
+arena acquisition/usage/release, owner rows, callback/control, retention,
+independent Core, module and deep-input paths run in this integrated gate.
+
+The explicit return is `2026-10-06T08:09:14.122089+00:00`, after 1,110.522
+seconds. Log SHA-256 is
+`cc4ddc359b11abf9e5036f1559b2b7969fab5971319c03ee6a25825faa5d2565`
+in `shared-preparation-integrated-final-gate-186/`. All 1,228 tracked input pins
+and 26 unrelated working-file pins match; branch HEAD, status and the empty
+index are unchanged, and no verification engine remains active.
+
+Before the merge, a preservation guard noticed concurrent updates to three
+untracked design notes, DN-0039, DN-0040 and DN-0041. The shell erroneously
+continued to the merge after that assertion. Post-merge checks verified both
+expected parents, exact source scope and preservation of the updated drafts;
+their author confirmed ownership and no executable overlap. The other 23
+unrelated pins matched. All 26 current files subsequently remained unchanged
+through receipt 186. This workflow defect is recorded in
+`shared-preparation-integration-185/integration.json`; future guarded mutations
+use checked orchestration. No draft was staged, restored or overwritten.
+
+Common retains shared compiler, Core, capture, provider checking and generic
+runtime ownership. SQLite's next preserved import must pair its fourteen-operation
+manifest with its matching native adapter, library and exact fixture adaptations
+from `sqlite14-fixture-handoff-187/`; the verified twelve-operation checkpoint
+does not complete that package. The three larger typing refusals remain pending.
+Typed arena allocation, Layout, references, containment, borrowing, sharing and
+storage families remain later arena work. DN-0037 and DN-0038 remain separate.
+These are tested implementation properties under DN-0036 and foreign adapter
+assumptions, not current Ash semantics or a mechanized whole-P-1 proof.
