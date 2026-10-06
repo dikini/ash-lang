@@ -20,21 +20,22 @@ preserve source lifecycle reports.
 copies a Unicode TEXT/BLOB row without reacquisition. `control-discard.ash`
 discards that owned continuation: source cleanup queries the outer connection
 before statement finalization and connection close. Both control entries pass
-the public driver in common's fourteen-operation candidate receipt 136,
-including their copied-value and finish-dispatch assertions. That receipt passes
-fourteen public cases, including the original reset/clear program, and retains
-three typing failures: copying, its NUL-input alternative and persistence.
-The candidate remains uncommitted and unmerged; this worktree still awaits the
-matching shared contract. The
-[execution record](../../execution.md#typed-original-preparation-and-recovered-reset-program)
-records the passing assertions and remaining delivery requirements.
+the public driver and actual host after the verified shared repair import.
+The current seventeen-case public suite passes fourteen cases, including the
+original reset/clear program, and retains three compiler work failures: copying,
+its NUL-input alternative and persistence. The text, resume and discard hosts
+return their required values, authenticated finalize/close reports and zero
+retained owners. The three larger hosts stop before any native observation.
+The manifest and control fixtures are committed in the SQLite worktree; the
+complete SQLite delivery remains pending those larger programs.
+The [current execution record](../../execution.md#current-checkpoint)
+records the verified import, passing assertions and remaining requirements.
 
-Receipt 150 retains fourteen passes and the same three typing failures after
-the shared callable-metadata repair. The fresh receipt 154 trace shows copying
-completing its type universe and exhausting during value propagation;
-persistence exhausts while admitting a callable type into its universe.
-The [current compiler evidence](../../execution.md#explicit-callable-metadata-presence)
-records these boundaries. Neither receipt establishes integrated verification.
+Earlier receipts 136 and 150 record fourteen passes and the same three failures
+on their own source snapshots. Receipt 154 traces those earlier compiler inputs;
+its internal boundaries are historical evidence, not a fresh trace of the
+imported repair. The [earlier compiler evidence](../../execution.md#explicit-callable-metadata-presence)
+retains that account.
 
 The [host example](../../../../../foreign-adapter/examples/sqlite_session.rs)
 registers the authenticated provider and SQLite manifests and executable binding.
@@ -44,24 +45,30 @@ claims. Required larger programs currently exhaust the compiler work budget
 before native execution. The [measurement account](../../execution.md#sqlite-compiler-work-measurement-receipt-109)
 distinguishes the Rust harness, compiled Ash inputs and charged analysis work.
 
-From the repository root, copy the package into an owned temporary directory and
-run the host with an absolute manifest path:
+From the repository root, build with Cargo in the workspace to select its
+pinned Rust toolchain. Then run the binary against a private copy of the package:
 
 ```sh
-ash_repo=$(pwd -P)
-sqlite_example_dir=$(mktemp -d)
-cp "$ash_repo"/docs/design/provider-experiments/examples/sqlite-copying/*.ash "$sqlite_example_dir"/
 (
+    ash_repo=$(pwd -P)
+    CARGO_BUILD_JOBS=1 cargo build --locked -p ash-foreign-adapter --example sqlite_session || exit
+    sqlite_example_dir=$(mktemp -d) || exit
+    cp "$ash_repo"/docs/design/provider-experiments/examples/sqlite-copying/*.ash "$sqlite_example_dir"/ || exit
+    printf 'Example directory: %s\n' "$sqlite_example_dir"
     cd "$sqlite_example_dir" || exit
-    CARGO_BUILD_JOBS=1 cargo run --locked --manifest-path "$ash_repo/Cargo.toml" -p ash-foreign-adapter --example sqlite_session -- "$sqlite_example_dir/text-entry.ash"
-    CARGO_BUILD_JOBS=1 cargo run --locked --manifest-path "$ash_repo/Cargo.toml" -p ash-foreign-adapter --example sqlite_session -- "$sqlite_example_dir/copying-entry.ash"
-    CARGO_BUILD_JOBS=1 cargo run --locked --manifest-path "$ash_repo/Cargo.toml" -p ash-foreign-adapter --example sqlite_session -- "$sqlite_example_dir/session-entry.ash"
-    CARGO_BUILD_JOBS=1 cargo run --locked --manifest-path "$ash_repo/Cargo.toml" -p ash-foreign-adapter --example sqlite_session -- "$sqlite_example_dir/control-resume.ash"
-    CARGO_BUILD_JOBS=1 cargo run --locked --manifest-path "$ash_repo/Cargo.toml" -p ash-foreign-adapter --example sqlite_session -- "$sqlite_example_dir/control-discard.ash"
+    sqlite_example_status=0
+    for sqlite_entry in text-entry.ash copying-entry.ash session-entry.ash control-resume.ash control-discard.ash
+    do
+        "$ash_repo/target/debug/examples/sqlite_session" "$sqlite_example_dir/$sqlite_entry" || sqlite_example_status=1
+    done
+    exit "$sqlite_example_status"
 )
 ```
 
-The session database belongs to this temporary directory. Use a fresh directory
+The recipe runs every entry and returns a failing status if any entry fails.
+The larger copying and session entries currently make that aggregate status fail.
+
+The session database belongs to the printed temporary directory. Use a fresh directory
 for another session run because the entry creates its table. Keep the directory
 while reviewing its source, observations, and database, then remove it when done.
 
@@ -91,10 +98,11 @@ The public tests compare the required source results and native observations:
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_copying --test provider_sqlite_sessions --test provider_sqlite_control
 ```
 
-Run that verification after common support and the String/TEXT manifest are
-integrated, in the agreed Cargo window. The required larger copying and file
-session cases still refuse during typing in candidate receipt 150. Profile 109
-and its traces describe earlier compiler inputs; receipt 154 records the fresh
-failure boundaries. Keep the remaining failures in the execution record
-until the complete programs pass. The commands
-and expected outcomes above do not establish integrated verification.
+Run these checks in the SQLite worktree in the agreed Cargo window. Shared
+support is verified and imported, and the String/TEXT manifest, native adapter
+and source fixtures are paired. The latest checks still report fourteen passes
+and three compiler work failures; the full copying, bound-NUL and persistence
+programs must pass before SQLite delivery integrates. Profile 109 and receipt
+154 describe earlier compiler inputs. Keep the remaining failures in the
+execution record until the complete programs pass. The commands and required
+outcomes above do not establish a completed SQLite delivery.
