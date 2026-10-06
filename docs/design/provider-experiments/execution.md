@@ -105,24 +105,21 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `c97e0f3fdb4ec0c1269015864a7ca4efeaa132fd`,
-merging common commit `50f4b6b8b33a04f77cc6eeb511fa6f453fff48f2`. Original tracking
-commit `7cf295ee266997be22ee54ae8ecb2323372f22c9` records the successful unfiltered
-`CARGO_BUILD_JOBS=1 cargo xtask verify` from receipt 116 under
-`provider-cost-integrated-final-gate-116/` in the common evidence directory.
-All four original common deliveries are complete. The current common follow-on
-isolates ten generic compiler, Core, capture, type and regression files against
-the original twelve-operation SQLite contract. Receipts 182–184 pass its
-library, connected public and corrected architecture checks, followed by strict
-lint and rustdoc. These isolated checks do not
-supersede the integrated checkpoint. The follow-on still requires unsigned
-integration and fresh verification in the original worktree.
+Latest integrated common code checkpoint is `5991e3d882b4a161c137fb826e73e79c149d550a`,
+merging common commit `183e9d506f0e3a41833f29b3e614616345169074` with an unsigned
+merge preserving both histories. Receipt 186 passes the complete unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. All four
+original common deliveries and this separate preparation-cost delivery are
+complete. The ten shared source/regression files and tracking are merged into
+`codex/provider-experiments`; `main` is unchanged.
 
 The pending String/TEXT manifest, adapter, source library and larger programs
-remain preserved SQLite-owned work. Their unchanged seventeen-case evidence is
+remain preserved SQLite-owned work. Their seventeen-case evidence remains
 fourteen passes and three typing-resource refusals in copied Unicode/BLOB/null
 results, bound NUL input and transaction/reopen persistence. Partial work
 reductions establish no full-program fit. Work and depth limits remain unchanged.
+The next canonical-preparation measurement is a proposal, not delivered code or
+proof that a larger typing quota is necessary.
 The following Batch 0–2 and dated intermediate Batch 3 entries retain historical
 evidence; later delivery records supersede their earlier control-failure summaries.
 
@@ -4087,3 +4084,62 @@ and run fresh `CARGO_BUILD_JOBS=1 cargo xtask verify` there before naming a
 completed follow-on delivery. These cost repairs change no selected experiment
 contract or normative language semantics. They establish no mechanized
 whole-P-1 correspondence proof or completed String/TEXT package.
+
+
+### Integrated preparation-cost delivery (2026-10-06, receipt 186)
+
+Common commit `183e9d506f0e3a41833f29b3e614616345169074` is merged into the
+original branch by unsigned merge `5991e3d882b4a161c137fb826e73e79c149d550a`.
+The parents are original tracking `7cf295ee266997be22ee54ae8ecb2323372f22c9`
+and that common commit. The exact ten-file export is
+`shared-lint-repair-184/export/`, pinned by
+`2e482c55cf2dd5f0e244b8135cd36c70f4795e4ed84d254376c4cef5ea2bcadc`.
+Only the two root-owned tracking documents accompany those files. SQLite's
+manifest, adapter, library, examples and expanded fixtures stay outside this
+commit and remain preserved working changes.
+
+This delivery reuses immutable preparation through private data phases and
+consuming evidence. Capture input reuse requires the exact reader slot and
+context; live values, unknown demands, callable routing and actual captured
+control still undergo their original analysis. Bounded function metadata retains
+complete ordered sources or a certified bounded compact summary, with the
+original fallback. Copied Type/row inputs use one checked borrowed insertion
+route and the complete original dependency union, retaining all three required
+owned substitutions. No quota or depth limit rises. The measured reductions and
+incomplete failed prefixes remain distinguished in receipts 162, 174 and 181.
+
+Receipt 186 runs the unfiltered root workspace verification in the original
+worktree with one Cargo build job. Format, metadata, all-targets build, strict
+all-feature lint, all-targets/all-feature tests and rustdoc pass. The outer Ash
+library summary is 1,621 passes; architecture is 43 passes. All 117 reported test
+summary blocks have zero failures and zero ignores. That block count includes
+fresh-child summaries and is not a count of unique tests. Original SQLite S-01,
+arena acquisition/usage/release, owner rows, callback/control, retention,
+independent Core, module and deep-input paths run in this integrated gate.
+
+The explicit return is `2026-10-06T08:09:14.122089+00:00`, after 1,110.522
+seconds. Log SHA-256 is
+`cc4ddc359b11abf9e5036f1559b2b7969fab5971319c03ee6a25825faa5d2565`
+in `shared-preparation-integrated-final-gate-186/`. All 1,228 tracked input pins
+and 26 unrelated working-file pins match; branch HEAD, status and the empty
+index are unchanged, and no verification engine remains active.
+
+Before the merge, a preservation guard noticed concurrent updates to three
+untracked design notes, DN-0039, DN-0040 and DN-0041. The shell erroneously
+continued to the merge after that assertion. Post-merge checks verified both
+expected parents, exact source scope and preservation of the updated drafts;
+their author confirmed ownership and no executable overlap. The other 23
+unrelated pins matched. All 26 current files subsequently remained unchanged
+through receipt 186. This workflow defect is recorded in
+`shared-preparation-integration-185/integration.json`; future guarded mutations
+use checked orchestration. No draft was staged, restored or overwritten.
+
+Common retains shared compiler, Core, capture, provider checking and generic
+runtime ownership. SQLite's next preserved import must pair its fourteen-operation
+manifest with its matching native adapter, library and exact fixture adaptations
+from `sqlite14-fixture-handoff-187/`; the verified twelve-operation checkpoint
+does not complete that package. The three larger typing refusals remain pending.
+Typed arena allocation, Layout, references, containment, borrowing, sharing and
+storage families remain later arena work. DN-0037 and DN-0038 remain separate.
+These are tested implementation properties under DN-0036 and foreign adapter
+assumptions, not current Ash semantics or a mechanized whole-P-1 proof.

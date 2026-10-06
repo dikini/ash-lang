@@ -69,8 +69,9 @@ exact Type/row identities and independent Core checks. Its ten shared source and
 regression files are checked separately against the original twelve-operation
 SQLite contract. Receipts 182–184 pass library, connected public and
 architecture checks, then the focused test correction, strict lint and rustdoc.
-Unsigned integration and fresh original-worktree
-verification are required before this becomes a completed shared delivery.
+Unsigned merge `5991e3d` integrates common commit `183e9d5`; receipt 186 passes
+the complete original-worktree `cargo xtask verify`. This separate common
+preparation-cost delivery is complete.
 
 The String/TEXT manifest, executable adapter, source library and larger programs
 remain preserved SQLite-owned work. Their passing cases and three default-budget
