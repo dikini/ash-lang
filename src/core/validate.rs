@@ -128,8 +128,9 @@ impl<'a, T> Iterator for RegistrySourceOrder<'a, T> {
     }
 }
 
-// Fallible sorting keeps every inventory allocation, key derivation, merge
-// comparison and retained reference copy in the caller's cumulative ledger.
+// Complete contextual keys determine natural nondecreasing runs. Merging
+// adjacent runs preserves source-order ties and keeps all retained storage,
+// comparisons and merge transfers in the caller's cumulative ledger.
 fn registry_source_order<T>(
     rows: &[T],
     reorder: bool,
@@ -141,55 +142,83 @@ fn registry_source_order<T>(
     }
     let resource = || ValidationError::new(ValidationReason::Resource, None);
     charge(rows.len())?;
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(rows.len()).map_err(|_| resource())?;
+    for row in rows {
+        keys.push(key(row)?);
+    }
+    if rows.is_empty() {
+        return Ok(RegistrySourceOrder::Borrowed(rows.iter()));
+    }
+
+    // Every key must complete before classifying even the first run.
+    // There can be at most one run start per row.
+    charge(rows.len())?;
+    let mut runs = Vec::new();
+    runs.try_reserve_exact(rows.len()).map_err(|_| resource())?;
+    runs.push(0usize);
+    for (index, pair) in keys.windows(2).enumerate() {
+        charge(1)?;
+        if pair[0] > pair[1] {
+            runs.push(index.checked_add(1).ok_or_else(resource)?);
+        }
+    }
+    if runs.len() == 1 {
+        return Ok(RegistrySourceOrder::Borrowed(rows.iter()));
+    }
+
+    charge(rows.len())?;
     let mut order = Vec::new();
     order
         .try_reserve_exact(rows.len())
         .map_err(|_| resource())?;
     order.extend(0..rows.len());
-    if reorder {
-        charge(rows.len().checked_mul(2).ok_or_else(resource)?)?;
-        let mut keys = Vec::new();
-        keys.try_reserve_exact(rows.len()).map_err(|_| resource())?;
-        for row in rows {
-            keys.push(key(row)?);
-        }
-        let mut scratch = Vec::new();
-        scratch
-            .try_reserve_exact(rows.len())
-            .map_err(|_| resource())?;
-        scratch.extend_from_slice(&order);
-        let mut width = 1usize;
-        while width < rows.len() {
-            let mut start = 0usize;
-            while start < rows.len() {
-                let middle = start.saturating_add(width).min(rows.len());
-                let end = middle.saturating_add(width).min(rows.len());
-                let (mut left, mut right) = (start, middle);
-                for target in &mut scratch[start..end] {
+    charge(rows.len())?;
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(rows.len())
+        .map_err(|_| resource())?;
+    scratch.extend_from_slice(&order);
+    while runs.len() > 1 {
+        charge(1)?;
+        let run_count = runs.len();
+        let mut input = 0usize;
+        let mut output = 0usize;
+        while input < run_count {
+            // Three boundary reads and one in-place compacted start.
+            charge(4)?;
+            let next = input.checked_add(1).ok_or_else(resource)?;
+            let following = input.checked_add(2).ok_or_else(resource)?;
+            let start = runs[input];
+            let middle = runs.get(next).copied().unwrap_or(rows.len());
+            let end = runs.get(following).copied().unwrap_or(rows.len());
+            runs[output] = start;
+            let (mut left, mut right) = (start, middle);
+            for target in &mut scratch[start..end] {
+                charge(1)?;
+                let take_left = if left == middle {
+                    false
+                } else if right == end {
+                    true
+                } else {
                     charge(1)?;
-                    let take_left = if left == middle {
-                        false
-                    } else if right == end {
-                        true
-                    } else {
-                        charge(1)?;
-                        keys[order[left]] <= keys[order[right]]
-                    };
-                    *target = if take_left {
-                        let value = order[left];
-                        left += 1;
-                        value
-                    } else {
-                        let value = order[right];
-                        right += 1;
-                        value
-                    };
-                }
-                start = end;
+                    keys[order[left]] <= keys[order[right]]
+                };
+                *target = if take_left {
+                    let value = order[left];
+                    left += 1;
+                    value
+                } else {
+                    let value = order[right];
+                    right += 1;
+                    value
+                };
             }
-            std::mem::swap(&mut order, &mut scratch);
-            width = width.saturating_mul(2);
+            output = output.checked_add(1).ok_or_else(resource)?;
+            input = following;
         }
+        runs.truncate(output);
+        std::mem::swap(&mut order, &mut scratch);
     }
     charge(rows.len())?;
     let mut result = Vec::new();
@@ -32877,7 +32906,9 @@ mod contextual_registry_order_tests {
         let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
         let first = crate::types::NominalTypeId::new(file.id(), 0);
         let second = crate::types::NominalTypeId::new(file.id(), 1);
-        for overlap in [false, true] {
+        for (overlap, already_ordered) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             // Unchecked metadata deliberately supplies the same wrong ranges
             // on both sides of a mirror. The structural range check remains
             // necessary; this is not a checked provider context constructor.
@@ -32897,15 +32928,21 @@ mod contextual_registry_order_tests {
                 payload: None,
                 origin: Origin::Source(span(start, end)),
             };
+            let mut nominals = vec![
+                nominal(second, "Second", if overlap { 3 } else { 6 }, 11),
+                nominal(first, "First", 0, 5),
+            ];
+            let mut constructors = vec![
+                constructor(second, "SecondValue", 7, 8),
+                constructor(first, "FirstValue", 1, 2),
+            ];
+            if already_ordered {
+                nominals.reverse();
+                constructors.reverse();
+            }
             let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
-                vec![
-                    nominal(second, "Second", if overlap { 3 } else { 6 }, 11),
-                    nominal(first, "First", 0, 5),
-                ],
-                vec![
-                    constructor(second, "SecondValue", 7, 8),
-                    constructor(first, "FirstValue", 1, 2),
-                ],
+                nominals,
+                constructors,
             ));
             let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(Arc::clone(&registry));
             let root = builder
@@ -32924,10 +32961,95 @@ mod contextual_registry_order_tests {
             }
             let ordinary =
                 Validator::new_modules(&program, &[&file], &[(first.module(), file.id())]).unwrap();
-            assert_eq!(
-                ordinary.validate_registry().unwrap_err().reason(),
-                ValidationReason::Registry
-            );
+            let ordinary_result = ordinary.validate_registry();
+            assert_eq!(ordinary_result.is_ok(), already_ordered && !overlap);
+            if let Err(error) = ordinary_result {
+                assert_eq!(error.reason(), ValidationReason::Registry);
+            }
+        }
+    }
+
+    #[test]
+    fn contextual_order_classification_waits_for_all_keys() {
+        let rows = [3u32, 1, 2, 4];
+        let calls = std::cell::RefCell::new(Vec::new());
+        let charges = std::cell::RefCell::new(Vec::new());
+        let result = registry_source_order(
+            &rows,
+            true,
+            |row| {
+                calls.borrow_mut().push(*row);
+                if *row == 4 {
+                    Err(ValidationError::new(ValidationReason::Registry, None))
+                } else {
+                    Ok((ModuleId::new(0), *row))
+                }
+            },
+            |amount| {
+                charges.borrow_mut().push(amount);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().reason(), ValidationReason::Registry);
+        assert_eq!(*calls.borrow(), rows);
+        assert_eq!(*charges.borrow(), [rows.len()]);
+        let ordinary = registry_source_order(
+            &rows,
+            false,
+            |_| panic!("ordinary order must not derive contextual keys"),
+            |_| panic!("ordinary order must not charge sorting work"),
+        )
+        .unwrap();
+        assert!(matches!(ordinary, RegistrySourceOrder::Borrowed(_)));
+    }
+
+    #[test]
+    fn contextual_order_is_stable_and_has_exact_refusal_cuts() {
+        type Fixture<'a> = (&'a [(u32, u32)], &'a [usize], usize, bool);
+        let fixtures: &[Fixture<'_>] = &[
+            (&[], &[], 0, true),
+            (&[(0, 1)], &[0], 2, true),
+            (&[(0, 1), (0, 1), (1, 0), (1, 2)], &[0, 1, 2, 3], 11, true),
+            (&[(1, 2), (0, 1), (1, 2), (0, 1)], &[1, 3, 0, 2], 49, false),
+            (&[(0, 0), (0, 2), (0, 1), (0, 3)], &[0, 2, 1, 3], 35, false),
+            (&[(0, 2), (0, 1), (0, 0)], &[2, 1, 0], 39, false),
+        ];
+        for &(rows, expected, cost, borrowed) in fixtures {
+            for allowance in 0..=cost {
+                for _ in 0..2 {
+                    let remaining = std::cell::Cell::new(allowance);
+                    let result = registry_source_order(
+                        rows,
+                        true,
+                        |row| Ok((ModuleId::new(row.0), row.1)),
+                        |amount| {
+                            let next = remaining.get().checked_sub(amount).ok_or_else(|| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            remaining.set(next);
+                            Ok(())
+                        },
+                    );
+                    if allowance == cost {
+                        let ordered = result.unwrap();
+                        assert_eq!(
+                            matches!(&ordered, RegistrySourceOrder::Borrowed(_)),
+                            borrowed
+                        );
+                        let positions = ordered
+                            .map(|row| {
+                                rows.iter()
+                                    .position(|candidate| std::ptr::eq(candidate, row))
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(positions, expected);
+                        assert_eq!(remaining.get(), 0);
+                    } else {
+                        assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+                    }
+                }
+            }
         }
     }
 
