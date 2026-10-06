@@ -2316,11 +2316,158 @@ struct CaptureTopology {
     dictionary: PreparedDictionaryRoutes,
 }
 
+// A matched Function installs structural capture coordinates, not live reads.
+// This temporary exclusive visit is consumed before Closure publication returns.
+struct FunctionCaptureInstallation<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+    expression: usize,
+    creation: usize,
+    body: usize,
+    captures: &'g [usize],
+}
+
+impl FunctionCaptureInstallation<'_, '_> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let Self {
+            analysis,
+            slot,
+            expression,
+            creation,
+            body,
+            captures,
+        } = self;
+        for capture in captures {
+            let source = analysis.install_slot(*capture, creation, budget)?;
+            if let Some(root) = analysis.roots.get(&body).copied() {
+                let target = analysis.install_slot(*capture, root, budget)?;
+                analysis.edge(target, source, budget)?;
+            }
+        }
+        analysis.atom(slot, Atom::Closure(expression, creation), budget)
+    }
+}
+
+// Private marker policies only distinguish structural coordinates from reads.
+struct ObservedCallInputs;
+struct OwnCallInputs;
+
+trait CallSlotPolicy {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure>;
+}
+
+impl CallSlotPolicy for ObservedCallInputs {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.slot(expression, context, budget)
+    }
+}
+
+impl CallSlotPolicy for OwnCallInputs {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.install_slot(expression, context, budget)
+    }
+}
+
+// Produced only after the original live Call/Function match, arity validation,
+// exact full-stamp lookup and fallible completion reservation.
+struct CallTransferInstallation<'s, 'g, 'v> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+    expression: usize,
+    context: usize,
+    target: usize,
+    creation: usize,
+    parameters: &'g [usize],
+    captures: &'g [usize],
+    actual: &'v [usize],
+    body: usize,
+    transfer: (Option<usize>, usize, usize, usize),
+}
+
+impl CallTransferInstallation<'_, '_, '_> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let invoked = self.analysis.context(
+            self.context,
+            Transition::Invoke(self.expression, self.target),
+            budget,
+        )?;
+        // Only this actual exact reader can omit structural shortcut watches.
+        charge(budget, 1)?;
+        if self.analysis.current == Some(self.slot) {
+            self.install_inputs(OwnCallInputs, invoked, budget)
+        } else {
+            self.install_inputs(ObservedCallInputs, invoked, budget)
+        }
+    }
+
+    fn install_inputs<P: CallSlotPolicy>(
+        self,
+        policy: P,
+        invoked: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Self {
+            analysis,
+            slot,
+            creation,
+            parameters,
+            captures,
+            actual,
+            body,
+            transfer,
+            ..
+        } = self;
+        for (&parameter, &argument) in parameters.iter().zip(actual) {
+            let parameter = policy.slot(analysis, parameter, invoked, budget)?;
+            analysis.edge(parameter, argument, budget)?;
+        }
+        for capture in captures {
+            let destination = policy.slot(analysis, *capture, invoked, budget)?;
+            let source = policy.slot(analysis, *capture, creation, budget)?;
+            analysis.edge(destination, source, budget)?;
+        }
+        // The body output remains observed and every live edge remains intact.
+        analysis.link(slot, body, invoked, budget)?;
+        analysis.callable_transfers.insert(transfer);
+        Ok(())
+    }
+}
+
+// Produced only by the paid exact own-reader guard of the actual Evidence visit.
+// The token remains transient under that visit's exclusive Analysis loan.
+#[derive(Clone, Copy)]
+struct OwnEvidenceReader;
+
+#[derive(Clone, Copy)]
+enum EvidenceReader {
+    Own(OwnEvidenceReader),
+    Other,
+}
+
 // Successful input installation consumes evaluate's actual Evidence match.
 // Its exact Analysis loan then stays with the succeeding dynamic phases and
 // returns after an atom is processed; no stored phase grants live answers.
 struct CheckedEvidenceVisit<'s, 'g> {
     analysis: &'s mut Analysis<'g>,
+    reader: EvidenceReader,
     slot: usize,
     evidence: usize,
     arguments_context: usize,
@@ -2396,6 +2543,11 @@ impl<'s, 'g> EvidenceInputVisit<'s, 'g> {
             value,
             visit: CheckedEvidenceVisit {
                 analysis,
+                reader: if own_reader {
+                    EvidenceReader::Own(OwnEvidenceReader)
+                } else {
+                    EvidenceReader::Other
+                },
                 slot,
                 evidence,
                 arguments_context: context,
@@ -2405,6 +2557,125 @@ impl<'s, 'g> EvidenceInputVisit<'s, 'g> {
     }
 }
 // ASH_INPUT169_END_INSTALL
+
+struct ObservedCaptureSlots;
+
+// The two private policies share one exact installer; neither carries answers.
+trait CaptureSlotPolicy {
+    fn prepare(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure>;
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure>;
+}
+
+impl CaptureSlotPolicy for ObservedCaptureSlots {
+    fn prepare(&self, _budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.slot(expression, context, budget)
+    }
+}
+
+impl CaptureSlotPolicy for OwnEvidenceReader {
+    fn prepare(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, 1)
+    }
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.install_slot(expression, context, budget)
+    }
+}
+
+// Consumes the actual Evidence visit's reader proof and one exact transfer.
+// No phase completion survives outside the existing full transfer stamp.
+struct CaptureTransferInstallation<'s, 'g, P> {
+    analysis: &'s mut Analysis<'g>,
+    policy: P,
+    function: usize,
+    creation: usize,
+    specialized: usize,
+    evidence: usize,
+    arguments_context: usize,
+}
+
+impl<P: CaptureSlotPolicy> CaptureTransferInstallation<'_, '_, P> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<usize, Failure> {
+        let Self {
+            analysis,
+            policy,
+            function,
+            creation,
+            specialized,
+            evidence,
+            arguments_context,
+        } = self;
+        let plan = analysis.prepare_capture_topology(function, evidence, budget)?;
+        let Expr::Evidence { bindings, .. } = &analysis.graph.expressions[evidence] else {
+            return Err(Failure::Invalid);
+        };
+        if analysis.capture_topologies[plan].visits.is_empty() {
+            return Ok(plan);
+        }
+        let transfer = (
+            analysis.current,
+            function,
+            creation,
+            specialized,
+            evidence,
+            arguments_context,
+        );
+        charge(budget, 1)?;
+        if analysis.specialization_transfers.contains(&transfer) {
+            return Ok(plan);
+        }
+        // Admit the completion entry before any transfer mutation. Only after
+        // every original slot/link succeeds may a repeated transfer be skipped.
+        charge(budget, 1)?;
+        analysis
+            .specialization_transfers
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        // Only the structural policy pays for consuming its owned-reader phase.
+        policy.prepare(budget)?;
+        let visit_count = analysis.capture_topologies[plan].visits.len();
+        for position in 0..visit_count {
+            charge(budget, 1)?;
+            let visit = analysis.capture_topologies[plan].visits[position];
+            // Structural destinations are never read here; installed edges remain live.
+            let destination = policy.slot(analysis, visit.expression, specialized, budget)?;
+            for position in visit.binding_start..visit.binding_end {
+                charge(budget, 1)?;
+                let original = analysis.capture_topologies[plan].bindings[position];
+                let source =
+                    policy.slot(analysis, bindings[original].2, arguments_context, budget)?;
+                analysis.edge(destination, source, budget)?;
+            }
+            if visit.lexical {
+                let source = policy.slot(analysis, visit.expression, creation, budget)?;
+                analysis.edge(destination, source, budget)?;
+            }
+        }
+        // Existing edges and watches still carry every later atom change.
+        analysis.specialization_transfers.insert(transfer);
+        Ok(plan)
+    }
+}
 
 struct ReservedEvidenceTransfer<'s, 'g> {
     visit: CheckedEvidenceVisit<'s, 'g>,
@@ -2523,14 +2794,26 @@ impl<'s, 'g> ReservedEvidenceTransfer<'s, 'g> {
             Transition::Call(visit.evidence),
             budget,
         )?;
-        let plan = visit.analysis.specialize_captures(
-            function,
-            creation,
-            specialized,
-            visit.evidence,
-            visit.arguments_context,
-            budget,
-        )?;
+        let plan = match visit.reader {
+            EvidenceReader::Other => visit.analysis.specialize_captures(
+                function,
+                creation,
+                specialized,
+                visit.evidence,
+                visit.arguments_context,
+                budget,
+            )?,
+            EvidenceReader::Own(reader) => CaptureTransferInstallation {
+                analysis: visit.analysis,
+                policy: reader,
+                function,
+                creation,
+                specialized,
+                evidence: visit.evidence,
+                arguments_context: visit.arguments_context,
+            }
+            .install(budget)?,
+        };
         Ok(InstalledCaptureBindings {
             visit,
             plan,
@@ -2606,6 +2889,62 @@ impl<'s, 'g> ReadyClosure<'s, 'g> {
         // dictionary routing and output succeed, then return the exact visit.
         self.visit.analysis.callable_transfers.insert(self.stamp);
         Ok(self.visit)
+    }
+}
+
+// A queue-owned evaluation carries its exact reader through one exclusive visit.
+// The original edge owns the source notification for structural Alias/Merge links.
+struct QueuedEvaluation<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ObservedAliasLinks;
+#[derive(Clone, Copy)]
+struct QueuedAliasLinks;
+
+trait AliasLinkPolicy {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure>;
+}
+
+#[cfg(test)]
+impl AliasLinkPolicy for ObservedAliasLinks {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        analysis.link(target, expression, context, budget)
+    }
+}
+
+impl AliasLinkPolicy for QueuedAliasLinks {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let source = analysis.install_slot(expression, context, budget)?;
+        analysis.edge(target, source, budget)
+    }
+}
+
+impl<'s, 'g> QueuedEvaluation<'s, 'g> {
+    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        self.analysis
+            .evaluate_with_alias_links::<QueuedAliasLinks>(self.slot, budget)
     }
 }
 
@@ -3438,12 +3777,24 @@ impl<'a> Analysis<'a> {
         context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
+        let id = self.install_slot(expression, context, budget)?;
+        if let Some(reader) = self.current {
+            self.watch(id, reader, budget)?;
+        }
+        Ok(id)
+    }
+
+    // Construct exact coordinates and enqueue new slots without reading their atoms.
+    // Observing slot(), typed Function/Evidence/Call installers, and queue-owned Alias/Merge links use this constructor.
+    fn install_slot(
+        &mut self,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         charge(budget, 1)?;
         let key = (expression, context);
         if let Some(&id) = self.indices.get(&key) {
-            if let Some(reader) = self.current {
-                self.watch(id, reader, budget)?;
-            }
             return Ok(id);
         }
         self.slots.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -3461,9 +3812,6 @@ impl<'a> Analysis<'a> {
         self.indices.insert(key, id);
         self.revision += 1;
         self.enqueue(id, budget)?;
-        if let Some(reader) = self.current {
-            self.watch(id, reader, budget)?;
-        }
         Ok(id)
     }
 
@@ -3644,10 +3992,18 @@ impl<'a> Analysis<'a> {
                 if self.slots[slot].preparation == SlotPreparation::EdgesInstalled {
                     false
                 } else {
-                    self.evaluate(slot, budget)?
+                    QueuedEvaluation {
+                        analysis: self,
+                        slot,
+                    }
+                    .evaluate(budget)?
                 }
             } else {
-                self.evaluate(slot, budget)?;
+                QueuedEvaluation {
+                    analysis: self,
+                    slot,
+                }
+                .evaluate(budget)?;
                 false
             };
             // Live ordered edges are processed on every visit, including after
@@ -3696,7 +4052,16 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn evaluate(&mut self, slot: usize, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        self.evaluate_with_alias_links::<ObservedAliasLinks>(slot, budget)
+    }
+
+    fn evaluate_with_alias_links<P: AliasLinkPolicy>(
+        &mut self,
+        slot: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
         // This reports setup readiness only. The queue owns its completion bit
         // and commits it after propagation; direct evaluation always runs.
         let mut fixed_setup = true;
@@ -3706,22 +4071,23 @@ impl<'a> Analysis<'a> {
             Expr::Scalar => self.atom(slot, Atom::Free, budget)?,
             Expr::Slot => {}
             Expr::Unknown => self.atom(slot, Atom::Unknown, budget)?,
-            Expr::Alias(value) => self.link(slot, *value, context, budget)?,
+            Expr::Alias(value) => P::link(self, slot, *value, context, budget)?,
             Expr::Merge(values) => {
                 self.atom(slot, Atom::Free, budget)?;
                 for value in values {
-                    self.link(slot, *value, context, budget)?;
+                    P::link(self, slot, *value, context, budget)?;
                 }
             }
             Expr::Function { captures, body, .. } => {
-                for capture in captures {
-                    let source = self.slot(*capture, context, budget)?;
-                    if let Some(root) = self.roots.get(body).copied() {
-                        let target = self.slot(*capture, root, budget)?;
-                        self.edge(target, source, budget)?;
-                    }
+                FunctionCaptureInstallation {
+                    analysis: self,
+                    slot,
+                    expression,
+                    creation: context,
+                    body: *body,
+                    captures,
                 }
-                self.atom(slot, Atom::Closure(expression, context), budget)?;
+                .install(budget)?;
             }
             Expr::Constructor(constructor) => {
                 self.atom(slot, Atom::Constructor(*constructor), budget)?
@@ -3789,23 +4155,20 @@ impl<'a> Analysis<'a> {
                             self.callable_transfers
                                 .try_reserve(1)
                                 .map_err(|_| Failure::Resource)?;
-                            let invoked = self.context(
+                            CallTransferInstallation {
+                                analysis: self,
+                                slot,
+                                expression,
                                 context,
-                                Transition::Invoke(expression, target),
-                                budget,
-                            )?;
-                            for (&parameter, &argument) in parameters.iter().zip(&actual) {
-                                let parameter = self.slot(parameter, invoked, budget)?;
-                                self.edge(parameter, argument, budget)?;
+                                target,
+                                creation,
+                                parameters,
+                                captures,
+                                actual: &actual,
+                                body: *body,
+                                transfer,
                             }
-                            for capture in captures {
-                                let destination = self.slot(*capture, invoked, budget)?;
-                                let source = self.slot(*capture, creation, budget)?;
-                                self.edge(destination, source, budget)?;
-                            }
-                            self.link(slot, *body, invoked, budget)?;
-                            // Commit only after all original context/slot/edge work.
-                            self.callable_transfers.insert(transfer);
+                            .install(budget)?;
                         }
                         Atom::Constructor(_) => self.atom(
                             slot,
@@ -4245,49 +4608,16 @@ impl<'a> Analysis<'a> {
         arguments_context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
-        let plan = self.prepare_capture_topology(function, evidence, budget)?;
-        let Expr::Evidence { bindings, .. } = &self.graph.expressions[evidence] else {
-            return Err(Failure::Invalid);
-        };
-        if self.capture_topologies[plan].visits.is_empty() {
-            return Ok(plan);
-        }
-        let transfer = (
-            self.current,
+        CaptureTransferInstallation {
+            analysis: self,
+            policy: ObservedCaptureSlots,
             function,
             creation,
             specialized,
             evidence,
             arguments_context,
-        );
-        charge(budget, 1)?;
-        if self.specialization_transfers.contains(&transfer) {
-            return Ok(plan);
         }
-        // Admit the completion entry before any transfer mutation. Only after
-        // every original slot/link succeeds may a repeated transfer be skipped.
-        charge(budget, 1)?;
-        self.specialization_transfers
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let visit_count = self.capture_topologies[plan].visits.len();
-        for position in 0..visit_count {
-            charge(budget, 1)?;
-            let visit = self.capture_topologies[plan].visits[position];
-            // Inert intermediate slots also retain their exact reader watches.
-            let destination = self.slot(visit.expression, specialized, budget)?;
-            for position in visit.binding_start..visit.binding_end {
-                charge(budget, 1)?;
-                let original = self.capture_topologies[plan].bindings[position];
-                self.link(destination, bindings[original].2, arguments_context, budget)?;
-            }
-            if visit.lexical {
-                self.link(destination, visit.expression, creation, budget)?;
-            }
-        }
-        // Existing edges and watches still carry every later atom change.
-        self.specialization_transfers.insert(transfer);
-        Ok(plan)
+        .install(budget)
     }
 
     fn dependencies(
@@ -4497,6 +4827,184 @@ mod tests {
         analysis.close(&mut work).unwrap();
         assert_eq!(analysis.slots[fresh].atoms, vec![Atom::Closure(4, context)]);
         assert!(analysis.slots[fresh].preparation.is_edges_installed());
+    }
+
+    #[test]
+    fn function_capture_installation_keeps_live_edges_without_structural_reader_watches() {
+        for captures in [vec![0], vec![0, 2]] {
+            let mut graph = graph(vec![
+                Expr::Slot,
+                Expr::Scalar,
+                Expr::Function {
+                    parameters: Vec::new(),
+                    body: 1,
+                    captures,
+                },
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+            ]);
+            graph.expressions[5] = Expr::Resource {
+                success: None,
+                failure: None,
+                handle: 0,
+                identity: 3,
+                initializer: 1,
+                body: 1,
+                source: graph.sources[5],
+            };
+            graph.globals.push((4, 2));
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = graph.start(&mut work).unwrap();
+            let function = analysis.indices[&(2, 0)];
+            let source = analysis.indices[&(0, 0)];
+            let root = analysis.roots[&1];
+            let routed = analysis.indices[&(0, root)];
+            assert!(!analysis.watched_pairs.contains(&(source, function)));
+            assert!(!analysis.watched_pairs.contains(&(routed, function)));
+            assert!(analysis.edge_pairs.contains_key(&(routed, source)));
+            assert!(analysis.watched_pairs.contains(&(source, routed)));
+            assert_eq!(analysis.slots[function].atoms, vec![Atom::Closure(2, 0)]);
+
+            // A genuine live dependency reader still subscribes to every capture.
+            let reader = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            analysis.current = Some(reader);
+            assert!(
+                analysis
+                    .dependencies(function, &mut work)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(analysis.watched_pairs.contains(&(source, reader)));
+            analysis.current = None;
+            let owner = Atom::Resource(5, 0);
+            analysis.atom(source, owner, &mut work).unwrap();
+            assert!(analysis.slots[routed].queued);
+            assert!(analysis.slots[reader].queued);
+            assert!(!analysis.slots[function].queued);
+            analysis.close(&mut work).unwrap();
+            assert!(analysis.slots[routed].atoms.contains(&owner));
+            assert_eq!(
+                analysis.dependencies(function, &mut work).unwrap(),
+                vec![owner]
+            );
+            assert_eq!(analysis.slots[function].atoms, vec![Atom::Closure(2, 0)]);
+
+            // Incoming data edges, including self-capture cycles, remain live.
+            let incoming = analysis.slot(6, 0, &mut work).unwrap();
+            analysis.edge(function, incoming, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            analysis.atom(incoming, Atom::Unknown, &mut work).unwrap();
+            assert!(analysis.slots[function].queued);
+            analysis.close(&mut work).unwrap();
+            assert_eq!(
+                analysis.slots[function].atoms,
+                vec![Atom::Closure(2, 0), Atom::Unknown]
+            );
+            assert_eq!(analysis.edge_pairs[&(function, incoming)], 1);
+            if matches!(&graph.expressions[2], Expr::Function { captures, .. } if captures.contains(&2))
+            {
+                // The self-capture root has its ordinary incoming edge and suffix.
+                let root_function = analysis.indices[&(2, root)];
+                assert!(analysis.slots[root_function].atoms.contains(&Atom::Unknown));
+                assert_eq!(analysis.edge_pairs[&(root_function, function)], 2);
+            }
+        }
+    }
+
+    #[test]
+    fn queued_alias_merge_links_keep_edge_watches_late_identity_and_direct_readers() {
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Alias(0),
+            Expr::Merge(vec![0, 1, 2]),
+            Expr::Tuple(vec![1]),
+            Expr::Scalar,
+        ]);
+        for _ in 0..2 {
+            graph.expressions.push(Expr::Resource {
+                success: None,
+                failure: None,
+                handle: 0,
+                identity: 1,
+                initializer: 4,
+                body: 2,
+                source: graph.sources[0],
+            });
+            graph.sources.push(graph.sources[0]);
+        }
+        fn setup(graph: &Graph) -> Analysis<'_> {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(graph, &mut work).unwrap();
+            for expression in 0..4 {
+                analysis.slot(expression, 0, &mut work).unwrap();
+            }
+            analysis
+        }
+        let mut analysis = setup(&graph);
+        let mut work = TypeWorkBudget::unbounded();
+        analysis.close(&mut work).unwrap();
+        let exact = work.used();
+        let [source, alias, merge, reader] = [0, 1, 2, 3];
+        assert_eq!(analysis.slots[source].readers, vec![alias, merge]);
+        assert!(analysis.edge_pairs.contains_key(&(merge, merge)));
+        for cut in 0..exact {
+            let mut refused = setup(&graph);
+            let mut short = TypeWorkBudget::with_limit(cut);
+            assert!(matches!(refused.close(&mut short), Err(Failure::Resource)));
+            for (target, input) in [
+                (alias, source),
+                (merge, source),
+                (merge, alias),
+                (merge, merge),
+            ] {
+                assert_eq!(
+                    refused.watched_pairs.contains(&(input, target)),
+                    refused.edge_pairs.contains_key(&(target, input)),
+                    "a queued structural link publishes its edge-owned watch atomically"
+                );
+            }
+            let mut retry = setup(&graph);
+            retry.close(&mut TypeWorkBudget::with_limit(exact)).unwrap();
+            assert_eq!(retry.edge_pairs, analysis.edge_pairs);
+            assert_eq!(retry.watched_pairs, analysis.watched_pairs);
+        }
+
+        // Independent direct evaluation still observes for its actual reader.
+        analysis.current = Some(reader);
+        analysis.evaluate(alias, &mut work).unwrap();
+        assert!(analysis.watched_pairs.contains(&(source, reader)));
+        analysis.current = None;
+        for expression in [5, 6] {
+            let owner = Atom::Resource(expression, 0);
+            analysis.atom(source, owner, &mut work).unwrap();
+            assert!(analysis.slots[alias].queued);
+            assert!(analysis.slots[merge].queued);
+            assert!(analysis.slots[reader].queued);
+            analysis.close(&mut work).unwrap();
+            assert!(analysis.slots[alias].atoms.contains(&owner));
+            assert!(analysis.slots[merge].atoms.contains(&owner));
+            assert!(
+                analysis
+                    .dependencies(reader, &mut work)
+                    .unwrap()
+                    .contains(&owner)
+            );
+            assert_eq!(
+                analysis.edge_pairs[&(alias, source)],
+                analysis.slots[source].atoms.len()
+            );
+            assert_eq!(
+                analysis.edge_pairs[&(merge, source)],
+                analysis.slots[source].atoms.len()
+            );
+        }
+        assert_eq!(
+            analysis.dependencies(reader, &mut work).unwrap(),
+            vec![Atom::Resource(5, 0), Atom::Resource(6, 0)]
+        );
     }
 
     #[test]
@@ -5179,6 +5687,19 @@ mod tests {
         assert_ne!(first_argument, second_argument);
         assert!(analysis.slots[first_argument].readers.contains(&calls[0]));
         assert!(!analysis.slots[first_argument].readers.contains(&calls[1]));
+        let first_invoked = analysis
+            .context(first, Transition::Invoke(6, 5), &mut work)
+            .unwrap();
+        for expression in [2, 3] {
+            let installed = analysis.indices[&(expression, first_invoked)];
+            assert!(!analysis.watched_pairs.contains(&(installed, calls[0])));
+        }
+        let original_capture = analysis.indices[&(3, creation)];
+        assert!(
+            !analysis
+                .watched_pairs
+                .contains(&(original_capture, calls[0]))
+        );
         let argument_owner = Atom::Resource(9, first);
         analysis
             .atom(first_argument, argument_owner, &mut work)
@@ -8427,7 +8948,283 @@ mod tests {
             "frozen pre-entry ports cannot be mutated"
         );
     }
+
+    fn structural_transfer_chain_graph() -> Graph {
+        let mut graph = evidence_completion_graph();
+        graph.expressions.extend([
+            Expr::Merge(vec![2, 3]),
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 9,
+                captures: vec![2, 3],
+            },
+            Expr::Call {
+                function: 6,
+                arguments: Vec::new(),
+                scalar: false,
+                type_application: false,
+            },
+            Expr::Slot,
+        ]);
+        graph.sources.extend([graph.sources[0]; 4]);
+        let Expr::Function { body, .. } = &mut graph.expressions[5] else {
+            unreachable!()
+        };
+        *body = 9;
+        graph
+    }
+
+    #[test]
+    fn structural_transfer_chain_keeps_late_identity_unknown_and_real_consumers() {
+        let graph = structural_transfer_chain_graph();
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let value = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(value, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        let lexical = analysis.slot(3, 0, &mut work).unwrap();
+        let call = analysis.slot(11, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let evidence = analysis.indices[&(6, 0)];
+        let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
+        let invoked = analysis
+            .context(0, Transition::Invoke(11, 5), &mut work)
+            .unwrap();
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(evidence), evidence, 5, 0))
+        );
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(call), call, 5, specialized))
+        );
+        for expression in [2, 3] {
+            let capture = analysis.indices[&(expression, specialized)];
+            let destination = analysis.indices[&(expression, invoked)];
+            assert!(analysis.edge_pairs.contains_key(&(destination, capture)));
+            assert!(!analysis.watched_pairs.contains(&(capture, evidence)));
+            assert!(!analysis.watched_pairs.contains(&(capture, call)));
+            assert!(!analysis.watched_pairs.contains(&(destination, call)));
+        }
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs.contains(&(evidence, call)));
+        let body = analysis.indices[&(9, invoked)];
+        assert!(analysis.watched_pairs.contains(&(body, call)));
+        let consumer = analysis.slot(12, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.current = Some(consumer);
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .is_empty()
+        );
+        let captured = analysis.indices[&(3, specialized)];
+        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        analysis.current = None;
+        let owner = Atom::Resource(8, 0);
+        analysis.atom(lexical, owner, &mut work).unwrap();
+        assert!(analysis.slots[captured].queued);
+        assert!(!analysis.slots[evidence].queued);
+        assert!(!analysis.slots[call].queued);
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[call].atoms.contains(&owner));
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .contains(&owner)
+        );
+
+        // A later actual Closure identity installs its own complete transfer.
+        let other_creation = analysis
+            .context(0, Transition::Root(216), &mut work)
+            .unwrap();
+        let other_capture = analysis.slot(3, other_creation, &mut work).unwrap();
+        let other_owner = Atom::Resource(8, other_creation);
+        analysis
+            .atom(other_capture, other_owner, &mut work)
+            .unwrap();
+        analysis
+            .atom(value, Atom::Closure(10, other_creation), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.callable_transfers.contains(&(
+            Some(evidence),
+            evidence,
+            10,
+            other_creation
+        )));
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(call), call, 10, specialized))
+        );
+        assert!(analysis.slots[call].atoms.contains(&other_owner));
+        let stamps = analysis.callable_transfers.clone();
+        let specialization_stamps = analysis.specialization_transfers.clone();
+        analysis
+            .atom(argument, Atom::Aggregate(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[evidence].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&owner));
+        assert!(analysis.slots[call].atoms.contains(&other_owner));
+        assert!(analysis.watched_pairs.contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs.contains(&(captured, call)));
+        assert_eq!(analysis.callable_transfers, stamps);
+        assert_eq!(analysis.specialization_transfers, specialization_stamps);
+    }
+
+    #[test]
+    fn structural_transfer_chain_refusal_keeps_independent_publication_and_fresh_retry() {
+        fn setup(graph: &Graph) -> (Analysis<'_>, usize, usize) {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(graph, &mut work).unwrap();
+            let value = analysis.slot(0, 0, &mut work).unwrap();
+            analysis
+                .atom(value, Atom::Closure(5, 0), &mut work)
+                .unwrap();
+            let argument = analysis.slot(1, 0, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            let lexical = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.atom(lexical, Atom::Free, &mut work).unwrap();
+            let evidence = analysis.slot(6, 0, &mut work).unwrap();
+            let call = analysis.slot(11, 0, &mut work).unwrap();
+            (analysis, evidence, call)
+        }
+        fn install(
+            analysis: &mut Analysis<'_>,
+            evidence: usize,
+            call: usize,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), Failure> {
+            analysis.current = Some(evidence);
+            analysis.evaluate(evidence, work)?;
+            analysis.current = Some(call);
+            analysis.evaluate(call, work)?;
+            Ok(())
+        }
+        let graph = structural_transfer_chain_graph();
+        let (mut measured, evidence, call) = setup(&graph);
+        let mut exact = TypeWorkBudget::unbounded();
+        install(&mut measured, evidence, call, &mut exact).unwrap();
+        let required = exact.used();
+        let transfers = measured.callable_transfers.clone();
+        let specialization_stamps = measured.specialization_transfers.clone();
+        let edges = measured.edge_pairs.clone();
+        let watches = measured.watched_pairs.clone();
+        measured.current = None;
+        measured.close(&mut TypeWorkBudget::unbounded()).unwrap();
+        let result = measured.slots[call].atoms.clone();
+        let mut saw_completed_evidence_before_call_refusal = false;
+        for prefix in [0, 11] {
+            for available in 0..required {
+                let (mut refused, evidence, call) = setup(&graph);
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    install(&mut refused, evidence, call, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(
+                    !refused
+                        .callable_transfers
+                        .iter()
+                        .any(|(_, reader, _, _)| *reader == call)
+                );
+                if refused
+                    .callable_transfers
+                    .contains(&(Some(evidence), evidence, 5, 0))
+                {
+                    saw_completed_evidence_before_call_refusal = true;
+                    assert_eq!(
+                        refused.slots[evidence].preparation,
+                        SlotPreparation::EvidenceInputsInstalled
+                    );
+                }
+            }
+            let (mut retried, evidence, call) = setup(&graph);
+            let mut retry = TypeWorkBudget::with_limit(prefix + required);
+            retry.charge(prefix).unwrap();
+            install(&mut retried, evidence, call, &mut retry).unwrap();
+            assert_eq!(retry.used(), prefix + required);
+            assert_eq!(retried.callable_transfers, transfers);
+            assert_eq!(retried.specialization_transfers, specialization_stamps);
+            assert_eq!(retried.edge_pairs, edges);
+            assert_eq!(retried.watched_pairs, watches);
+            retried.current = None;
+            retried.close(&mut TypeWorkBudget::unbounded()).unwrap();
+            assert_eq!(retried.slots[call].atoms, result);
+        }
+        assert!(saw_completed_evidence_before_call_refusal);
+    }
+
     // ASH_INPUT169_BEGIN_TESTS
+    #[test]
+    fn structural_specialization_keeps_late_capture_and_unknown_consumers_live() {
+        let mut graph = evidence_completion_graph();
+        graph.expressions.push(Expr::Slot);
+        graph.sources.push(graph.sources[0]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let value = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(value, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        let lexical = analysis.slot(3, 0, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
+        let bound = analysis.indices[&(2, specialized)];
+        let captured = analysis.indices[&(3, specialized)];
+        assert!(analysis.edge_pairs.contains_key(&(bound, argument)));
+        assert!(analysis.edge_pairs.contains_key(&(captured, lexical)));
+        assert!(!analysis.watched_pairs.contains(&(bound, evidence)));
+        assert!(!analysis.watched_pairs.contains(&(captured, evidence)));
+        assert!(!analysis.watched_pairs.contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        let consumer = analysis.slot(9, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.current = Some(consumer);
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        analysis.current = None;
+        let owner = Atom::Resource(8, 0);
+        analysis.atom(lexical, owner, &mut work).unwrap();
+        assert!(analysis.slots[captured].queued);
+        assert!(!analysis.slots[evidence].queued);
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[captured].atoms.contains(&owner));
+        assert_eq!(
+            analysis.dependencies(evidence, &mut work).unwrap(),
+            vec![owner]
+        );
+        let stamps = analysis.specialization_transfers.clone();
+        analysis
+            .atom(argument, Atom::Aggregate(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[evidence].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[evidence].atoms.contains(&owner));
+        assert_eq!(analysis.specialization_transfers, stamps);
+    }
+
     #[test]
     fn evidence_input_phase_keeps_late_live_atoms_and_other_direct_readers() {
         let graph = evidence_completion_graph();

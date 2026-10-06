@@ -993,7 +993,7 @@ struct RowBinding {
 
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
-    types: Vec<&'a Type>,
+    types: PreparedTypeUniverse<'a>,
     owner_rows: Vec<&'a EffectRow>,
     contexts: Vec<Context>,
     labels: Vec<Request>,
@@ -1215,6 +1215,63 @@ fn retain_type_universe_entry<'a>(
 
 // This constructor-local owner exposes no mutable universe or phase view.
 // Entries only append, and consuming it ends the Unit admission proof.
+// Consuming the original builder preserves its paid selector and authoritative order.
+struct PreparedTypeUniverse<'a> {
+    ordered: Vec<&'a Type>,
+    buckets: HashMap<u64, Vec<usize>>,
+}
+
+impl<'a> PreparedTypeUniverse<'a> {
+    fn lookup(&self, actual: &Type, budget: &mut TypeWorkBudget) -> Result<Option<usize>, ()> {
+        let mut hasher = DefaultHasher::new();
+        hash_type_with_budget(actual, &mut hasher, budget)?;
+        budget.charge(1)?;
+        let Some(ordinals) = self.buckets.get(&hasher.finish()) else {
+            return Ok(None);
+        };
+        for ordinal in ordinals {
+            budget.charge(1)?;
+            let original = self.ordered.get(*ordinal).ok_or(())?;
+            if same_type_with_budget(original, actual, budget)? {
+                return Ok(Some(*ordinal));
+            }
+        }
+        Ok(None)
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> std::slice::Iter<'_, &'a Type> {
+        self.ordered.iter()
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.ordered.len()
+    }
+
+    #[cfg(test)]
+    fn swap_ordinals(&mut self, left: usize, right: usize) {
+        self.ordered.swap(left, right);
+        for ordinals in self.buckets.values_mut() {
+            for ordinal in ordinals.iter_mut() {
+                if *ordinal == left {
+                    *ordinal = right;
+                } else if *ordinal == right {
+                    *ordinal = left;
+                }
+            }
+            ordinals.sort_unstable();
+        }
+    }
+}
+
+impl<'a> std::ops::Index<usize> for PreparedTypeUniverse<'a> {
+    type Output = &'a Type;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.ordered[index]
+    }
+}
+
 struct TypeUniverseBuilder<'a> {
     ordered: Vec<&'a Type>,
     buckets: HashMap<u64, Vec<usize>>,
@@ -1284,6 +1341,18 @@ impl<'a> TypeUniverseBuilder<'a> {
         )
     }
 
+    fn into_prepared(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<PreparedTypeUniverse<'a>, Failure> {
+        charge(budget, 1)?;
+        Ok(PreparedTypeUniverse {
+            ordered: self.ordered,
+            buckets: self.buckets,
+        })
+    }
+
+    #[cfg(test)]
     fn into_ordered(self) -> Vec<&'a Type> {
         self.ordered
     }
@@ -1425,7 +1494,7 @@ impl<'a> Analysis<'a> {
                 _ => {}
             }
         }
-        let types = universe.into_ordered();
+        let types = universe.into_prepared(budget)?;
         let mut contexts = Vec::new();
         contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
         contexts.push(Context {
@@ -1769,13 +1838,11 @@ impl<'a> Analysis<'a> {
         while let Some((formal, actual)) = pending.pop() {
             charge(budget, 1)?;
             if let Type::Variable(variable) = formal {
-                let mut replacement = usize::MAX;
-                for (id, ty) in self.types.iter().enumerate() {
-                    if same_type_with_budget(ty, actual, budget).map_err(|_| Failure::Resource)? {
-                        replacement = id;
-                        break;
-                    }
-                }
+                let replacement = self
+                    .types
+                    .lookup(actual, budget)
+                    .map_err(|_| Failure::Resource)?
+                    .unwrap_or(usize::MAX);
                 charge(budget, bindings.len())?;
                 if let Some((_, previous)) = bindings.iter_mut().find(|(id, _)| id == variable) {
                     if *previous != replacement {
@@ -1972,13 +2039,7 @@ impl<'a> Analysis<'a> {
                 instance.arguments(),
                 budget,
                 |argument, budget| {
-                    let mut found = false;
-                    for original in &self.types {
-                        if same_type_with_budget(argument, original, budget)? {
-                            found = true;
-                            break;
-                        }
-                    }
+                    let found = self.types.lookup(argument, budget)?.is_some();
                     unproved |= !found;
                     Ok(())
                 },
@@ -5898,7 +5959,7 @@ mod tests {
                 .iter()
                 .position(|ty| matches!(ty, Type::Int))
                 .unwrap();
-            analysis.types.swap(0, integer);
+            analysis.types.swap_ordinals(0, integer);
             let context = analysis.call_context(0, 0, 0, budget)?;
             assert_eq!(analysis.contexts[context].bindings.len(), WIDTH);
             Ok::<(), Failure>(())
@@ -7219,6 +7280,65 @@ mod tests {
                 .match_labels(integer, boolean, &mut budget)
                 .unwrap()
                 .0
+        );
+    }
+    #[test]
+    fn completed_type_universe_lookup_keeps_first_original_and_checks_collisions() {
+        let originals = [
+            Type::function(Type::Unit, Type::Int),
+            Type::Unit,
+            Type::Bool,
+            Type::Int,
+            Type::EffectfulFunction(
+                Box::new(Type::Unit),
+                Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+            ),
+        ];
+        let mut builder = TypeUniverseBuilder::new();
+        for ty in &originals {
+            builder.admit(ty, &mut TypeWorkBudget::unbounded()).unwrap();
+        }
+        let mut prepared = builder
+            .into_prepared(&mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(prepared.len(), 4);
+        assert!(std::ptr::eq(prepared[0], &originals[0]));
+        assert_eq!(
+            prepared
+                .lookup(&originals[4], &mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            Some(0)
+        );
+        // Force selector collision; full equality still determines the first ID.
+        let mut hasher = DefaultHasher::new();
+        hash_type_with_budget(&Type::Int, &mut hasher, &mut TypeWorkBudget::unbounded()).unwrap();
+        prepared.buckets.insert(hasher.finish(), vec![0, 1, 2, 3]);
+        assert_eq!(
+            prepared
+                .lookup(&Type::Int, &mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            Some(3)
+        );
+        assert_eq!(
+            prepared
+                .lookup(&Type::String, &mut TypeWorkBudget::unbounded())
+                .unwrap(),
+            None
+        );
+        let mut measured = TypeWorkBudget::unbounded();
+        assert_eq!(prepared.lookup(&Type::Int, &mut measured).unwrap(), Some(3));
+        for cut in 0..measured.used() {
+            assert_eq!(
+                prepared.lookup(&Type::Int, &mut TypeWorkBudget::with_limit(cut)),
+                Err(())
+            );
+            assert!(std::ptr::eq(prepared[0], &originals[0]));
+        }
+        assert_eq!(
+            prepared
+                .lookup(&Type::Int, &mut TypeWorkBudget::with_limit(measured.used()))
+                .unwrap(),
+            Some(3)
         );
     }
 }
