@@ -2948,6 +2948,188 @@ impl<'s, 'g> QueuedEvaluation<'s, 'g> {
     }
 }
 
+// One word retains either a watch-only relation or a complete linked prefix.
+// MAX cannot be an Atom Vec prefix: Vec allocation lengths are bounded below
+// usize::MAX. It is not a new work/depth/graph limit. The original prefix range
+// check rejects this sentinel together with every other malformed cursor.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DependencyProgress(usize);
+
+impl DependencyProgress {
+    const WATCHING: Self = Self(usize::MAX);
+    const LINKED_EMPTY: Self = Self(0);
+}
+
+#[derive(Default)]
+struct DependencyRelations {
+    // Exact (target/reader, source), with original slot contexts preserved.
+    entries: HashMap<(usize, usize), DependencyProgress>,
+}
+
+// The exclusive table loan preserves the exact absent or watch-only claim
+// through all fallible reservation. Only these producers can publish links.
+struct VacantDependency<'a> {
+    entries: &'a mut HashMap<(usize, usize), DependencyProgress>,
+    pair: (usize, usize),
+}
+
+struct ReservedDependency<'a> {
+    entries: &'a mut HashMap<(usize, usize), DependencyProgress>,
+    pair: (usize, usize),
+}
+
+struct WatchingDependency<'a> {
+    entries: &'a mut HashMap<(usize, usize), DependencyProgress>,
+    pair: (usize, usize),
+}
+
+enum WatchPreparation<'a> {
+    Complete,
+    Vacant(VacantDependency<'a>),
+}
+
+enum LinkInstallation<'a> {
+    Vacant(VacantDependency<'a>),
+    Watching(WatchingDependency<'a>),
+}
+
+enum ReservedLinkInstallation<'a> {
+    Vacant(ReservedDependency<'a>),
+    Watching(WatchingDependency<'a>),
+}
+
+enum EdgePreparation<'a> {
+    Complete,
+    Install(LinkInstallation<'a>),
+}
+
+impl<'a> VacantDependency<'a> {
+    fn reserve(self) -> Result<ReservedDependency<'a>, Failure> {
+        self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+        Ok(ReservedDependency {
+            entries: self.entries,
+            pair: self.pair,
+        })
+    }
+}
+
+impl ReservedDependency<'_> {
+    fn publish_watching(self) {
+        self.entries.insert(self.pair, DependencyProgress::WATCHING);
+    }
+
+    fn publish_linked(self) {
+        self.entries
+            .insert(self.pair, DependencyProgress::LINKED_EMPTY);
+    }
+}
+
+impl WatchingDependency<'_> {
+    fn publish_linked(self) {
+        // The exact existing entry cannot allocate; the exclusive table loan
+        // has admitted no mutation since the Watching producer classified it.
+        self.entries
+            .insert(self.pair, DependencyProgress::LINKED_EMPTY);
+    }
+}
+
+impl ReservedLinkInstallation<'_> {
+    fn publish(self) {
+        match self {
+            Self::Vacant(pending) => pending.publish_linked(),
+            Self::Watching(pending) => pending.publish_linked(),
+        }
+    }
+}
+
+// Initially this may be watch-only or malformed. Consuming the ORIGINAL
+// source-prefix range check is the producer of the linked cursor authority.
+struct PendingDependencyCursor<'a> {
+    progress: &'a mut DependencyProgress,
+}
+
+struct LinkedDependencyCursor<'a> {
+    cursor: &'a mut usize,
+    delivered: usize,
+    end: usize,
+}
+
+impl<'a> PendingDependencyCursor<'a> {
+    fn prepare(self, atoms: &[Atom]) -> Result<LinkedDependencyCursor<'a>, Failure> {
+        let delivered = self.progress.0;
+        let end = atoms.len();
+        atoms.get(delivered..end).ok_or(Failure::Invalid)?;
+        Ok(LinkedDependencyCursor {
+            cursor: &mut self.progress.0,
+            delivered,
+            end,
+        })
+    }
+}
+
+impl LinkedDependencyCursor<'_> {
+    fn publish(self) {
+        *self.cursor = self.end;
+    }
+}
+
+impl DependencyRelations {
+    fn prepare_watch(
+        &mut self,
+        source: usize,
+        reader: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<WatchPreparation<'_>, Failure> {
+        charge(budget, 1)?;
+        let pair = (reader, source);
+        if self.entries.contains_key(&pair) {
+            return Ok(WatchPreparation::Complete);
+        }
+        Ok(WatchPreparation::Vacant(VacantDependency {
+            entries: &mut self.entries,
+            pair,
+        }))
+    }
+
+    fn prepare_edge(
+        &mut self,
+        target: usize,
+        source: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<EdgePreparation<'_>, Failure> {
+        charge(budget, 1)?;
+        let pair = (target, source);
+        if let Some(progress) = self.entries.get(&pair).copied() {
+            // This occupied-entry phase read is additional performed work.
+            charge(budget, 1)?;
+            if progress == DependencyProgress::WATCHING {
+                return Ok(EdgePreparation::Install(LinkInstallation::Watching(
+                    WatchingDependency {
+                        entries: &mut self.entries,
+                        pair,
+                    },
+                )));
+            }
+            return Ok(EdgePreparation::Complete);
+        }
+        Ok(EdgePreparation::Install(LinkInstallation::Vacant(
+            VacantDependency {
+                entries: &mut self.entries,
+                pair,
+            },
+        )))
+    }
+
+    fn pending_cursor(
+        &mut self,
+        pair: (usize, usize),
+    ) -> Result<PendingDependencyCursor<'_>, Failure> {
+        let progress = self.entries.get_mut(&pair).ok_or(Failure::Invalid)?;
+        Ok(PendingDependencyCursor { progress })
+    }
+}
+
 // This short loan contains precisely the mutable fields of original atom().
 // The edge-cursor table is absent, so propagation cannot invalidate its loan.
 struct AtomStore<'s> {
@@ -3020,10 +3202,9 @@ pub(super) struct Analysis<'a> {
     context_indices: HashMap<Vec<Transition>, usize>,
     slots: Vec<Slot>,
     atom_pairs: HashSet<(usize, Atom)>,
-    watched_pairs: HashSet<(usize, usize)>,
-    // Exact target/source slots retain the completed prefix of source atoms.
-    // Ordered edge vectors and watches still control every later notification.
-    edge_pairs: HashMap<(usize, usize), usize>,
+    // One exact relation retains watch-only or linked-prefix progress.
+    // Ordered edge vectors and readers still control transfer/notification.
+    dependencies: DependencyRelations,
     // Successful immutable Call/Evidence transfers for exact reader, source
     // slot and Closure(code, creation). Live atoms remain in the ordinary graph.
     callable_transfers: HashSet<(Option<usize>, usize, usize, usize)>,
@@ -3765,8 +3946,7 @@ impl<'a> Analysis<'a> {
             context_indices,
             slots: Vec::new(),
             atom_pairs: HashSet::new(),
-            watched_pairs: HashSet::new(),
-            edge_pairs: HashMap::new(),
+            dependencies: DependencyRelations::default(),
             callable_transfers: HashSet::new(),
             specialization_transfers: HashSet::new(),
             indices: HashMap::new(),
@@ -3884,24 +4064,19 @@ impl<'a> Analysis<'a> {
         reader: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        // Slots retain their exact expression and creation context. Index only
-        // this dependency pair; the ordered list still controls notification.
-        charge(budget, 1)?;
-        let pair = (source, reader);
-        if self.watched_pairs.contains(&pair) {
+        let WatchPreparation::Vacant(pending) =
+            self.dependencies.prepare_watch(source, reader, budget)?
+        else {
             return Ok(());
-        }
-        // Admit and reserve both retained entries before changing membership.
-        // A work/storage refusal cannot publish half a dependency relation.
+        };
+        // One compact relation entry and one ordered reader, before mutation.
         charge(budget, 2)?;
-        self.watched_pairs
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
+        let pending = pending.reserve()?;
         self.slots[source]
             .readers
             .try_reserve(1)
             .map_err(|_| Failure::Resource)?;
-        self.watched_pairs.insert(pair);
+        pending.publish_watching();
         self.slots[source].readers.push(reader);
         Ok(())
     }
@@ -3930,34 +4105,30 @@ impl<'a> Analysis<'a> {
         if self.slots[target].key.1 < self.frozen_contexts {
             return Err(Failure::Invalid);
         }
-        // Slot IDs preserve expression and creation context. This index keeps
-        // exact edge membership and its delivered source prefix; the ordered
-        // edge list still drives propagation.
-        charge(budget, 1)?;
-        let edge = (target, source);
-        if self.edge_pairs.contains_key(&edge) {
+        let EdgePreparation::Install(installation) =
+            self.dependencies.prepare_edge(target, source, budget)?
+        else {
             return Ok(());
-        }
-        // Retain the exact pair, scalar cursor and ordered source entry.
-        charge(budget, 3)?;
-        self.edge_pairs
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
+        };
+        let (installation, new_reader) = match installation {
+            LinkInstallation::Vacant(pending) => {
+                // Exact pair, initial scalar cursor, ordered source and reader.
+                charge(budget, 4)?;
+                let pending = pending.reserve()?;
+                (ReservedLinkInstallation::Vacant(pending), true)
+            }
+            LinkInstallation::Watching(pending) => {
+                // Existing-entry mutation lookup/write and ordered source.
+                // Its original reader position remains unchanged.
+                charge(budget, 3)?;
+                (ReservedLinkInstallation::Watching(pending), false)
+            }
+        };
         self.slots[target]
             .edges
             .try_reserve(1)
             .map_err(|_| Failure::Resource)?;
-        // An edge also requires its independently tracked notification watch.
-        // Reserve the entire edge/watch/enqueue transition before committing
-        // any relation, so refusal cannot make a retry skip missing readers.
-        charge(budget, 1)?;
-        let watch = (source, target);
-        let new_watch = !self.watched_pairs.contains(&watch);
-        if new_watch {
-            charge(budget, 2)?;
-            self.watched_pairs
-                .try_reserve(1)
-                .map_err(|_| Failure::Resource)?;
+        if new_reader {
             self.slots[source]
                 .readers
                 .try_reserve(1)
@@ -3968,11 +4139,12 @@ impl<'a> Analysis<'a> {
         if enqueue {
             self.pending.try_reserve(1).map_err(|_| Failure::Resource)?;
         }
-        self.edge_pairs.insert(edge, 0);
+        // All table/vector/queue storage is admitted. Neither a work nor
+        // allocation refusal can publish a link without its ordered reader.
+        installation.publish();
         self.slots[target].edges.push(source);
         self.revision += 1;
-        if new_watch {
-            self.watched_pairs.insert(watch);
+        if new_reader {
             self.slots[source].readers.push(target);
         }
         if enqueue {
@@ -4042,15 +4214,13 @@ impl<'a> Analysis<'a> {
                 charge(budget, 1)?;
                 let source = self.slots[slot].edges[edge_index];
                 let pair = (slot, source);
-                // One exact entry loan proves the final publication coordinate.
-                let cursor = self.edge_pairs.get_mut(&pair).ok_or(Failure::Invalid)?;
-                let delivered = *cursor;
-                let end = self.slots[source].atoms.len();
-                let unread = self.slots[source]
-                    .atoms
-                    .get(delivered..end)
-                    .ok_or(Failure::Invalid)?;
-                if unread.is_empty() {
+                let cursor = self
+                    .dependencies
+                    .pending_cursor(pair)?
+                    .prepare(&self.slots[source].atoms)?;
+                let delivered = cursor.delivered;
+                let end = cursor.end;
+                if delivered == end {
                     continue;
                 }
                 // The retained exact entry loan removes the second table lookup.
@@ -4071,7 +4241,7 @@ impl<'a> Analysis<'a> {
                     let atom = atoms.slots[source].atoms[atom_index];
                     atoms.atom(slot, atom, budget)?;
                 }
-                *cursor = end;
+                cursor.publish();
             }
             if complete_setup {
                 // The existing Slot admission already reserves this scalar
@@ -4084,6 +4254,26 @@ impl<'a> Analysis<'a> {
             self.current = None;
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn edge_pairs(&self) -> HashMap<(usize, usize), usize> {
+        self.dependencies
+            .entries
+            .iter()
+            .filter_map(|(&pair, &progress)| {
+                (progress != DependencyProgress::WATCHING).then_some((pair, progress.0))
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn watched_pairs(&self) -> HashSet<(usize, usize)> {
+        self.dependencies
+            .entries
+            .keys()
+            .map(|&(reader, source)| (source, reader))
+            .collect()
     }
 
     #[cfg(test)]
@@ -4248,14 +4438,14 @@ impl<'a> Analysis<'a> {
                             match &self.graph.expressions[target] {
                                 Expr::Tuple(fields) if constructor.is_none() => {
                                     if let Some(value) = fields.get(*field) {
-                                        self.link(slot, *value, creation, budget)?;
+                                        P::link(self, slot, *value, creation, budget)?;
                                     }
                                 }
                                 Expr::Call { arguments, .. }
                                     if constructor.is_some() && *field == 0 =>
                                 {
                                     if let Some(value) = arguments.first() {
-                                        self.link(slot, *value, creation, budget)?;
+                                        P::link(self, slot, *value, creation, budget)?;
                                     }
                                 }
                                 Expr::Resource {
@@ -4263,7 +4453,7 @@ impl<'a> Analysis<'a> {
                                     success: Some(success),
                                     ..
                                 } if *constructor == Some(*success) && *field == 0 => {
-                                    self.link(slot, *body, creation, budget)?;
+                                    P::link(self, slot, *body, creation, budget)?;
                                 }
                                 Expr::Resource {
                                     failure: Some(failure),
@@ -4308,7 +4498,7 @@ impl<'a> Analysis<'a> {
                 if self.slots[binder].atoms.is_empty() {
                     return Ok(false);
                 }
-                self.link(slot, *body, context, budget)?;
+                P::link(self, slot, *body, context, budget)?;
             }
             Expr::Recursive { bindings, body } => {
                 let mut ready = true;
@@ -4321,7 +4511,7 @@ impl<'a> Analysis<'a> {
                 if !ready {
                     return Ok(false);
                 }
-                self.link(slot, *body, context, budget)?;
+                P::link(self, slot, *body, context, budget)?;
             }
             Expr::Match { scrutinee, arms } => {
                 let scrutinee = self.slot(*scrutinee, context, budget)?;
@@ -4333,7 +4523,7 @@ impl<'a> Analysis<'a> {
                         let binder = self.slot(binder, context, budget)?;
                         self.link(binder, initializer, context, budget)?;
                     }
-                    self.link(slot, *body, context, budget)?;
+                    P::link(self, slot, *body, context, budget)?;
                 }
             }
             Expr::Resource {
@@ -4358,7 +4548,7 @@ impl<'a> Analysis<'a> {
                     self.slot(*body, context, budget)?;
                     self.atom(slot, Atom::Aggregate(expression, context), budget)?;
                 } else {
-                    self.link(slot, *body, context, budget)?;
+                    P::link(self, slot, *body, context, budget)?;
                 }
             }
             Expr::Request { operand, scalar } => {
@@ -4368,7 +4558,7 @@ impl<'a> Analysis<'a> {
             Expr::Resume { operand } => {
                 self.slot(*operand, context, budget)?;
             }
-            Expr::Handler { body, .. } => self.link(slot, *body, context, budget)?,
+            Expr::Handler { body, .. } => P::link(self, slot, *body, context, budget)?,
             // ASH_INPUT169_BEGIN_EVALUATE
             Expr::Evidence { value, bindings } => {
                 fixed_setup = false;
@@ -4771,16 +4961,16 @@ mod tests {
         let mut complete = setup();
         complete.close(&mut exact).unwrap();
         assert_eq!(complete.slots[0].atoms, expected);
-        assert_eq!(complete.edge_pairs[&(0, 1)], 3);
-        assert_eq!(complete.edge_pairs[&(0, 2)], 1);
-        assert_eq!(complete.edge_pairs[&(0, 0)], 4);
+        assert_eq!(complete.edge_pairs()[&(0, 1)], 3);
+        assert_eq!(complete.edge_pairs()[&(0, 2)], 1);
+        assert_eq!(complete.edge_pairs()[&(0, 0)], 4);
         for cut in 0..exact.used() {
             let mut refused = setup();
             assert!(matches!(
                 refused.close(&mut TypeWorkBudget::with_limit(cut)),
                 Err(Failure::Resource)
             ));
-            let cursor = refused.edge_pairs[&(0, 1)];
+            let cursor = refused.edge_pairs()[&(0, 1)];
             assert!(cursor == 0 || cursor == 3, "no partial suffix is complete");
             if cursor == 3 {
                 assert!(
@@ -4789,8 +4979,8 @@ mod tests {
                         .all(|atom| refused.slots[0].atoms.contains(atom))
                 );
             }
-            assert!(refused.edge_pairs[&(0, 2)] <= 1);
-            assert!(refused.edge_pairs[&(0, 0)] <= refused.slots[0].atoms.len());
+            assert!(refused.edge_pairs()[&(0, 2)] <= 1);
+            assert!(refused.edge_pairs()[&(0, 0)] <= refused.slots[0].atoms.len());
             // A refused analysis is discarded; an exact retry starts fresh.
             // The partial cursor assertions above still cover every failure cut.
             let mut retry = setup();
@@ -4798,7 +4988,7 @@ mod tests {
                 .close(&mut TypeWorkBudget::with_limit(exact.used()))
                 .unwrap();
             assert_eq!(retry.slots[0].atoms, expected);
-            assert_eq!(retry.edge_pairs, complete.edge_pairs);
+            assert_eq!(retry.edge_pairs(), complete.edge_pairs());
         }
         let later = Atom::Resource(9, 1);
         complete
@@ -4806,8 +4996,8 @@ mod tests {
             .unwrap();
         complete.close(&mut TypeWorkBudget::unbounded()).unwrap();
         assert_eq!(complete.slots[0].atoms, [expected, vec![later]].concat());
-        assert_eq!(complete.edge_pairs[&(0, 1)], 4);
-        assert_eq!(complete.edge_pairs[&(0, 0)], 5);
+        assert_eq!(complete.edge_pairs()[&(0, 1)], 4);
+        assert_eq!(complete.edge_pairs()[&(0, 0)], 5);
     }
 
     fn immutable_setup_graph() -> Graph {
@@ -4868,7 +5058,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let edges = analysis.edge_pairs.clone();
+        let edges = analysis.edge_pairs();
         let atom_revision = analysis.revision;
         // A new real Resource fills the original handle and identity ports only
         // after the eligible slots' complete first queue visits.
@@ -4884,7 +5074,7 @@ mod tests {
         assert_eq!(analysis.slots[outputs[1]].atoms, vec![owner]);
         assert_eq!(analysis.slots[outputs[2]].atoms, vec![Atom::Free, owner]);
         for pair in edges.keys() {
-            assert!(analysis.edge_pairs.contains_key(pair));
+            assert!(analysis.edge_pairs().contains_key(pair));
         }
         let identity = analysis.indices[&(1, 0)];
         analysis.atom(identity, Atom::Unknown, &mut work).unwrap();
@@ -4907,17 +5097,36 @@ mod tests {
         // Direct evaluation with the same optional reader coordinate also
         // remains ordinary; a queue-owned bit cannot authorize direct reuse.
         analysis.current = Some(outputs[1]);
-        let mut same_reader = TypeWorkBudget::with_limit(3);
+        // The original Alias path paid 3: slot hit, watch hit, linked hit.
+        // A Linked entry now also pays its distinct phase read.
+        let linked_phase_read_work = 1;
+        let same_reader_work = 3 + linked_phase_read_work;
+        let before_relations = analysis.dependencies.entries.clone();
+        let source = analysis.indices[&(0, 0)];
+        let before_readers = analysis.slots[source].readers.clone();
+        let before_revision = analysis.revision;
+        let mut short_reader = TypeWorkBudget::with_limit(same_reader_work - 1);
+        assert!(matches!(
+            analysis.evaluate(outputs[1], &mut short_reader),
+            Err(Failure::Resource)
+        ));
+        assert_eq!(short_reader.used(), same_reader_work - 1);
+        assert_eq!(analysis.dependencies.entries, before_relations);
+        assert_eq!(analysis.slots[source].readers, before_readers);
+        assert_eq!(analysis.revision, before_revision);
+        let mut same_reader = TypeWorkBudget::with_limit(same_reader_work);
         analysis.evaluate(outputs[1], &mut same_reader).unwrap();
-        assert_eq!(same_reader.used(), 3);
+        assert_eq!(same_reader.used(), same_reader_work);
         analysis.current = None;
-        let mut no_reader = TypeWorkBudget::with_limit(10);
+        // Function remains 3; Alias and Merge add one and two Linked phase reads.
+        let no_reader_work = 10 + 3 * linked_phase_read_work;
+        let mut no_reader = TypeWorkBudget::with_limit(no_reader_work);
         for &slot in &outputs {
             analysis.evaluate(slot, &mut no_reader).unwrap();
         }
         assert_eq!(
             no_reader.used(),
-            10,
+            no_reader_work,
             "None still runs original Function, Alias and Merge setup without flag lookup"
         );
         let context = analysis
@@ -4962,10 +5171,10 @@ mod tests {
             let source = analysis.indices[&(0, 0)];
             let root = analysis.roots[&1];
             let routed = analysis.indices[&(0, root)];
-            assert!(!analysis.watched_pairs.contains(&(source, function)));
-            assert!(!analysis.watched_pairs.contains(&(routed, function)));
-            assert!(analysis.edge_pairs.contains_key(&(routed, source)));
-            assert!(analysis.watched_pairs.contains(&(source, routed)));
+            assert!(!analysis.watched_pairs().contains(&(source, function)));
+            assert!(!analysis.watched_pairs().contains(&(routed, function)));
+            assert!(analysis.edge_pairs().contains_key(&(routed, source)));
+            assert!(analysis.watched_pairs().contains(&(source, routed)));
             assert_eq!(analysis.slots[function].atoms, vec![Atom::Closure(2, 0)]);
 
             // A genuine live dependency reader still subscribes to every capture.
@@ -4978,7 +5187,7 @@ mod tests {
                     .unwrap()
                     .is_empty()
             );
-            assert!(analysis.watched_pairs.contains(&(source, reader)));
+            assert!(analysis.watched_pairs().contains(&(source, reader)));
             analysis.current = None;
             let owner = Atom::Resource(5, 0);
             analysis.atom(source, owner, &mut work).unwrap();
@@ -5004,13 +5213,13 @@ mod tests {
                 analysis.slots[function].atoms,
                 vec![Atom::Closure(2, 0), Atom::Unknown]
             );
-            assert_eq!(analysis.edge_pairs[&(function, incoming)], 1);
+            assert_eq!(analysis.edge_pairs()[&(function, incoming)], 1);
             if matches!(&graph.expressions[2], Expr::Function { captures, .. } if captures.contains(&2))
             {
                 // The self-capture root has its ordinary incoming edge and suffix.
                 let root_function = analysis.indices[&(2, root)];
                 assert!(analysis.slots[root_function].atoms.contains(&Atom::Unknown));
-                assert_eq!(analysis.edge_pairs[&(root_function, function)], 2);
+                assert_eq!(analysis.edge_pairs()[&(root_function, function)], 2);
             }
         }
     }
@@ -5050,7 +5259,7 @@ mod tests {
         let exact = work.used();
         let [source, alias, merge, reader] = [0, 1, 2, 3];
         assert_eq!(analysis.slots[source].readers, vec![alias, merge]);
-        assert!(analysis.edge_pairs.contains_key(&(merge, merge)));
+        assert!(analysis.edge_pairs().contains_key(&(merge, merge)));
         for cut in 0..exact {
             let mut refused = setup(&graph);
             let mut short = TypeWorkBudget::with_limit(cut);
@@ -5062,21 +5271,21 @@ mod tests {
                 (merge, merge),
             ] {
                 assert_eq!(
-                    refused.watched_pairs.contains(&(input, target)),
-                    refused.edge_pairs.contains_key(&(target, input)),
+                    refused.watched_pairs().contains(&(input, target)),
+                    refused.edge_pairs().contains_key(&(target, input)),
                     "a queued structural link publishes its edge-owned watch atomically"
                 );
             }
             let mut retry = setup(&graph);
             retry.close(&mut TypeWorkBudget::with_limit(exact)).unwrap();
-            assert_eq!(retry.edge_pairs, analysis.edge_pairs);
-            assert_eq!(retry.watched_pairs, analysis.watched_pairs);
+            assert_eq!(retry.edge_pairs(), analysis.edge_pairs());
+            assert_eq!(retry.watched_pairs(), analysis.watched_pairs());
         }
 
         // Independent direct evaluation still observes for its actual reader.
         analysis.current = Some(reader);
         analysis.evaluate(alias, &mut work).unwrap();
-        assert!(analysis.watched_pairs.contains(&(source, reader)));
+        assert!(analysis.watched_pairs().contains(&(source, reader)));
         analysis.current = None;
         for expression in [5, 6] {
             let owner = Atom::Resource(expression, 0);
@@ -5094,11 +5303,11 @@ mod tests {
                     .contains(&owner)
             );
             assert_eq!(
-                analysis.edge_pairs[&(alias, source)],
+                analysis.edge_pairs()[&(alias, source)],
                 analysis.slots[source].atoms.len()
             );
             assert_eq!(
-                analysis.edge_pairs[&(merge, source)],
+                analysis.edge_pairs()[&(merge, source)],
                 analysis.slots[source].atoms.len()
             );
         }
@@ -5123,7 +5332,7 @@ mod tests {
         for capture in [0, 1] {
             let source = normal.indices[&(capture, 0)];
             let routed = normal.indices[&(capture, root)];
-            assert!(normal.edge_pairs.contains_key(&(routed, source)));
+            assert!(normal.edge_pairs().contains_key(&(routed, source)));
             assert!(normal.slots[routed].atoms.contains(&Atom::Resource(3, 0)));
         }
         let (mut focused, context) = normal.focused(20, 0, &mut work).unwrap();
@@ -5195,7 +5404,7 @@ mod tests {
                     analysis.slots[slot]
                         .edges
                         .iter()
-                        .all(|source| analysis.edge_pairs[&(slot, *source)] == 0)
+                        .all(|source| analysis.edge_pairs()[&(slot, *source)] == 0)
                 );
             }
             assert!(!analysis.slots[slot].preparation.is_edges_installed());
@@ -5235,7 +5444,7 @@ mod tests {
                         );
                         for &source in &refused.slots[attempted].edges {
                             assert_eq!(
-                                refused.edge_pairs[&(attempted, source)],
+                                refused.edge_pairs()[&(attempted, source)],
                                 refused.slots[source].atoms.len()
                             );
                         }
@@ -5249,8 +5458,8 @@ mod tests {
                     assert_eq!(exact_work.used(), prefix + exact);
                     assert!(retried.slots[attempted].preparation.is_edges_installed());
                     assert_eq!(retried.slots[attempted].atoms, measured.slots[slot].atoms);
-                    assert_eq!(retried.edge_pairs, measured.edge_pairs);
-                    assert_eq!(retried.watched_pairs, measured.watched_pairs);
+                    assert_eq!(retried.edge_pairs(), measured.edge_pairs());
+                    assert_eq!(retried.watched_pairs(), measured.watched_pairs());
                 }
             }
         }
@@ -5338,7 +5547,7 @@ mod tests {
                     if available == exact - 1 {
                         for &source in &refused.slots[result].edges {
                             assert_eq!(
-                                refused.edge_pairs[&(result, source)],
+                                refused.edge_pairs()[&(result, source)],
                                 refused.slots[source].atoms.len()
                             );
                         }
@@ -5351,8 +5560,8 @@ mod tests {
                 assert_eq!(exact_work.used(), prefix + exact);
                 assert!(retried.slots[result].preparation.is_edges_installed());
                 assert_eq!(retried.slots[result].atoms, measured.slots[result].atoms);
-                assert_eq!(retried.edge_pairs, measured.edge_pairs);
-                assert_eq!(retried.watched_pairs, measured.watched_pairs);
+                assert_eq!(retried.edge_pairs(), measured.edge_pairs());
+                assert_eq!(retried.watched_pairs(), measured.watched_pairs());
                 // Newly arriving ownership/Unknown cannot reopen fixed setup,
                 // but its original source slots and result dependencies stay live.
                 let input = retried.indices[&(1, 0)];
@@ -5496,8 +5705,8 @@ mod tests {
             analysis.dependencies(evidence, &mut work).unwrap(),
             vec![owner, late]
         );
-        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
-        assert!(analysis.watched_pairs.contains(&(evidence, evidence)));
+        assert!(analysis.watched_pairs().contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs().contains(&(evidence, evidence)));
     }
 
     #[test]
@@ -5685,8 +5894,8 @@ mod tests {
                 .contains(&(Some(evidence), evidence, 5, 0))
         );
         assert_eq!(measured.slots[evidence].atoms.len(), 1);
-        let edges = measured.edge_pairs.clone();
-        let watches = measured.watched_pairs.clone();
+        let edges = measured.edge_pairs();
+        let watches = measured.watched_pairs();
         for prefix in [0, 9] {
             for available in 0..exact {
                 let (mut refused, evidence) = setup(&graph);
@@ -5707,8 +5916,8 @@ mod tests {
                 retry.charge(prefix).unwrap();
                 retried.evaluate(evidence, &mut retry).unwrap();
                 assert_eq!(retry.used(), prefix + exact);
-                assert_eq!(retried.edge_pairs, edges);
-                assert_eq!(retried.watched_pairs, watches);
+                assert_eq!(retried.edge_pairs(), edges);
+                assert_eq!(retried.watched_pairs(), watches);
                 assert_eq!(retried.callable_transfers, measured.callable_transfers);
                 assert_eq!(
                     retried.slots[evidence].atoms,
@@ -5727,8 +5936,8 @@ mod tests {
         // ASH_INPUT169_END_COST
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slots);
-        assert_eq!(measured.edge_pairs, edges);
-        assert_eq!(measured.watched_pairs, watches);
+        assert_eq!(measured.edge_pairs(), edges);
+        assert_eq!(measured.watched_pairs(), watches);
 
         let (mut malformed, evidence) = setup(&graph);
         let value = malformed.indices[&(0, 0)];
@@ -5793,12 +6002,12 @@ mod tests {
             .unwrap();
         for expression in [2, 3] {
             let installed = analysis.indices[&(expression, first_invoked)];
-            assert!(!analysis.watched_pairs.contains(&(installed, calls[0])));
+            assert!(!analysis.watched_pairs().contains(&(installed, calls[0])));
         }
         let original_capture = analysis.indices[&(3, creation)];
         assert!(
             !analysis
-                .watched_pairs
+                .watched_pairs()
                 .contains(&(original_capture, calls[0]))
         );
         let argument_owner = Atom::Resource(9, first);
@@ -5895,8 +6104,8 @@ mod tests {
         );
         let revision = measured.revision;
         let slot_count = measured.slots.len();
-        let edges = measured.edge_pairs.clone();
-        let watches = measured.watched_pairs.clone();
+        let edges = measured.edge_pairs();
+        let watches = measured.watched_pairs();
         // Two existing slots+watches, one argument visit, a paid atom visit,
         // and one completed-transfer lookup: no context or edge reconstruction.
         let mut duplicate = TypeWorkBudget::with_limit(7);
@@ -5904,8 +6113,8 @@ mod tests {
         assert_eq!(duplicate.used(), 7);
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slot_count);
-        assert_eq!(measured.edge_pairs, edges);
-        assert_eq!(measured.watched_pairs, watches);
+        assert_eq!(measured.edge_pairs(), edges);
+        assert_eq!(measured.watched_pairs(), watches);
         for prefix in [0, 9] {
             for available in 0..exact {
                 let (mut failed, call) = setup(&graph);
@@ -5926,8 +6135,8 @@ mod tests {
             retried.evaluate(call, &mut retry).unwrap();
             assert_eq!(retry.used(), prefix + exact);
             assert_eq!(retried.callable_transfers, measured.callable_transfers);
-            assert_eq!(retried.edge_pairs, edges);
-            assert_eq!(retried.watched_pairs, watches);
+            assert_eq!(retried.edge_pairs(), edges);
+            assert_eq!(retried.watched_pairs(), watches);
         }
         // Direct private evaluation may have a different or absent reader.
         // Those calls must not reuse a record that omits their required watches.
@@ -5994,7 +6203,7 @@ mod tests {
             duplicate.charge(prefix).unwrap();
             analysis.watch(*source, *first, &mut duplicate).unwrap();
             assert_eq!(duplicate.used(), prefix + 1);
-            let before_pairs = analysis.watched_pairs.len();
+            let before_pairs = analysis.dependencies.entries.len();
             let before_readers = analysis.slots[*source].readers.clone();
             let mut short = TypeWorkBudget::with_limit(prefix + 2);
             short.charge(prefix).unwrap();
@@ -6003,7 +6212,7 @@ mod tests {
                 Err(Failure::Resource)
             ));
             assert_eq!(short.used(), prefix + 1);
-            assert_eq!(analysis.watched_pairs.len(), before_pairs);
+            assert_eq!(analysis.dependencies.entries.len(), before_pairs);
             assert_eq!(analysis.slots[*source].readers, before_readers);
             let mut exact = TypeWorkBudget::with_limit(prefix + 3);
             exact.charge(prefix).unwrap();
@@ -6059,7 +6268,7 @@ mod tests {
                 }
             }
             assert_eq!(analysis.slots[source].readers, readers);
-            assert_eq!(analysis.watched_pairs.len(), WIDTH);
+            assert_eq!(analysis.dependencies.entries.len(), WIDTH);
             analysis.pending.clear();
             for slot in &mut analysis.slots {
                 slot.queued = false;
@@ -6086,6 +6295,10 @@ mod tests {
 
     #[test]
     fn edge_pairs_preserve_contexts_order_independent_watches_and_atomic_budget_boundaries() {
+        assert_eq!(
+            std::mem::size_of::<DependencyProgress>(),
+            std::mem::size_of::<usize>()
+        );
         let graph = graph(vec![Expr::Slot]);
         let mut setup = TypeWorkBudget::unbounded();
         let mut analysis = Analysis::new(&graph, &mut setup).unwrap();
@@ -6114,7 +6327,11 @@ mod tests {
         analysis.edge(*target, *second, &mut setup).unwrap();
         analysis.edge(*target, *first, &mut setup).unwrap();
         assert_eq!(analysis.slots[*target].edges, vec![*second, *first]);
-        assert!(!analysis.edge_pairs.contains_key(&(*other_target, *second)));
+        assert!(
+            !analysis
+                .edge_pairs()
+                .contains_key(&(*other_target, *second))
+        );
         assert_eq!(
             analysis.slots[*second].readers,
             vec![*other_target, *target]
@@ -6124,17 +6341,17 @@ mod tests {
             slot.queued = false;
         }
         for (prefix, source) in [(0, *fresh), (9, *prefilled)] {
-            let mut duplicate = TypeWorkBudget::with_limit(prefix + 1);
+            let mut duplicate = TypeWorkBudget::with_limit(prefix + 2);
             duplicate.charge(prefix).unwrap();
             analysis.edge(*target, *first, &mut duplicate).unwrap();
-            assert_eq!(duplicate.used(), prefix + 1);
+            assert_eq!(duplicate.used(), prefix + 2);
             assert!(!analysis.slots[*target].queued);
             let before_edges = analysis.slots[*target].edges.clone();
-            let before_pairs = analysis.edge_pairs.clone();
-            let before_watches = analysis.watched_pairs.clone();
+            let before_pairs = analysis.edge_pairs();
+            let before_watches = analysis.watched_pairs();
             let before_readers = analysis.slots[source].readers.clone();
             let before_revision = analysis.revision;
-            for allowance in 0..8 {
+            for allowance in 0..6 {
                 let mut short = TypeWorkBudget::with_limit(prefix + allowance);
                 short.charge(prefix).unwrap();
                 assert!(matches!(
@@ -6142,17 +6359,17 @@ mod tests {
                     Err(Failure::Resource)
                 ));
                 assert_eq!(analysis.slots[*target].edges, before_edges);
-                assert_eq!(analysis.edge_pairs, before_pairs);
-                assert_eq!(analysis.watched_pairs, before_watches);
+                assert_eq!(analysis.edge_pairs(), before_pairs);
+                assert_eq!(analysis.watched_pairs(), before_watches);
                 assert_eq!(analysis.slots[source].readers, before_readers);
                 assert_eq!(analysis.revision, before_revision);
                 assert!(analysis.pending.is_empty());
                 assert!(!analysis.slots[*target].queued);
             }
-            let mut exact = TypeWorkBudget::with_limit(prefix + 8);
+            let mut exact = TypeWorkBudget::with_limit(prefix + 6);
             exact.charge(prefix).unwrap();
             analysis.edge(*target, source, &mut exact).unwrap();
-            assert_eq!(exact.used(), prefix + 8);
+            assert_eq!(exact.used(), prefix + 6);
             let mut expected = before_edges;
             expected.push(source);
             assert_eq!(analysis.slots[*target].edges, expected);
@@ -6167,17 +6384,28 @@ mod tests {
         // A watch does not imply an edge, and an existing watch costs no new
         // reader storage when the independently missing edge is inserted.
         analysis.watch(*watched, *target, &mut setup).unwrap();
-        let before_pairs = analysis.edge_pairs.clone();
-        let mut short = TypeWorkBudget::with_limit(5);
-        assert!(matches!(
-            analysis.edge(*target, *watched, &mut short),
-            Err(Failure::Resource)
-        ));
-        assert_eq!(analysis.edge_pairs, before_pairs);
-        assert!(!analysis.slots[*target].queued);
+        let before_pairs = analysis.edge_pairs();
+        let before_relations = analysis.dependencies.entries.clone();
+        let before_readers = analysis.slots[*watched].readers.clone();
+        for allowance in 0..6 {
+            let mut short = TypeWorkBudget::with_limit(allowance);
+            assert!(matches!(
+                analysis.edge(*target, *watched, &mut short),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(analysis.edge_pairs(), before_pairs);
+            assert_eq!(analysis.dependencies.entries, before_relations);
+            assert_eq!(analysis.slots[*watched].readers, before_readers);
+            assert!(!analysis.slots[*target].queued);
+        }
         let mut exact = TypeWorkBudget::with_limit(6);
         analysis.edge(*target, *watched, &mut exact).unwrap();
         assert_eq!(exact.used(), 6);
+        assert_eq!(analysis.dependencies.entries.len(), before_relations.len());
+        assert_eq!(
+            analysis.dependencies.entries[&(*target, *watched)],
+            DependencyProgress::LINKED_EMPTY
+        );
         assert_eq!(analysis.slots[*watched].readers, vec![*target]);
         // A second target can already be queued, but still receives the exact
         // edge and its pre-existing watch without a second queue position.
@@ -6211,14 +6439,14 @@ mod tests {
             analysis.slots[*other_target].atoms.is_empty(),
             "a watch alone never propagates atoms"
         );
-        let before_pairs = analysis.edge_pairs.clone();
+        let before_pairs = analysis.edge_pairs();
         let mut frozen = TypeWorkBudget::with_limit(0);
         analysis.frozen_contexts = analysis.contexts.len();
         assert!(matches!(
             analysis.edge(*target, *first, &mut frozen),
             Err(Failure::Invalid)
         ));
-        assert_eq!(analysis.edge_pairs, before_pairs);
+        assert_eq!(analysis.edge_pairs(), before_pairs);
         assert_eq!(frozen.used(), 0);
     }
 
@@ -6248,7 +6476,7 @@ mod tests {
                 .and_then(|()| analysis.close(budget));
             if result.is_err() {
                 assert_eq!(
-                    analysis.edge_pairs.get(&(target, source)),
+                    analysis.edge_pairs().get(&(target, source)),
                     Some(&0),
                     "a refused suffix must not publish its completed prefix"
                 );
@@ -6258,7 +6486,7 @@ mod tests {
                 analysis.slots[target].atoms,
                 vec![Atom::Unknown, Atom::Free, Atom::Resource(0, creation)]
             );
-            assert_eq!(analysis.edge_pairs.get(&(target, source)), Some(&3));
+            assert_eq!(analysis.edge_pairs().get(&(target, source)), Some(&3));
             Ok::<(), Failure>(())
         };
         // enqueue + pop + one original edge visit + cursor write under its loan +
@@ -6298,7 +6526,7 @@ mod tests {
         }
         analysis.close(&mut work).unwrap();
         assert_eq!(analysis.slots[target].atoms, analysis.slots[source].atoms);
-        assert_eq!(analysis.edge_pairs.get(&(target, source)), Some(&5));
+        assert_eq!(analysis.edge_pairs().get(&(target, source)), Some(&5));
         // A new exact target starts at zero and receives an existing source
         // prefix. Independent readers receive notifications without values.
         let other = analysis.slot(0, other_creation, &mut work).unwrap();
@@ -6306,7 +6534,7 @@ mod tests {
         let observer = analysis.slot(0, observer_context, &mut work).unwrap();
         analysis.watch(source, observer, &mut work).unwrap();
         analysis.edge(other, source, &mut work).unwrap();
-        assert_eq!(analysis.edge_pairs.get(&(other, source)), Some(&0));
+        assert_eq!(analysis.edge_pairs().get(&(other, source)), Some(&0));
         analysis.edge(target, target, &mut work).unwrap();
         analysis.edge(source, target, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
@@ -6321,19 +6549,22 @@ mod tests {
         assert!(analysis.slots[observer].atoms.is_empty());
         assert_eq!(analysis.slots[target].edges, vec![source, target]);
         assert_eq!(
-            analysis.edge_pairs[&(target, target)],
+            analysis.edge_pairs()[&(target, target)],
             analysis.slots[target].atoms.len()
         );
         assert_eq!(
-            analysis.edge_pairs[&(source, target)],
+            analysis.edge_pairs()[&(source, target)],
             analysis.slots[target].atoms.len()
         );
-        for malformed in [None, Some(4)] {
+        for malformed in [None, Some(4), Some(usize::MAX)] {
             let (mut rejected, source, target, _) = setup();
             if let Some(cursor) = malformed {
-                rejected.edge_pairs.insert((target, source), cursor);
+                rejected
+                    .dependencies
+                    .entries
+                    .insert((target, source), DependencyProgress(cursor));
             } else {
-                rejected.edge_pairs.remove(&(target, source));
+                rejected.dependencies.entries.remove(&(target, source));
             }
             rejected.enqueue(target, &mut work).unwrap();
             assert!(matches!(rejected.close(&mut work), Err(Failure::Invalid)));
@@ -6355,21 +6586,30 @@ mod tests {
                 analysis.edge(target, source, budget)?;
                 sources.push(source);
             }
+            assert_eq!(analysis.edge_pairs().len(), WIDTH);
+            let mut linked_phase_reads = 0;
             for _ in 0..WIDTH {
                 for source in sources.iter().rev() {
                     analysis.edge(target, *source, budget)?;
+                    linked_phase_reads += 1;
                 }
             }
             assert_eq!(analysis.slots[target].edges, sources);
-            assert_eq!(analysis.edge_pairs.len(), WIDTH);
+            assert_eq!(analysis.edge_pairs().len(), WIDTH);
             analysis.close(budget)?;
-            Ok::<(), Failure>(())
+            Ok::<usize, Failure>(linked_phase_reads)
         };
         let mut measured = TypeWorkBudget::unbounded();
-        run(&mut measured).unwrap();
+        let linked_phase_reads = run(&mut measured).unwrap();
+        assert_eq!(linked_phase_reads, WIDTH * WIDTH);
+        // new(2) + target(2) + W * [context(8) + slot(2) + vacant edge(6)]
+        // + W^2 * linked hit(2) + close [W + 1 pops + W empty edges].
+        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 18 * WIDTH + 5);
+        let linked_phase_read_work = 1;
+        let original_tariff_work = measured.used() - linked_phase_reads * linked_phase_read_work;
         assert!(
-            measured.used() < 2 * WIDTH * WIDTH,
-            "membership cost must scale with pair visits"
+            original_tariff_work < 2 * WIDTH * WIDTH,
+            "original growth bound excludes only the exact new Linked phase reads"
         );
         for prefix in [0, 9] {
             let mut short = TypeWorkBudget::with_limit(prefix + measured.used() - 1);
@@ -6407,7 +6647,7 @@ mod tests {
                     let before_revision = analysis.revision;
                     let before_flags: Vec<_> =
                         analysis.slots.iter().map(|slot| slot.queued).collect();
-                    let before_watches = analysis.watched_pairs.clone();
+                    let before_watches = analysis.watched_pairs();
                     let mut short = TypeWorkBudget::with_limit(prefix + available);
                     short.charge(prefix).unwrap();
                     assert!(matches!(
@@ -6426,7 +6666,7 @@ mod tests {
                             .collect::<Vec<_>>(),
                         before_flags
                     );
-                    assert_eq!(analysis.watched_pairs, before_watches);
+                    assert_eq!(analysis.watched_pairs(), before_watches);
                     let mut retry = TypeWorkBudget::with_limit(prefix + 5);
                     retry.charge(prefix).unwrap();
                     analysis.atom(source, Atom::Unknown, &mut retry).unwrap();
@@ -6596,7 +6836,7 @@ mod tests {
         );
         assert_eq!(work.used() - warm, 1);
         assert!(analysis.slots.is_empty());
-        assert!(analysis.watched_pairs.is_empty());
+        assert!(analysis.dependencies.entries.is_empty());
         assert_eq!(analysis.revision, 0);
         for (function, evidence) in [(8, 9), (7, 7), (usize::MAX, 8), (7, usize::MAX)] {
             assert!(matches!(
@@ -6627,8 +6867,8 @@ mod tests {
             assert!(rejected.capture_topology_indices.is_empty());
             assert!(rejected.binding_indices.is_empty());
             assert!(rejected.slots.is_empty());
-            assert!(rejected.watched_pairs.is_empty());
-            assert!(rejected.edge_pairs.is_empty());
+            assert!(rejected.dependencies.entries.is_empty());
+            assert!(rejected.edge_pairs().is_empty());
             assert_eq!(rejected.revision, 0);
         }
     }
@@ -6671,8 +6911,8 @@ mod tests {
                     assert!(refused.slots.is_empty());
                     assert!(refused.indices.is_empty());
                     assert!(refused.pending.is_empty());
-                    assert!(refused.watched_pairs.is_empty());
-                    assert!(refused.edge_pairs.is_empty());
+                    assert!(refused.dependencies.entries.is_empty());
+                    assert!(refused.edge_pairs().is_empty());
                     assert!(refused.atom_pairs.is_empty());
                     assert_eq!(refused.revision, 0);
                     let mut retry = TypeWorkBudget::with_limit(prefix + exact);
@@ -6762,16 +7002,16 @@ mod tests {
         analysis
             .specialize_captures(5, creation_a, specialized_a, 6, arguments_a, &mut work)
             .unwrap();
-        let edges = analysis.edge_pairs.clone();
-        let watches = analysis.watched_pairs.clone();
+        let edges = analysis.edge_pairs();
+        let watches = analysis.watched_pairs();
         let revision = analysis.revision;
         let mut duplicate = TypeWorkBudget::with_limit(2);
         analysis
             .specialize_captures(5, creation_a, specialized_a, 6, arguments_a, &mut duplicate)
             .unwrap();
         assert_eq!(duplicate.used(), 2);
-        assert_eq!(analysis.edge_pairs, edges);
-        assert_eq!(analysis.watched_pairs, watches);
+        assert_eq!(analysis.edge_pairs(), edges);
+        assert_eq!(analysis.watched_pairs(), watches);
         assert_eq!(analysis.revision, revision);
         // Same topology under another reader must still install inert-slot and
         // argument/lexical watches; the reader coordinate cannot be omitted.
@@ -6902,8 +7142,8 @@ mod tests {
         let exact = work.used();
         let key = (Some(reader), 3, 0, specialized, 6, 0);
         assert!(measured.specialization_transfers.contains(&key));
-        let edges = measured.edge_pairs.clone();
-        let watches = measured.watched_pairs.clone();
+        let edges = measured.edge_pairs();
+        let watches = measured.watched_pairs();
         for prefix in [0, 9] {
             for available in 0..exact {
                 let (mut failed, specialized, _) = setup(&graph);
@@ -6931,8 +7171,8 @@ mod tests {
                 retried.specialization_transfers,
                 measured.specialization_transfers
             );
-            assert_eq!(retried.edge_pairs, edges);
-            assert_eq!(retried.watched_pairs, watches);
+            assert_eq!(retried.edge_pairs(), edges);
+            assert_eq!(retried.watched_pairs(), watches);
             let revision = retried.revision;
             let mut duplicate = TypeWorkBudget::with_limit(prefix + 2);
             duplicate.charge(prefix).unwrap();
@@ -6941,8 +7181,8 @@ mod tests {
                 .unwrap();
             assert_eq!(duplicate.used(), prefix + 2);
             assert_eq!(retried.revision, revision);
-            assert_eq!(retried.edge_pairs, edges);
-            assert_eq!(retried.watched_pairs, watches);
+            assert_eq!(retried.edge_pairs(), edges);
+            assert_eq!(retried.watched_pairs(), watches);
         }
     }
 
@@ -7433,8 +7673,8 @@ mod tests {
                 retried.specialization_transfers,
                 measured.specialization_transfers
             );
-            assert_eq!(retried.edge_pairs, measured.edge_pairs);
-            assert_eq!(retried.watched_pairs, measured.watched_pairs);
+            assert_eq!(retried.edge_pairs(), measured.edge_pairs());
+            assert_eq!(retried.watched_pairs(), measured.watched_pairs());
             assert_eq!(retried.slots[source].atoms, measured.slots[source].atoms);
         }
     }
@@ -9107,15 +9347,15 @@ mod tests {
         for expression in [2, 3] {
             let capture = analysis.indices[&(expression, specialized)];
             let destination = analysis.indices[&(expression, invoked)];
-            assert!(analysis.edge_pairs.contains_key(&(destination, capture)));
-            assert!(!analysis.watched_pairs.contains(&(capture, evidence)));
-            assert!(!analysis.watched_pairs.contains(&(capture, call)));
-            assert!(!analysis.watched_pairs.contains(&(destination, call)));
+            assert!(analysis.edge_pairs().contains_key(&(destination, capture)));
+            assert!(!analysis.watched_pairs().contains(&(capture, evidence)));
+            assert!(!analysis.watched_pairs().contains(&(capture, call)));
+            assert!(!analysis.watched_pairs().contains(&(destination, call)));
         }
-        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
-        assert!(analysis.watched_pairs.contains(&(evidence, call)));
+        assert!(analysis.watched_pairs().contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs().contains(&(evidence, call)));
         let body = analysis.indices[&(9, invoked)];
-        assert!(analysis.watched_pairs.contains(&(body, call)));
+        assert!(analysis.watched_pairs().contains(&(body, call)));
         let consumer = analysis.slot(12, 0, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
         analysis.current = Some(consumer);
@@ -9126,7 +9366,7 @@ mod tests {
                 .is_empty()
         );
         let captured = analysis.indices[&(3, specialized)];
-        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        assert!(analysis.watched_pairs().contains(&(captured, consumer)));
         analysis.current = None;
         let owner = Atom::Resource(8, 0);
         analysis.atom(lexical, owner, &mut work).unwrap();
@@ -9178,8 +9418,8 @@ mod tests {
         assert!(analysis.slots[call].atoms.contains(&Atom::Unknown));
         assert!(analysis.slots[call].atoms.contains(&owner));
         assert!(analysis.slots[call].atoms.contains(&other_owner));
-        assert!(analysis.watched_pairs.contains(&(lexical, evidence)));
-        assert!(analysis.watched_pairs.contains(&(captured, call)));
+        assert!(analysis.watched_pairs().contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs().contains(&(captured, call)));
         assert_eq!(analysis.callable_transfers, stamps);
         assert_eq!(analysis.specialization_transfers, specialization_stamps);
     }
@@ -9220,8 +9460,8 @@ mod tests {
         let required = exact.used();
         let transfers = measured.callable_transfers.clone();
         let specialization_stamps = measured.specialization_transfers.clone();
-        let edges = measured.edge_pairs.clone();
-        let watches = measured.watched_pairs.clone();
+        let edges = measured.edge_pairs();
+        let watches = measured.watched_pairs();
         measured.current = None;
         measured.close(&mut TypeWorkBudget::unbounded()).unwrap();
         let result = measured.slots[call].atoms.clone();
@@ -9259,8 +9499,8 @@ mod tests {
             assert_eq!(retry.used(), prefix + required);
             assert_eq!(retried.callable_transfers, transfers);
             assert_eq!(retried.specialization_transfers, specialization_stamps);
-            assert_eq!(retried.edge_pairs, edges);
-            assert_eq!(retried.watched_pairs, watches);
+            assert_eq!(retried.edge_pairs(), edges);
+            assert_eq!(retried.watched_pairs(), watches);
             retried.current = None;
             retried.close(&mut TypeWorkBudget::unbounded()).unwrap();
             assert_eq!(retried.slots[call].atoms, result);
@@ -9288,12 +9528,12 @@ mod tests {
         let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
         let bound = analysis.indices[&(2, specialized)];
         let captured = analysis.indices[&(3, specialized)];
-        assert!(analysis.edge_pairs.contains_key(&(bound, argument)));
-        assert!(analysis.edge_pairs.contains_key(&(captured, lexical)));
-        assert!(!analysis.watched_pairs.contains(&(bound, evidence)));
-        assert!(!analysis.watched_pairs.contains(&(captured, evidence)));
-        assert!(!analysis.watched_pairs.contains(&(lexical, evidence)));
-        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        assert!(analysis.edge_pairs().contains_key(&(bound, argument)));
+        assert!(analysis.edge_pairs().contains_key(&(captured, lexical)));
+        assert!(!analysis.watched_pairs().contains(&(bound, evidence)));
+        assert!(!analysis.watched_pairs().contains(&(captured, evidence)));
+        assert!(!analysis.watched_pairs().contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs().contains(&(argument, evidence)));
         let consumer = analysis.slot(9, 0, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
         analysis.current = Some(consumer);
@@ -9303,7 +9543,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        assert!(analysis.watched_pairs().contains(&(captured, consumer)));
         analysis.current = None;
         let owner = Atom::Resource(8, 0);
         analysis.atom(lexical, owner, &mut work).unwrap();
@@ -9345,7 +9585,7 @@ mod tests {
         );
         assert!(analysis.slots[evidence].atoms.is_empty());
         for source in [value, argument] {
-            assert!(analysis.watched_pairs.contains(&(source, evidence)));
+            assert!(analysis.watched_pairs().contains(&(source, evidence)));
             assert!(analysis.slots[source].readers.contains(&evidence));
         }
         analysis.current = None;
@@ -9383,7 +9623,7 @@ mod tests {
         analysis.current = Some(reader);
         analysis.evaluate(evidence, &mut work).unwrap();
         for source in [value, argument] {
-            assert!(analysis.watched_pairs.contains(&(source, reader)));
+            assert!(analysis.watched_pairs().contains(&(source, reader)));
             assert!(analysis.slots[source].readers.contains(&reader));
         }
         assert_eq!(
@@ -9479,7 +9719,7 @@ mod tests {
                         saw_completed_inputs = true;
                         for expression in [0, 1] {
                             let source = refused.indices[&(expression, 0)];
-                            assert!(refused.watched_pairs.contains(&(source, evidence)));
+                            assert!(refused.watched_pairs().contains(&(source, evidence)));
                             assert!(refused.slots[source].readers.contains(&evidence));
                         }
                     }
@@ -9493,7 +9733,7 @@ mod tests {
                     refused.slots[evidence].preparation,
                     SlotPreparation::EvidenceInputsInstalled
                 );
-                assert_eq!(refused.watched_pairs, measured.watched_pairs);
+                assert_eq!(refused.watched_pairs(), measured.watched_pairs());
                 assert_eq!(
                     refused.slots[evidence].atoms,
                     measured.slots[evidence].atoms
@@ -9589,8 +9829,8 @@ mod tests {
         );
         let other_source = analysis.indices[&(1, other_context)];
         assert_ne!(other_source, analysis.indices[&(1, 0)]);
-        assert!(analysis.watched_pairs.contains(&(other_source, other)));
-        assert!(!analysis.watched_pairs.contains(&(other_source, evidence)));
+        assert!(analysis.watched_pairs().contains(&(other_source, other)));
+        assert!(!analysis.watched_pairs().contains(&(other_source, evidence)));
 
         let (mut focused, context) = analysis.focused(174, 0, &mut work).unwrap();
         for original in 0..analysis.slots.len() {
@@ -9610,12 +9850,12 @@ mod tests {
             SlotPreparation::EvidenceInputsInstalled
         );
         let source = focused.indices[&(1, context)];
-        assert!(focused.watched_pairs.contains(&(source, fresh)));
-        assert!(!focused.watched_pairs.contains(&(source, evidence)));
+        assert!(focused.watched_pairs().contains(&(source, fresh)));
+        assert!(!focused.watched_pairs().contains(&(source, evidence)));
         assert!(
             Analysis::new(&graph, &mut work)
                 .unwrap()
-                .watched_pairs
+                .watched_pairs()
                 .is_empty()
         );
     }

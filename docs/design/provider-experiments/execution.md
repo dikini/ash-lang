@@ -4604,3 +4604,94 @@ from normal admission. Relation consolidation and borrowed frozen prefixes
 remain private investigation. This delivery supplies experimental DN-0036
 evidence; it changes no normative Ash rule and proves no whole-contract or
 intrinsic resource lower bound. The exclusions recorded above remain.
+
+
+### Dependency progress and queued output delivery (2026-10-07)
+
+This candidate joins exact dependency watch membership and linked-prefix progress
+in one analysis-local table. Private consuming states distinguish a vacant
+relation, reserved storage, an existing watch and a linked cursor. The original
+source-prefix range check admits the cursor; publication follows all original
+fallible storage and work admission. Exact expression/context identities, source
+atom order, reader order, frozen-target checks and success-only cursor updates
+remain. Focused analyses construct fresh relations. No live value, evidence,
+capture demand or completed source answer is cached.
+
+The existing queue-owned output-link policy also covers eight output edges in
+Project, Bind, Recursive, Match, Resource and Handler evaluation. Their original
+input/readiness observations remain; only the redundant output watch disappears
+where the same edge supplies that notification. Direct evaluation retains its
+observing policy. A Resource success-constructor body without that output edge
+remains observing. No new field, lookup or phase is added by this eight-site
+change. Native dispatch, library definitions and native ownership do not change.
+
+Paired receipts 251 and 255 execute copying, persistence, resume and bound-NUL
+through the public driver, including their actual native assertions. Temporary
+completion ceilings permit measurement of still-failing normal programs; they
+are removed after each run. Relative to the integrated cursor/method baseline,
+the selected source reports these completed costs:
+
+| Program | Source checking | Independent Effect Core |
+|---|---:|---:|
+| Copying | 1,328,833 | 951,107 |
+| Persistence | 621,950 | 1,658,241 |
+| Resume | 207,434 | 298,216 |
+| Bound-NUL | 1,328,833 | 951,102 |
+
+These are separate lexical ledgers, not a pooled allowance. Normal limits remain
+327,680 for the source ledger and 983,040 for independent Core, with unchanged
+depth limits. Copying and bound-NUL still exceed the source limit by 1,001,153;
+persistence exceeds source by 294,270 and Core by 675,201. Persistence's separate
+final-elaboration measurement is also above 327,680. Only resume has a fresh
+normal-limit execution in this comparison. Diagnostic completion is not normal
+admission, and no intrinsic lower bound is established.
+
+The relation-only comparison preserves completed operation counts. Its exact
+tariff delta is linked hits minus twice vacant links: one entry eliminates a
+second table operation on new links while successful occupied classifications
+remain charged. Existing exact laws retain their original growth threshold,
+with only the separately counted new phase-read units removed from that growth
+comparison; the complete measured total is also asserted. The queued output
+extension saves a further 908/1,891/252 source units and 2,678/4,167/582 Core units
+for copying/persistence/resume respectively. Bound-NUL has copying's same delta.
+Collection capacities and scalar layout sizes are metadata proxies, not measured
+allocator or peak-memory savings.
+
+Receipt 255's temporary Call observer preserves all six owner endpoints in all
+four paired cases. In copying's first, source-checking Analysis, it identifies 65,221 units of
+Call-input preparation and 838,859 units of close work outside Calls. These are nested/disjoint portions
+of that observation, not extra costs to add to a whole owner. A retained Call
+input phase is not selected: its storage and cold/access costs need evidence,
+and the measured preparation opportunity cannot cure the main deficit alone.
+
+Receipt 257 repeats unchanged persistence variants eight times each. All sixteen
+public/native executions pass under diagnostic ceilings. Source totals vary
+with the original enclosing-binder scan's capacity debit; the remaining scan
+work is constant. One unchanged output variant reports final elaboration
+376,941 instead of 376,978: its capacity debit is 299 instead of 336 and its scan
+work falls by the same 37 units. This demonstrates capacity-dependent variation
+in unchanged code. The earlier receipt 255 final-elaboration difference of 40
+units has no corresponding capacity trace and remains unproved for that exact
+run. It is preserved rather than silently assigned to the candidate. No capacity
+accounting or TypeContext representation change belongs to this delivery.
+
+This remains the bounded [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md)
+experiment. The changes establish tested
+finite cases and source invariants, not a formal proof of the complete resource
+contract or current Ash semantics. Existing foreign binding assumptions and
+independent Core authority remain; no new foreign ABI, library policy, allocation,
+borrowing or production architecture is accepted here.
+
+Connected normal verification 260 passes: sixteen public integration binaries
+(230 parent cases), the realistic SQLite resume case, 43 architecture cases,
+60 native cases, all-target checking, formatting, strict workspace/all-feature
+Clippy and warning-denied rustdoc. The 1,633 library cases passed on the identical
+candidate in receipt 256; receipt 260 authenticates and carries that raw result.
+Receipt 256 stopped because its harness miscounted nested test summaries, not
+because a library case failed. The corrected parser distinguishes child runs
+from their parent coverage and rejects every failed or ignored summary.
+
+All these checks use normal limits with no measurement observer. Full guards
+preserve unrelated Common, SQLite and Original sources, indexes and histories.
+Independent review authenticates the raw logs and the sole selected compiler
+change. Original-branch integration and its full `cargo xtask verify` are pending.
