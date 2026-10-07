@@ -423,6 +423,44 @@ integration operations remain serial. Combined review and the verified unsigned
 SQLite merge back into `codex/provider-experiments` follow normal acceptance of
 the original larger programs. This remains bounded DN-0036 experiment evidence.
 
+## Bounded native invocation preparation (2026-10-07)
+
+The generic runtime adds `ForeignInvocationWork`, a borrowed debit-only
+capability for one synchronous native preparation. It exposes neither the work
+ledger nor a native owner, cannot be cloned, and cannot enter owned pending
+commit state. `prepare_invoke_with_work` defaults to the existing preparation
+method exactly once, with no added legacy tariff. Adapters prepay conversion,
+scratch and commit work before publication. A refused debit preserves its first
+measured Access-phase failure even when an adapter ignores the returned error;
+any pending result is abandoned before commit. The original operation, module
+and ordered live owner views remain authenticated by the existing protocol.
+
+Arena's unsigned source checkpoint `d18cf07` supplies the reviewed three-file
+handoff. Its 27 public and 15 private cases pass on one compiled source closure;
+a runner initially selected the CLI instead of the library test executable.
+The continuation authenticated the existing library artifact and ran only the
+15 pending checks. No rebuild or repeated public cases followed that wrapper
+failure. Common retains its existing manifest representation: only the two
+previous foundation fixture edits are omitted from the handoff, preserving all
+new API, evaluator logic and tests. Fresh Common verification passes all 42
+selected cases, scoped formatting and diff checks.
+
+The connected command uses one Cargo job with `cargo test --locked -p ash
+--lib --test foreign_codec_failures --test provider_retention_source
+--test provider_arena_source --test provider_sqlite_source --no-run
+--message-format=json`, then executes the inventoried test artifacts. Required
+cases establish exact adapter debits, default forwarding, measured refusal,
+ignored-refusal abandonment, native lifecycle and host teardown. Source and
+artifact pins, raw commands and integration receipts are retained under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/context-extension-delivery-20261007/metered-shared-delivery/`.
+
+This delivery supplies a preparation boundary; it does not execute typed arena
+storage or reduce Source analysis costs. Adapter metering and publication remain
+trusted foreign obligations. Existing acquisition, Immediate effects, finish,
+quarantine, work limits and source result protocols remain unchanged. Core
+alignment stays paused. The full quality gate is due at the next combined
+feature checkpoint; the previous full gate is historical evidence.
+
 ## SQLite copying workstream (2026-10-05)
 
 Authorized implementation starts from integration commit `53db4eb` in
