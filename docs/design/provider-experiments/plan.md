@@ -63,15 +63,23 @@ at `7c97a45`, and the basic arena lifecycle at `53db4eb`. Independent SQLite
 and arena work starts from those original-branch integration commits. Delivery
 4 is integrated at `3f9dd75`, with the complete original-branch gate recorded in
 [execution](execution.md#current-checkpoint). The separate generic cost delivery
-is integrated at `c97e0f3` and verified by receipt 116. The current common
-follow-on consolidates measured source preparation and capture work, preserving
-exact Type/row identities and independent Core checks. Its ten shared source and
-regression files are checked separately against the original twelve-operation
-SQLite contract. Receipts 182–184 pass library, connected public and
-architecture checks, then the focused test correction, strict lint and rustdoc.
-Unsigned merge `5991e3d` integrates common commit `183e9d5`; receipt 186 passes
-the complete original-worktree `cargo xtask verify`. This separate common
-preparation-cost delivery is complete.
+is integrated at `c97e0f3` and verified by receipt 116. The measured common
+follow-on consolidates source preparation and capture work while preserving
+exact Type/row identities and independent Core checks. Earlier source delivery
+`183e9d5` merged at `5991e3d` and passed receipt 186. The subsequent capture and
+final-binder delivery `70e97735` merged at `13d2b89` and passed the complete
+original-worktree gate in receipt 282; documentation-only merges advance the
+original tip to `0d0c2bd`.
+
+The next selected delivery tracks completed control-call suffixes, carries
+unproved row equations explicitly and borrows immutable replacement Types.
+Receipt 284 passes the connected Common normal gate, including independent
+Core, public control/row programs, architecture and strict quality checks.
+Its commit, original merge and integrated full gate remain pending. Dirty-edge,
+strict-predecessor and global-constructor staging trials increased measured
+work and were exactly reversed. The larger three SQLite cases still exceed
+normal limits; the next private fusion study targets contextual child expansion.
+No work or depth limit changes are selected.
 
 The String/TEXT manifest, executable adapter, source library and larger programs
 remain preserved SQLite-owned work. Their passing cases and three default-budget

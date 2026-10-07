@@ -2830,3 +2830,23 @@ and all twenty-three unrelated working files are preserved. The external
 verification outcome, which governs completion and the consumer handoff.
 Independent SQLite and arena merges follow that verified checkpoint. Shared
 source remains common-owned, and Cargo leases remain explicit and serial.
+
+
+## 2026-10-07: completed-phase preparation checkpoint
+
+The selected shared source records a delivered control-call prefix only after
+success, consumes a known failed row equation without redundant membership work,
+and borrows prepared replacement Types through the existing substitution kernel.
+The connected Common normal gate passes workspace and public tests, independent
+Core/rebuild cases, all 43 architecture checks, build, formatting, strict lint
+and warning-denied docs. Source commit, preserving original merge and integrated
+full verification are the next delivery checkpoint.
+
+The original four SQLite programs supply actual native cost evidence under
+restored diagnostic ceilings. Selected changes save work but do not cure the
+larger three normal-limit refusals. Dirty-edge, strict-predecessor and constructor
+staging candidates are rejected and exactly reversed; passing native execution
+alone is insufficient when measured work rises. A private typed-route/frame
+candidate targets contextual expansion and has no execution claim yet. Shared
+compiler ownership remains Common's, native/library ownership remains SQLite's,
+and engine windows remain serial. DN-0036 retains experimental authority.

@@ -22,8 +22,8 @@ use std::{
 };
 
 use super::{
-    CompletionOwner, Failure, Request, Substitutions, SummaryGraph, TypeArguments, UnsafeDiscard,
-    Value, charge, same_effect,
+    CompletionOwner, Failure, Request, SummaryGraph, TypeArguments, UnsafeDiscard, Value, charge,
+    same_effect,
 };
 use crate::{
     source::Span,
@@ -31,7 +31,7 @@ use crate::{
         EffectInstance, EffectRow, EffectRowVariable, KindedArgument, Type, TypeVariableId,
         TypeWorkBudget, clone_effect_row_with_budget, clone_type_with_budget,
         hash_type_with_budget, rebuild_effect_row_with_budget, same_type_with_budget,
-        substitute_type_and_row_variables_with,
+        substitute_type_and_row_variables_borrowed_with,
     },
 };
 
@@ -980,6 +980,13 @@ struct Context {
     rows: Vec<RowBinding>,
 }
 
+// Consumed only after the original formal-prefix removal has completed.
+// Unproved deliberately lends no residual row to the membership consumer.
+enum RowEquation<'r> {
+    Unproved,
+    Residual(&'r EffectRow),
+}
+
 #[derive(Debug, Eq, Hash, PartialEq)]
 struct RowBinding {
     variable: TypeVariableId,
@@ -1525,26 +1532,24 @@ impl<'a> Analysis<'a> {
         })
     }
 
+    // The prepared universe already borrows immutable original source Types.
+    // Return that source lifetime, so label interning may mutate this Analysis
+    // while the completed replacement input remains borrowed and unchanged.
     fn type_replacements(
         &self,
         bindings: &[(TypeVariableId, usize)],
         budget: &mut TypeWorkBudget,
-    ) -> Result<Substitutions, Failure> {
-        let mut substitutions = Substitutions::default();
+    ) -> Result<HashMap<TypeVariableId, &'a Type>, Failure> {
+        let mut substitutions = HashMap::new();
         for (variable, target) in bindings {
             charge(budget, 1)?;
             if *target == usize::MAX {
                 continue;
             }
             substitutions
-                .0
                 .try_reserve(1)
                 .map_err(|_| Failure::Resource)?;
-            substitutions.insert(
-                *variable,
-                clone_type_with_budget(self.types[*target], budget)
-                    .map_err(|_| Failure::Resource)?,
-            );
+            substitutions.insert(*variable, self.types[*target]);
         }
         Ok(substitutions)
     }
@@ -1580,9 +1585,9 @@ impl<'a> Analysis<'a> {
             rows.try_reserve(1).map_err(|_| Failure::Resource)?;
             rows.insert(binding.variable, row);
         }
-        substitute_type_and_row_variables_with(
+        substitute_type_and_row_variables_borrowed_with(
             ty,
-            &substitutions.0,
+            &substitutions,
             &rows,
             |count| charge(budget, count),
             || Failure::Resource,
@@ -1660,9 +1665,9 @@ impl<'a> Analysis<'a> {
             }
             for argument in effect.arguments() {
                 arguments.0.push(
-                    crate::types::substitute_kinded_argument_with(
+                    crate::types::substitute_kinded_argument_borrowed_with(
                         argument,
-                        &substitutions.0,
+                        &substitutions,
                         &rows,
                         |units| budget.charge(units),
                     )
@@ -1941,27 +1946,28 @@ impl<'a> Analysis<'a> {
                     return Err(Failure::Invalid);
                 };
                 let formal = formal
-                    .substitute_type_variables_with_budget(&substitutions.0, budget)
+                    .substitute_type_variables_borrowed_with_budget(&substitutions, budget)
                     .map_err(|_| Failure::Resource)?;
                 let mut remainder = if let Some(actual) = actual {
                     clone_effect_row_with_budget(actual, budget).map_err(|_| Failure::Resource)?
                 } else {
                     EffectRow::empty()
                 };
-                let mut unproved = false;
-                for instance in formal.known() {
-                    match remainder
-                        .remove_exact_with_budget(instance, budget)
-                        .map_err(|_| Failure::Resource)?
-                    {
-                        Ok(rest) => remainder = rest,
-                        Err(_) => {
-                            unproved = true;
-                            break;
+                // The original exact-removal result directly produces the
+                // equation phase; no second caller-side classification is needed.
+                let equation = 'known_prefix: {
+                    for instance in formal.known() {
+                        match remainder
+                            .remove_exact_with_budget(instance, budget)
+                            .map_err(|_| Failure::Resource)?
+                        {
+                            Ok(rest) => remainder = rest,
+                            Err(_) => break 'known_prefix RowEquation::Unproved,
                         }
                     }
-                }
-                let incoming = self.row_binding(variable, &remainder, unproved, source, budget)?;
+                    RowEquation::Residual(&remainder)
+                };
+                let incoming = self.row_binding(variable, equation, source, budget)?;
                 charge(budget, rows.len())?;
                 if let Some(previous) = rows.iter_mut().find(|binding| binding.variable == variable)
                 {
@@ -2016,13 +2022,28 @@ impl<'a> Analysis<'a> {
     fn row_binding(
         &mut self,
         variable: TypeVariableId,
-        row: &EffectRow,
-        mut unproved: bool,
+        equation: RowEquation<'_>,
         source: Span,
         budget: &mut TypeWorkBudget,
     ) -> Result<RowBinding, Failure> {
         let mut known = Vec::new();
         let mut lacks = Vec::new();
+        // One paid consuming dispatch. A completed prefix mismatch carries no
+        // row; membership work cannot recover precision from this result.
+        charge(budget, 1)?;
+        let row = match equation {
+            RowEquation::Unproved => {
+                return Ok(RowBinding {
+                    variable,
+                    known,
+                    tail: None,
+                    lacks,
+                    unproved: true,
+                });
+            }
+            RowEquation::Residual(row) => row,
+        };
+        let mut unproved = false;
         // Row substitutions must not recursively grow a new argument universe.
         // As for ordinary bindings, exact arguments name original type subtrees.
         charge(
@@ -2350,8 +2371,12 @@ impl<'a> Analysis<'a> {
     ) -> Result<(), Failure> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
-        let mut calls = Vec::new();
-        let mut observed_calls = HashSet::new();
+        struct ObservedCall {
+            state: State,
+            delivered: Option<super::value::DeliveredCallPrefix>,
+        }
+        let mut calls: Vec<ObservedCall> = Vec::new();
+        let mut observed_calls = HashMap::new();
         let mut revision = self
             .data
             .as_ref()
@@ -2538,23 +2563,33 @@ impl<'a> Analysis<'a> {
                         )?;
                     }
                     Control::Call { value, ty, source } => {
-                        if self.data.is_some() {
+                        let (successors, publication) = if let Some(data) = &mut self.data {
                             charge(budget, state.heap.len() + 1)?;
-                            if !observed_calls.contains(&state) {
+                            let index = if let Some(index) = observed_calls.get(&state) {
+                                *index
+                            } else {
+                                // One ordinal in the existing exact-State map and
+                                // one completed-phase field in its existing record.
+                                charge(budget, 2)?;
                                 observed_calls
                                     .try_reserve(1)
                                     .map_err(|_| Failure::Resource)?;
-                                observed_calls.insert(state.copy(budget)?);
+                                let index = calls.len();
+                                observed_calls.insert(state.copy(budget)?, index);
                                 calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                calls.push(state.copy(budget)?);
-                            }
-                        }
-                        let super::value::CallSuccessors {
-                            targets,
-                            unknown,
-                            returns,
-                        } = if let Some(data) = &mut self.data {
-                            data.calls(code, state.value_context, budget)?
+                                calls.push(ObservedCall {
+                                    state: state.copy(budget)?,
+                                    delivered: None,
+                                });
+                                index
+                            };
+                            let (successors, publication) = data.calls_after(
+                                code,
+                                state.value_context,
+                                calls[index].delivered.as_ref(),
+                                budget,
+                            )?;
+                            (successors, Some((index, publication)))
                         } else {
                             charge(budget, value.targets.len())?;
                             let mut targets = Vec::new();
@@ -2562,12 +2597,20 @@ impl<'a> Analysis<'a> {
                                 .try_reserve(value.targets.len())
                                 .map_err(|_| Failure::Resource)?;
                             targets.extend(value.targets.iter().map(|target| (*target, 0)));
-                            super::value::CallSuccessors {
-                                targets,
-                                unknown: value.unknown || value.targets.is_empty(),
-                                returns: false,
-                            }
+                            (
+                                super::value::CallSuccessors {
+                                    targets,
+                                    unknown: value.unknown || value.targets.is_empty(),
+                                    returns: false,
+                                },
+                                None,
+                            )
                         };
+                        let super::value::CallSuccessors {
+                            targets,
+                            unknown,
+                            returns,
+                        } = successors;
                         let ty = *ty;
                         let source = *source;
                         for (target, value_context) in targets {
@@ -2652,6 +2695,9 @@ impl<'a> Analysis<'a> {
                                 }
                             }
                         }
+                        if let Some((index, publication)) = publication {
+                            calls[index].delivered = Some(publication.publish(budget)?);
+                        }
                     }
                     Control::Resume { owner, value } => {
                         if state.position.next == 0 {
@@ -2701,7 +2747,7 @@ impl<'a> Analysis<'a> {
                 .try_reserve(calls.len())
                 .map_err(|_| Failure::Resource)?;
             for call in &calls {
-                pending.push_back(call.copy(budget)?);
+                pending.push_back(call.state.copy(budget)?);
             }
         }
         Ok(())
@@ -6900,7 +6946,12 @@ mod tests {
             let run = |early: bool, budget: &mut TypeWorkBudget| {
                 let mut analysis =
                     Analysis::new(&graph, None, &mut TypeWorkBudget::unbounded()).unwrap();
-                let outcome = analysis.row_binding(variable, &row, already_unproved, span, budget);
+                let equation = if already_unproved {
+                    RowEquation::Unproved
+                } else {
+                    RowEquation::Residual(&row)
+                };
+                let outcome = analysis.row_binding(variable, equation, span, budget);
                 if early {
                     assert!(
                         analysis.labels.is_empty(),
@@ -6909,13 +6960,40 @@ mod tests {
                 }
                 let binding = outcome?;
                 assert_eq!(binding.unproved, arguments || already_unproved);
+                if already_unproved {
+                    assert!(binding.known.is_empty());
+                    assert!(binding.lacks.is_empty());
+                    assert_eq!(binding.tail, None);
+                }
                 Ok::<(), Failure>(())
             };
             let width = row.known().len() + row.tail().map_or(0, |tail| tail.lacks().len());
-            for limit in [0, if arguments { WIDTH } else { width - 1 }] {
+            if already_unproved {
+                let mut short = TypeWorkBudget::with_limit(0);
+                assert!(matches!(run(true, &mut short), Err(Failure::Resource)));
+                assert_eq!(short.used(), 0);
+                for _ in 0..2 {
+                    let mut exact = TypeWorkBudget::with_limit(1);
+                    run(true, &mut exact).unwrap();
+                    assert_eq!(exact.used(), 1);
+                }
+                continue;
+            }
+            // Retain both original scan cuts after the one-unit phase dispatch,
+            // and separately exercise refusal of that added dispatch itself.
+            for limit in [0, 1, 1 + if arguments { WIDTH } else { width - 1 }] {
                 let mut budget = TypeWorkBudget::with_limit(limit);
                 assert!(matches!(run(true, &mut budget), Err(Failure::Resource)));
-                assert_eq!(budget.used(), if arguments && limit != 0 { 1 } else { 0 });
+                assert_eq!(
+                    budget.used(),
+                    if limit == 0 {
+                        0
+                    } else if arguments && limit > 1 {
+                        2
+                    } else {
+                        1
+                    }
+                );
             }
             let mut measured = TypeWorkBudget::unbounded();
             run(false, &mut measured).unwrap();
@@ -6950,8 +7028,7 @@ mod tests {
             for index in 0..WIDTH {
                 rows.push(analysis.row_binding(
                     TypeVariableId::new(index as u32),
-                    &row,
-                    false,
+                    RowEquation::Residual(&row),
                     span,
                     budget,
                 )?);
@@ -6994,8 +7071,7 @@ mod tests {
             let novel = EffectRow::singleton(instance(Type::Tuple(Box::new([Type::Int]))));
             let binding = analysis.row_binding(
                 TypeVariableId::new(WIDTH as u32),
-                &novel,
-                false,
+                RowEquation::Residual(&novel),
                 span,
                 budget,
             )?;
@@ -7009,8 +7085,7 @@ mod tests {
             );
             let binding = analysis.row_binding(
                 TypeVariableId::new(WIDTH as u32),
-                &alias,
-                false,
+                RowEquation::Residual(&alias),
                 span,
                 budget,
             )?;
