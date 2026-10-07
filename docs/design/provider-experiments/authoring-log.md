@@ -2864,3 +2864,20 @@ Fusion continues the private frame consumer; a smaller context-extension reuse
 candidate is source-reviewed but uncompiled and unmeasured. Neither candidate
 is part of this verified delivery. Library/native ownership and serial engine
 coordination remain unchanged.
+
+## 2026-10-07: context-extension source checkpoint
+
+The context-extension follow-on is now compiled and measured. Exact private
+extension entries witness the already completed recurrence check, preserving
+the same context identity and all miss checks. The 60 normal Value tests pass;
+connected verification passes 320 public cases, normal native resume, build,
+formatting and strict Clippy. Four original native cost cases reduce Source/Core
+work by 658/1,460 in copying and bound NUL, 377/1,435 in persistence and 67/238
+in resume. Other owner totals remain exact; no capacity discount or budget
+change is used. The per-Call actual-type sharing trial increases work and is
+exactly reversed.
+
+This is a source checkpoint, awaiting unsigned integration and full Original
+verification. The completed-phase integration above remains the verified
+delivery; private Fusion work has no new completion claim. All unrelated work
+and serial engine ownership are preserved.

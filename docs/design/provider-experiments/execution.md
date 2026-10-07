@@ -5045,3 +5045,22 @@ This verifies the shared reduction, not normal-budget completion of the larger
 three SQLite programs. SQLite retains library/native ownership; Common retains
 shared compiler and merge ownership. The next private frame and context-hit
 candidates require their own execution, cost comparison and review.
+
+### Completed value-context extension hits (2026-10-07, source checkpoint)
+
+The existing exact `(parent, Transition)` extension entry now witnesses a completed recurrence check. Lookup follows original parent validation and precedes the unchanged oldest-first recurrence walk. Hits reuse the same context ID; misses still execute the original checks and publication. The change adds no retained carrier, value cache or identity quotient. Actual request paths preserve original forward source-validation order.
+
+The real tariff is included: a hit saves path length plus one unit, a new extension costs the same, and a recurrence miss costs one extra unit. All 60 normal Value laws pass, including source order, atomic cold publication, recurrence and exact retry. Four original SQLite programs then pass their original native assertions under temporary diagnostic completion ceilings; every temporary overlay is restored afterward. Normalized fixture inputs and original assertions match; raw PID contents may differ at the fixed padded width.
+
+| Program | Source-checking units | Independent Core units | Source / Core savings |
+| --- | ---: | ---: | ---: |
+| Copying | 1,212,707 | 903,995 | 658 / 1,460 |
+| Persistence | 597,882 | 1,609,101 | 377 / 1,435 |
+| Resume | 203,215 | 289,063 | 67 / 238 |
+| Bound NUL | 1,212,707 | 903,990 | 658 / 1,460 |
+
+The other four owner totals remain exact, including persistence final elaboration 376,641. No capacity discount or cross-owner pooling is used. Source/final limits remain 327,680 and Core 983,040; these small savings do not resolve the larger three normal-limit cases or establish an intrinsic lower bound.
+
+A separate per-Call actual-type sharing trial is rejected and exactly reversed: despite 37 normal Control tests and four native passes, Source/Core work increases 64/210 in copying and bound NUL, 71/396 in persistence and 16/72 in resume. Its intermediate stack failure and borrowed-phase repair remain private evidence, not retained source.
+
+Evidence is under `requested-root-metadata-160/author/` in `context-extension-hit-normal-preparation-v1/`, `context-extension-hit-candidate-only-measurement-runner-v1/` and `context-extension-connected-verification-v1/`. Only the context lookup change is selected. Connected normal verification returned at 15:39:40.643362 UTC after 207.128 seconds: all 320 cases in 18 public suites, normal native resume, all-target compilation, formatting and strict workspace/all-feature Clippy pass. The 60 normal Value tests and four completed-cost cases are carried from the exact selected source. Architecture and rustdoc remain covered by the unchanged-carrier integrated receipt 284, rather than new runs. All three worktree guards are preserved and no engines remain. The connected return SHA-256 is `264eff7f932898a84b54fd4b6c011cedd4736575ee7e2392039faa5f9cf0049b`. Unsigned source integration and full Original verification remain pending at this source checkpoint. This is bounded [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md) implementation evidence, without new normative Ash semantics.
