@@ -2399,6 +2399,12 @@ impl ContextPaths {
         budget: &mut TypeWorkBudget,
     ) -> Result<(usize, bool), Failure> {
         let length = self.paths.get(parent).ok_or(Failure::Invalid)?.length();
+        // Only completed nonrecurrence walks publish this exact extension.
+        // Its parent chain is immutable, including in a focused complete copy.
+        charge(budget, 1)?;
+        if let Some(&id) = self.extensions.get(&(parent, transition)) {
+            return Ok((id, false));
+        }
         // The original recurrence relation is checked along the whole parent
         // chain. Walking backwards must retain the OLDEST match, not the nearest.
         charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
@@ -2423,10 +2429,6 @@ impl ContextPaths {
             cursor = parent;
         }
         if let Some(id) = repeated {
-            return Ok((id, false));
-        }
-        charge(budget, 1)?;
-        if let Some(&id) = self.extensions.get(&(parent, transition)) {
             return Ok((id, false));
         }
         let id = PendingContextExtension {
@@ -9240,6 +9242,38 @@ mod tests {
                 analysis.context(later_root, Transition::Invoke(99, 10), budget)?,
                 first
             );
+            // Recurrence results are never installed as extensions: a lookup
+            // miss still executes the original full oldest-match walk. Moving
+            // the lookup before that walk adds exactly one unit on this path.
+            let transition = Transition::Invoke(99, 10);
+            assert!(
+                !analysis
+                    .contexts
+                    .extensions
+                    .contains_key(&(later_root, transition))
+            );
+            let recurrence_work = analysis.contexts.paths[later_root].length() + 2;
+            let before_len = analysis.contexts.len();
+            let before_revision = analysis.revision;
+            assert!(matches!(
+                analysis.context(
+                    later_root,
+                    transition,
+                    &mut TypeWorkBudget::with_limit(recurrence_work - 1)
+                ),
+                Err(Failure::Resource)
+            ));
+            let mut exact = TypeWorkBudget::with_limit(recurrence_work);
+            assert_eq!(analysis.context(later_root, transition, &mut exact)?, first);
+            assert_eq!(exact.used(), recurrence_work);
+            assert_eq!(analysis.contexts.len(), before_len);
+            assert_eq!(analysis.revision, before_revision);
+            assert!(
+                !analysis
+                    .contexts
+                    .extensions
+                    .contains_key(&(later_root, transition))
+            );
             let root = analysis.context(0, Transition::Root(10), budget)?;
             assert_eq!(
                 analysis.context(root, Transition::Invoke(6, 10), budget)?,
@@ -9369,10 +9403,55 @@ mod tests {
                 Err(Failure::Invalid)
             ));
         }
-        let inherited = measured
+        let mut inherited = measured
             .contexts
             .copy(&mut TypeWorkBudget::unbounded())
             .unwrap();
+        // A complete focused copy retains the same extension proofs for all
+        // six transition variants. Hits neither walk nor publish a new path.
+        let extensions = inherited
+            .paths
+            .iter()
+            .enumerate()
+            .filter_map(|(id, path)| match *path {
+                ContextPath::Empty => None,
+                ContextPath::Step {
+                    parent, transition, ..
+                } => Some((parent, transition, id)),
+            })
+            .collect::<Vec<_>>();
+        let before_index = inherited.extensions.clone();
+        for (parent, transition, id) in extensions {
+            assert!(matches!(
+                inherited.intern(parent, transition, &mut TypeWorkBudget::with_limit(0)),
+                Err(Failure::Resource)
+            ));
+            let mut exact = TypeWorkBudget::with_limit(1);
+            assert_eq!(
+                inherited.intern(parent, transition, &mut exact).unwrap(),
+                (id, false)
+            );
+            assert_eq!(exact.used(), 1);
+            assert_eq!(inherited.extensions, before_index);
+        }
+        let before_revision = measured.revision;
+        let mut warm = TypeWorkBudget::with_limit(1);
+        assert_eq!(
+            measured
+                .context(parent, Transition::Focus, &mut warm)
+                .unwrap(),
+            focused
+        );
+        assert_eq!(warm.used(), 1);
+        assert_eq!(measured.revision, before_revision);
+        assert!(matches!(
+            inherited.intern(
+                usize::MAX,
+                Transition::Focus,
+                &mut TypeWorkBudget::with_limit(0)
+            ),
+            Err(Failure::Invalid)
+        ));
         assert_eq!(inherited.len(), measured.contexts.len());
         for context in 0..inherited.len() {
             assert_eq!(
