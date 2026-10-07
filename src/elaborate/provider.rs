@@ -1177,6 +1177,9 @@ fn authenticate_provider_application_witness(
     work: &mut TypeWorkBudget,
 ) -> Result<(), crate::resolved::ResolvedBuildFailure> {
     use crate::resolved::ResolvedBuildFailure as Failure;
+    if fact.family_template.is_some() {
+        return Err(Failure::InvalidState);
+    }
     if fact.provider_application.interface() != checked_application.interface()
         || fact.provider.interface.id != checked_application.interface()
         || fact.provider_application.arguments().len() != checked_application.arguments().len()
@@ -3478,6 +3481,13 @@ fn contract_error(span: Span, message: &'static str) -> TypeError {
     inference_failure(TypeReason::Argument, span, message)
 }
 
+pub(super) fn unsupported_resource_family(span: Span) -> TypeError {
+    contract_error(
+        span,
+        "resource family templates are not executable in this experimental checkpoint",
+    )
+}
+
 pub(super) fn nominal_arguments<'a>(
     ty: &'a Type,
     budget: &mut TypeWorkBudget,
@@ -3623,6 +3633,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         module: &ResolvedModule,
         definition: &ResolvedResourceDefinition,
     ) -> Result<ProviderHeader, TypeError> {
+        if let Some(family) = &definition.family_template {
+            return Err(unsupported_resource_family(family.span));
+        }
         let registry = Arc::clone(&self.registry);
         let owner = definition.parameters.first().ok_or_else(invalid_state)?;
         if owner.kind != Kind::Type || definition.answer.kind != Kind::Type {
@@ -4930,6 +4943,45 @@ mod tests {
             .unwrap();
         fact.provider_application.arguments_mut_for_summary_test()[0] =
             crate::types::KindedArgument::RowArg(EffectRow::empty());
+        assert_eq!(
+            authenticate_provider_application_witness(
+                &fact,
+                &header.provider_application,
+                &mut work
+            ),
+            Err(crate::resolved::ResolvedBuildFailure::InvalidState)
+        );
+    }
+
+    #[test]
+    fn provider_application_witness_rejects_unconsumed_family_metadata() {
+        let fixture = Fixture::new(SOURCE);
+        let definition = &fixture.resolved.resources()[0];
+        let header = fixture
+            .elaborator()
+            .check_provider_header(&fixture.resolved, definition)
+            .unwrap();
+        let mut work = TypeWorkBudget::default();
+        let mut fact =
+            crate::resolved::ResourceTypeFact::from_definition_with_budget(definition, &mut work)
+                .unwrap();
+        authenticate_provider_application_witness(&fact, &header.provider_application, &mut work)
+            .unwrap();
+        // Adding an unconsumed family cannot inherit the ordinary group's
+        // original certificate, even when its original application is intact.
+        fact.family_template = Some(crate::resolved::ResourceFamilyTypeFact {
+            parameter: definition.answer.clone(),
+            requirements: Box::new([]),
+            provider: fact.provider.clone(),
+            provider_application: fact
+                .provider_application
+                .clone_with_budget(&mut work)
+                .unwrap(),
+            provided: fact.provided.clone(),
+            interpreted: fact.interpreted.clone(),
+            origin: fact.origin.clone(),
+            span: definition.span,
+        });
         assert_eq!(
             authenticate_provider_application_witness(
                 &fact,

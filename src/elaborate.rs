@@ -21279,6 +21279,9 @@ fn check_module_with_budget_family<F: CoreLoweringFamily>(
                 .type_work
                 .charge(1)
                 .map_err(|()| type_resource())?;
+            if let Some(family) = &resource.family_template {
+                return Err(provider::unsupported_resource_family(family.span));
+            }
             let module = resource.id.module();
             let certificate = resolved
                 .imported_facts()

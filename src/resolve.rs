@@ -19097,6 +19097,15 @@ impl Resolver {
                     .collect(),
             );
             let template = (|| {
+                // Resolve the guarded family before constructing unguarded
+                // outer lifecycle trees; its payload scope cannot leak outward.
+                let family_template = source
+                    .family
+                    .as_ref()
+                    .map(|family| {
+                        self.resolve_resource_family(family, &parameters, &source.answer.name.text)
+                    })
+                    .transpose()?;
                 let input = self.resolve_type(&source.input)?;
                 let state = self.resolve_type(&source.state)?;
                 let answer = self.allocate_type_variable(
@@ -19183,6 +19192,7 @@ impl Resolver {
                     provider,
                     provided,
                     interpreted,
+                    family_template,
                     acquire_binder,
                     acquire,
                     finish_binder,
@@ -19197,6 +19207,164 @@ impl Resolver {
             resources.push(template?);
         }
         Ok(resources)
+    }
+
+    fn resolve_resource_family(
+        &mut self,
+        source: &crate::surface::SurfaceResourceFamily,
+        owners: &[ResolvedTypeVariable],
+        answer_spelling: &str,
+    ) -> Result<crate::resolved::ResolvedResourceFamilyTemplate, ResolveError> {
+        // Colliding source spellings remain outside this nonexecutable slice.
+        self.type_work
+            .charge(owners.len().saturating_add(1))
+            .map_err(|()| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    source.span,
+                    "resource family binder traversal exceeded its budget",
+                )
+            })?;
+        if source.parameter.name.text == answer_spelling
+            || owners
+                .iter()
+                .any(|parameter| parameter.spelling == source.parameter.name.text)
+        {
+            return Err(error(
+                ResolveReason::UnknownType,
+                source.parameter.name.span,
+                "resource family payload spelling collisions are unsupported",
+            ));
+        }
+        let parameter = self.allocate_type_variable(
+            &source.parameter.name,
+            source.parameter.kind.as_ref(),
+            Kind::Type,
+        )?;
+        if parameter.kind != Kind::Type {
+            return Err(error(
+                ResolveReason::UnknownType,
+                source.parameter.name.span,
+                "resource family payload must have kind Type",
+            ));
+        }
+        struct Parts {
+            requirements: Vec<ResolvedInterfaceApplication>,
+            provider: Option<ResolvedInterfaceApplication>,
+            provided: Option<ResolvedEffectInstance>,
+            interpreted: Option<ResolvedEffectInstance>,
+        }
+        impl Drop for Parts {
+            fn drop(&mut self) {
+                for application in self.requirements.drain(..).chain(self.provider.take()) {
+                    crate::resolved::discard_resolved_interface_application(application);
+                }
+                for effect in self
+                    .provided
+                    .take()
+                    .into_iter()
+                    .chain(self.interpreted.take())
+                {
+                    drop(effect.instance);
+                    discard_origin_iteratively(effect.origin);
+                }
+            }
+        }
+        let type_scope = self.type_scopes.len();
+        self.type_scopes.push(
+            [(parameter.spelling.clone(), parameter.id)]
+                .into_iter()
+                .collect(),
+        );
+        let result = (|| {
+            self.type_work
+                .charge(source.requirements.len().saturating_add(1))
+                .map_err(|()| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        source.span,
+                        "resource family header traversal exceeded its budget",
+                    )
+                })?;
+            let mut parts = Parts {
+                requirements: Vec::new(),
+                provider: None,
+                provided: None,
+                interpreted: None,
+            };
+            parts
+                .requirements
+                .try_reserve_exact(source.requirements.len())
+                .map_err(|_| {
+                    error(
+                        ResolveReason::TypeResourceExhausted,
+                        source.span,
+                        "resource family requirement storage could not be reserved",
+                    )
+                })?;
+            for requirement in &source.requirements {
+                parts
+                    .requirements
+                    .push(self.resolve_interface_application(requirement)?);
+            }
+            parts.provider = Some(self.resolve_interface_application(&source.provider)?);
+            parts.provided = Some(self.resolve_effect_instance_parts(
+                &source.provided.effect,
+                &source.provided.arguments,
+                source.provided.span,
+            )?);
+            parts.interpreted = Some(self.resolve_effect_instance_parts(
+                &source.interpreted.effect,
+                &source.interpreted.arguments,
+                source.interpreted.span,
+            )?);
+            let retained = self.clone_type_variable_for_retention(
+                &parameter,
+                source.span,
+                "resource family payload retention exceeded its budget",
+            )?;
+            self.lexical_method_parameters.try_reserve(1).map_err(|_| {
+                error(
+                    ResolveReason::TypeResourceExhausted,
+                    source.span,
+                    "resource family payload registry storage could not be reserved",
+                )
+            })?;
+            let handlers_binder =
+                self.allocate_binder(&source.handlers_binder.text, source.handlers_binder.span)?;
+            let scope = self.scopes.len();
+            self.push_binder_scope_many(std::slice::from_ref(&handlers_binder));
+            let handlers = self.resolve_resource_handlers(
+                parts
+                    .provided
+                    .as_ref()
+                    .expect("family provided effect resolved"),
+                &source.handlers,
+                source.span,
+            );
+            self.scopes.truncate(scope);
+            let handlers = handlers?;
+            self.lexical_method_parameters.push(retained);
+            Ok(crate::resolved::ResolvedResourceFamilyTemplate {
+                parameter,
+                requirements: std::mem::take(&mut parts.requirements).into_boxed_slice(),
+                provider: parts.provider.take().expect("family provider resolved"),
+                provided: parts
+                    .provided
+                    .take()
+                    .expect("family provided effect resolved"),
+                interpreted: parts
+                    .interpreted
+                    .take()
+                    .expect("family interpreted effect resolved"),
+                handlers_binder,
+                handlers: handlers.into_boxed_slice(),
+                origin: Origin::Source(source.span),
+                span: source.span,
+            })
+        })();
+        self.type_scopes.truncate(type_scope);
+        result
     }
 
     fn resolve_resource_clause(
@@ -19362,6 +19530,52 @@ impl Resolver {
                     &mut self.type_work,
                 )
                 .map_err(|()| exhausted())?;
+            }
+        }
+        if let Some(family) = &resource.family_template {
+            // Empty requirement applications still cost a traversal step.
+            // Pay before flat-mapping their arguments on this import path.
+            self.type_work
+                .charge(
+                    family
+                        .requirements
+                        .len()
+                        .checked_add(1)
+                        .ok_or_else(exhausted)?,
+                )
+                .map_err(|()| exhausted())?;
+            for argument in family.contract_arguments() {
+                self.retain_argument_nominals(argument, summary, span)?;
+                crate::resolved::collect_argument_nominal_identities(
+                    argument,
+                    output,
+                    &mut self.type_work,
+                )
+                .map_err(|()| exhausted())?;
+            }
+            // Interface facts are retained by the shared dependency-interface
+            // import pass. Their Type/Row actuals remain part of this closure.
+            for instance in [&family.provided.instance, &family.interpreted.instance] {
+                let effect = summary.effect_by_id(instance.effect()).ok_or_else(|| {
+                    error(
+                        ResolveReason::InternalState,
+                        span,
+                        "resource family effect metadata is missing",
+                    )
+                })?;
+                self.retain_imported_effect(effect, span)?;
+                self.type_work
+                    .charge(effect.operations.len())
+                    .map_err(|()| exhausted())?;
+                for operation in &effect.operations {
+                    self.retain_type_nominals(&operation.annotation.ty, summary, span)?;
+                    crate::resolved::collect_nominal_identities(
+                        &operation.annotation.ty,
+                        output,
+                        &mut self.type_work,
+                    )
+                    .map_err(|()| exhausted())?;
+                }
             }
         }
         Ok(())
@@ -19559,6 +19773,127 @@ mod provider_import_tests {
     use super::*;
 
     #[test]
+    fn resource_family_body_free_copy_and_import_preserve_metadata_without_authority() {
+        let text = concat!(
+            "type Report<A, B, T> = Scope(T)\ntype State<R> = Token(Unit)\n",
+            "interface Provider<R> {\nread : Connection<R> -> Int\n}\n",
+            "effect Ops<R> {\nread : Connection<R> -> Int\n}\n",
+            "effect Native<R> {\nopen : Int -> State<R>\nclose : State<R> -> Unit\nread : State<R> -> Int\n}\n",
+            "interface Marker<P> {\nmark : P -> Unit\n}\n",
+            "interface FamilyProvider<R, P> {\ntouch : Connection<R> -> Int\n}\n",
+            "effect FamilyOps<R, P> {\ntouch : Connection<R> -> Int\n}\n",
+            "pub resource Connection<R> {\ninput Int\nstate State<R>\nresult Report<Int, Int, T> for <T>\nprovider Provider<R>\neffect Ops<R>\ninterpret Native<R>\n",
+            "family<Payload> where Marker<Payload> {\nprovider FamilyProvider<R, Payload>\neffect FamilyOps<R, Payload>\ninterpret Native<R>\nhandlers family_state {\ntouch operand => resume false\n}\n}\n",
+            "acquire config => perform Native<R>.open config\nfinish state => perform Native<R>.close state\nhandlers state {\nread db => resume (perform Native<R>.read state)\n}\n}\n",
+        );
+        let source = crate::source::SourceFile::new("family-metadata.ash", text).unwrap();
+        let surface = crate::parser::project_module(
+            &source,
+            &crate::parser::parse(crate::lexer::lex(&source).unwrap()),
+        )
+        .unwrap();
+        let defining_module = ModuleId::new(90_101);
+        let mut defining = Resolver::new(defining_module);
+        let declarations = defining.resolve_declarations(&surface).unwrap();
+        let resource = &declarations.resources[0];
+        let original = resource.family_template.as_ref().unwrap();
+        assert_ne!(original.parameter.id, resource.parameters[0].id);
+        assert_ne!(original.parameter.id, resource.answer.id);
+        let mut measured = TypeWorkBudget::with_limit(usize::MAX);
+        let fact =
+            crate::resolved::ResourceTypeFact::from_definition_with_budget(resource, &mut measured)
+                .unwrap();
+        let cost = measured.used();
+        let copied = fact.family_template.as_ref().unwrap();
+        assert_eq!(copied.parameter, original.parameter);
+        assert_eq!(copied.requirements, original.requirements);
+        assert_eq!(copied.provider, original.provider);
+        assert_eq!(copied.provided, original.provided);
+        assert_eq!(copied.interpreted, original.interpreted);
+        assert_eq!(copied.origin, original.origin);
+        assert_eq!(copied.span, original.span);
+        assert_eq!(
+            copied.provider_application.arguments().len(),
+            copied.provider.arguments.len()
+        );
+        for (canonical, written) in copied
+            .provider_application
+            .arguments()
+            .iter()
+            .zip(&copied.provider.arguments)
+        {
+            assert_eq!(canonical, &written.ty);
+        }
+        for prefix in [0, 7] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            assert!(
+                crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                    resource, &mut short
+                )
+                .is_err()
+            );
+            let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+            exact.charge(prefix).unwrap();
+            let copied = crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                resource, &mut exact,
+            )
+            .unwrap();
+            assert_eq!(
+                copied.family_template.as_ref().unwrap().parameter.id,
+                original.parameter.id
+            );
+            assert_eq!(exact.used(), prefix + cost);
+        }
+        for invalid_parameter in [&resource.parameters[0], &resource.answer] {
+            let mut malformed = resource.clone();
+            malformed.family_template.as_mut().unwrap().parameter = invalid_parameter.clone();
+            assert!(
+                crate::resolved::ResourceTypeFact::from_definition_with_budget(
+                    &malformed,
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .is_err(),
+                "family payload must retain its independent rigid identity"
+            );
+            crate::resolved::discard_resolved_resource_definition(malformed);
+        }
+        let fact = std::sync::Arc::new(fact);
+        let mut summary = ExportSummary::test_fixture(
+            defining_module,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        summary
+            .insert_resource_type_for_test("Connection".to_owned(), std::sync::Arc::clone(&fact));
+        let mut importing = Resolver::new(ModuleId::new(90_102));
+        importing
+            .clone_summary_namespaces(&summary, surface.span, &mut CaptureGraphVisits::default())
+            .unwrap();
+        let (_, retained) = importing.imported.resource_types().next().unwrap();
+        assert!(std::sync::Arc::ptr_eq(retained, &fact));
+        assert_eq!(
+            retained.family_template.as_ref().unwrap().origin,
+            original.origin
+        );
+        assert_eq!(
+            retained.family_template.as_ref().unwrap().parameter.id,
+            original.parameter.id
+        );
+        assert!(
+            summary
+                .authenticate(
+                    &mut TypeWorkBudget::unbounded(),
+                    &mut InterfaceConstraintBudget::default()
+                )
+                .is_err(),
+            "resolver-only family metadata must not become executable publication authority"
+        );
+    }
+
+    #[test]
     fn imported_resource_metadata_preserves_defining_origin_without_template_bodies() {
         let text = concat!(
             "type Report<A, B, T> = Scope(T)\ntype State<R> = Token(Unit)\n",
@@ -19661,8 +19996,17 @@ impl Resolver {
                     "resource handler traversal exceeded its budget",
                 )
             })?;
-        let mut clauses = Vec::new();
-        clauses.try_reserve(source.len()).map_err(|_| {
+        struct Clauses(Vec<ResolvedHandlerClause>);
+        impl Drop for Clauses {
+            fn drop(&mut self) {
+                for clause in self.0.drain(..) {
+                    discard_resolved_pattern_iteratively(clause.pattern);
+                    discard_resolved_expression_iteratively(clause.body);
+                }
+            }
+        }
+        let mut clauses = Clauses(Vec::new());
+        clauses.0.try_reserve(source.len()).map_err(|_| {
             error(
                 ResolveReason::TypeResourceExhausted,
                 span,
@@ -19712,15 +20056,16 @@ impl Resolver {
                 .map(ResolvedExpressionOwner::new);
             self.scopes.truncate(scope);
             self.active_resumes.truncate(resume_scope);
-            clauses.push(ResolvedHandlerClause {
+            let body = body?;
+            clauses.0.push(ResolvedHandlerClause {
                 operation,
                 spelling: clause.operation.text.clone(),
                 resume,
                 pattern: pattern.into_inner(),
-                body: body?.into_inner(),
+                body: body.into_inner(),
                 span: clause.span,
             });
         }
-        Ok(clauses)
+        Ok(std::mem::take(&mut clauses.0))
     }
 }
