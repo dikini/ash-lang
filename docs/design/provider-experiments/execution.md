@@ -5173,3 +5173,26 @@ this native publication delivery does not reduce their source-analysis costs.
 Typed arena allocation and its Layout/reference/family foundations remain
 separate work. These are finite DN-0036 experimental results, without new
 normative language authority or a complete formal resource proof.
+
+### Architecture analysis preparation (2026-10-07)
+
+The architecture test implementation now constructs retention membership sets
+once per immutable fixed-point round and once for the final snapshot. Field
+queries borrow that snapshot. Owner mutation analysis reuses its token scope
+paths and rejects irrelevant tokens before looking up lexical owner bindings.
+The existing aliases, imports, shadowing rules, collect-then-merge order, fixture
+programs and all 43 test assertions remain unchanged. This changes test
+implementation only; it adds no Ash semantics or resource capability.
+
+Independent source review passed. On the Original source tree at `aacf2214`,
+one cached architecture-only compilation took 10.64 seconds, and ten scanner
+fixtures, three owner fixtures and both dominant production checks passed. The
+retention check took 12.79 seconds and the owner check 27.32 seconds, run
+separately with one test thread. The complete architecture gate remains due
+once after integration. The earlier full architecture run took 456.60 seconds
+with concurrent tests; that is not an equivalent individual timing baseline.
+No speedup ratio or production typing-cost reduction follows from these focused
+measurements. The reviewed packet and raw results are retained under
+`requested-root-metadata-160/{bounds/architecture-work-candidate-v1,author/architecture-work-feedback-v2}/`
+in the Common evidence root. All three worktree source/index/HEAD guards were
+restored after focused verification.
