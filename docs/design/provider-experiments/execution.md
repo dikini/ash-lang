@@ -105,25 +105,26 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59`,
-merging common commit `cdf44d990a74225fb9d1214a809986809ac32d19` with an unsigned
-merge preserving both histories. Receipt 246 passes the complete unfiltered
+Latest integrated common code checkpoint is `7bd1c1cfbba01ae2d83a653e44903d745f040997`,
+merging Common commit `7693db41c8e2e9ddf7757f0d54d58578a00296ac` with an unsigned
+merge preserving both histories. Receipt 259 passes the complete unfiltered
 `CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
-original common deliveries and the subsequent verified shared reductions are
-merged into `codex/provider-experiments`; `main` is unchanged. The latest
-delivery borrows productive edge cursors and corrects binary method-lookup
-charges, with their exact integration-test mirror. Its integration evidence is recorded at the end of this file.
+original Common deliveries and subsequent verified shared reductions are merged
+into `codex/provider-experiments`; `main` is unchanged. The latest delivery
+consolidates dependency progress and queue-owned output links. Its evidence is
+recorded at the end of this file.
 
-The expanded SQLite manifest, adapter, source library and larger programs remain
+The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
-limits. Copying, bound NUL and persistence complete their original assertions
-under the temporary diagnostic ceiling, but still exceed normal source-checking
-limits. Copying and bound NUL now fit independent Core; persistence retains
-source, elaboration and Core deficits. Exact totals appear in receipt 242 below.
-Production work and depth limits remain unchanged. Further relation
-consolidation is an unverified private candidate, not delivered code or proof
-that a larger typing quota is necessary. SQLite and arena have separately
-resumed; shared-source ownership and serial engine windows remain coordinated.
+limits. Copying, bound-NUL and persistence complete their original assertions
+under temporary diagnostic ceilings but still exceed normal source limits.
+Copying and bound-NUL fit independent Core; persistence retains source, final
+elaboration and Core deficits. Exact completed costs and capacity variation
+appear in the dependency-progress entry below. Production work and depth limits
+remain unchanged. Further capture-cost attribution is investigation, not proof
+that larger quotas are necessary. Common coordinates shared ownership and
+serial engine windows with SQLite, arena and the separate proof workstream.
+
 The following Batch 0–2 and dated intermediate Batch 3 entries retain historical
 evidence; later delivery records supersede their earlier control-failure summaries.
 
@@ -4694,4 +4695,48 @@ from their parent coverage and rejects every failed or ignored summary.
 All these checks use normal limits with no measurement observer. Full guards
 preserve unrelated Common, SQLite and Original sources, indexes and histories.
 Independent review authenticates the raw logs and the sole selected compiler
-change. Original-branch integration and its full `cargo xtask verify` are pending.
+change. The unsigned Original merge and full `cargo xtask verify` pass, as recorded below.
+
+
+### Integrated dependency progress and output links (2026-10-07, receipt 259)
+
+Unsigned Common commit `7693db41c8e2e9ddf7757f0d54d58578a00296ac` is integrated by
+unsigned merge `7bd1c1cfbba01ae2d83a653e44903d745f040997` into
+`codex/provider-experiments`. Its parents are original tip
+`5ccc2e245e74b074d25a06f4431d00dc971cfed5` and the Common commit; its tree
+matches the Common tree. This delivery changes only capture values and this
+execution record. All SQLite-owned source and unrelated Original drafts retain
+their working bytes, status and unstaged state.
+
+The unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` passes at the merge:
+formatting, metadata, all-target build, strict workspace/all-feature Clippy,
+all-target/all-feature tests and warning-denied rustdoc. The Ash library reports
+1,633 passes and architecture reports 43. All 117 raw summary blocks
+have zero failures and ignores; child reruns are included in that block count,
+not counted as unique tests. This gate covers integrated SQLite S-01, the arena
+lifecycle, owner rows, capture/resume/discard/completion, independent Core,
+modules, transforms and deep-input regressions. Expanded SQLite programs have
+the separate connected and diagnostic evidence above; they are not part of the
+Original tree's full test gate.
+
+Explicit return is `2026-10-07T07:43:40.006103+00:00`, after
+1080.103 seconds. Raw log SHA-256 is
+`47f968841fe3331ea3ba94ff155999c2559922aa35fb159d5dfc4ca049a27d27`
+in `relation-output-delivery-259/` under the Common evidence directory.
+Complete guards confirm preserved Common working bytes and empty index,
+unchanged SQLite worktree, and preserved unrelated Original bytes and empty
+index. No verification engine remains. Independent source, accounting,
+measurement, documentation and raw-log reviews accompany this delivery.
+
+Common retains shared compiler, Core, capture, provider-checking and generic
+runtime ownership and coordinates merges. SQLite retains its manifest, library,
+native adapter and executable evidence. The next agreed order is a separately
+bounded proof cleanup window, SQLite's preserving import and four normal
+programs, then Common's next capture-cost attribution. Arena's five parser and
+surface files remain its source-only writer slice; resolving and checking
+families require a separate complete handoff. No typed allocation, references,
+foreign callback ABI or new resource semantics belong to this delivery.
+
+The normal copying, bound-NUL and persistence deficits remain open. No quota or
+depth limit changes, intrinsic lower bound, full resource proof or production
+architecture acceptance follows from this experimental DN-0036 evidence.
