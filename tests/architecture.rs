@@ -3695,6 +3695,7 @@ fn every_production_type_field_is_manifested_bidirectionally() {
         stale.join("\n"),
     );
     let retention_modes = transitive_type_retention_sets(&fields);
+    let retention_membership = RetentionMembership::new(&retention_modes);
     let retention_mismatches = fields
         .iter()
         .filter_map(|field| {
@@ -3702,7 +3703,7 @@ fn every_production_type_field_is_manifested_bidirectionally() {
             if !actual.contains(&key) {
                 return None;
             }
-            let derived = field_type_retention(field, &declarations, &retention_modes)
+            let derived = field_type_retention(field, &declarations, &retention_membership)
                 .expect("a type-bearing field has derived retention");
             let manifested = KIND_SITES
                 .iter()
@@ -4668,18 +4669,41 @@ fn transform_retention(direct: RetentionSet, referenced: RetentionSet) -> Retent
     transformed
 }
 
+// Membership sets belong to one immutable retention fixed-point snapshot.
+struct RetentionMembership {
+    by_mode: [BTreeSet<CarrierId>; 3],
+}
+
+impl RetentionMembership {
+    fn new(carrier_modes: &BTreeMap<CarrierId, RetentionSet>) -> Self {
+        Self {
+            by_mode: [
+                RetentionSet::OWNED,
+                RetentionSet::SHARED,
+                RetentionSet::BORROWED,
+            ]
+            .map(|bit| {
+                carrier_modes
+                    .iter()
+                    .filter_map(|(carrier, mode)| (mode.0 & bit != 0).then_some(carrier.clone()))
+                    .collect()
+            }),
+        }
+    }
+}
+
 fn field_type_retention(
     field: &ProductionField,
     declarations: &DeclarationIndex,
-    carrier_modes: &BTreeMap<CarrierId, RetentionSet>,
+    membership: &RetentionMembership,
 ) -> Option<RetentionMode> {
-    field_type_retention_set(field, declarations, carrier_modes).map(RetentionSet::collapse)
+    field_type_retention_set(field, declarations, membership).map(RetentionSet::collapse)
 }
 
 fn field_type_retention_set(
     field: &ProductionField,
     declarations: &DeclarationIndex,
-    carrier_modes: &BTreeMap<CarrierId, RetentionSet>,
+    membership: &RetentionMembership,
 ) -> Option<RetentionSet> {
     let mut result = None;
     for reference in &field.references {
@@ -4687,22 +4711,21 @@ fn field_type_retention_set(
         let mut referenced = RetentionSet::owned();
         if !generic_carrier {
             referenced = RetentionSet(0);
-            for bit in [
+            for (bit, owners) in [
                 RetentionSet::OWNED,
                 RetentionSet::SHARED,
                 RetentionSet::BORROWED,
-            ] {
-                let owners = carrier_modes
-                    .iter()
-                    .filter_map(|(carrier, mode)| (mode.0 & bit != 0).then_some(carrier.clone()))
-                    .collect::<BTreeSet<_>>();
+            ]
+            .into_iter()
+            .zip(&membership.by_mode)
+            {
                 if reference_reaches_owner_with_aliases(
                     &field.source,
                     &field.carrier,
                     reference,
                     &field.aliases,
                     declarations,
-                    &owners,
+                    owners,
                 ) {
                     referenced.0 |= bit;
                 }
@@ -4767,9 +4790,11 @@ fn transitive_retention_sets_with_roots(
         })
         .collect::<BTreeMap<_, _>>();
     loop {
+        let membership = RetentionMembership::new(&modes);
         let mut discovered = BTreeMap::<CarrierId, RetentionSet>::new();
         for field in fields {
-            let Some(retention) = field_type_retention_set(field, &declarations, &modes) else {
+            let Some(retention) = field_type_retention_set(field, &declarations, &membership)
+            else {
                 continue;
             };
             let carrier = CarrierId {
@@ -8352,8 +8377,7 @@ fn drop_teardown_ranges(tokens: &[&str], owner: &str) -> Vec<(usize, usize)> {
     }
 }
 
-fn owner_bindings(tokens: &[&str], owner: &str) -> Vec<OwnerBinding> {
-    let scopes = token_scope_paths(tokens);
+fn owner_bindings(tokens: &[&str], scopes: &[Vec<usize>], owner: &str) -> Vec<OwnerBinding> {
     let owner_impls = impl_body_ranges(tokens, owner);
     let mut bindings = Vec::new();
     let mut cursor = 0usize;
@@ -8448,7 +8472,7 @@ fn owner_bindings(tokens: &[&str], owner: &str) -> Vec<OwnerBinding> {
         let owns = explicitly_typed
             || directly_constructed
             || alias.is_some_and(|alias| {
-                binding_owns_at(&bindings, &scopes, alias, equals.saturating_sub(1))
+                binding_owns_at(&bindings, scopes, alias, equals.saturating_sub(1))
             });
         bindings.push(OwnerBinding {
             name: name.to_owned(),
@@ -8927,15 +8951,15 @@ fn assert_no_destructive_backing_field_bypass(
     }
 
     let scopes = token_scope_paths(tokens);
-    let bindings = owner_bindings(tokens, owner);
+    let bindings = owner_bindings(tokens, &scopes, owner);
     let teardown_ranges = drop_teardown_ranges(tokens, owner);
     for index in 0..tokens.len().saturating_sub(2) {
-        if !binding_owns_at(&bindings, &scopes, tokens[index], index)
-            || tokens[index + 1] != "."
+        if tokens[index + 1] != "."
             || !fields.contains(tokens[index + 2])
             || teardown_ranges
                 .iter()
                 .any(|(open, close)| *open < index && index < *close)
+            || !binding_owns_at(&bindings, &scopes, tokens[index], index)
         {
             continue;
         }
