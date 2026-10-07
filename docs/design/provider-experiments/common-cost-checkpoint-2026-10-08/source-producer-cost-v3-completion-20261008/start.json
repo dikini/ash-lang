@@ -1,0 +1,50 @@
+{
+  "utc": "2026-10-07T22:07:29.161323+00:00",
+  "runner_sha256": "42dcc5ac9a492f9b2ccffce34948fa0bb66f818b1bf6778b97e7f0a62970e815",
+  "pins_sha256": "cc1b9e387ec6925f0b9c6c871ab412c7f43fef83d0a57ad7a97eac3f53f63896",
+  "diagnostic_patch_sha256": "4101c99e62fdb329759c9ba43d4d9845fdabea3a7b36832ddd867b8a15df1131",
+  "jobs": 1,
+  "temporary_completion_ceiling": 268435456,
+  "normal_source_limit": 327680,
+  "normal_Core_limit": 983040,
+  "cases": [
+    {
+      "case_id": "copying",
+      "test_binary": "provider_sqlite_copying",
+      "test_name": "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+      "argv": [
+        "cargo",
+        "test",
+        "--jobs",
+        "1",
+        "--test",
+        "provider_sqlite_copying",
+        "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ]
+    },
+    {
+      "case_id": "bound_nul",
+      "test_binary": "provider_sqlite_copying",
+      "test_name": "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+      "argv": [
+        "cargo",
+        "test",
+        "--jobs",
+        "1",
+        "--test",
+        "provider_sqlite_copying",
+        "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ]
+    }
+  ],
+  "fresh_baseline": false,
+  "acceptance": false
+}

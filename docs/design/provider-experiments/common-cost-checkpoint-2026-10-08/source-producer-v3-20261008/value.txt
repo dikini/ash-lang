@@ -1,0 +1,367 @@
+   Compiling ash v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support)
+warning: associated items `original`, `construct`, `ready`, `publish_head`, and `target` are never used
+   --> src/core/capture/value/deferred_frame.rs:227:19
+    |
+175 | impl Arena {
+    | ---------- associated items in this implementation
+...
+227 |     pub(super) fn original(&mut self, port: OriginalPort, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
+    |                   ^^^^^^^^
+...
+479 |     pub(super) fn construct(
+    |                   ^^^^^^^^^
+...
+499 |     pub(super) fn ready(
+    |                   ^^^^^
+...
+540 |     pub(super) fn publish_head(
+    |                   ^^^^^^^^^^^^
+...
+742 |     pub(super) fn target(
+    |                   ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: variant `Cyclic` is never constructed
+   --> src/core/capture/value/local_recipe.rs:105:5
+    |
+100 | pub(super) enum Decline {
+    |                 ------- variant in this enum
+...
+105 |     Cyclic,
+    |     ^^^^^^
+    |
+    = note: `Decline` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `0` is never read
+  --> src/core/capture/value/support_plan.rs:24:15
+   |
+24 |     TypedCall(usize),
+   |     --------- ^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SupportKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+24 -     TypedCall(usize),
+24 +     TypedCall(()),
+   |
+
+warning: field `0` is never read
+  --> src/core/capture/value/support_plan.rs:26:14
+   |
+26 |     Terminal(SlotRole),
+   |     -------- ^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+   = note: `SupportKind` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+26 -     Terminal(SlotRole),
+26 +     Terminal(()),
+   |
+
+warning: field `function` is never read
+  --> src/core/capture/value/support_plan.rs:54:5
+   |
+52 | pub(super) struct CaptureSupportPlan<'g> {
+   |                   ------------------ field in this struct
+53 |     graph: &'g Graph,
+54 |     function: usize,
+   |     ^^^^^^^^
+
+warning: methods `function` and `typed_calls` are never used
+  --> src/core/capture/value/support_plan.rs:62:19
+   |
+60 | impl<'g> CaptureSupportPlan<'g> {
+   | ------------------------------- methods in this implementation
+61 |     pub(super) fn graph(&self) -> &'g Graph { self.graph }
+62 |     pub(super) fn function(&self) -> usize { self.function }
+   |                   ^^^^^^^^
+...
+65 |     pub(super) fn typed_calls(&self) -> &[TypedCallRelation] { &self.typed_calls }
+   |                   ^^^^^^^^^^^
+
+warning: fields `role` and `saved_capture_ordinal` are never read
+   --> src/core/capture/value/support_plan.rs:188:16
+    |
+186 | pub(super) struct SlotBaseline {
+    |                   ------------ fields in this struct
+187 |     pub(super) expression: usize,
+188 |     pub(super) role: SlotRole,
+    |                ^^^^
+189 |     pub(super) formal_ordinal: Option<usize>,
+190 |     pub(super) saved_capture_ordinal: Option<usize>,
+    |                ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `SlotBaseline` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: field `factory` is never read
+  --> src/core/capture/value/producer.rs:80:16
+   |
+79 | pub(super) struct RootFeed {
+   |                   -------- field in this struct
+80 |     pub(super) factory: usize,
+   |                ^^^^^^^
+   |
+   = note: `RootFeed` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: fields `factory` and `returned` are never read
+  --> src/core/capture/value/producer_zero.rs:52:9
+   |
+51 |     TypedCall { expression: usize, function: usize, arguments: Vec<usize>,
+   |     --------- fields in this variant
+52 |         factory: usize, returned: usize },
+   |         ^^^^^^^         ^^^^^^^^
+
+warning: field `factory` is never read
+  --> src/core/capture/value/producer_zero.rs:53:51
+   |
+53 |     Evidence { expression: usize, payload: usize, factory: usize, returned: usize },
+   |     -------- field in this variant                ^^^^^^^
+
+warning: `ash` (lib) generated 10 warnings
+   Compiling ash-foreign-adapter v0.0.0 (/home/dikini/Projects/ash-lang/.worktree/common-resource-support/foreign-adapter)
+warning: associated items `original`, `construct`, `ready`, and `target` are never used
+   --> src/core/capture/value/deferred_frame.rs:227:19
+    |
+175 | impl Arena {
+    | ---------- associated items in this implementation
+...
+227 |     pub(super) fn original(&mut self, port: OriginalPort, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
+    |                   ^^^^^^^^
+...
+479 |     pub(super) fn construct(
+    |                   ^^^^^^^^^
+...
+499 |     pub(super) fn ready(
+    |                   ^^^^^
+...
+742 |     pub(super) fn target(
+    |                   ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ash` (lib test) generated 10 warnings (9 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.62s
+     Running unittests src/lib.rs (target/debug/deps/ash-94445b49e5489316)
+
+running 63 tests
+test core::capture::value::tests::atom_membership_keeps_variants_creation_contexts_and_slot_contexts_distinct ... ok
+test core::capture::value::tests::atom_membership_publication_and_notifications_have_exact_retry_boundaries ... ok
+test core::capture::value::tests::binding_indices_preserve_owner_keys_duplicates_and_refusal_atomicity ... ok
+test core::capture::value::tests::call_transfer_completion_has_prefilled_refusal_and_fresh_exact_retry_boundaries ... ok
+test core::capture::value::tests::canonical_context_prefixes_preserve_source_order_and_atomic_cold_publication ... ok
+test core::capture::value::tests::capture_topology_preserves_lifo_inert_visits_and_exact_evidence_owners ... ok
+test core::capture::value::tests::capture_topology_refusals_are_atomic_at_every_cold_and_prefilled_budget_cut ... ok
+test core::capture::value::tests::capture_topology_replay_keeps_fresh_contexts_readers_and_late_resource_atoms ... ok
+test core::capture::value::tests::clause_capture_projection_preserves_shared_cuts_and_allocation_order ... ok
+test core::capture::value::tests::completed_bound_ports_keep_duplicate_keys_extra_ports_and_late_owner_routes ... ok
+test core::capture::value::tests::completed_callable_transfers_keep_late_values_creation_contexts_and_unknown_readers ... ok
+test core::capture::value::tests::completed_match_setup_keeps_late_constructor_payload_ownership ... ok
+test core::capture::value::tests::conditional_handler_import_preserves_per_request_pattern_and_resume_operands ... ok
+test core::capture::value::tests::conditional_handler_import_refuses_unknown_body_and_control_port_collisions ... ok
+test core::capture::value::tests::connected_nonleaf_producer_preserves_original_evidence_tuple_roots_and_control ... ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-connected-installed expression=77 slot=129 context=0 total_raw=1 total_evidence=0 new_raw=1 new_evidence=0 root_reused=0
+ash-fusion-connected-installed expression=86 slot=168 context=0 total_raw=3 total_evidence=1 new_raw=2 new_evidence=1 root_reused=0
+ash-fusion-typed-leaf-source function=59 creation=15 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=20 application=77 factory=60 arguments_context=17 captures=11
+ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=15 application=77 factory=60 arguments_context=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=16 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=21 application=77 factory=60 arguments_context=14 captures=11
+ash-fusion-typed-leaf-source function=59 creation=23 application=77 factory=60 arguments_context=17 captures=11
+ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-definition-source function=102 creation=0 captures=11
+ash-fusion-definition-source function=123 creation=0 captures=11
+ash-fusion-connected-installed expression=77 slot=213 context=0 total_raw=1 total_evidence=0 new_raw=1 new_evidence=0 root_reused=0
+ash-fusion-connected-installed expression=98 slot=252 context=0 total_raw=3 total_evidence=1 new_raw=2 new_evidence=1 root_reused=0
+ash-fusion-connected-installed expression=119 slot=282 context=0 total_raw=7 total_evidence=4 new_raw=4 new_evidence=3 root_reused=0
+ash-fusion-connected-installed expression=128 slot=312 context=0 total_raw=15 total_evidence=11 new_raw=8 new_evidence=7 root_reused=0
+ash-fusion-typed-leaf-source function=59 creation=21 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=35 application=77 factory=60 arguments_context=19 captures=11
+ash-fusion-typed-leaf-source function=59 creation=38 application=77 factory=60 arguments_context=23 captures=11
+ash-fusion-typed-leaf-source function=59 creation=41 application=77 factory=60 arguments_context=32 captures=11
+ash-fusion-typed-leaf-source function=59 creation=48 application=77 factory=60 arguments_context=36 captures=11
+ash-fusion-typed-leaf-source function=59 creation=52 application=77 factory=60 arguments_context=42 captures=11
+ash-fusion-typed-leaf-source function=59 creation=53 application=77 factory=60 arguments_context=39 captures=11
+ash-fusion-typed-leaf-source function=59 creation=56 application=77 factory=60 arguments_context=46 captures=11
+ash-fusion-typed-leaf-source function=59 creation=57 application=77 factory=60 arguments_context=43 captures=11
+ash-fusion-typed-leaf-source function=59 creation=61 application=77 factory=60 arguments_context=49 captures=11
+ash-fusion-typed-leaf-source function=59 creation=65 application=77 factory=60 arguments_context=50 captures=11
+ash-fusion-typed-leaf-source function=59 creation=67 application=77 factory=60 arguments_context=58 captures=11
+ash-fusion-typed-leaf-source function=59 creation=68 application=77 factory=60 arguments_context=54 captures=11
+ash-fusion-typed-leaf-source function=59 creation=71 application=77 factory=60 arguments_context=62 captures=11
+ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-definition-source function=102 creation=0 captures=11
+ash-fusion-definition-source function=123 creation=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=21 application=77 factory=60 arguments_context=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=22 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=36 application=77 factory=60 arguments_context=20 captures=11
+ash-fusion-typed-leaf-source function=59 creation=39 application=77 factory=60 arguments_context=23 captures=11
+ash-fusion-typed-leaf-source function=59 creation=43 application=77 factory=60 arguments_context=27 captures=11
+ash-fusion-typed-leaf-source function=59 creation=44 application=77 factory=60 arguments_context=30 captures=11
+ash-fusion-typed-leaf-source function=59 creation=57 application=77 factory=60 arguments_context=34 captures=11
+ash-fusion-typed-leaf-source function=59 creation=58 application=77 factory=60 arguments_context=40 captures=11
+ash-fusion-typed-leaf-source function=59 creation=62 application=77 factory=60 arguments_context=47 captures=11
+ash-fusion-typed-leaf-source function=59 creation=63 application=77 factory=60 arguments_context=42 captures=11
+ash-fusion-typed-leaf-source function=59 creation=66 application=77 factory=60 arguments_context=50 captures=11
+ash-fusion-typed-leaf-source function=59 creation=67 application=77 factory=60 arguments_context=45 captures=11
+ash-fusion-typed-leaf-source function=59 creation=71 application=77 factory=60 arguments_context=52 captures=11
+ash-fusion-typed-leaf-source function=59 creation=73 application=77 factory=60 arguments_context=55 captures=11
+ash-fusion-typed-leaf-source function=59 creation=80 application=77 factory=60 arguments_context=56 captures=11
+ash-fusion-typed-leaf-source function=59 creation=84 application=77 factory=60 arguments_context=68 captures=11
+ash-fusion-typed-leaf-source function=59 creation=85 application=77 factory=60 arguments_context=59 captures=11
+ash-fusion-typed-leaf-source function=59 creation=86 application=77 factory=60 arguments_context=60 captures=11
+ash-fusion-typed-leaf-source function=59 creation=88 application=77 factory=60 arguments_context=74 captures=11
+ash-fusion-typed-leaf-source function=59 creation=89 application=77 factory=60 arguments_context=75 captures=11
+ash-fusion-typed-leaf-source function=59 creation=90 application=77 factory=60 arguments_context=69 captures=11
+ash-fusion-typed-leaf-source function=59 creation=96 application=77 factory=60 arguments_context=81 captures=11
+ok
+test core::capture::value::tests::context_lookup_charges_its_path_without_scanning_unrelated_contexts ... ok
+test core::capture::value::tests::cut_inputs_exclude_pending_local_binders_with_exact_fresh_retry ... ok
+test core::capture::value::tests::delayed_capture_leaf_and_populated_edge_wake_existing_consumers ... ok
+test core::capture::value::tests::delivered_control_call_prefix_keeps_late_arguments_and_opaque_replays_live ... ok
+test core::capture::value::tests::edge_delta_prefixes_preserve_late_identity_order_and_reject_partial_completion ... ok
+test core::capture::value::tests::edge_pairs_preserve_contexts_order_independent_watches_and_atomic_budget_boundaries ... ok
+test core::capture::value::tests::evidence_coalesces_complementary_empty_capture_ports_before_provider_validity ... ok
+test core::capture::value::tests::evidence_completion_keeps_late_dictionary_owners_and_exact_closure_readers ... ok
+test core::capture::value::tests::evidence_completion_refusals_never_publish_attempted_transfers ... ok
+test core::capture::value::tests::evidence_input_phase_duplicate_inputs_and_focused_contexts_keep_exact_relations ... ok
+test core::capture::value::tests::evidence_input_phase_keeps_late_live_atoms_and_other_direct_readers ... ok
+test core::capture::value::tests::evidence_input_phase_refusal_cuts_distinguish_inputs_from_dynamic_completion ... ok
+test core::capture::value::tests::evidence_lookup_charges_cold_imported_and_append_boundaries_with_prefilled_retry ... ok
+test core::capture::value::tests::evidence_lookup_preserves_first_original_imported_port_and_refuses_invalid_ordinals ... ok
+test core::capture::value::tests::evidence_routes_every_matching_port_with_exact_canonical_identity ... ok
+test core::capture::value::tests::evidence_self_source_snapshot_keeps_unknown_and_late_resource_dependencies ... ok
+test core::capture::value::tests::evidence_specialization_preserves_shared_ports_and_inert_aliases ... ok
+test core::capture::value::tests::final_payload_check_cannot_materialize_an_unfinished_or_missing_input ... ok
+test core::capture::value::tests::focused_entry_marks_only_the_fresh_owner_and_keeps_inherited_structure ... ok
+test core::capture::value::tests::function_capture_installation_keeps_live_edges_without_structural_reader_watches ... ok
+test core::capture::value::tests::immutable_setup_completion_refuses_all_cold_cuts_after_ordered_propagation ... ok
+test core::capture::value::tests::immutable_setup_keeps_late_real_owners_closure_dependencies_and_direct_readers ... ok
+test core::capture::value::tests::immutable_setup_roots_focus_and_restore_keep_separate_frozen_authority ... ok
+test core::capture::value::tests::indexed_bindings_keep_late_notifications_and_distinct_argument_contexts ... ok
+test core::capture::value::tests::productive_cursor_loans_keep_partial_refusal_self_edges_and_late_original_owners ... ok
+test core::capture::value::tests::provider_invocation_charges_wide_target_lookup ... ok
+test core::capture::value::tests::provider_scope_result_keeps_body_tuple_and_independent_completion ... ok
+test core::capture::value::tests::queued_alias_merge_links_keep_edge_watches_late_identity_and_direct_readers ... ok
+test core::capture::value::tests::ready_setup_completion_refuses_before_publication_and_keeps_live_inputs ... ok
+test core::capture::value::tests::recursive_callee_contexts_join_calls_but_keep_distinct_entries ... ok
+test core::capture::value::tests::repeated_binding_lookup_work_depends_on_matches_instead_of_vector_width ... ok
+test core::capture::value::tests::repeated_static_cut_reuses_preparation_but_keeps_new_result_edges ... ok
+test core::capture::value::tests::repeated_wide_edges_retry_at_exact_work_without_reordering ... ok
+test core::capture::value::tests::repeated_wide_watch_dependencies_retry_at_exact_work_without_reordering ... ok
+test core::capture::value::tests::restored_native_result_keeps_success_projection_without_reacquiring ... ok
+test core::capture::value::tests::specialization_transfer_completion_has_prefilled_refusal_and_fresh_retry_boundaries ... ok
+test core::capture::value::tests::strict_results_wait_for_bottom_inputs_and_wake_on_late_values ... ok
+test core::capture::value::tests::structural_specialization_keeps_late_capture_and_unknown_consumers_live ... ok
+test core::capture::value::tests::structural_transfer_chain_keeps_late_identity_unknown_and_real_consumers ... ok
+test core::capture::value::tests::structural_transfer_chain_refusal_keeps_independent_publication_and_fresh_retry ... ok
+test core::capture::value::tests::symbolic_returned_root_keeps_both_full_specializations_and_original_typecall ... ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-definition-source function=102 creation=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=17 application=77 factory=60 arguments_context=0 captures=11
+ash-fusion-typed-leaf-source function=59 creation=20 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=31 application=77 factory=60 arguments_context=16 captures=11
+ash-fusion-typed-leaf-source function=59 creation=36 application=77 factory=60 arguments_context=21 captures=11
+ash-fusion-typed-leaf-source function=59 creation=37 application=77 factory=60 arguments_context=22 captures=11
+ash-fusion-typed-leaf-source function=59 creation=38 application=77 factory=60 arguments_context=23 captures=11
+ash-fusion-typed-leaf-source function=59 creation=39 application=77 factory=60 arguments_context=25 captures=11
+ash-fusion-typed-leaf-source function=59 creation=40 application=77 factory=60 arguments_context=28 captures=11
+ash-fusion-typed-leaf-source function=59 creation=52 application=77 factory=60 arguments_context=33 captures=11
+ash-fusion-typed-leaf-source function=59 creation=53 application=77 factory=60 arguments_context=34 captures=11
+ash-fusion-typed-leaf-source function=59 creation=54 application=77 factory=60 arguments_context=35 captures=11
+ash-fusion-typed-leaf-source function=59 creation=56 application=77 factory=60 arguments_context=42 captures=11
+ash-fusion-typed-leaf-source function=59 creation=57 application=77 factory=60 arguments_context=43 captures=11
+ash-fusion-typed-leaf-source function=59 creation=59 application=77 factory=60 arguments_context=44 captures=11
+ash-fusion-typed-leaf-source function=59 creation=65 application=77 factory=60 arguments_context=49 captures=11
+ash-fusion-typed-leaf-source function=59 creation=67 application=77 factory=60 arguments_context=58 captures=11
+ash-fusion-definition-source function=3 creation=0 captures=0
+ash-fusion-definition-source function=8 creation=0 captures=0
+ash-fusion-definition-source function=13 creation=0 captures=0
+ash-fusion-definition-source function=18 creation=0 captures=0
+ash-fusion-definition-source function=23 creation=0 captures=0
+ash-fusion-definition-source function=28 creation=0 captures=0
+ash-fusion-definition-source function=33 creation=0 captures=0
+ash-fusion-definition-source function=38 creation=0 captures=0
+ash-fusion-definition-source function=43 creation=0 captures=0
+ash-fusion-definition-source function=60 creation=0 captures=9
+ash-fusion-definition-source function=81 creation=0 captures=11
+ash-fusion-definition-source function=102 creation=0 captures=11
+ash-fusion-connected-installed expression=77 slot=181 context=0 total_raw=1 total_evidence=0 new_raw=1 new_evidence=0 root_reused=0
+ash-fusion-connected-installed expression=98 slot=220 context=0 total_raw=3 total_evidence=1 new_raw=2 new_evidence=1 root_reused=0
+ash-fusion-connected-installed expression=107 slot=250 context=0 total_raw=7 total_evidence=4 new_raw=4 new_evidence=3 root_reused=0
+ash-fusion-typed-leaf-source function=59 creation=18 application=77 factory=60 arguments_context=13 captures=11
+ash-fusion-typed-leaf-source function=59 creation=30 application=77 factory=60 arguments_context=17 captures=11
+ash-fusion-typed-leaf-source function=59 creation=31 application=77 factory=60 arguments_context=20 captures=11
+ash-fusion-typed-leaf-source function=59 creation=32 application=77 factory=60 arguments_context=21 captures=11
+ash-fusion-typed-leaf-source function=59 creation=35 application=77 factory=60 arguments_context=27 captures=11
+ash-fusion-typed-leaf-source function=59 creation=36 application=77 factory=60 arguments_context=28 captures=11
+ash-fusion-typed-leaf-source function=59 creation=41 application=77 factory=60 arguments_context=29 captures=11
+ash-fusion-typed-leaf-source function=59 creation=44 application=77 factory=60 arguments_context=33 captures=11
+ash-fusion-typed-leaf-source function=59 creation=48 application=77 factory=60 arguments_context=37 captures=11
+ash-fusion-typed-leaf-source function=59 creation=49 application=77 factory=60 arguments_context=45 captures=11
+ash-fusion-connected-installed expression=115 slot=1117 context=0 total_raw=11 total_evidence=7 new_raw=4 new_evidence=3 root_reused=0
+ok
+test core::capture::value::tests::terminal_completed_value_keeps_its_frozen_creation_slots ... ok
+test core::capture::value::tests::watched_pairs_keep_creation_contexts_notification_order_and_failed_insertion_atomic ... ok
+test core::capture::value::tests::wide_call_staging_precedes_argument_slots_and_retries_exactly ... ok
+test core::capture::value::tests::wide_expression_copies_preflight_outer_staging_and_retry_exactly ... ok
+test core::capture::value::tests::wide_handler_build_preflights_clauses_and_retries_exactly ... ok
+test core::capture::value::tests::wide_pattern_staging_precedes_graph_mutation_and_retries_exactly ... ok
+test core::capture::value::tests::wide_payload_and_dependency_staging_preflight_and_retry_exactly ... ok
+
+test result: ok. 63 passed; 0 failed; 0 ignored; 0 measured; 1586 filtered out; finished in 0.74s
+

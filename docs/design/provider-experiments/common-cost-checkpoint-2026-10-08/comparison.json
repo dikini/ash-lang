@@ -1,0 +1,160 @@
+{
+  "status": "diagnostic compound regression; not accepted or integrated",
+  "baseline_commit": "5a1da1ce97808ba68ad961a5cc6d80dadb6d09de",
+  "measurement_input_recovery": "11de19c8e627d74d5e0e3c25dc4a8cfb4f5e0ce6",
+  "candidate_pins_sha256": "cc1b9e387ec6925f0b9c6c871ab412c7f43fef83d0a57ad7a97eac3f53f63896",
+  "normal_source_limit": 327680,
+  "normal_Core_limit": 983040,
+  "cases": [
+    {
+      "case": "copying",
+      "baseline": {
+        "resolution": 27413,
+        "source-checking": 1212707,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 903995
+      },
+      "candidate": {
+        "resolution": 27413,
+        "source-checking": 33595389,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 1034670
+      },
+      "deltas": {
+        "resolution": 0,
+        "source-checking": 32382682,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 130675
+      },
+      "source_ratio": 27.702807850536033,
+      "baseline_log_sha256": "8833264807a93716cad24f9ee1400ce3f3ac8385c6c424085c1b04f088fa7b49",
+      "candidate_log_sha256": "57513fdacfe80e2cd89803c8f2654a3d1745f3caf474dd5b28feb8333f8a6932"
+    },
+    {
+      "case": "persistence",
+      "baseline": {
+        "resolution": 44240,
+        "source-checking": 597882,
+        "module-linking": 4136,
+        "linked-interface": 48578,
+        "final-elaboration": 376605,
+        "independent-effect-core": 1609101
+      },
+      "candidate": {
+        "resolution": 44240,
+        "source-checking": 757922,
+        "module-linking": 4136,
+        "linked-interface": 48578,
+        "final-elaboration": 376641,
+        "independent-effect-core": 1733738
+      },
+      "deltas": {
+        "resolution": 0,
+        "source-checking": 160040,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 36,
+        "independent-effect-core": 124637
+      },
+      "source_ratio": 1.26767823751175,
+      "baseline_log_sha256": "f9d28870185bf1e8f17eab9b87e6808fc4f9fdcfb5f1bbd53a3a9a150d16fd59",
+      "candidate_log_sha256": "f4780e308a12dfbbb12d4edc2670bafea67de084bf91c3832446471d08848fc4"
+    },
+    {
+      "case": "resume",
+      "baseline": {
+        "resolution": 25542,
+        "source-checking": 203215,
+        "module-linking": 3950,
+        "linked-interface": 15190,
+        "final-elaboration": 103738,
+        "independent-effect-core": 289063
+      },
+      "candidate": {
+        "resolution": 25542,
+        "source-checking": 253310,
+        "module-linking": 3950,
+        "linked-interface": 15190,
+        "final-elaboration": 103738,
+        "independent-effect-core": 310657
+      },
+      "deltas": {
+        "resolution": 0,
+        "source-checking": 50095,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 21594
+      },
+      "source_ratio": 1.2465123145437098,
+      "baseline_log_sha256": "0cf584a4587c7940d26e463d4ba14f2f8181b334f8d13069ceecd65d7068aaf9",
+      "candidate_log_sha256": "9b86520146acd3c9b6e6118ebb5e46725fab1e676ca85296762cf08c0efde813"
+    },
+    {
+      "case": "bound_nul",
+      "baseline": {
+        "resolution": 27413,
+        "source-checking": 1212707,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 903990
+      },
+      "candidate": {
+        "resolution": 27413,
+        "source-checking": 33595389,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 1034665
+      },
+      "deltas": {
+        "resolution": 0,
+        "source-checking": 32382682,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 130675
+      },
+      "source_ratio": 27.702807850536033,
+      "baseline_log_sha256": "ae87427086a1b3682e85fe92aec255c89b538302a7540de2e6bbdd548b39649a",
+      "candidate_log_sha256": "1ed5e1624adf3c74d88c24afa32d1792bb91c16545fc83eb4ed5b03fc933bc02"
+    },
+    {
+      "case": "forwarding",
+      "baseline": {
+        "resolution": 25557,
+        "source-checking": 216584,
+        "module-linking": 3934,
+        "linked-interface": 15098,
+        "final-elaboration": 107066,
+        "independent-effect-core": 315193
+      },
+      "candidate": {
+        "resolution": 25557,
+        "source-checking": 401561,
+        "module-linking": 3934,
+        "linked-interface": 15098,
+        "final-elaboration": 107066,
+        "independent-effect-core": 338902
+      },
+      "deltas": {
+        "resolution": 0,
+        "source-checking": 184977,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 23709
+      },
+      "source_ratio": 1.8540658589738854,
+      "baseline_log_sha256": "a41faa98ab6c2be926ef5d653730cab97ddbfff5bef4daf52b21e9bcebbd923c",
+      "candidate_log_sha256": "457658fedfeb6cebf9fc23622ea762d68deec5586ef81753a6ede000d5436203"
+    }
+  ]
+}
