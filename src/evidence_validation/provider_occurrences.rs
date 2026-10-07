@@ -176,7 +176,7 @@ pub(crate) fn copy_provider_occurrences(
                     .map_err(|failure| mapping_failure(failure, span))
             })
             .transpose()?;
-        let scope = copy_owner(occurrence.scope, context, span, types)?;
+        let scope = copy_owner(occurrence.scope, original, context, span, types)?;
         let scope_binder = occurrence
             .scope_binder
             .map(|binder| {
@@ -185,7 +185,7 @@ pub(crate) fn copy_provider_occurrences(
                     .map_err(|failure| mapping_failure(failure, span))
             })
             .transpose()?;
-        let target_owner = copy_owner(occurrence.target_owner, context, span, types)?;
+        let target_owner = copy_owner(occurrence.target_owner, original, context, span, types)?;
         // No fallible work remains after releasing the iterative Type guards.
         arguments.extend(staged.into_iter().map(IterativeTypeOwner::into_inner));
         output.occurrences.push(MethodEvidenceOccurrence {
@@ -243,6 +243,7 @@ fn copy_application(
 
 fn copy_owner(
     owner: Option<MethodEvidenceOwner>,
+    original: ProviderOriginalTemplate<'_>,
     context: &ProviderCopyContext<'_>,
     span: Span,
     types: &mut TypeWorkBudget,
@@ -253,7 +254,15 @@ fn copy_owner(
                 .binder(binder, types)
                 .map_err(|failure| mapping_failure(failure, span))?,
         )),
-        other => other,
+        Some(MethodEvidenceOwner::ResourceFamily(definition)) => {
+            types.charge(1).map_err(|()| type_resource(span))?;
+            let ProviderOriginalTemplate::Handler(handler) = original else { return Err(invalid_root(span)); };
+            let template = handler.original_template();
+            if template.definition() != definition || template.ordinal() != 3 { return Err(invalid_root(span)); }
+            Some(MethodEvidenceOwner::ResourceFamily(definition))
+        }
+        Some(MethodEvidenceOwner::Implementation(method)) => Some(MethodEvidenceOwner::Implementation(method)),
+        None => None,
     })
 }
 

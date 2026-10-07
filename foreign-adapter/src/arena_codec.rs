@@ -6,8 +6,10 @@
 //! Aggregate descriptors and constructor identities must come from a bridge
 //! that authenticates the complete type dictionary. Local consistency checks
 //! cannot detect a forged sole-constructor subset or grant Ash Layout evidence.
-//! This preparation supports only acyclic by-value data, duplicates shared
-//! inline fields, and excludes references, source callbacks and source delivery.
+//! Aggregate preparation supports only acyclic by-value data and duplicates
+//! shared inline fields. The production scalar entry points require authenticated
+//! dictionaries from the caller and an evaluator work debit. Reference payloads
+//! and source callbacks remain unsupported.
 
 use crate::arena::{AllocationError, LayoutTag, PayloadLayout};
 use ash::foreign::runtime::{ForeignData, ForeignDataNode, ForeignExecutionError};
@@ -1000,4 +1002,36 @@ mod tests {
             assert!(decode_scalar(kind, &bytes).is_err());
         }
     }
+}
+
+
+/// Production scalar entry: the authenticated caller supplies the full
+/// dictionary and pays conversion plus the eventual native byte copy first.
+pub(super) fn prepare_scalar_with_work(
+    tag: LayoutTag,
+    value: &ForeignDataNode,
+    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
+) -> Result<PreparedPayload, PreparationError> {
+    let (conversion, extent) = match value {
+        ForeignDataNode::Unit => (1, 0),
+        ForeignDataNode::Boolean(_) => (1, 1),
+        ForeignDataNode::Integer(integer) => (
+            usize::try_from(integer.magnitude_byte_length()).map_err(|_| PreparationError::Internal(ForeignExecutionError::WORK_EXHAUSTED))?.max(1),
+            8,
+        ),
+        _ => return Err(PreparationError::Internal(ForeignExecutionError("unsupported arena scalar"))),
+    };
+    let units = conversion.checked_add(extent).and_then(|units| units.checked_add(extent))
+        .ok_or(PreparationError::Internal(ForeignExecutionError::WORK_EXHAUSTED))?;
+    work.charge(units).map_err(PreparationError::Internal)?;
+    PreparedPayload::scalar(tag, value)
+}
+
+pub(super) fn decode_scalar_with_work(
+    kind: ScalarKind,
+    bytes: &[u8],
+    work: &mut ash::foreign::runtime::ForeignInvocationWork<'_>,
+) -> Result<ForeignData, ForeignExecutionError> {
+    work.charge(bytes.len().checked_add(1).ok_or(ForeignExecutionError::WORK_EXHAUSTED)?)?;
+    decode_scalar(kind, bytes)
 }

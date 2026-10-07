@@ -26,6 +26,8 @@ use std::{
 pub(crate) struct FinalProviderInstancePlan {
     pub(in crate::elaborate) copyplan: PreparedScopeCopyPlan,
     pub(crate) copies: [CopiedProviderOccurrenceCatalog; 3],
+    pub(crate) family_copies: Box<[CopiedProviderOccurrenceCatalog]>,
+    pub(crate) family_members: Box<[Arc<super::PreparedProviderFamilyInstance>]>,
 }
 pub(crate) struct FinalProviderPreparation {
     registry: Arc<ResolvedRegistry>,
@@ -173,14 +175,30 @@ pub(crate) fn prepare_final_provider_program(
                 program.registry(),
                 &mut compiler.type_work,
             )?;
-            let copyplan = compiler.prepare_scope_copy_plan(
-                &source,
-                &prepared.actuals,
-                &prepared.body,
-                &prepared.handler_rows,
-                prepared.provider().module(),
-                occurrence.span,
-            )?;
+            let copyplan = if prepared.family_members.is_empty() {
+                if !prepared.family_rows.is_empty() {
+                    return Err(invalid_state());
+                }
+                compiler.prepare_scope_copy_plan(
+                    &source,
+                    &prepared.actuals,
+                    &prepared.body,
+                    &prepared.handler_rows,
+                    prepared.provider().module(),
+                    occurrence.span,
+                )?
+            } else {
+                compiler.prepare_scope_copy_plan_with_family_rows(
+                    &source,
+                    &prepared.actuals,
+                    &prepared.body,
+                    &prepared.handler_rows,
+                    &prepared.family_members,
+                    &prepared.family_rows,
+                    prepared.provider().module(),
+                    occurrence.span,
+                )?
+            };
             let originals = [
                 ProviderOriginalTemplate::Lifecycle(
                     source.acquire.original,
@@ -213,12 +231,36 @@ pub(crate) fn prepare_final_provider_program(
                 &mut compiler.type_work,
             )
             .map_err(evidence_failure)?;
+            let family_copies: Box<[CopiedProviderOccurrenceCatalog]> = if copyplan.family_phases.is_empty() {
+                Box::new([])
+            } else {
+                let family = source.family.as_ref().ok_or_else(invalid_state)?;
+                if copyplan.family_phases.len() != prepared.family_members.len() {
+                    return Err(invalid_state());
+                }
+                compiler.type_work.charge(copyplan.family_phases.len()).map_err(|()| type_resource())?;
+                let mut copies = Vec::new();
+                copies.try_reserve_exact(copyplan.family_phases.len()).map_err(|_| type_resource())?;
+                for phase in &copyplan.family_phases {
+                    copies.push(copy_provider_occurrences(
+                        ProviderOriginalTemplate::Handler(family.handler),
+                        &phase.context(),
+                        occurrence.span,
+                        &mut compiler.constraint_work,
+                        &mut compiler.type_work,
+                    ).map_err(evidence_failure)?);
+                }
+                copies.into_boxed_slice()
+            };
+            let family_members = compiler.prepare_final_family_members(&prepared.family_members)?;
             compiler.type_work.charge(1).map_err(|()| type_resource())?;
             plans.insert(
                 prepared.provider(),
                 Arc::new(FinalProviderInstancePlan {
                     copyplan,
                     copies: [acquire, finish, handler],
+                    family_copies,
+                    family_members,
                 }),
             );
         }
@@ -295,6 +337,11 @@ pub(crate) fn final_provider_catalog_relocations(
         Ok(match producer {
             Producer::Lexical { source } => Producer::Lexical {
                 source: context.lexical(source, work)?,
+            },
+            Producer::ProviderFamily { source, member, binder } => Producer::ProviderFamily {
+                source: context.lexical(source, work)?,
+                member,
+                binder: context.binder(binder, work)?,
             },
             other => other,
         })
@@ -449,6 +496,12 @@ pub(crate) fn final_provider_catalog_relocations(
                 source: context.lexical(source, work)?,
                 binder: context.binder(binder, work)?,
                 selection_node,
+            },
+            Role::ProviderFamilyUse { source, member, selection_node, binder } => Role::ProviderFamilyUse {
+                source: context.lexical(source, work)?,
+                member,
+                selection_node,
+                binder: context.binder(binder, work)?,
             },
             Role::ImplementationOwner {
                 implementation,

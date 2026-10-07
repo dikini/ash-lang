@@ -4,7 +4,7 @@
 //! carry no dynamic symbol names and do not initialize or execute an adapter.
 mod arena;
 pub mod runtime;
-pub use arena::arena_manifest;
+pub use arena::{arena_manifest, typed_arena_manifest};
 
 use crate::{
     interface::{InterfaceId, MethodId},
@@ -648,11 +648,187 @@ pub struct ForeignStateFact {
     /// Defining provenance.
     pub origin: Origin,
 }
+
+/// Physical scalar encoding selected by an authenticated dictionary.
+/// This descriptor alone grants no witness or foreign authority.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ForeignScalarEncoding {
+    /// Zero bytes, alignment one.
+    Unit,
+    /// One byte, restricted to zero and one.
+    Bool,
+    /// Checked signed 64-bit little-endian two's-complement integer.
+    Signed64,
+}
+impl ForeignScalarEncoding {
+    fn payload_type(self) -> Type {
+        match self {
+            Self::Unit => Type::Unit,
+            Self::Bool => Type::Bool,
+            Self::Signed64 => Type::Int,
+        }
+    }
+}
+
+/// Qualified dictionary lookup identity; it does not authenticate a dictionary.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ForeignLayoutDictionaryId {
+    interface: InterfaceId,
+    ordinal: u8,
+}
+
+/// Inspectable pure-callable header copied from a canonical dictionary.
+/// Consumers must authenticate the full dictionary against the original fact.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ForeignLayoutProducer {
+    dictionary: ForeignLayoutDictionaryId,
+    method: MethodId,
+    witness: NominalTypeId,
+    payload: ForeignScalarEncoding,
+}
+impl ForeignLayoutProducer {
+    /// Returns the qualified dictionary lookup identity.
+    #[must_use]
+    pub const fn dictionary(self) -> ForeignLayoutDictionaryId { self.dictionary }
+    /// Returns the original defining interface.
+    #[must_use]
+    pub const fn interface(self) -> InterfaceId { self.dictionary.interface }
+    /// Returns the original defining witness method.
+    #[must_use]
+    pub const fn method(self) -> MethodId { self.method }
+    /// Returns the original opaque witness family.
+    #[must_use]
+    pub const fn witness(self) -> NominalTypeId { self.witness }
+    /// Returns the exact closed payload type represented by this header.
+    #[must_use]
+    pub fn payload_type(self) -> Type { self.payload.payload_type() }
+    /// Returns the ordinary nominal witness type.
+    #[must_use]
+    pub fn witness_type(self) -> Type {
+        Type::Application(Box::new(Type::Nominal(self.witness)), Box::new(self.payload_type()))
+    }
+    /// Returns the pure witness-producing method type.
+    #[must_use]
+    pub fn producer_type(self) -> Type {
+        Type::Function(Box::new(Type::Unit), Box::new(self.witness_type()))
+    }
+}
+
+/// Complete immutable scalar dictionary bound to original foreign identities.
+/// Construction is private to canonical foreign admission. Later graph layouts
+/// must extend this checked representation rather than authorize numeric tags.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ForeignLayoutDictionary {
+    producer: ForeignLayoutProducer,
+    payload_type: Type,
+    encoding: ForeignScalarEncoding,
+    size: usize,
+    natural_alignment: usize,
+}
+impl ForeignLayoutDictionary {
+    /// Returns its copied pure-callable header.
+    #[must_use]
+    pub const fn producer(&self) -> ForeignLayoutProducer { self.producer }
+    /// Returns its exact canonical payload type.
+    #[must_use]
+    pub const fn payload_type(&self) -> &Type { &self.payload_type }
+    /// Returns its validated native encoding.
+    #[must_use]
+    pub const fn encoding(&self) -> ForeignScalarEncoding { self.encoding }
+    /// Returns the encoded scalar extent.
+    #[must_use]
+    pub const fn size(&self) -> usize { self.size }
+    /// Returns the encoded scalar natural alignment.
+    #[must_use]
+    pub const fn natural_alignment(&self) -> usize { self.natural_alignment }
+}
+
+/// Original sealed Layout authority and its finite scalar dictionary table.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignLayoutFact {
+    interface: InterfaceId,
+    method: MethodId,
+    witness: NominalTypeId,
+    payload_parameter: TypeVariableId,
+    dictionaries: [Arc<ForeignLayoutDictionary>; 3],
+}
+impl ForeignLayoutFact {
+    /// Returns the sealed defining interface.
+    #[must_use]
+    pub const fn interface(&self) -> InterfaceId { self.interface }
+    /// Returns the original witness-producing method.
+    #[must_use]
+    pub const fn method(&self) -> MethodId { self.method }
+    /// Returns the opaque witness nominal.
+    #[must_use]
+    pub const fn witness(&self) -> NominalTypeId { self.witness }
+    /// Returns the canonical interface payload binder.
+    #[must_use]
+    pub const fn payload_parameter(&self) -> TypeVariableId { self.payload_parameter }
+    /// Resolves and checks the entire header, never just its ordinal.
+    #[must_use]
+    pub fn dictionary_for_producer(&self, producer: ForeignLayoutProducer) -> Option<Arc<ForeignLayoutDictionary>> {
+        if producer.interface() != self.interface { return None; }
+        let dictionary = self.dictionaries.get(usize::from(producer.dictionary.ordinal))?;
+        (dictionary.producer == producer).then(|| Arc::clone(dictionary))
+    }
+    /// Derives only the admitted closed scalar payload goals.
+    #[must_use]
+    pub fn dictionary_for_payload(&self, payload: &Type) -> Option<Arc<ForeignLayoutDictionary>> {
+        self.dictionaries.iter().find(|dictionary| &dictionary.payload_type == payload).map(Arc::clone)
+    }
+}
+
+/// Exact canonical owner/payload coordinates and store/load result families.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ForeignStorageFact {
+    effect: EffectId,
+    store: OperationId,
+    load: OperationId,
+    state: NominalTypeId,
+    witness: NominalTypeId,
+    reference: NominalTypeId,
+    report: NominalTypeId,
+    error: NominalTypeId,
+    allocated_constructor: ConstructorId,
+    refused_constructor: ConstructorId,
+    owner_parameter: usize,
+    payload_parameter: usize,
+    reference_owner_parameter: usize,
+    reference_payload_parameter: usize,
+}
+macro_rules! foreign_storage_readers {
+    ($($name:ident : $ty:ty),* $(,)?) => {
+        impl ForeignStorageFact {
+            $(#[doc = concat!("Returns the canonical ", stringify!($name), " role.")]
+            #[must_use]
+            pub const fn $name(&self) -> $ty { self.$name })*
+        }
+    };
+}
+foreign_storage_readers! {
+    effect: EffectId, store: OperationId, load: OperationId,
+    state: NominalTypeId, witness: NominalTypeId, reference: NominalTypeId,
+    report: NominalTypeId, error: NominalTypeId,
+    allocated_constructor: ConstructorId, refused_constructor: ConstructorId,
+    owner_parameter: usize, payload_parameter: usize,
+    reference_owner_parameter: usize, reference_payload_parameter: usize,
+}
 /// Canonical lifecycle/result relation, with no source-name authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ForeignResultFact {
     /// Copied independent data.
     Independent,
+    /// Successful publication retains its actual payload; refusal is independent.
+    Store {
+        /// Defining storage contract; actual owner/payload come from this call.
+        storage: EffectId,
+    },
+    /// Loads recover the selected object's actual stored payload relation.
+    Load {
+        /// Defining storage contract; never an operation-spelling convention.
+        storage: EffectId,
+    },
     /// Guarded acquired state and distinct error/report families.
     Acquire {
         /// Native state identity.
@@ -742,6 +918,10 @@ pub struct ForeignModuleFact {
     pub operations: Vec<ForeignOperationFact>,
     /// Optional provider primitive.
     pub state_access: Option<ForeignStateAccessFact>,
+    /// Optional sealed Layout authority and immutable dictionaries.
+    pub layout: Option<ForeignLayoutFact>,
+    /// Optional authenticated nonowning storage contract.
+    pub storage: Option<ForeignStorageFact>,
 }
 
 impl Drop for ForeignModuleFact {
@@ -911,6 +1091,8 @@ impl ForeignModuleSource {
             effects: Vec::new(),
             operations: Vec::new(),
             state_access: None,
+            layout: None,
+            storage: None,
         };
         let foundation = self.manifest.schema.foundation.as_ref();
         let mut foundation_types = FoundationTypeBindings::default();
@@ -1057,7 +1239,7 @@ impl ForeignModuleSource {
             });
         }
         if let Some(declaration) = foundation {
-            let _prepared = prepare_foreign_foundation(
+            let prepared = prepare_foreign_foundation(
                 registry,
                 &fact,
                 effects,
@@ -1066,11 +1248,38 @@ impl ForeignModuleSource {
                 foundation_types,
                 work,
             )?;
-            // No checked module, operation capability or Layout evidence may
-            // escape until the connected storage/Core/runtime path exists.
-            return Err(invalid(
-                "typed foreign storage is not executable in this admission phase",
-            ));
+            charge(work, 3)?;
+            fact.effects.try_reserve(1).map_err(|_| ForeignRegistrationError {
+                message: "foreign storage fact reservation refused".into(), resource: true,
+            })?;
+            fact.operations.try_reserve(2).map_err(|_| ForeignRegistrationError {
+                message: "foreign storage operation reservation refused".into(), resource: true,
+            })?;
+            fact.effects.push(prepared.storage.effect());
+            for (operation, result) in prepared.declaration.operations.iter().zip([
+                ForeignResultFact::Store { storage: prepared.storage.effect() },
+                ForeignResultFact::Load { storage: prepared.storage.effect() },
+            ]) {
+                let signature = crate::types::clone_type_with_budget(&operation.annotation.ty, work)
+                    .map_err(|()| ForeignRegistrationError { message: "foreign registration type-work budget exhausted".into(), resource: true })?;
+                fact.operations.push(ForeignOperationFact {
+                    id: operation.id,
+                    role: ForeignOperationRole::Borrow,
+                    owned_identity_position: prepared.storage.owner_parameter(),
+                    state_operands: vec![vec![0]],
+                    state_lineage: vec![ForeignStateOperandFact {
+                        path: vec![0], state: prepared.storage.state(),
+                        lineage: vec![prepared.storage.owner_parameter()],
+                    }],
+                    retained_arguments: vec![],
+                    result, signature, origin: operation.origin.clone(),
+                });
+            }
+            fact.layout = Some(prepared.layout);
+            fact.storage = Some(prepared.storage);
+            // Remove only after the connected dictionary, Core, family and
+            // runtime consumers have passed their joint admission review.
+            return Err(invalid("typed foreign storage is not executable in this admission phase"));
         }
         Ok(Arc::new(fact))
     }
@@ -1116,20 +1325,12 @@ impl<'a> FoundationTypeBindings<'a> {
     }
 }
 
-// Private preparation only. Borrowed canonical declarations already own their
-// recursive metadata; this carrier retains no duplicate Types or Origins.
+// Private preparation borrows original operation declarations and owns only
+// checked flat roles plus closed scalar dictionaries.
 struct PreparedForeignFoundation<'a> {
-    _layout: &'a ResolvedInterfaceDeclaration,
-    _storage: &'a ResolvedEffectDeclaration,
-    _state: NominalTypeId,
-    _witness: NominalTypeId,
-    _reference: NominalTypeId,
-    _report: NominalTypeId,
-    _error: NominalTypeId,
-    _owner_parameter: usize,
-    _payload_parameter: usize,
-    _reference_owner_parameter: usize,
-    _reference_payload_parameter: usize,
+    layout: ForeignLayoutFact,
+    storage: ForeignStorageFact,
+    declaration: &'a ResolvedEffectDeclaration,
 }
 
 fn validate_foundation_parameters(
@@ -1429,18 +1630,38 @@ fn prepare_foreign_foundation<'a>(
     }
     validate_independent_data(registry, fact, storage, &Type::Nominal(error.id), work)?;
     validate_foundation_data_arities(registry, &Type::Nominal(error.id), work)?;
+    // The finite table is defined by this registered native serialization
+    // policy, not by a source name, value, or unchecked producer annotation.
+    charge(work, 18 + 3 * 10)?;
+    let policies = [
+        (ForeignScalarEncoding::Unit, 0, 1),
+        (ForeignScalarEncoding::Bool, 1, 1),
+        (ForeignScalarEncoding::Signed64, 8, 8),
+    ];
+    let dictionaries = std::array::from_fn(|ordinal| {
+        let (encoding, size, natural_alignment) = policies[ordinal];
+        Arc::new(ForeignLayoutDictionary {
+            producer: ForeignLayoutProducer {
+                dictionary: ForeignLayoutDictionaryId { interface: layout.id, ordinal: ordinal as u8 },
+                method: method.id, witness: witness.id, payload: encoding,
+            },
+            payload_type: encoding.payload_type(), encoding, size, natural_alignment,
+        })
+    });
     Ok(PreparedForeignFoundation {
-        _layout: layout,
-        _storage: storage,
-        _state: state.id,
-        _witness: witness.id,
-        _reference: reference.id,
-        _report: report.id,
-        _error: error.id,
-        _owner_parameter: owner_position,
-        _payload_parameter: payload_position,
-        _reference_owner_parameter: reference_owner,
-        _reference_payload_parameter: reference_payload,
+        layout: ForeignLayoutFact {
+            interface: layout.id, method: method.id, witness: witness.id,
+            payload_parameter: layout.parameters[0].id, dictionaries,
+        },
+        storage: ForeignStorageFact {
+            effect: storage.id, store: store.id, load: load.id,
+            state: state.id, witness: witness.id, reference: reference.id,
+            report: report.id, error: error.id,
+            allocated_constructor: *success_id, refused_constructor: *refused_id,
+            owner_parameter: owner_position, payload_parameter: payload_position,
+            reference_owner_parameter: reference_owner, reference_payload_parameter: reference_payload,
+        },
+        declaration: storage,
     })
 }
 
@@ -2235,6 +2456,8 @@ mod storage_tests {
                 method: MethodId::new(interface, 0),
                 origin: deep_origin(),
             }),
+            layout: None,
+            storage: None,
         });
         let retained = Arc::clone(&fact);
         let replacement_access = ForeignStateAccessFact {

@@ -4,7 +4,7 @@
 //! owners are unique host objects; copied codec data and borrowed state views
 //! never transfer that ownership.
 
-use std::{any::Any, fmt, sync::Arc};
+use std::{any::Any, fmt, num::NonZeroU64, sync::Arc};
 
 use super::{ForeignManifest, ForeignModuleFact, ForeignOperationFact};
 use crate::types::{ConstructorId, NominalTypeId, TYPE_WORK_LIMIT, TypeWorkBudget};
@@ -53,6 +53,55 @@ impl fmt::Display for ForeignExecutionError {
 }
 impl std::error::Error for ForeignExecutionError {}
 
+/// Opaque immutable witness for an authenticated complete layout dictionary.
+/// Cloning this value retains metadata, never a native resource owner.
+#[derive(Clone, Debug)]
+pub struct ForeignLayoutWitness {
+    dictionary: Arc<super::ForeignLayoutDictionary>,
+}
+impl ForeignLayoutWitness {
+    pub(crate) fn from_dictionary(dictionary: Arc<super::ForeignLayoutDictionary>) -> Self {
+        Self { dictionary }
+    }
+    /// Returns the complete dictionary; a scalar encoding alone is not authority.
+    #[must_use]
+    pub fn dictionary(&self) -> &Arc<super::ForeignLayoutDictionary> { &self.dictionary }
+}
+
+/// A nonowning native candidate. The evaluator admits its owner/payload relation
+/// before publication; these physical IDs alone establish no Ash authority.
+#[derive(Clone, Debug)]
+pub struct ForeignReference {
+    witness: ForeignLayoutWitness,
+    owner_slot: usize,
+    native_owner: NonZeroU64,
+    native_object: NonZeroU64,
+}
+impl ForeignReference {
+    /// Constructs an unpublished candidate supplied by a trusted adapter.
+    /// The adapter must recheck the same live owner and dictionary at commit.
+    #[must_use]
+    pub fn candidate(witness: ForeignLayoutWitness, owner_slot: usize,
+        native_owner: NonZeroU64, native_object: NonZeroU64) -> Self {
+        Self { witness, owner_slot, native_owner, native_object }
+    }
+    /// Returns the complete payload/layout witness.
+    #[must_use]
+    pub fn witness(&self) -> &ForeignLayoutWitness { &self.witness }
+    /// Returns the position in this invocation's authenticated ordered owner views.
+    #[must_use]
+    pub const fn owner_slot(&self) -> usize { self.owner_slot }
+    /// Returns nonowning physical identity, without granting source authority.
+    #[must_use]
+    pub const fn native_owner(&self) -> NonZeroU64 { self.native_owner }
+    /// Returns the owner-local physical object identity.
+    #[must_use]
+    pub const fn native_object(&self) -> NonZeroU64 { self.native_object }
+    pub(crate) fn with_owner_slot(&self, owner_slot: usize) -> Self {
+        Self { owner_slot, ..self.clone() }
+    }
+}
+
 /// One node in independent copied foreign data. Child indices precede parents.
 #[derive(Debug)]
 pub enum ForeignDataNode {
@@ -70,6 +119,10 @@ pub enum ForeignDataNode {
     Tuple(Box<[usize]>),
     /// An original admitted constructor and its optional payload.
     Constructor(ConstructorId, Option<usize>),
+    /// An authenticated complete immutable layout dictionary.
+    LayoutWitness(ForeignLayoutWitness),
+    /// A nonowning reference whose owner slot is admitted relationally.
+    Reference(ForeignReference),
     /// A borrowed operand slot, permitted only in inputs, never copied results.
     State(usize),
 }
@@ -163,6 +216,8 @@ impl ForeignData {
         }
         Ok(Self { nodes, root })
     }
+    pub(crate) fn nodes_mut(&mut self) -> &mut [ForeignDataNode] { &mut self.nodes }
+
     /// Borrows the checked ordered codec nodes.
     #[must_use]
     pub fn nodes(&self) -> &[ForeignDataNode] {
@@ -626,6 +681,18 @@ impl ForeignRuntimeBinding {
             ))?;
         let ordinal = usize::try_from(operation.id.operation())
             .map_err(|_| ForeignExecutionError("foreign operation ordinal is unrepresentable"))?;
+        if let Some(storage) = &module.storage {
+            if operation.id == storage.store() || operation.id == storage.load() {
+                let relation = matches!((&operation.result, operation.id),
+                    (super::ForeignResultFact::Store { storage: owner }, id) if *owner == storage.effect() && id == storage.store())
+                    || matches!((&operation.result, operation.id),
+                    (super::ForeignResultFact::Load { storage: owner }, id) if *owner == storage.effect() && id == storage.load());
+                if operation.role != crate::module::ForeignOperationRole::Borrow || !relation {
+                    return Err(ForeignExecutionError("foreign storage operation relation differs"));
+                }
+                return Ok(ForeignOperationKey { effect, operation: ordinal });
+            }
+        }
         let declared = self
             .manifest
             .schema

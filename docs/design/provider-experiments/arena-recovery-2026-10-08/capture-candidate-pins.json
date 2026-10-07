@@ -1,0 +1,20 @@
+{
+  "baseline": "dbe34ed2cbd96e6e50708034b9dddda4eb66a112",
+  "status": "private source-only; uncompiled; no engine or formatter run",
+  "files": {
+    "src/core/capture.rs": {
+      "base": "aba46f50e937ac6187e61607ad093517fe47c287481f423aa369042393fec285",
+      "candidate": "9f8ab6ba0ebfd771fb51fbd862718d3ba1173f2e5bce6ba9dab884177289a51e"
+    },
+    "src/core/capture/value.rs": {
+      "base": "495bc3d295a667fd00f60c47a941ecc7e3b34aa5d2d064229c49e16b64060a76",
+      "candidate": "54a7ad1b97f1ad05a9713ce63784448b4287b076924d5973ab11e72eedca4a4a"
+    },
+    "src/core/capture/control.rs": {
+      "base": "51607bcc19c28587eb20cf4d1c7b2ab468fa759fd310a1f3357fc999a0b13197",
+      "candidate": "d70c85e434d3c0cfd8d256fc4d7db5b930881a72a94ac614a4208137c59356ac"
+    }
+  },
+  "patch_sha256": "0c1025ba51cbd88cbd987cdce7fa225d698b18965473cf9aa839fd4f04f20f3a",
+  "composition_sha256": "3cfd6b1cbb7a462f638d03d89f9e627a28f51d04b4b1161103ee6b33cc2c8fe0"
+}

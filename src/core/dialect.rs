@@ -182,10 +182,21 @@ pub(crate) struct MethodEvidenceOccurrence {
 pub(crate) enum MethodEvidenceOwner {
     Global(BinderId),
     Implementation(ImplMethodId),
+    ResourceFamily(crate::resolved::ResourceDefinitionId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MethodEvidenceExpectedRole {
+    ProviderFamilyUse {
+        source: crate::interface::LexicalEvidenceId,
+        member: usize,
+        selection_node: EvidenceNodeId,
+        binder: BinderId,
+    },
+    NativeLayoutUse {
+        producer: crate::foreign::ForeignLayoutProducer,
+        selection_node: EvidenceNodeId,
+    },
     LexicalCaptureUse {
         owner: usize,
         ordinal: usize,
@@ -292,6 +303,14 @@ impl Drop for MethodEvidenceAdapter {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MethodEvidenceProducer {
+    ProviderFamily {
+        source: crate::interface::LexicalEvidenceId,
+        member: usize,
+        binder: BinderId,
+    },
+    NativeLayout {
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     Lexical {
         source: crate::interface::LexicalEvidenceId,
     },
@@ -941,6 +960,42 @@ pub(super) fn method_evidence_anchor_matches_expectation(
     type_work.charge(1)?;
     match (expected.role, role) {
         (
+            MethodEvidenceExpectedRole::ProviderFamilyUse { source, member, selection_node, binder },
+            MethodEvidenceAnchorRole::ProviderFamilyUse {
+                source: actual_source, member: actual_member,
+                selection_node: actual_node, binder: actual_binder,
+            },
+        ) => {
+            let Some(occurrence) = expected.occurrence.and_then(|slot| catalog.occurrence(slot)) else {
+                return Ok(false);
+            };
+            let Some(EvidenceNode::ProviderFamily { source: selected, application: goal, methods, .. })
+                = occurrence.selection.node(selection_node) else { return Ok(false); };
+            type_work.charge(methods.len())?;
+            Ok(source == actual_source && member == actual_member && binder == actual_binder
+                && selection_node == actual_node && selected == source
+                && methods.contains(&expected.method) && requirement.is_none() && owner.is_none()
+                && same_interface_application_with_budget(goal, application, type_work)?)
+        }
+        (
+            MethodEvidenceExpectedRole::NativeLayoutUse { producer, selection_node },
+            MethodEvidenceAnchorRole::NativeLayoutUse { producer: actual, selection_node: actual_node },
+        ) => {
+            let Some(occurrence) = expected.occurrence.and_then(|slot| catalog.occurrence(slot)) else {
+                return Ok(false);
+            };
+            let [crate::types::KindedArgument::TypeArg(payload)] = application.arguments() else {
+                return Ok(false);
+            };
+            Ok(producer == actual && selection_node == actual_node
+                && producer.method() == expected.method
+                && application.interface() == producer.interface()
+                && *payload == producer.payload_type()
+                && requirement.is_none()
+                && owner.is_none()
+                && matches!(occurrence.selection.node(selection_node), Some(EvidenceNode::NativeLayout { producer: selected }) if selected == producer))
+        }
+        (
             MethodEvidenceExpectedRole::LexicalCaptureUse { owner, ordinal },
             MethodEvidenceAnchorRole::LexicalCaptureUse {
                 owner: actual_owner,
@@ -1330,6 +1385,13 @@ fn method_evidence_expected_producer_matches(
                         _ => false,
                     }
                 }
+                MethodEvidenceExpectedRole::ProviderFamilyUse { source, selection_node, .. } => {
+                    selection_node == actual_selection_node
+                        && occurrence.and_then(|slot| catalog.occurrence(slot))
+                            .and_then(|row| row.selection.node(actual_selection_node))
+                            .is_some_and(|node| matches!(node,
+                                EvidenceNode::ProviderFamily { source: selected, .. } if selected == source))
+                }
                 MethodEvidenceExpectedRole::LexicalOwner { owner } => {
                     let selected = occurrence
                         .and_then(|slot| catalog.occurrence(slot))
@@ -1369,6 +1431,14 @@ pub(super) fn method_evidence_producer_matches(
         actual,
     ) {
         (
+            Some(MethodEvidenceExpectedRole::ProviderFamilyUse { source, member, binder, .. }),
+            MethodEvidenceProducer::ProviderFamily { source: actual_source, member: actual_member, binder: actual_binder },
+        ) => source == actual_source && member == actual_member && binder == actual_binder,
+        (
+            Some(MethodEvidenceExpectedRole::NativeLayoutUse { producer, .. }),
+            MethodEvidenceProducer::NativeLayout { producer: actual },
+        ) => producer == actual,
+        (
             Some(MethodEvidenceExpectedRole::LexicalOwner { owner }),
             MethodEvidenceProducer::Lexical { source },
         ) => catalog
@@ -1399,7 +1469,9 @@ fn selection_contains_method(
     type_work: &mut TypeWorkBudget,
 ) -> Result<bool, ()> {
     selection_contains(selection, type_work, |node| match node {
-        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+        EvidenceNode::NativeLayout { producer } => producer.method() == method,
+        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+        | EvidenceNode::ProviderFamily { methods, .. } => {
             methods.contains(&method)
         }
         EvidenceNode::Implementation { methods, .. } => {
@@ -1433,7 +1505,9 @@ fn selection_contains(
             return Ok(false);
         };
         let method_count = match node {
-            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+            EvidenceNode::NativeLayout { .. } => 1,
+            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+        | EvidenceNode::ProviderFamily { methods, .. } => {
                 methods.len()
             }
             EvidenceNode::Implementation { methods, .. } => methods.len(),
@@ -1442,7 +1516,8 @@ fn selection_contains(
         if predicate(node) {
             return Ok(true);
         }
-        if let EvidenceNode::Implementation { prerequisites, .. } = node {
+        if let EvidenceNode::Implementation { prerequisites, .. }
+            | EvidenceNode::ProviderFamily { prerequisites, .. } = node {
             type_work.charge(prerequisites.len())?;
             pending.try_reserve(prerequisites.len()).map_err(|_| ())?;
             pending.extend(prerequisites.iter().copied());
@@ -1453,6 +1528,16 @@ fn selection_contains(
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MethodEvidenceAnchorRole {
+    ProviderFamilyUse {
+        source: crate::interface::LexicalEvidenceId,
+        member: usize,
+        selection_node: EvidenceNodeId,
+        binder: BinderId,
+    },
+    NativeLayoutUse {
+        producer: crate::foreign::ForeignLayoutProducer,
+        selection_node: EvidenceNodeId,
+    },
     LexicalCaptureUse {
         owner: usize,
         ordinal: usize,
@@ -1498,6 +1583,8 @@ const fn method_evidence_anchor_identity_work(role: MethodEvidenceAnchorRole) ->
     match role {
         MethodEvidenceAnchorRole::Adapter { .. } => 1,
         MethodEvidenceAnchorRole::AdapterEdge { .. } => 4,
+        MethodEvidenceAnchorRole::NativeLayoutUse { .. } => 5,
+        MethodEvidenceAnchorRole::ProviderFamilyUse { .. } => 2,
         MethodEvidenceAnchorRole::ImplementationOwner { .. }
         | MethodEvidenceAnchorRole::LexicalCaptureUse { .. }
         | MethodEvidenceAnchorRole::LexicalOwner { .. }
@@ -2534,6 +2621,23 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
             _ => owner,
         };
         let selection_authority = match (role, occurrence) {
+            (MethodEvidenceAnchorRole::ProviderFamilyUse { source, selection_node, .. }, Some(slot)) => {
+                let selection = self.method_evidence.occurrence(slot).map(|row| row.selection.clone());
+                match selection.as_ref().and_then(|selection| selection.node(selection_node)) {
+                    Some(EvidenceNode::ProviderFamily { source: selected, methods, .. }) => {
+                        self.type_work.charge(methods.len()).map_err(|()| BuildError::TypeWorkExceeded)?;
+                        selected == source && methods.contains(&method)
+                    }
+                    _ => false,
+                }
+            }
+            (MethodEvidenceAnchorRole::NativeLayoutUse { producer, selection_node }, Some(slot)) => {
+                self.type_work.charge(1).map_err(|()| BuildError::TypeWorkExceeded)?;
+                self.method_evidence.occurrence(slot)
+                    .and_then(|expected| expected.selection.node(selection_node))
+                    .is_some_and(|selected| matches!(selected,
+                        EvidenceNode::NativeLayout { producer: original } if original == producer && producer.method() == method))
+            }
             (MethodEvidenceAnchorRole::Application { .. }, Some(slot)) => self
                 .method_evidence
                 .occurrence(slot)
@@ -2600,6 +2704,8 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     | (MethodEvidenceAnchorRole::Domain { .. }, None)
                     | (
                         MethodEvidenceAnchorRole::Instantiation { .. }
+                            | MethodEvidenceAnchorRole::NativeLayoutUse { .. }
+                            | MethodEvidenceAnchorRole::ProviderFamilyUse { .. }
                             | MethodEvidenceAnchorRole::LexicalUse { .. }
                             | MethodEvidenceAnchorRole::Application { .. }
                             | MethodEvidenceAnchorRole::Adapter { .. }
@@ -2608,6 +2714,22 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                     )
             );
         let source_identity_matches = match role {
+            MethodEvidenceAnchorRole::ProviderFamilyUse { binder, .. } => {
+                self.type_work.charge(method_evidence_anchor_identity_work(role))
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                node.index().ok().and_then(|index| self.nodes.get(index))
+                    .is_some_and(|stored| matches!(F::pure(&stored.kind),
+                        Some(PureExprKind::Variable(variable)) if variable.binder() == binder))
+            }
+            MethodEvidenceAnchorRole::NativeLayoutUse { producer, .. } => {
+                self.type_work.charge(method_evidence_anchor_identity_work(role))
+                    .map_err(|()| BuildError::TypeWorkExceeded)?;
+                node.index().ok().and_then(|index| self.nodes.get(index))
+                    .is_some_and(|stored| matches!(F::pure(&stored.kind),
+                        Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic)))
+                        if intrinsic.module() == producer.interface().module()
+                            && intrinsic.operation() == (super::packed::Intrinsic::ForeignLayoutWitness { producer })))
+            }
             MethodEvidenceAnchorRole::AdapterEdge {
                 producer_node,
                 producer_binder,
@@ -2639,7 +2761,19 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                                     Some(PureExprKind::Variable(variable)) if variable.binder() == binder
                                 )
                             }),
+                        (MethodEvidenceProducer::ProviderFamily { binder: family_binder, .. }, Some(binder)) => {
+                            family_binder == binder && producer_node.index().ok()
+                                .and_then(|index| self.nodes.get(index))
+                                .is_some_and(|stored| matches!(F::pure(&stored.kind),
+                                    Some(PureExprKind::Variable(variable)) if variable.binder() == binder))
+                        }
                         (MethodEvidenceProducer::Adapter { .. }, None) => true,
+                        (MethodEvidenceProducer::NativeLayout { producer }, None) => producer_node.index().ok()
+                            .and_then(|index| self.nodes.get(index))
+                            .is_some_and(|stored| matches!(F::pure(&stored.kind),
+                                Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic)))
+                                if intrinsic.module() == producer.interface().module()
+                                    && intrinsic.operation() == (super::packed::Intrinsic::ForeignLayoutWitness { producer }))),
                         _ => false,
                     }
             }
@@ -3056,6 +3190,17 @@ impl<F: CoreOperationFamily> CoreBuilder<F> {
                 operation, module,
             ))),
         )
+    }
+
+    /// Adds an unchecked sealed Layout producer for independent validation.
+    pub(crate) fn layout_witness_producer(
+        &mut self,
+        producer: crate::foreign::ForeignLayoutProducer,
+        ty: Type,
+        origin: Origin,
+    ) -> Result<NodeId, BuildError> {
+        self.intrinsic(super::packed::Intrinsic::ForeignLayoutWitness { producer },
+            producer.interface().module(), ty, origin)
     }
 
     /// Adds a Boolean payload with an unchecked result annotation.

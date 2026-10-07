@@ -1,0 +1,337 @@
+{
+  "status": "PAUSED_UNVERIFIED_INCOMPLETE",
+  "base": "dbe34ed2cbd96e6e50708034b9dddda4eb66a112",
+  "engines": [],
+  "executable_delivery": false,
+  "actual_capture_type_changes": false,
+  "source": [
+    {
+      "path": "foreign-adapter/src/arena_bindings.rs",
+      "sha256": "b8ab97eb9792e6747924982ef6556dbc51aaeca0a21e38e3ab4513d316644c50"
+    },
+    {
+      "path": "foreign-adapter/src/arena_codec.rs",
+      "sha256": "0b3925237135db2d4356ad5f7df72ef6db1be382b8dec7af81005df4488a69c5"
+    },
+    {
+      "path": "src/core/dialect.rs",
+      "sha256": "3978a1dc2fda5b3a68d255004f2c329fdedfbff00ae2db4d18e17fce373d6908"
+    },
+    {
+      "path": "src/core/packed.rs",
+      "sha256": "b0750c05ec4cb3a166966ae992c4bb0c04219178934430dc1537755f40ba828b"
+    },
+    {
+      "path": "src/core/provider.rs",
+      "sha256": "0edcdc535ea2745880d7f5bd5ea23dde30750eafce8680812b2aaf017f70aa2f"
+    },
+    {
+      "path": "src/core/provider/external.rs",
+      "sha256": "fcf2a1cf20e00434013af151c93da10b707df387ad631c2f45c58a182f3f0b84"
+    },
+    {
+      "path": "src/core/provider/handler.rs",
+      "sha256": "bb052566fe108f9662e9c72fd58f7d58775d217567d0e29cd0a1ac8bfb7bc8d4"
+    },
+    {
+      "path": "src/core/provider/row.rs",
+      "sha256": "135926cc0491126210610424133107319cb431fcaf70df6f2284d7803796015e"
+    },
+    {
+      "path": "src/core/provider/scope.rs",
+      "sha256": "0efb3e8945a7ec1e7a47c3b4652fb14ae5bb50ee9e760f1e9b034753b12026d4"
+    },
+    {
+      "path": "src/core/provider/specialization.rs",
+      "sha256": "46b78030655e41ee0a8ba3f0286e2039648dba9b6e97bcb8f9d28218394f3814"
+    },
+    {
+      "path": "src/core/transform.rs",
+      "sha256": "e97f70b07fba967a621903e571f238303e239f22bc801f0f9fa14c64d26b7178"
+    },
+    {
+      "path": "src/core/validate.rs",
+      "sha256": "22f95999a1212849b74a42339564c60a284c7d71dd6a77bfa58a017e71c49c6b"
+    },
+    {
+      "path": "src/elaborate.rs",
+      "sha256": "5fbcfb4398079c1e8566215e3d75ecdd0cf6b293b27e7f7115761b84fe065dfe"
+    },
+    {
+      "path": "src/elaborate/module_bodies.rs",
+      "sha256": "92efd26eae74fd133f4b05b38eb15704bae45ed8f7b9d0b366c38fbc92ad38be"
+    },
+    {
+      "path": "src/elaborate/provider.rs",
+      "sha256": "2fa41cba33cb1e0e9ff9126607cc5d926127b9744924e1128efc8a87426ea52c"
+    },
+    {
+      "path": "src/elaborate/provider_external.rs",
+      "sha256": "2a040c46e8247188e655e9bd70a53d034c3d28e40b9306b52ba22146dd026e5f"
+    },
+    {
+      "path": "src/elaborate/provider_instance.rs",
+      "sha256": "1423f538093dce9d5e1aacb1010e10ff48ea1627de11bc8ba48c87a8e5d4d37b"
+    },
+    {
+      "path": "src/elaborate/provider_instance/copy.rs",
+      "sha256": "3585cd669245e34887f724747f77adf429d92e21e80114a3bac2e1d25749d123"
+    },
+    {
+      "path": "src/elaborate/provider_instance/final_preparation.rs",
+      "sha256": "467581180bedea1bce6898210c92a9cccae878ec19b3bcd9b46ae708a877a20a"
+    },
+    {
+      "path": "src/eval/foreign.rs",
+      "sha256": "f59b7c8f139e06f58208509feaf2229754879d2ed3a63b25901eaace010874da"
+    },
+    {
+      "path": "src/eval/machine.rs",
+      "sha256": "2a6fb1a7db007f3b483cf10e6cfa52632c2ba765d3543ead06bad653b5528228"
+    },
+    {
+      "path": "src/eval/value.rs",
+      "sha256": "1b7c6ab497fdac40095e20b83808b6cc8d1844e889c6ef788986c5f36c5d8f8a"
+    },
+    {
+      "path": "src/evidence.rs",
+      "sha256": "fa8ddab982e7eb7206438a50b523c0c70fa4a3dc6a810a6f103ac5632eaf5563"
+    },
+    {
+      "path": "src/evidence_validation.rs",
+      "sha256": "b17d5a3b5858171d0fdcb4205ec2160cb095303e6d48f41ac77710c1e67bd8f6"
+    },
+    {
+      "path": "src/evidence_validation/provider_occurrences.rs",
+      "sha256": "176ba6a2536814fb1fedb4fddbce2692a7468b45f477877e542a1c36654601c6"
+    },
+    {
+      "path": "src/evidence_validation/provider_sources.rs",
+      "sha256": "5c0fff6ca59d0dd62cb95e1b853238499ebce83124650f02309e54203e12a040"
+    },
+    {
+      "path": "src/foreign.rs",
+      "sha256": "1ad9b4ec164fd1a7261d154e5c3edb81a9228a93d7ba9998789878de28eb044f"
+    },
+    {
+      "path": "src/foreign/arena.rs",
+      "sha256": "882421cc172ae5c6781ca6f2b8e757186fb1676899044b57f52544f1d309036f"
+    },
+    {
+      "path": "src/foreign/runtime.rs",
+      "sha256": "fd99d7798ebbf5a191083431fec958550c4f0cf5a1a98e38fdbbc0cb1404c2af"
+    },
+    {
+      "path": "src/interface.rs",
+      "sha256": "c97c2ac759ad89588a9ddc985ee307555b81ef73a7701cbdf5978da1f61bde98"
+    },
+    {
+      "path": "src/resolve.rs",
+      "sha256": "a7d79cdd2d499aa122beaa226a4d5f5b772745a8855075d687c8ff791c67f8e6"
+    },
+    {
+      "path": "src/resolved.rs",
+      "sha256": "97cca8203cb0eba2098962b0962244fb68720386efdc9e3c9b9dacc9e4c44d9c"
+    },
+    {
+      "path": "foreign-adapter/examples/arena_typed.rs",
+      "sha256": "ee138d98c9d85ccd2a118ca60a1c113fe4445a53c94169ea66d94b03018a3bdd"
+    },
+    {
+      "path": "tests/provider_arena_allocation.rs",
+      "sha256": "613b680d4b83c7c76aee75c2c038d32e98ab7ac107200c2ac7673e49156377b1"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/aligned-unit-entry.ash",
+      "sha256": "75e4813a0576dc2f0cb40750b0ed3a56fcc4648134d789d74b7aa571b97c739a"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/alignment-refusal-entry.ash",
+      "sha256": "a0012f86659aada504e93a5642aba18945871c5e73923de62988bb1732426bb6"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash",
+      "sha256": "87caa1d19023f2e92836f14dc4c8f3fb25d8665c5c6da4058e5f2ecdc26b4147"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/fabricated-layout-entry.ash",
+      "sha256": "8f440130e45d5398e5a8eba67bd96d4e259f5808ce470f66b50941d06fca89cb"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/fabricated-reference-entry.ash",
+      "sha256": "261f632b12935a529cbf1dfb0eeac04cf5c656fbe18ca1802433f9ba2e80265f"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/inner-owner-source-refusal.ash",
+      "sha256": "16d39b3dfc2563b1d6639f7f518829baeafa41e80359ac51bfeba303410f5d1a"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/maximum-integer-entry.ash",
+      "sha256": "61cb2290685a991e42685b20baeaf77166055e2b6dca48a18cd909fb5c6e6748"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/multiple-entry.ash",
+      "sha256": "e491f694b5042699bf9ebf987c3792cfa4deca44975bf90ddf5410e6ed9b09a4"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/object-refusal-entry.ash",
+      "sha256": "385143f0aa174364e020bc1ab6738957d81edd8a6b1b6493fc2318cb7f853431"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/outward-family-refusal-entry.ash",
+      "sha256": "29731b399916d51d276b61d5be3349e59c266cc20ba8466fb1aae537f3d865f9"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/outward_arena.ash",
+      "sha256": "a7e5c86b7fe5eb44e87bd33fd0e7c7db4b566efba7b1e4f67e522fad1a083c4f"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/payload-refusal-entry.ash",
+      "sha256": "af4998d3da8ff9c1f4b76b81f7384c749668afa36c891be850b519fca81ab4ba"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/provider.ash",
+      "sha256": "1775841df8016044671de9fcbd4d8ffa905f36060da01dd878d90fa6ea378fb6"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/range-refusal-entry.ash",
+      "sha256": "c9d1b9f82da23f1fccf7009203395bdbdb90c04d9f3bff06c6e0e0423e0122be"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/reference-escape-entry.ash",
+      "sha256": "e4b4f8a9ed8885e0def2d58ae71e34f90ac277256b29e85ce5d125e7178ee113"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/source-refusal-entry.ash",
+      "sha256": "d5dc1d84bae9823d7fcf660007bb713bded263c01395795b3d53ed7e91a0aa36"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/unit-entry.ash",
+      "sha256": "6975de9711aec06c72cfd06b2fc0e49929b69ce942e780cd36dda575658133fc"
+    },
+    {
+      "path": "tests/fixtures/provider-experiments/arena-typed/wrong-owner-entry.ash",
+      "sha256": "288b5d6805ef264187c0d80af0620e98798466ed73cb839c5d3d12461f0c1b07"
+    }
+  ],
+  "preserved_unstaged_documents": [
+    {
+      "path": "docs/design/provider-experiments/cases.md",
+      "sha256": "c2c596be471c6ec302659f793ad71717dee4b13a3e85a69fddfc3215cc58074f"
+    },
+    {
+      "path": "docs/design/provider-experiments/contracts.md",
+      "sha256": "7dd94acba3bb2704a339ec4553feb2c6d2be3591a820dd16138499faf725680f"
+    },
+    {
+      "path": "docs/design/provider-experiments/semantics.md",
+      "sha256": "7460ecfa35ab20aea2b9d96b843b0683efffa410451a04549a08860f487ef9bc"
+    },
+    {
+      "path": "docs/tasks/README.md",
+      "sha256": "631d959cf1a81f52347c45416ea01ca5c1026586d72fa219970d8f18dff5eb6d"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-blueprint.md",
+      "sha256": "8553911c9e6885e266e8021ead48013124621759fe5ece91d985307bf294c0bb"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-execution.md",
+      "sha256": "fb8abccfb317be04e79689ff384ebaa2c3a0d5052f740f4d19f2f1c4b9e2fd4a"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-plan.md",
+      "sha256": "a6118ee956fa7a364011ed65019a029300f3646e6f0bb25b191783ebb4618a8a"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-safety.md",
+      "sha256": "9fa40e72504a60d7b0e687522785d559990c3a3232d1f7a9b0e8bf2f8d7cacc1"
+    },
+    {
+      "path": "docs/tasks/TASK-0034-immutable-arena-provider-experiment.md",
+      "sha256": "09b30ccdb9dc088ff9e2e9d4d68b3c0e384f2495abeb950edb9029eb3876bbfb"
+    }
+  ],
+  "capsule": [
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/README.md",
+      "sha256": "f61bcd7abc4e08b53caef15c9809eaee88a59e83ed9c17ad47a5c26b6fe1631e"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/capture-candidate-pins.json",
+      "sha256": "ac806f31b3d9174310c7f33e54d1edff8a1abd7acc42d6c771d2047ce575da59"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/capture-composition.md",
+      "sha256": "3cfd6b1cbb7a462f638d03d89f9e627a28f51d04b4b1161103ee6b33cc2c8fe0"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/capture-scalar-candidate.patch.gz",
+      "sha256": "46c7213b935a8cdbaa22143fedacb0ab4c17d4ceab84235e276177709d3139a1"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/document-drafts.patch.gz",
+      "sha256": "dfd249956a2ac7146dbf3d4e3bb6782b2ad68563f8f7e53153f2b4b75140317f"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/family-certificate-getter.rs",
+      "sha256": "a43798e3b4d7f4c598495dcd289c6b526901f6d67166f03d4db5ffbd18b63490"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/family-helper-pins.json",
+      "sha256": "4bae95e3648117cf4c30b01410c4db010b39da1ab2f4a1df438b8606fab6f83b"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/family-integration.md",
+      "sha256": "81a33e5cf31e840812a8fc9b7b1b68292e05447e707f1a131cec52a6801dc3f6"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/family-specialization-helpers.rs",
+      "sha256": "8bacab3256847bdfc13b2a6b44ee7b2bb9f8f163705c02b719f0203501987ebf"
+    }
+  ],
+  "stashes": [
+    "727185becf5b476c2aeebe1aac426a627971e092",
+    "0fc7ef743f941ff617c92faefcf2a4072885d8f8",
+    "1cef41bf9d9f15f53b858709c3dc267395729a07",
+    "9bbeec8c2f138e9a936b6034397a7d983685b70b",
+    "df1a1334fd9ad900dd28f7f13614dbc919db477a",
+    "164d8b499d0b9ae3a658c2e9f5f8c3b6e27150cc",
+    "a03656eca6f9edb8fb8af6053e75870d0cc2e9de",
+    "ebb774398eea5646a885cebfa6880c419888f2a5",
+    "e936477f59504b89dfc1cfd0b25676fed20e743d",
+    "300a4afcc5bc7ffae0726259e0356f9be1b83ec8",
+    "66302ba49ccb19e24670d0ae8ae26ca7c18cd000",
+    "503496d06733e39b9c20d8d92359532a692d3fcd",
+    "1700c219191f29e44a537ccf0c12a0d3ea5df1cf",
+    "1eccb7cd18736bd42e35429d537d5a6992dafe79",
+    "02d82942a31e0885889a227346a98fe52b87818f",
+    "dffc2c796ce293f9e7475b3fba791a29be85fc64",
+    "741a1991882dd6f96b8ca8490baa4372aff329c5",
+    "7143bbd0a992a83867f39bca0f995e87459c94b6",
+    "6be361f187417c686c1ab72e87e43e8b7d3467a0",
+    "6b2437b57ddd2fdb8d261cc85a408a67b761483e",
+    "a416fc70ddde52a2d3941c96117721a06ab5445e",
+    "117c831118f01f0b168642d4980ee8670cbe7a13",
+    "27dd330f8a1c469481bc2f65143616a49ab53d98",
+    "f7a2904b89151797b02c53a723ac79a652553fdc",
+    "a2086033f2c24a455f61d5d104ceddf9d494ad6c",
+    "ef9da0d04d5c5b7aa94bfd931a4d3729ba8608c1",
+    "32fe13be6597a29dc99e32bada01dbf0d9966c20",
+    "5978318e68a9178b28f8f79328ecf38f4fa8c24b",
+    "47774177637d0684b36d48fee9164e5dc0a383d7",
+    "e13d994237d13dee0b2b014c2f84fc77b5f465da",
+    "94cb04bb2d098ef1899b908987c8c03f22bac4be",
+    "d14357acf0168f15dc4ffd71df369fdcb94884d1"
+  ],
+  "archives": [
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/capture-scalar-candidate.patch.gz",
+      "uncompressed_sha256": "0c1025ba51cbd88cbd987cdce7fa225d698b18965473cf9aa839fd4f04f20f3a"
+    },
+    {
+      "path": "docs/design/provider-experiments/arena-recovery-2026-10-08/document-drafts.patch.gz",
+      "uncompressed_sha256": "91e7b517b0775b3d23418352bf508a72b1ea36a85c4c52be73ff7808e9b39455"
+    }
+  ]
+}

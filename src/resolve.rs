@@ -2233,6 +2233,7 @@ struct Resolver {
     builtin_native_buffer: Option<ModuleId>,
     resource_families: HashMap<NominalTypeId, crate::resolved::ResourceDefinitionId>,
     row_resource_families: HashSet<NominalTypeId>,
+    handler_family_resources: HashSet<NominalTypeId>,
     resource_provider_interfaces: HashMap<NominalTypeId, InterfaceId>,
     resource_origins: HashMap<NominalTypeId, Origin>,
     next_binder: u32,
@@ -2581,6 +2582,7 @@ impl Resolver {
             module,
             resource_families: HashMap::new(),
             row_resource_families: HashSet::new(),
+            handler_family_resources: HashSet::new(),
             resource_provider_interfaces: HashMap::new(),
             resource_origins: HashMap::new(),
             next_binder: 0,
@@ -7126,6 +7128,7 @@ impl Resolver {
                 });
             }
             self.retain_row_resource_family(family, has_row_parameter, resource.span)?;
+            self.retain_handler_family_resource(family, resource.family.is_some(), resource.span)?;
         }
         let interface_identities = self.install_interface_identities(&surface.interfaces)?;
         let effect_identities = self.install_effect_identities(&surface.effects)?;
@@ -7907,6 +7910,7 @@ impl Resolver {
                     || self
                         .imported
                         .foreign_state_access_interface(head.interface.id)
+                    || self.imported.foreign_layout_interface(head.interface.id)
                 {
                     return Err(error(
                         ResolveReason::SealedProvider,
@@ -10308,6 +10312,20 @@ impl Resolver {
         })?;
         let arguments = self.resolve_provider_resource_arguments(source, family, span)?;
         let (provider, forwarding) = self.reserve_resource_forwarding(family, span)?;
+        let family_provider = if self.handler_family_resources.contains(&family) {
+            self.type_work.charge(1).map_err(|()| {
+                error(ResolveReason::TypeResourceExhausted, span,
+                    "resource family evidence identity exceeded its budget")
+            })?;
+            let id = crate::interface::LexicalEvidenceId::new(self.module, self.next_lexical_evidence);
+            self.next_lexical_evidence = self.next_lexical_evidence.checked_add(1).ok_or_else(|| {
+                identity_error(ResolveIdentitySpace::LexicalEvidence, span,
+                    "resource family evidence identity exhausted")
+            })?;
+            Some(id)
+        } else {
+            None
+        };
         let identity = self.allocate_type_variable(&source.identity, None, Kind::Type)?;
         let handle = self.allocate_binder(&source.handle.text, source.handle.span)?;
         self.type_work.charge(6).map_err(|()| {
@@ -10388,6 +10406,7 @@ impl Resolver {
                 arguments,
                 handle,
                 provider,
+                family_provider,
                 forwarding,
                 initializer: Box::new(initializer),
                 scope_checkpoint,
@@ -10412,6 +10431,7 @@ impl Resolver {
             arguments,
             handle,
             provider,
+            family_provider,
             forwarding,
             initializer,
             scope_checkpoint,
@@ -10446,6 +10466,7 @@ impl Resolver {
                 crate::resolved::ResolvedProviderResourceExpr {
                     prepared,
                     provider,
+                    family_provider,
                     forwarding,
                     definition,
                     family,
@@ -10949,6 +10970,7 @@ impl Resolver {
                         || self
                             .imported
                             .foreign_state_access_interface(application.interface.id)
+                        || self.imported.foreign_layout_interface(application.interface.id)
                     {
                         return Err(error(
                             ResolveReason::SealedProvider,
@@ -11955,6 +11977,7 @@ struct PendingProviderResource {
     arguments: Option<ResolvedOwnerOccurrenceBuffer>,
     handle: Binder,
     provider: crate::interface::LexicalEvidenceId,
+    family_provider: Option<crate::interface::LexicalEvidenceId>,
     forwarding: Box<[crate::resolved::ResourceForwardingBinder]>,
     initializer: Box<ResolvedExpressionOwner>,
     scope_checkpoint: usize,
@@ -19581,6 +19604,27 @@ impl Resolver {
         Ok(())
     }
 
+    fn retain_handler_family_resource(
+        &mut self,
+        family: NominalTypeId,
+        has_family: bool,
+        span: Span,
+    ) -> Result<(), ResolveError> {
+        if !has_family || self.handler_family_resources.contains(&family) {
+            return Ok(());
+        }
+        self.type_work.charge(1).map_err(|()| {
+            error(ResolveReason::TypeResourceExhausted, span,
+                "resource family classification exceeded its budget")
+        })?;
+        self.handler_family_resources.try_reserve(1).map_err(|_| {
+            error(ResolveReason::TypeResourceExhausted, span,
+                "resource family classification could not reserve storage")
+        })?;
+        self.handler_family_resources.insert(family);
+        Ok(())
+    }
+
     fn retain_row_resource_family(
         &mut self,
         family: NominalTypeId,
@@ -19665,6 +19709,7 @@ impl Resolver {
             .iter()
             .any(|parameter| matches!(parameter.kind, Kind::EffectRow));
         self.retain_row_resource_family(fact.family, has_row_parameter, span)?;
+        self.retain_handler_family_resource(fact.family, fact.family_template.is_some(), span)?;
         self.imported
             .retain_resource_type(spelling, fact, &mut self.type_work)
             .map_err(|failure| {

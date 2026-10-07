@@ -1258,6 +1258,7 @@ struct HandlerSharedRowContract {
 pub(in crate::core) struct HandlerRowContract {
     shared: HandlerSharedRowContract,
     template: ProviderTemplateId,
+    family: Option<super::ProviderFamilyIdentity>,
     handler: HandlerId,
     hidden: [(crate::types::TypeVariableId, crate::types::Kind); 2],
     formals: Box<[(crate::types::TypeVariableId, crate::types::Kind)]>,
@@ -1295,12 +1296,14 @@ impl HandlerRowRecipeDraft {
             .direct
             .as_ref()
             .ok_or_else(|| invalid(entry.draft.program.root))?;
-        charge(work, entry.definition.parameters.len())?;
+        let parameter_count = entry.definition.parameters.len()
+            .checked_add(usize::from(entry.family_identity().is_some())).ok_or_else(resource)?;
+        charge(work, parameter_count)?;
         let mut formals = Vec::new();
         formals
-            .try_reserve_exact(entry.definition.parameters.len())
+            .try_reserve_exact(parameter_count)
             .map_err(|_| resource())?;
-        for parameter in &entry.definition.parameters {
+        for parameter in entry.parameters() {
             formals.push((
                 parameter.id,
                 crate::types::clone_kind_with_budget(&parameter.kind, work)
@@ -1326,6 +1329,7 @@ impl HandlerRowRecipeDraft {
                 residual: entry.draft.hidden[1].0,
             },
             template: entry.draft.template,
+            family: entry.family_identity(),
             handler: entry.draft.handler,
             hidden: [
                 (
@@ -1341,12 +1345,12 @@ impl HandlerRowRecipeDraft {
             ],
             formals: formals.into_boxed_slice(),
             provided: crate::types::clone_effect_instance_with_budget(
-                &entry.definition.provided.instance,
+                entry.provided(),
                 work,
             )
             .map_err(|()| resource())?,
             interpreted: crate::types::clone_effect_instance_with_budget(
-                &entry.definition.interpreted.instance,
+                entry.interpreted(),
                 work,
             )
             .map_err(|()| resource())?,
@@ -1369,16 +1373,30 @@ pub(in crate::core) fn authenticate_definition_contract(
     // The original immutable certificate is required; this projection is no
     // constructor for a conditional proof and cannot authorize executable Core.
     let invalid_contract = || super::ValidationError::new(super::ValidationReason::NodeType, None);
+    let family = match contract.family {
+        None => None,
+        Some(identity) => {
+            let family = fact.family_template.as_ref().ok_or_else(invalid_contract)?;
+            if identity.definition != fact.id || identity.parameter != family.parameter.id {
+                return Err(invalid_contract());
+            }
+            Some(family)
+        }
+    };
+    let provided = family.map_or(&fact.provided.instance, |family| &family.provided.instance);
+    let interpreted = family.map_or(&fact.interpreted.instance, |family| &family.interpreted.instance);
     charge(work, contract.formals.len())?;
-    if contract.template != ProviderTemplateId::new(fact.id, 2)
-        || contract.formals.len() != fact.parameters.len()
+    if contract.template != ProviderTemplateId::new(fact.id, if family.is_some() { 3 } else { 2 })
+        || contract.formals.len() != fact.parameters.len().checked_add(usize::from(family.is_some())).ok_or_else(resource)?
         || contract.hidden[0].0 == contract.hidden[1].0
         || contract.hidden[0].1 != crate::types::Kind::Type
         || contract.hidden[1].1 != crate::types::Kind::EffectRow
     {
         return Err(invalid_contract());
     }
-    for ((formal, kind), parameter) in contract.formals.iter().zip(&fact.parameters) {
+    for ((formal, kind), parameter) in contract.formals.iter().zip(
+        fact.parameters.iter().chain(family.map(|family| &family.parameter)),
+    ) {
         if *formal != parameter.id
             || !crate::types::same_kind_with_budget(kind, &parameter.kind, work)
                 .map_err(|()| resource())?
@@ -1391,14 +1409,14 @@ pub(in crate::core) fn authenticate_definition_contract(
         .map_err(|()| resource())?
         || crate::types::compare_effect_instances_with_budget(
             &contract.provided,
-            &fact.provided.instance,
+            provided,
             work,
         )
         .map_err(|()| resource())?
             != std::cmp::Ordering::Equal
         || crate::types::compare_effect_instances_with_budget(
             &contract.interpreted,
-            &fact.interpreted.instance,
+            interpreted,
             work,
         )
         .map_err(|()| resource())?
@@ -1417,6 +1435,18 @@ pub(in crate::core) fn authenticate_owned_contract(
     work: &mut TypeWorkBudget,
 ) -> Result<(), super::ValidationError> {
     use super::{charge, invalid, resource};
+    let family = match contract.family {
+        None => None,
+        Some(identity) => {
+            let family = fact.family_template.as_ref().ok_or_else(|| invalid(draft.program.root))?;
+            if identity.definition != fact.id || identity.parameter != family.parameter.id {
+                return Err(invalid(draft.program.root));
+            }
+            Some(family)
+        }
+    };
+    let provided = family.map_or(&fact.provided.instance, |family| &family.provided.instance);
+    let interpreted = family.map_or(&fact.interpreted.instance, |family| &family.interpreted.instance);
     charge(
         work,
         contract
@@ -1425,7 +1455,7 @@ pub(in crate::core) fn authenticate_owned_contract(
             .checked_add(contract.clauses.len())
             .ok_or_else(resource)?,
     )?;
-    if contract.template != ProviderTemplateId::new(fact.id, 2)
+    if contract.template != ProviderTemplateId::new(fact.id, if family.is_some() { 3 } else { 2 })
         || contract.template != draft.template
         || contract.handler != draft.handler
         || recipe.template != draft.template
@@ -1433,7 +1463,7 @@ pub(in crate::core) fn authenticate_owned_contract(
         || contract.shared.continuation != FullContinuationInputId(0)
         || contract.shared.output != HandlerOutputId(0)
         || contract.shared.residual != draft.hidden[1].0
-        || contract.formals.len() != fact.parameters.len()
+        || contract.formals.len() != fact.parameters.len().checked_add(usize::from(family.is_some())).ok_or_else(resource)?
         || contract.clauses.len() != draft.clauses.len()
         || contract.hidden[0].0 == contract.hidden[1].0
         || contract.hidden[0].1 != crate::types::Kind::Type
@@ -1449,7 +1479,9 @@ pub(in crate::core) fn authenticate_owned_contract(
             return Err(invalid(draft.program.root));
         }
     }
-    for ((formal, kind), parameter) in contract.formals.iter().zip(&fact.parameters) {
+    for ((formal, kind), parameter) in contract.formals.iter().zip(
+        fact.parameters.iter().chain(family.map(|family| &family.parameter)),
+    ) {
         if *formal != parameter.id
             || !crate::types::same_kind_with_budget(kind, &parameter.kind, work)
                 .map_err(|()| resource())?
@@ -1462,14 +1494,14 @@ pub(in crate::core) fn authenticate_owned_contract(
         .map_err(|()| resource())?
         || crate::types::compare_effect_instances_with_budget(
             &contract.provided,
-            &fact.provided.instance,
+            provided,
             work,
         )
         .map_err(|()| resource())?
             != std::cmp::Ordering::Equal
         || crate::types::compare_effect_instances_with_budget(
             &contract.interpreted,
-            &fact.interpreted.instance,
+            interpreted,
             work,
         )
         .map_err(|()| resource())?
@@ -1480,7 +1512,7 @@ pub(in crate::core) fn authenticate_owned_contract(
     for (retained, clause) in contract.clauses.iter().zip(&draft.clauses) {
         if retained.operation != clause.operation()
             || retained.resume != clause.resume()
-            || retained.operation.owner() != fact.provided.instance.effect()
+            || retained.operation.owner() != provided.effect()
             || !crate::resolved::same_origin_with_budget(
                 retained.origin.as_origin(),
                 clause.origin(),

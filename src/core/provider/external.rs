@@ -30,6 +30,7 @@ pub(crate) struct AuthenticatedProviderExternals<'a> {
     imported: &'a ImportedFacts,
     defining: Option<&'a crate::resolved::ProviderDefiningFacts>,
     entry: Option<&'a super::HandlerFragmentEntry<'a>>,
+    family: Option<super::ProviderFamilyIdentity>,
 }
 
 /// Canonical source inputs retained only after authenticating the actual ABI
@@ -45,7 +46,7 @@ struct ProviderSourceOccurrence<'a> {
     methods: Vec<(
         crate::interface::RequirementId,
         crate::interface::MethodId,
-        usize,
+        super::super::capture::MethodTarget,
     )>,
     adapters: Vec<super::super::capture::MethodAdapter>,
 }
@@ -265,8 +266,16 @@ fn authenticate_plain_externals_context<'a>(
         types.insert(binder, scheme);
         captures.insert(binder, fact.capture());
     }
-    if entry.is_some_and(|entry| entry.imports.len() != source_variables.len()) {
-        return Err(invalid(program.root));
+    if let Some(entry) = entry {
+        let count = if entry.family_definition().is_some() {
+            charge(work, entry.imports.len())?;
+            entry.imports.values().filter(|source| source.global_binder().is_some()).count()
+        } else {
+            entry.imports.len()
+        };
+        if count != source_variables.len() {
+            return Err(invalid(program.root));
+        }
     }
     let accesses = authenticate_state_accesses(program, associations, work)?;
     super::super::validate::check_provider_external_structure(
@@ -295,6 +304,7 @@ fn authenticate_plain_externals_context<'a>(
         imported,
         defining,
         entry,
+        family: None,
     })
 }
 
@@ -494,12 +504,18 @@ impl AuthenticatedProviderExternals<'_> {
                 .map_err(|_| resource())?;
             patterns.extend(entry.draft.clauses.iter().map(|clause| clause.pattern()));
         }
-        let states = self.entry.map(|entry| [&entry.draft.state]);
+        let mut states = Vec::new();
+        if let Some(entry) = self.entry {
+            charge(work, entry.dictionary_parameters().len().checked_add(1).ok_or_else(resource)?)?;
+            states.try_reserve_exact(entry.dictionary_parameters().len() + 1).map_err(|_| resource())?;
+            states.push(&entry.draft.state);
+            states.extend(entry.dictionary_parameters());
+        }
         let mut builder = super::super::transform::prepare_provider_fragment_builder_with_catalog(
             program,
             &order,
             std::sync::Arc::clone(&program.method_evidence),
-            states.as_ref().map_or(&[], |states| states.as_slice()),
+            &states,
             &patterns,
             work,
         )
@@ -541,15 +557,19 @@ impl AuthenticatedProviderExternals<'_> {
                     routes
                         .try_reserve(source.methods.len())
                         .map_err(|_| resource())?;
-                    for (requirement, method, adapter) in &source.methods {
-                        let adapter = offset.checked_add(*adapter).ok_or_else(resource)?;
-                        let producer = adapters.get(adapter).ok_or_else(|| invalid(original))?;
+                    for (requirement, method, target) in &source.methods {
+                        let target = match *target {
+                            super::super::capture::MethodTarget::Adapter { value, binder } => {
+                                let value = offset.checked_add(value).ok_or_else(resource)?;
+                                if adapters.get(value).is_none_or(|producer| producer.binder != binder) { return Err(invalid(original)); }
+                                super::super::capture::MethodTarget::Adapter { value, binder }
+                            }
+                            super::super::capture::MethodTarget::Abstract(requirement) => super::super::capture::MethodTarget::Abstract(requirement),
+                            _ => return Err(invalid(original)),
+                        };
                         routes.push(super::super::capture::MethodUse {
                             node: emitted,
-                            target: super::super::capture::MethodTarget::Adapter {
-                                value: adapter,
-                                binder: producer.binder,
-                            },
+                            target,
                             method: *method,
                             requirement: Some(*requirement),
                             arguments: 0,
@@ -1554,7 +1574,13 @@ pub(in crate::core) fn authenticate_handler_staged_externals<'a>(
     native_authentication: Option<&crate::foreign::NativeAuthenticationSession>,
     work: &mut TypeWorkBudget,
 ) -> Result<AuthenticatedProviderExternals<'a>, ValidationError> {
-    if occurrences.len() != entry.imports.len() {
+    let import_count = if entry.family_definition().is_some() {
+        charge(work, entry.imports.len())?;
+        entry.imports.values().filter(|source| source.global_binder().is_some()).count()
+    } else {
+        entry.imports.len()
+    };
+    if occurrences.len() != import_count {
         return Err(invalid(entry.draft.program.root));
     }
     let mut canonical_occurrences = Vec::new();
@@ -1662,7 +1688,41 @@ fn authenticate_staged_externals_context<'a>(
     let mut seen_occurrences = HashSet::new();
     let mut roots = Vec::new();
     let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
-    let expected_catalog = crate::evidence_validation::build_provider_method_evidence_catalog(
+    let mut family_formals = Vec::new();
+    if let Some(entry) = entry.filter(|entry| entry.family_definition().is_some()) {
+        charge(work, entry.dictionary_parameters().len())?;
+        family_formals.try_reserve_exact(entry.dictionary_parameters().len()).map_err(|_| resource())?;
+        family_formals.extend(entry.dictionary_parameters());
+    }
+    let family_scope = entry.and_then(|entry| entry.family_definition().map(|definition| {
+        crate::evidence_validation::ProviderFamilyEvidenceScope {
+            definition, requirements: entry.family_requirements(), dictionary_parameters: &family_formals,
+        }
+    }));
+    // The source inventory is a map. Use alleged catalogue slots only to
+    // order the independently authenticated inputs, with an exact bijection;
+    // the claimed metadata supplies no method or application authority.
+    let mut family_methods = Vec::new();
+    if let Some(entry) = entry.filter(|entry| entry.family_definition().is_some()) {
+        charge(work, entry.imports.len())?;
+        let mut methods_by_slot = HashMap::new();
+        methods_by_slot.try_reserve(entry.imports.len()).map_err(|_| resource())?;
+        for source in entry.source_methods() {
+            let [slot] = source.evidence.as_ref() else { return Err(invalid(program.root)); };
+            if methods_by_slot.insert(slot.storage_id(), source).is_some() { return Err(invalid(program.root)); }
+        }
+        charge(work, program.method_evidence.occurrences().len())?;
+        family_methods.try_reserve_exact(methods_by_slot.len()).map_err(|_| resource())?;
+        for occurrence in program.method_evidence.occurrences() {
+            if occurrence.checked_method.is_some() {
+                family_methods.push(methods_by_slot.remove(&occurrence.slot).ok_or_else(|| invalid(program.root))?);
+            }
+        }
+        if !methods_by_slot.is_empty() {
+            return Err(invalid(program.root));
+        }
+    }
+    let expected_catalog = crate::evidence_validation::build_provider_method_evidence_catalog_with_family_scope(
         facts,
         canonical,
         occurrences
@@ -1671,10 +1731,12 @@ fn authenticate_staged_externals_context<'a>(
             .map(Ok)
             .unwrap_or_else(|| super::super::transform::provider_draft_span(program, program.root))
             .map_err(|_| invalid(program.root))?,
-        occurrences.iter().map(|o| o.source),
+        occurrences.iter().map(|o| o.source)
+            .chain(family_methods.iter().copied()),
         publication,
         &mut constraints,
         work,
+        family_scope,
     );
     charge(work, constraints.used())?;
     let expected_catalog = expected_catalog.map_err(|failure| match failure.reason() {
@@ -1718,6 +1780,43 @@ fn authenticate_staged_externals_context<'a>(
         ));
     }
 
+    if let Some(scope) = family_scope {
+        charge(work, 1)?;
+        external_owners.try_reserve(1).map_err(|_| resource())?;
+        external_owners.insert(super::super::dialect::MethodEvidenceOwner::ResourceFamily(scope.definition.id));
+        for source in &family_methods {
+            charge(work, 1)?;
+            let crate::resolved::ResolvedTermName::Method(method) = source.term else { return Err(invalid(program.root)); };
+            let [slot] = source.evidence.as_ref() else { return Err(invalid(program.root)); };
+            let pending = publication.occurrence(slot.storage_id(), Some(method), work)
+                .map_err(|failure| match failure {
+                    crate::evidence::SelectionFailure::TypeResource => resource(),
+                    _ => invalid(program.root),
+                })?;
+            if let Some(EvidenceNode::Abstract { requirement, .. }) = pending.selection.node(pending.selection.root()) {
+                authenticate_family_abstract_selection(program, facts, scope, pending.selection,
+                    pending.application, program.root, work)?;
+                let value_type = pending.value_type.ok_or_else(|| invalid(program.root))?;
+                let mut found = false;
+                for (ordinal, stored) in program.nodes.iter().enumerate() {
+                    charge(work, 1)?;
+                    if !matches!(&stored.kind, EffectExprKind::Pure(PureExprKind::Variable(_))) { continue; }
+                    let Some(origin) = stored.origin.as_ref() else { continue; };
+                    if !crate::resolved::same_origin_with_budget(origin, &source.origin, work).map_err(|()| resource())? { continue; }
+                    let id = NodeId::new(program.arena, u32::try_from(ordinal).map_err(|_| resource())?);
+                    authenticate_family_dictionary_variable(program, facts, scope, requirement, method, id, &source.origin, work)?;
+                    require_same(value_type, &stored.ty, id, work)?;
+                    dictionary_variables.try_reserve(1).map_err(|_| resource())?;
+                    dictionary_variables.insert(id);
+                    found = true;
+                }
+                if !found {
+                    return Err(invalid(program.root));
+                }
+            }
+        }
+    }
+
     for occurrence in occurrences {
         charge(work, 1)?;
         seen_occurrences.try_reserve(1).map_err(|_| resource())?;
@@ -1742,7 +1841,10 @@ fn authenticate_staged_externals_context<'a>(
             work,
         )?;
         for argument in occurrence.arguments {
-            closed_data_type(program, imported, argument, occurrence.root, work)?;
+            if !family_scope.is_some_and(|scope| matches!(argument, Type::Variable(id)
+                if scope.definition.family_template.as_ref().is_some_and(|family| family.parameter.id == *id))) {
+                closed_data_type(program, imported, argument, occurrence.root, work)?;
+            }
         }
         if occurrence.row_arguments.iter().any(|row| !row.is_empty()) {
             return Err(invalid(occurrence.root));
@@ -1888,20 +1990,23 @@ fn authenticate_staged_externals_context<'a>(
             }
             let mut constraints =
                 crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
-            let selected = crate::evidence_validation::validate_provider_closed_selection(
-                facts,
-                canonical,
-                occurrence_module,
-                pending.selection,
-                pending.application,
-                &mut constraints,
-                work,
-                occurrence.source.origin.primary_span(),
-            );
+            let selected = if let Some(scope) = family_scope
+                && matches!(pending.selection.node(pending.selection.root()), Some(EvidenceNode::Abstract { .. })) {
+                authenticate_family_abstract_selection(program, facts, scope, pending.selection,
+                    pending.application, occurrence.root, work)
+            } else {
+                let selected = crate::evidence_validation::validate_provider_closed_selection(
+                    facts, canonical, occurrence_module, pending.selection, pending.application,
+                    &mut constraints, work, occurrence.source.origin.primary_span(),
+                );
+                selected.map_err(|failure| match failure.reason() {
+                    crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted
+                    | crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => resource(),
+                    _ => invalid(occurrence.root),
+                })
+            };
             charge(work, constraints.used())?;
-            selected.map_err(|failure| match failure.reason() {
-                crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted | crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => resource(), _ => invalid(occurrence.root),
-            })?;
+            selected?;
             let checked_application = pending
                 .application
                 .clone_with_budget(work)
@@ -1909,11 +2014,14 @@ fn authenticate_staged_externals_context<'a>(
             charge(work, 1)?;
             checked_evidence.push((checked_application, pending.selection.clone()));
             for index in 0..pending.selection.node_count() {
-                let Some(EvidenceNode::Implementation { substitution, .. }) = pending
-                    .selection
-                    .node(crate::interface::EvidenceNodeId::new(index))
-                else {
+                let Some(selected) = pending.selection.node(crate::interface::EvidenceNodeId::new(index)) else {
                     return Err(invalid(occurrence.root));
+                };
+                let substitution = match selected {
+                    EvidenceNode::Implementation { substitution, .. } => substitution,
+                    EvidenceNode::NativeLayout { .. } => continue,
+                    EvidenceNode::Abstract { .. } if family_scope.is_some() => continue,
+                    _ => return Err(invalid(occurrence.root)),
                 };
                 for binding in substitution {
                     closed_data_type(program, imported, binding.argument(), occurrence.root, work)?;
@@ -1941,6 +2049,29 @@ fn authenticate_staged_externals_context<'a>(
                 .interface(requirement.interface(), work)
                 .map_err(|()| resource())?
                 .ok_or_else(|| invalid(occurrence.root))?;
+            if let Some(EvidenceNode::Abstract { requirement: formal_requirement, methods: selected })
+                = pending.selection.node(pending.selection.root()) {
+                let scope = family_scope.ok_or_else(|| invalid(occurrence.root))?;
+                if targets.len() != interface.methods.len() || selected.len() != targets.len() {
+                    return Err(invalid(occurrence.root));
+                }
+                for ((method, selected), (target_method, target)) in interface.methods.iter().zip(selected).zip(targets) {
+                    if method.id != *selected || target_method != method.id
+                        || !matches!(target, super::super::capture::MethodTarget::Abstract(id) if id == formal_requirement)
+                    { return Err(invalid(occurrence.root)); }
+                    let &(application, previous, argument) = edge.next().ok_or_else(|| invalid(occurrence.root))?;
+                    authenticate_family_dictionary_variable(program, facts, scope, formal_requirement,
+                        method.id, argument, &occurrence.source.origin, work)?;
+                    charge(work, 2)?;
+                    dictionary_edges.try_reserve(1).map_err(|_| resource())?;
+                    if dictionary_edges.insert(application, (binder, previous)).is_some() { return Err(invalid(application)); }
+                    dictionary_variables.try_reserve(1).map_err(|_| resource())?;
+                    dictionary_variables.insert(argument);
+                    methods.try_reserve(1).map_err(|_| resource())?;
+                    methods.push((requirement.id, method.id, target));
+                }
+                continue;
+            }
             let EvidenceNode::Implementation {
                 methods: selected, ..
             } = pending
@@ -1994,7 +2125,9 @@ fn authenticate_staged_externals_context<'a>(
                     return Err(invalid(application));
                 }
                 methods.try_reserve(1).map_err(|_| resource())?;
-                methods.push((requirement.id, method.id, adapter));
+                methods.push((requirement.id, method.id, super::super::capture::MethodTarget::Adapter {
+                    value: adapter, binder: adapters.get(adapter).ok_or_else(|| invalid(occurrence.root))?.binder,
+                }));
             }
         }
         if edge.next().is_some() {
@@ -2096,6 +2229,7 @@ fn authenticate_staged_externals_context<'a>(
         imported,
         defining,
         entry,
+        family: entry.and_then(|entry| entry.family_identity()),
     })
 }
 
@@ -2136,6 +2270,98 @@ fn compare_actual_arguments(
     }
     Ok(())
 }
+/// Authenticates only an original family formal. The enclosing catalogue
+/// reconstruction has already checked the entire written family scope.
+fn authenticate_family_abstract_selection(
+    program: &UnvalidatedEffectProgram,
+    facts: ProviderExternalFacts<'_>,
+    scope: crate::evidence_validation::ProviderFamilyEvidenceScope<'_>,
+    selection: &crate::interface::EvidenceSelection,
+    application: &crate::interface::InterfaceApplication,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    let Some(crate::interface::EvidenceNode::Abstract { requirement, methods }) =
+        selection.node(selection.root())
+    else {
+        return Err(invalid(at));
+    };
+    charge(
+        work,
+        scope.requirements.len().checked_add(methods.len()).ok_or_else(resource)?,
+    )?;
+    if selection.node_count() != 1
+        || requirement.owner()
+            != crate::interface::RequirementOwner::ResourceFamily(scope.definition.id)
+    {
+        return Err(invalid(at));
+    }
+    let checked = scope.requirements.iter().find(|checked| checked.id == requirement)
+        .ok_or_else(|| invalid(at))?;
+    if checked.interface() != application.interface()
+        || selection.interface() != application.interface()
+        || checked.arguments().len() != application.arguments().len()
+        || selection.arguments().len() != application.arguments().len()
+    {
+        return Err(invalid(at));
+    }
+    for ((formal, actual), selected) in checked.arguments().iter()
+        .zip(application.arguments()).zip(selection.arguments())
+    {
+        require_same_argument(formal, actual, at, work)?;
+        require_same_argument(formal, selected, at, work)?;
+    }
+    let interface = facts.interface(checked.interface(), work).map_err(|()| resource())?
+        .ok_or_else(|| invalid(at))?;
+    charge(work, interface.methods.len())?;
+    if !methods.iter().copied().eq(interface.methods.iter().map(|method| method.id)) {
+        return Err(invalid(at));
+    }
+    node(program, at)?;
+    Ok(())
+}
+
+/// Matches the actual dictionary argument to its ordered, genuine family
+/// formal. No variable of the same type is accepted as a replacement.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "original family scope and actual argument provenance are independent inputs"
+)]
+fn authenticate_family_dictionary_variable(
+    program: &UnvalidatedEffectProgram,
+    facts: ProviderExternalFacts<'_>,
+    scope: crate::evidence_validation::ProviderFamilyEvidenceScope<'_>,
+    requirement: crate::interface::RequirementId,
+    method: crate::interface::MethodId,
+    at: NodeId,
+    origin: &crate::source::Origin,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    charge(work, scope.requirements.len())?;
+    let mut position = 0usize;
+    for checked in scope.requirements {
+        let interface = facts.interface(checked.interface(), work).map_err(|()| resource())?
+            .ok_or_else(|| invalid(at))?;
+        charge(work, interface.methods.len())?;
+        for declaration in &interface.methods {
+            let formal = scope.dictionary_parameters.get(position).ok_or_else(|| invalid(at))?;
+            if checked.id == requirement && declaration.id == method {
+                if !matches!(&node(program, at)?.kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(variable))
+                        if variable.binder() == formal.id())
+                {
+                    return Err(invalid(at));
+                }
+                require_same(formal.ty(), &node(program, at)?.ty, at, work)?;
+                require_origin(program, at, origin, work)?;
+                return Ok(());
+            }
+            position = position.checked_add(1).ok_or_else(resource)?;
+        }
+    }
+    Err(invalid(at))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "dictionary variable authority is tied to actual evidence roots, canonical selections, type schemes, origins and cumulative work"
@@ -2400,7 +2626,7 @@ fn source_capture_relation(
     selected: &[(
         crate::interface::RequirementId,
         crate::interface::MethodId,
-        usize,
+        super::super::capture::MethodTarget,
     )],
     adapters: &[super::super::capture::MethodAdapter],
     facts: ProviderExternalFacts<'_>,
@@ -2511,7 +2737,7 @@ fn source_capture_relation_builder(
     selected: &[(
         crate::interface::RequirementId,
         crate::interface::MethodId,
-        usize,
+        super::super::capture::MethodTarget,
     )],
     adapters: &[super::super::capture::MethodAdapter],
     facts: ProviderExternalFacts<'_>,
@@ -2559,14 +2785,16 @@ fn source_capture_relation_builder(
     routes
         .try_reserve_exact(selected.len())
         .map_err(|_| resource())?;
-    for (requirement, method, adapter) in selected {
-        let producer = adapters.get(*adapter).ok_or_else(|| invalid(at))?;
+    for (requirement, method, target) in selected {
+        match *target {
+            super::super::capture::MethodTarget::Adapter { value, binder }
+                if adapters.get(value).is_some_and(|producer| producer.binder == binder) => {}
+            super::super::capture::MethodTarget::Abstract(_) => {}
+            _ => return Err(invalid(at)),
+        }
         routes.push(super::super::capture::MethodUse {
             node: occurrence,
-            target: super::super::capture::MethodTarget::Adapter {
-                value: *adapter,
-                binder: producer.binder,
-            },
+            target: *target,
             method: *method,
             requirement: Some(*requirement),
             arguments: 0,
@@ -3444,6 +3672,11 @@ pub(crate) struct RetainedHandlerExternals {
     implementations: Vec<crate::resolved::ImportedImplementationFact>,
     defining_implementations: Vec<crate::resolved::CheckedImplementationFact>,
     occurrences: Vec<RetainedHandlerOccurrence>,
+    methods: Vec<RetainedHandlerMethod>,
+    // These private records are produced only after reconstructing the full
+    // original family scope and its immutable method catalogue.
+    family: Option<super::ProviderFamilyIdentity>,
+    dictionary_formals: HashMap<BinderId, IterativeTypeOwner>,
     dictionary_edges: HashMap<NodeId, (BinderId, NodeId)>,
 }
 
@@ -3477,11 +3710,77 @@ struct RetainedHandlerEvidenceAnchor {
 }
 
 impl RetainedHandlerExternals {
+    pub(in crate::core) fn original_evidence_slots(&self) -> impl Iterator<Item = &crate::interface::EvidenceSlot> {
+        self.occurrences.iter().flat_map(|occurrence| occurrence.slots.iter())
+            .chain(self.methods.iter().map(|method| &method.slot))
+    }
     pub(in crate::core) fn original_catalog(
         &self,
     ) -> &std::sync::Arc<super::super::dialect::MethodEvidenceCatalog> {
         &self.catalog
     }
+    /// Retention can recognize only the exact original Abstract plan already
+    /// authenticated against the borrowed family scope. A specialized plan or
+    /// a newly selected plan must use the separate final admission path.
+    fn original_family_selection(
+        &self,
+        slot: usize,
+        selection: &crate::interface::EvidenceSelection,
+        application: &crate::interface::InterfaceApplication,
+        at: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        let Some(crate::interface::EvidenceNode::Abstract { requirement, .. }) = selection.node(selection.root())
+        else { return Ok(false); };
+        let family = self.family.ok_or_else(|| invalid(at))?;
+        charge(work, self.catalog.occurrence_count())?;
+        let original = self.catalog.occurrence(slot).ok_or_else(|| invalid(at))?;
+        if original.scope != Some(super::super::dialect::MethodEvidenceOwner::ResourceFamily(family.definition))
+            || requirement.owner() != crate::interface::RequirementOwner::ResourceFamily(family.definition)
+            || !selection.shares_plan_with(&original.selection)
+            || selection.root() != original.selection.root()
+            || application.interface() != original.checked_application.interface()
+            || application.arguments().len() != original.checked_application.arguments().len()
+        { return Err(invalid(at)); }
+        charge(work, application.arguments().len())?;
+        for (expected, actual) in original.checked_application.arguments().iter().zip(application.arguments()) {
+            require_same_argument(expected, actual, at, work)?;
+        }
+        Ok(true)
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "the original immutable catalogue and published method coordinates are independently compared")]
+    fn authenticate_method_coordinates(
+        &self,
+        retained: &RetainedHandlerMethod,
+        method: crate::interface::MethodId,
+        application: &crate::interface::InterfaceApplication,
+        arguments: &[Type],
+        value_type: &Type,
+        selection: &crate::interface::EvidenceSelection,
+        at: NodeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        charge(work, self.catalog.occurrence_count())?;
+        let original = self.catalog.occurrence(retained.slot.storage_id()).ok_or_else(|| invalid(at))?;
+        if method != retained.method || original.checked_method != Some(method)
+            || !selection.same_original_owner(&original.selection)
+            || application.interface() != original.checked_application.interface()
+            || application.arguments().len() != original.checked_application.arguments().len()
+            || arguments.len() != original.method_arguments.len()
+            || original.scope != self.family.map(|family| super::super::dialect::MethodEvidenceOwner::ResourceFamily(family.definition))
+        { return Err(invalid(at)); }
+        charge(work, application.arguments().len().checked_add(arguments.len()).ok_or_else(resource)?)?;
+        for (expected, actual) in original.checked_application.arguments().iter().zip(application.arguments()) {
+            require_same_argument(expected, actual, at, work)?;
+        }
+        for (expected, actual) in original.method_arguments.iter().zip(arguments) {
+            require_same(expected, actual, at, work)?;
+        }
+        require_same(original.checked_value_type.as_ref().ok_or_else(|| invalid(at))?, value_type, at, work)?;
+        self.original_family_selection(retained.slot.storage_id(), selection, application, at, work)
+    }
+
     pub(crate) fn authenticate_publication(
         &self,
         committed: bool,
@@ -3509,11 +3808,25 @@ impl RetainedHandlerExternals {
                 {
                     return Err(invalid(occurrence.node));
                 }
+                self.original_family_selection(slot.storage_id(), selection, actual, occurrence.node, work)?;
                 charge(work, expected.arguments().len())?;
                 for (expected, actual) in expected.arguments().iter().zip(actual.arguments()) {
                     require_same_argument(expected, actual, occurrence.node, work)?;
                 }
             }
+        }
+        charge(work, self.methods.len())?;
+        for method in &self.methods {
+            let at = method.node;
+            if !committed {
+                if method.slot.selection().is_some() {
+                    return Err(invalid(at));
+                }
+                continue;
+            }
+            let (id, application, arguments, value_type, selection) = method.slot.filled_method()
+                .ok_or_else(|| invalid(at))?;
+            self.authenticate_method_coordinates(method, id, application, arguments, value_type, selection, at, work)?;
         }
         Ok(())
     }
@@ -3562,6 +3875,10 @@ impl RetainedHandlerExternals {
                 {
                     require_same_argument(expected, actual, occurrence.node, work)?;
                 }
+                if self.original_family_selection(slot.storage_id(), pending.selection,
+                    pending.application, occurrence.node, work)? {
+                    continue;
+                }
                 let mut constraints =
                     crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
                 let result = crate::evidence_validation::validate_provider_closed_selection(
@@ -3582,6 +3899,31 @@ impl RetainedHandlerExternals {
                 })?;
             }
         }
+        charge(work, self.methods.len())?;
+        for method in &self.methods {
+            if method.slot.selection().is_some() {
+                return Err(invalid(method.node));
+            }
+            let pending = publication.occurrence(method.slot.storage_id(), Some(method.method), work)
+                .map_err(|failure| match failure {
+                    crate::evidence::SelectionFailure::TypeResource => resource(),
+                    _ => invalid(method.node),
+                })?;
+            if self.authenticate_method_coordinates(method,
+                pending.method.ok_or_else(|| invalid(method.node))?, pending.application,
+                pending.method_arguments, pending.value_type.ok_or_else(|| invalid(method.node))?,
+                pending.selection, method.node, work)? { continue; }
+            let mut constraints = crate::interface::InterfaceConstraintBudget::with_limit(work.remaining());
+            let result = crate::evidence_validation::validate_provider_closed_selection(
+                facts, canonical, module, pending.selection, pending.application,
+                &mut constraints, work, method.origin.as_origin().primary_span());
+            charge(work, constraints.used())?;
+            result.map_err(|failure| match failure.reason() {
+                crate::evidence_validation::EvidenceValidationReason::ConstraintResourceExhausted
+                | crate::evidence_validation::EvidenceValidationReason::TypeResourceExhausted => resource(),
+                _ => invalid(method.node),
+            })?;
+        }
         Ok(())
     }
 
@@ -3594,6 +3936,7 @@ impl RetainedHandlerExternals {
                     .iter()
                     .map(|occurrence| occurrence.origin.as_origin()),
             )
+            .chain(self.methods.iter().map(|method| method.origin.as_origin()))
             .chain(self.implementations.iter().flat_map(|implementation| {
                 std::iter::once(&implementation.fact.origin).chain(
                     implementation
@@ -3689,7 +4032,8 @@ impl RetainedHandlerExternals {
             }
             if let RetainedHandlerDictionaryNode::Variable(binder) = expected {
                 require_same(
-                    self.types.get(binder).ok_or_else(|| invalid(*id))?,
+                    self.types.get(binder).or_else(|| self.dictionary_formals.get(binder))
+                        .ok_or_else(|| invalid(*id))?,
                     &node(program, *id)?.ty,
                     *id,
                     work,
@@ -3806,6 +4150,13 @@ impl RetainedHandlerExternals {
 // Source type/capture relations are retained in their authenticated occurrence
 // records. The global inventory contributes only original source origins here.
 struct RetainedHandlerGlobal {
+    origin: RetainedHandlerOrigin,
+}
+
+struct RetainedHandlerMethod {
+    node: NodeId,
+    method: crate::interface::MethodId,
+    slot: crate::interface::EvidenceSlot,
     origin: RetainedHandlerOrigin,
 }
 
@@ -4076,6 +4427,39 @@ impl AuthenticatedProviderExternals<'_> {
             charge(work, constraints.used())?;
             result?;
         }
+        let family = self.family;
+        if self.entry.and_then(|entry| entry.family_identity()) != family {
+            return Err(invalid(self.program.root));
+        }
+        let mut dictionary_formals = HashMap::new();
+        let mut methods = Vec::new();
+        if let Some(entry) = self.entry.filter(|entry| entry.family_definition().is_some()) {
+            charge(work, entry.dictionary_parameters().len())?;
+            dictionary_formals.try_reserve(entry.dictionary_parameters().len()).map_err(|_| resource())?;
+            for formal in entry.dictionary_parameters() {
+                if dictionary_formals.insert(formal.id(), IterativeTypeOwner::new(
+                    clone_type_with_budget(formal.ty(), work).map_err(|()| resource())?)).is_some()
+                { return Err(invalid(self.program.root)); }
+            }
+            for source in entry.source_methods() {
+                charge(work, 1)?;
+                let crate::resolved::ResolvedTermName::Method(method) = source.term else { return Err(invalid(self.program.root)); };
+                let [slot] = source.evidence.as_ref() else { return Err(invalid(self.program.root)); };
+                charge(work, self.program.method_evidence.occurrence_count())?;
+                let original = self.program.method_evidence.occurrence(slot.storage_id())
+                    .ok_or_else(|| invalid(self.program.root))?;
+                if original.checked_method != Some(method) || original.checked_value_type.is_none()
+                    || original.scope != family.map(|identity| super::super::dialect::MethodEvidenceOwner::ResourceFamily(identity.definition))
+                { return Err(invalid(self.program.root)); }
+                methods.try_reserve(1).map_err(|_| resource())?;
+                methods.push(RetainedHandlerMethod {
+                    node: self.program.root,
+                    method,
+                    slot: slot.retain_unpublished().ok_or_else(|| invalid(self.program.root))?,
+                    origin: RetainedHandlerOrigin::copy(&source.origin, work)?,
+                });
+            }
+        }
         let mut occurrences = Vec::new();
         charge(work, self.source_occurrences.len())?;
         occurrences
@@ -4166,6 +4550,9 @@ impl AuthenticatedProviderExternals<'_> {
             implementations,
             defining_implementations,
             occurrences,
+            methods,
+            family,
+            dictionary_formals,
             dictionary_edges: self.dictionary_edges,
         })
     }

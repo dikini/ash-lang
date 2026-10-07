@@ -67,6 +67,43 @@ pub(crate) struct ProviderScopeAdmission {
     pub(crate) retained: Box<[crate::types::TypeVariableId]>,
     pub(crate) native_effect: crate::types::EffectInstance,
     pub(crate) protocol: super::ProviderScopeProtocol,
+    pub(crate) families: Box<[ProviderFamilyAdmission]>,
+}
+
+/// Compiler claims for one complete selected family goal. The original
+/// certificate and final copied graph must authenticate these before admission.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ProviderFamilyAdmission {
+    pub(crate) identity: super::ProviderFamilyIdentity,
+    pub(crate) application: crate::interface::InterfaceApplication,
+    pub(crate) payload: crate::types::Type,
+    pub(crate) native_effect: crate::types::EffectInstance,
+    pub(crate) lexical: crate::interface::LexicalEvidenceId,
+    pub(crate) requirements: Box<[(crate::interface::EvidenceSelection, crate::interface::EvidenceNodeId)]>,
+}
+impl ProviderFamilyAdmission {
+    pub(super) fn clone_with_budget(&self, work: &mut TypeWorkBudget) -> Result<Self, crate::core::BuildError> {
+        use crate::core::BuildError;
+        let resource = || BuildError::TypeWorkExceeded;
+        work.charge(self.requirements.len().checked_add(1).ok_or_else(resource)?)
+            .map_err(|()| resource())?;
+        let mut requirements = Vec::new();
+        requirements.try_reserve_exact(self.requirements.len()).map_err(|_| resource())?;
+        requirements.extend(self.requirements.iter().cloned());
+        Ok(Self {
+            identity: self.identity,
+            application: self.application.clone_with_budget(work).map_err(|()| resource())?,
+            payload: crate::types::clone_type_with_budget(&self.payload, work).map_err(|()| resource())?,
+            native_effect: crate::types::clone_effect_instance_with_budget(&self.native_effect, work).map_err(|()| resource())?,
+            lexical: self.lexical,
+            requirements: requirements.into_boxed_slice(),
+        })
+    }
+}
+impl Drop for ProviderFamilyAdmission {
+    fn drop(&mut self) {
+        crate::types::discard_type_iteratively(std::mem::replace(&mut self.payload, crate::types::Type::Unit));
+    }
 }
 impl Drop for ProviderScopeAdmission {
     fn drop(&mut self) {
@@ -83,6 +120,19 @@ pub(crate) struct ProviderSpecializationEntries<'a> {
     pub(crate) clauses: &'a [crate::core::EffectClause],
     pub(crate) body: NodeId,
     pub(crate) capture_globals: &'a [(crate::resolved::BinderId, NodeId)],
+    pub(crate) families: &'a [ProviderSpecializationFamilyEntries<'a>],
+}
+
+pub(crate) struct ProviderSpecializationFamilyEntries<'a> {
+    pub(crate) state: &'a crate::core::TypedBinder,
+    pub(crate) handler: crate::core::HandlerId,
+    pub(crate) clauses: &'a [crate::core::EffectClause],
+    pub(crate) dictionaries: &'a [ProviderSpecializationDictionaryEntry<'a>],
+}
+
+pub(crate) struct ProviderSpecializationDictionaryEntry<'a> {
+    pub(crate) binder: &'a crate::core::TypedBinder,
+    pub(crate) initializer: NodeId,
 }
 
 fn renamed<T: Copy + Eq>(
@@ -827,6 +877,81 @@ pub(in crate::core) fn prepare_handler_rows(
     })
 }
 
+/// Exact inputs for one member of a single-owner source dispatch group.
+pub(crate) struct ProviderGroupRowsInput<'a> {
+    pub(crate) original: &'a crate::core::validate::CheckedHandlerTemplate,
+    pub(crate) types: &'a std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+    pub(crate) rows: &'a std::collections::HashMap<crate::types::TypeVariableId, crate::types::EffectRow>,
+    pub(crate) provided: &'a crate::types::EffectInstance,
+    pub(crate) native: &'a crate::types::EffectInstance,
+}
+
+/// Solves the body-only removal and each clause's own native interpretation.
+/// The common continuation row is reconstructed from direct demand, never
+/// from a feedback-containing final clause row.
+pub(crate) fn prepare_group_handler_rows(
+    inputs: &[ProviderGroupRowsInput<'_>],
+    answer: &crate::types::Type,
+    body: &crate::types::EffectRow,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[ResolvedProviderHandlerRows]>, ValidationError> {
+    use crate::types::{EffectRow, EffectRowError, clone_effect_row_with_budget, same_effect_rows_with_budget};
+    if inputs.is_empty() { return Err(ValidationError::new(crate::core::ValidationReason::Registry, None)); }
+    super::charge(work, inputs.len())?;
+    let mut remainder = clone_effect_row_with_budget(body, work).map_err(|()| super::resource())?;
+    let remove = |row: &EffectRow, effect: &crate::types::EffectInstance, work: &mut TypeWorkBudget| {
+        match row.remove_exact_with_budget(effect, work).map_err(|()| super::resource())? {
+            Ok(row) => Ok(row),
+            Err(EffectRowError::Missing) => clone_effect_row_with_budget(row, work).map_err(|()| super::resource()),
+            Err(_) => Err(ValidationError::new(crate::core::ValidationReason::EffectRow, None)),
+        }
+    };
+    for input in inputs { remainder = remove(&remainder, input.provided, work)?; }
+    let mut output = clone_effect_row_with_budget(&remainder, work).map_err(|()| super::resource())?;
+    let mut records = Vec::new(); records.try_reserve_exact(inputs.len()).map_err(|_| super::resource())?;
+    for input in inputs {
+        let checked = input.original;
+        // Capture-sensitive templates remain an explicit unsupported fragment;
+        // this path does not fabricate a capture result for a family member.
+        if checked.needs_actual_captures() { return Err(ValidationError::new(crate::core::ValidationReason::ResourceEscape, None)); }
+        let captures = crate::core::capture::ActualCaptureInputs::empty(checked.original_template());
+        let (direct, pending) = checked.original_recipe().realize_direct(input.types, input.rows, captures.rows(), work)?;
+        let canonical = checked.original_row_contract().realize_direct(input.types, input.rows, captures.rows(), work)?;
+        if !same_effect_rows_with_budget(&direct, &canonical, work).map_err(|()| super::resource())? { return Err(super::invalid(checked.original_program().root)); }
+        let outward = remove(&direct, input.native, work)?;
+        output = output.union_with_budget(&outward, work).map_err(|()| super::resource())?
+            .map_err(|error| ValidationError::row_union_failure(error, None))?;
+        records.push((direct, pending, captures));
+    }
+    let mut solutions = Vec::new(); solutions.try_reserve_exact(inputs.len()).map_err(|_| super::resource())?;
+    for (input, (direct, pending_rows, captures)) in inputs.iter().zip(records) {
+        let checked = input.original; let hidden = checked.original_hidden();
+        if input.types.contains_key(&hidden[0].0) || input.rows.contains_key(&hidden[1].0)
+            || pending_rows.len() != checked.original_pending_rows().len() { return Err(super::invalid(checked.original_program().root)); }
+        super::charge(work, pending_rows.len())?;
+        let mut pending = std::collections::HashMap::new(); pending.try_reserve(pending_rows.len()).map_err(|_| super::resource())?;
+        for (record, row) in checked.original_pending_rows().iter().zip(pending_rows) {
+            if pending.insert(record.identity, row).is_some() { return Err(super::invalid(checked.original_program().root)); }
+        }
+        let mut complete = OriginalSubstitutions { types: std::collections::HashMap::new(), rows: std::collections::HashMap::new() };
+        super::charge(work, input.types.len().checked_add(input.rows.len()).and_then(|n| n.checked_add(2)).ok_or_else(super::resource)?)?;
+        complete.types.try_reserve(input.types.len() + 1).map_err(|_| super::resource())?;
+        complete.rows.try_reserve(input.rows.len() + 1).map_err(|_| super::resource())?;
+        for (id, ty) in input.types { complete.insert_type(*id, crate::types::clone_type_with_budget(ty, work).map_err(|()| super::resource())?); }
+        for (id, row) in input.rows { complete.insert_row(*id, clone_effect_row_with_budget(row, work).map_err(|()| super::resource())?); }
+        complete.insert_type(hidden[0].0, crate::types::clone_type_with_budget(answer, work).map_err(|()| super::resource())?);
+        complete.insert_row(hidden[1].0, clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?);
+        let realized = checked.original_recipe().realize_nodes(checked.original_program(), &complete.types, &complete.rows,
+            &pending, captures.rows(), &output, work)?;
+        solutions.push(ResolvedProviderHandlerRows { original_arena: checked.original_program().arena,
+            direct, epsilon: clone_effect_row_with_budget(&remainder, work).map_err(|()| super::resource())?,
+            output: clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?,
+            residual: clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?,
+            pending, node_rows: realized.nodes, handler_outputs: realized.handlers, captures });
+    }
+    Ok(solutions.into_boxed_slice())
+}
+
 /// Original checked lifecycle authority. This preparation-only token is bound
 /// to the exact original arena, catalog, entry, and frozen typed node forest.
 /// It is deliberately absent from executable specialization proof storage.
@@ -1236,6 +1361,50 @@ struct SpecializationProof {
     occurrences: Vec<SpecializedOccurrence>,
     anchors: Vec<SpecializedAnchor>,
     state_accesses: Vec<NodeId>,
+    families: Vec<SpecializedFamily>,
+    native_storage: Vec<AdmittedNativeStorageRelation>,
+}
+
+#[derive(Debug)]
+struct SpecializedFamily {
+    header: ProviderFamilyAdmission,
+    state: super::projection::NodeProjection,
+    handler: crate::core::HandlerId,
+    clauses: Vec<super::projection::NodeProjection>,
+    nodes: Vec<NodeId>,
+    dictionaries: Vec<SpecializedDictionary>,
+}
+
+#[derive(Debug)]
+struct SpecializedDictionary {
+    requirement: crate::interface::RequirementId,
+    method: crate::interface::MethodId,
+    binder: crate::resolved::BinderId,
+    projection: super::projection::NodeProjection,
+    initializer: super::projection::NodeProjection,
+    producer: crate::foreign::ForeignLayoutProducer,
+}
+
+/// Minted only by original-template projection and exact native-flow transfer.
+#[derive(Debug)]
+pub(crate) struct AdmittedNativeStorageRelation {
+    request: NodeId,
+    operation: crate::types::OperationId,
+    effect: crate::types::EffectInstance,
+    owner: crate::types::TypeVariableId,
+    family: super::ProviderFamilyIdentity,
+    member: usize,
+    result: super::HandlerNativeStorageResult,
+}
+
+impl AdmittedNativeStorageRelation {
+    pub(crate) fn request(&self) -> NodeId { self.request }
+    pub(crate) fn operation(&self) -> crate::types::OperationId { self.operation }
+    pub(crate) fn effect(&self) -> &crate::types::EffectInstance { &self.effect }
+    pub(crate) fn owner(&self) -> crate::types::TypeVariableId { self.owner }
+    pub(crate) fn family(&self) -> super::ProviderFamilyIdentity { self.family }
+    pub(crate) fn member(&self) -> usize { self.member }
+    pub(crate) fn result(&self) -> super::HandlerNativeStorageResult { self.result }
 }
 struct SpecializedOccurrence {
     slot: usize,
@@ -1588,6 +1757,84 @@ fn target_node(
         .ok_or_else(|| super::invalid(node))
 }
 
+fn reconstruct_group_rows(
+    admission: &ProviderScopeAdmission,
+    copies: &[ProviderCopiedTemplate<'_>],
+    body: &crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[ResolvedProviderHandlerRows]>, ValidationError> {
+    use crate::types::{KindedArgument, TemplateIdentityRenaming};
+    let count = admission.families.len().checked_add(1).ok_or_else(super::resource)?;
+    super::charge(work, count.checked_mul(4).ok_or_else(super::resource)?)?;
+    let mut formals = Vec::new();
+    let mut provided = Vec::new();
+    let mut natives = Vec::new();
+    let mut originals = Vec::new();
+    formals.try_reserve_exact(count).map_err(|_| super::resource())?;
+    provided.try_reserve_exact(count).map_err(|_| super::resource())?;
+    natives.try_reserve_exact(count).map_err(|_| super::resource())?;
+    originals.try_reserve_exact(count).map_err(|_| super::resource())?;
+    let variables = std::collections::HashMap::new();
+    let nominals = std::collections::HashMap::new();
+    let renaming = TemplateIdentityRenaming { variables: &variables, nominals: &nominals };
+    for member in 0..count {
+        let copy = copies.get(member + 2).ok_or_else(super::resource)?;
+        let ProviderOriginalTemplate::Handler(original) = copy.original else {
+            return Err(super::invalid(original_root(copy)));
+        };
+        let mut sigma = OriginalSubstitutions {
+            types: std::collections::HashMap::new(), rows: std::collections::HashMap::new(),
+        };
+        super::charge(work, admission.arguments.len().checked_add(usize::from(member != 0)).ok_or_else(super::resource)?)?;
+        sigma.types.try_reserve(admission.arguments.len() + usize::from(member != 0)).map_err(|_| super::resource())?;
+        sigma.rows.try_reserve(admission.arguments.len()).map_err(|_| super::resource())?;
+        for (formal, actual) in admission.definition.parameters.iter().zip(&admission.arguments) {
+            authenticate_actual(formal.id, actual, &copy.substitution, work)?;
+            match actual {
+                KindedArgument::TypeArg(ty) => {
+                    sigma.insert_type(formal.id, crate::types::clone_type_with_budget(ty, work).map_err(|()| super::resource())?);
+                }
+                KindedArgument::RowArg(row) => {
+                    sigma.insert_row(formal.id, crate::types::clone_effect_row_with_budget(row, work).map_err(|()| super::resource())?);
+                }
+            }
+        }
+        let (provided_template, native_template) = if member == 0 {
+            (&admission.definition.provided.instance, &admission.definition.interpreted.instance)
+        } else {
+            let family = admission.definition.family_template.as_ref().ok_or_else(|| super::invalid(original.original_program().root))?;
+            let claim = &admission.families[member - 1];
+            if claim.identity.definition != admission.definition.id || claim.identity.parameter != family.parameter.id {
+                return Err(super::invalid(original.original_program().root));
+            }
+            let actual = crate::types::KindedArgument::TypeArg(crate::types::clone_type_with_budget(&claim.payload, work).map_err(|()| super::resource())?);
+            let actual = crate::types::IterativeArgumentOwner::new(actual);
+            authenticate_actual(family.parameter.id, &actual, &copy.substitution, work)?;
+            sigma.insert_type(family.parameter.id, crate::types::clone_type_with_budget(&claim.payload, work).map_err(|()| super::resource())?);
+            (&family.provided.instance, &family.interpreted.instance)
+        };
+        provided.push(substitute_instance(provided_template, &copy.substitution, &renaming, work)?);
+        natives.push(substitute_instance(native_template, &copy.substitution, &renaming, work)?);
+        originals.push(original);
+        formals.push(sigma);
+    }
+    let mut inputs = Vec::new();
+    super::charge(work, count)?;
+    inputs.try_reserve_exact(count).map_err(|_| super::resource())?;
+    for member in 0..count {
+        inputs.push(ProviderGroupRowsInput { original: originals[member], types: &formals[member].types,
+            rows: &formals[member].rows, provided: &provided[member], native: &natives[member] });
+    }
+    prepare_group_handler_rows(&inputs, &body.ty, &body.effects, work)
+}
+
+fn original_root(copy: &ProviderCopiedTemplate<'_>) -> NodeId {
+    match copy.original {
+        ProviderOriginalTemplate::Lifecycle(_, program) => program.root,
+        ProviderOriginalTemplate::Handler(original) => original.original_program().root,
+    }
+}
+
 impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
     /// Reconstructs every copied typed occurrence from original independently
     /// admitted templates. Compiler claims are consumed, never retained as proof.
@@ -1606,13 +1853,19 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
         let (arena, target, catalog) = self
             .provider_projection_parts()
             .map_err(|_| super::invalid(entries.body))?;
-        if copies.len() != 3
+        let grouped = !admission.families.is_empty();
+        let expected_copies = admission.families.len().checked_add(3).ok_or_else(super::resource)?;
+        if copies.len() != expected_copies
+            || entries.families.len() != admission.families.len()
             || admission.arguments.len() != admission.definition.parameters.len()
             || !matches!(admission.arguments.first(),Some(KindedArgument::TypeArg(Type::Variable(id))) if *id==admission.identity)
         {
             return Err(super::invalid(entries.body));
         }
         let body = target_node(arena, target, entries.body)?;
+        let group_rows = if grouped {
+            Some(reconstruct_group_rows(&admission, copies, body, work)?)
+        } else { None };
         super::charge(
             work,
             admission
@@ -1675,6 +1928,8 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             occurrences: Vec::new(),
             anchors: Vec::new(),
             state_accesses: Vec::new(),
+            families: Vec::new(),
+            native_storage: Vec::new(),
         };
         proof
             .nodes
@@ -1685,10 +1940,18 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             .try_reserve_exact(entries.clauses.len())
             .map_err(|_| super::resource())?;
         let mut phases = [false; 3];
-        for copy in copies {
+        let mut family_phases = Vec::new();
+        if grouped {
+            super::charge(work, admission.families.len())?;
+            family_phases.try_reserve_exact(admission.families.len()).map_err(|_| super::resource())?;
+            family_phases.resize(admission.families.len(), false);
+            proof.families.try_reserve_exact(admission.families.len()).map_err(|_| super::resource())?;
+        }
+        for (copy_index, copy) in copies.iter().enumerate() {
+            let family_index = (grouped && copy_index >= 3).then(|| copy_index - 3);
             copy.freshening.authenticate(work)?;
             if copy.substitution.types.len()
-                != type_count.checked_add(1).ok_or_else(super::resource)?
+                != type_count.checked_add(1).and_then(|count| count.checked_add(usize::from(family_index.is_some()))).ok_or_else(super::resource)?
                 || copy.substitution.rows.len()
                     != row_count.checked_add(1).ok_or_else(super::resource)?
             {
@@ -1738,6 +2001,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         super::LifecyclePhase::Acquire => 0,
                         super::LifecyclePhase::Finish => 1,
                     };
+                    if grouped && copy_index != phase { return Err(super::invalid(entries.body)); }
                     let expected = if phase == 0 {
                         entries.acquire
                     } else {
@@ -1808,10 +2072,18 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                 ProviderOriginalTemplate::Handler(original) => {
                     original.authenticate_source(work)?;
                     original.authenticate_definition(&admission.definition, work)?;
+                    let (actual_state_binder, actual_handler, actual_clauses) = if let Some(index) = family_index {
+                        let family = entries.families.get(index).ok_or_else(|| super::invalid(entries.body))?;
+                        (family.state, family.handler, family.clauses)
+                    } else {
+                        if grouped && copy_index != 2 { return Err(super::invalid(entries.body)); }
+                        (entries.state, entries.handler, entries.clauses)
+                    };
                     if original.original_template().definition() != admission.definition.id
+                        || original.original_template() != crate::resolved::ProviderTemplateId::new(admission.definition.id, if family_index.is_some() { 3 } else { 2 })
                         || renamed(original.original_handler(), copy.freshening.handlers, work)?
-                            != entries.handler
-                        || original.original_clauses().len() != entries.clauses.len()
+                            != actual_handler
+                        || original.original_clauses().len() != actual_clauses.len()
                     {
                         return Err(super::invalid(entries.body));
                     }
@@ -1830,7 +2102,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                     )?;
                     let actual_state = project_binder(
                         mapped(&nodes, original.original_program().root)?,
-                        entries.state,
+                        actual_state_binder,
                         work,
                     )?;
                     if !specialize_projection(
@@ -1919,7 +2191,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                             })?,
                         )
                     };
-                    let rows = original.prepare_rows(
+                    let legacy_rows = if grouped { None } else { Some(original.prepare_rows(
                         &formals.types,
                         &formals.rows,
                         &body.ty,
@@ -1927,7 +2199,10 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         &provided,
                         actual_capture,
                         work,
-                    )?;
+                    )?) };
+                    let rows = if let Some(rows) = &group_rows {
+                        rows.get(family_index.map_or(0, |index| index + 1)).ok_or_else(|| super::invalid(entries.body))?
+                    } else { legacy_rows.as_ref().ok_or_else(|| super::invalid(entries.body))? };
                     super::charge(work, rows.node_rows.len())?;
                     if copy.node_rows.len() != rows.node_rows.len() {
                         return Err(super::invalid(entries.body));
@@ -1980,10 +2255,15 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                             return Err(super::invalid(entries.body));
                         }
                     }
+                    let mut family_clauses = Vec::new();
+                    if family_index.is_some() {
+                        super::charge(work, actual_clauses.len())?;
+                        family_clauses.try_reserve_exact(actual_clauses.len()).map_err(|_| super::resource())?;
+                    }
                     for (frozen, actual) in original
                         .original_clause_projections()
                         .iter()
-                        .zip(entries.clauses)
+                        .zip(actual_clauses)
                     {
                         let expected = specialize_projection(
                             frozen,
@@ -1997,9 +2277,23 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         if !expected.same(&actual, work)? {
                             return Err(super::invalid(actual.node));
                         }
-                        proof.clauses.push(expected);
+                        if family_index.is_some() { family_clauses.push(expected); }
+                        else { proof.clauses.push(expected); }
                     }
-                    (original.original_program(), original.original_nodes(), 2)
+                    if let Some(index) = family_index {
+                        let family = &admission.families[index];
+                        authenticate_family_header(&admission, family, copy, self.registry(), &renaming, work)?;
+                        let dictionaries = authenticate_family_dictionaries(&admission, family, &entries.families[index],
+                            copy, self.registry(), arena, target, &nodes, &renaming, work)?;
+                        let mut member_nodes = Vec::new();
+                        super::charge(work, copy.nodes.len())?;
+                        member_nodes.try_reserve_exact(copy.nodes.len()).map_err(|_| super::resource())?;
+                        member_nodes.extend(copy.nodes.iter().map(|(_, copied)| *copied));
+                        proof.families.push(SpecializedFamily { header: family.clone_with_budget(work).map_err(|failure|
+                            if failure == BuildError::TypeWorkExceeded { super::resource() } else { super::invalid(entries.body) })?,
+                            state: actual_state, handler: actual_handler, clauses: family_clauses, nodes: member_nodes, dictionaries });
+                    }
+                    (original.original_program(), original.original_nodes(), family_index.map_or(2, |index| index + 3))
                 }
             };
             let mut declarations = LocalDeclarations::default();
@@ -2016,6 +2310,9 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         original.original_state().id(),
                         work,
                     )?;
+                    for dictionary in original.original_dictionary_parameters() {
+                        retain_identity(&mut declarations.binders, dictionary.id(), work)?;
+                    }
                     retain_identity(
                         &mut declarations.handlers,
                         original.original_handler(),
@@ -2047,10 +2344,11 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             {
                 return Err(super::invalid(entries.body));
             }
-            if phases[phase] {
-                return Err(super::invalid(entries.body));
-            }
-            phases[phase] = true;
+            let phase_seen = if phase < 3 { &mut phases[phase] } else {
+                family_phases.get_mut(phase - 3).ok_or_else(|| super::invalid(entries.body))?
+            };
+            if *phase_seen { return Err(super::invalid(entries.body)); }
+            *phase_seen = true;
             if originals.len() != nodes.len() {
                 return Err(super::invalid(entries.body));
             }
@@ -2116,7 +2414,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                 work,
             )?;
         }
-        if !phases.into_iter().all(|phase| phase) {
+        if !phases.into_iter().all(|phase| phase) || family_phases.iter().any(|phase| !phase) {
             return Err(super::invalid(entries.body));
         }
         let specialization = OriginalProviderSpecialization(std::sync::Arc::new(proof));
@@ -2133,6 +2431,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             .map_err(|()| super::resource())?,
             protocol: admission.protocol,
             specialization,
+            families: std::mem::take(&mut admission.families),
         };
         Ok(std::sync::Arc::new(descriptor))
     }
@@ -3407,6 +3706,9 @@ impl ProviderOriginalTemplate<'_> {
                     original.original_state().id(),
                     work,
                 )?;
+                for dictionary in original.original_dictionary_parameters() {
+                    retain_identity(&mut declarations.binders, dictionary.id(), work)?;
+                }
                 retain_identity(
                     &mut declarations.handlers,
                     original.original_handler(),
@@ -3975,6 +4277,7 @@ mod executable_scope_tests {
             native_effect: clone_effect_instance_with_budget(&original.native_effect, &mut work)
                 .unwrap(),
             protocol: original.protocol,
+            families: Box::new([]),
         };
         scope.descriptor =
             super::super::ProviderScopeAuthority::prepared(metadata, &mut work).unwrap();

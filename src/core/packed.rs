@@ -25,6 +25,11 @@ impl StringNode {
 /// Closed set of compiler-owned pure operations admitted by this experiment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
+    /// Produces an opaque witness from one independently authenticated dictionary.
+    ForeignLayoutWitness {
+        /// Copied header; canonical dictionary validation is mandatory.
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     /// Constructs empty bytes.
     BytesEmpty,
     /// Appends a checked byte and returns an ordinary constructor result.
@@ -73,6 +78,7 @@ impl IntrinsicNode {
     #[must_use]
     pub fn expected_type(self) -> Type {
         let (input, output) = match self.operation {
+            Intrinsic::ForeignLayoutWitness { producer } => return producer.producer_type(),
             Intrinsic::BytesEmpty => (Type::Unit, Type::Bytes),
             Intrinsic::BytesAppendByte { appended, .. } => (
                 Type::Tuple(Box::new([Type::Bytes, Type::Int])),
@@ -97,11 +103,15 @@ impl IntrinsicNode {
     }
     pub(crate) fn authentic_module(self) -> bool {
         match self.operation {
+            Intrinsic::ForeignLayoutWitness { .. } => false,
             Intrinsic::BytesEmpty
             | Intrinsic::BytesAppendByte { .. }
             | Intrinsic::BytesLength
             | Intrinsic::BytesEqual => self.module.is_builtin_bytes(),
-            _ => self.module.is_builtin_string(),
+            Intrinsic::StringToUtf8
+            | Intrinsic::StringFromUtf8 { .. }
+            | Intrinsic::StringByteLength
+            | Intrinsic::StringEqual => self.module.is_builtin_string(),
         }
     }
 }

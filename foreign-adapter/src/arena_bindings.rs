@@ -1,19 +1,18 @@
 //! Minimal real native arena lifecycle through the generic Ash runtime.
-// Prepared codec remains test-only until the authenticated storage bridge lands.
-#[cfg(test)]
+// Scalar storage uses authenticated dictionaries and deferred publication.
 #[path = "arena_codec.rs"]
 mod codec;
 
-use crate::arena::{Arena, ArenaInitError, Usage};
+use crate::arena::{AllocationError, AllocationKey, Arena, ArenaInitError, LayoutTag, PayloadLayout, PreparedAllocation, Usage};
 use ash::foreign::{
-    ForeignManifest, ForeignModuleFact, arena_manifest,
+    ForeignManifest, ForeignModuleFact, ForeignScalarEncoding, arena_manifest, typed_arena_manifest,
     runtime::{
         ExecutableForeignModule, ForeignAcquisition, ForeignCompletion, ForeignData,
-        ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignOperationKey,
+        ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignOperationKey, ForeignInvocation, ForeignInvocationWork, ForeignLayoutWitness, ForeignReference, NativeInvocationCommit,
         ForeignRuntimeBinding, NativeResourceOwner,
     },
 };
-use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
+use std::{any::Any, cell::RefCell, num::NonZeroU64, rc::Rc, sync::Arc};
 
 /// Observations of actual native arena owners and lifecycle calls.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,6 +28,30 @@ pub enum ArenaEvent {
     Usage {
         /// Observation-only activation sequence.
         activation: u64,
+        /// Counters read from the native owner.
+        usage: Usage,
+    },
+    /// A prepared store committed actual payload bytes and an object record.
+    Stored {
+        /// Observation-only activation sequence.
+        activation: u64,
+        /// Published physical identity, granting no Ash reference authority.
+        allocation: AllocationKey,
+        /// Physical encoded extent and alignment.
+        layout: PayloadLayout,
+        /// Counters read after native publication.
+        usage: Usage,
+    },
+    /// A load read the published object's actual backing bytes.
+    Loaded {
+        /// Observation-only activation sequence.
+        activation: u64,
+        /// Physical identity checked against the live backing owner.
+        allocation: AllocationKey,
+        /// Physical discriminator checked against the published record.
+        layout: LayoutTag,
+        /// Actual backing byte extent read, including zero-size objects.
+        bytes_read: usize,
         /// Counters read from the native owner.
         usage: Usage,
     },
@@ -135,7 +158,7 @@ impl Drop for ArenaOwner {
 struct ArenaBinding {
     observations: ArenaObservations,
 }
-/// Binds only the exact admitted minimal arena manifest.
+/// Binds the exact lifecycle or explicitly opted-in typed arena manifest.
 /// # Errors
 /// Rejects any different schema before acquiring native backing.
 pub fn arena_binding(
@@ -144,7 +167,9 @@ pub fn arena_binding(
 ) -> Result<ForeignRuntimeBinding, ForeignExecutionError> {
     let expected = arena_manifest(manifest.id())
         .map_err(|_| ForeignExecutionError("invalid arena manifest"))?;
-    if manifest.as_ref() != &expected {
+    let typed = typed_arena_manifest(manifest.id())
+        .map_err(|_| ForeignExecutionError("invalid typed arena manifest"))?;
+    if manifest.as_ref() != &expected && manifest.as_ref() != &typed {
         return Err(ForeignExecutionError("arena executable manifest mismatch"));
     }
     Ok(ForeignRuntimeBinding::new(
@@ -168,7 +193,12 @@ impl ExecutableForeignModule for ArenaBinding {
     fn preflight(&self, module: &ForeignModuleFact) -> Result<(), ForeignExecutionError> {
         let expected = arena_manifest(module.manifest().id())
             .map_err(|_| ForeignExecutionError("invalid arena manifest"))?;
-        if module.manifest().as_ref() != &expected || module.operations.len() != 3 {
+        let typed = typed_arena_manifest(module.manifest().id())
+            .map_err(|_| ForeignExecutionError("invalid typed arena manifest"))?;
+        let legacy = module.manifest().as_ref() == &expected && module.operations.len() == 3;
+        let storage = module.manifest().as_ref() == &typed && module.operations.len() == 5
+            && module.storage.is_some() && module.layout.is_some();
+        if !legacy && !storage {
             return Err(ForeignExecutionError("arena executable facts mismatch"));
         }
         for name in [
@@ -309,6 +339,119 @@ impl ExecutableForeignModule for ArenaBinding {
         nodes.push(ForeignDataNode::Tuple(fields.into_boxed_slice()));
         ForeignData::new(nodes, 4)
     }
+    fn prepare_invoke_with_work(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+        work: &mut ForeignInvocationWork<'_>,
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        let Some(storage) = &module.storage else {
+            return self.prepare_invoke(key, module, input, states);
+        };
+        let operation = module.effects.get(key.effect)
+            .filter(|effect| **effect == storage.effect())
+            .and_then(|_| module.operations.iter().find(|operation|
+                operation.id.owner() == storage.effect() && operation.id.operation() as usize == key.operation));
+        let Some(operation) = operation else {
+            return self.prepare_invoke(key, module, input, states);
+        };
+        if states.len() != 1 { return Err(ForeignExecutionError("arena storage owner count differs")); }
+        work.charge(8)?;
+        let owner = states[0].as_any().downcast_ref::<ArenaOwner>()
+            .ok_or(ForeignExecutionError("arena storage owner differs"))?;
+        if !Rc::ptr_eq(&owner.observations.0, &self.observations.0) {
+            return Err(ForeignExecutionError("arena storage binding owner differs"));
+        }
+        let ForeignDataNode::Tuple(fields) = input.node(input.root()).ok_or(ForeignExecutionError("arena storage input absent"))? else {
+            return Err(ForeignExecutionError("arena storage input differs"));
+        };
+        let store = operation.id == storage.store();
+        if fields.len() != if store { 4 } else { 3 } || (!store && operation.id != storage.load()) {
+            return Err(ForeignExecutionError("arena storage operation differs"));
+        }
+        if !matches!(input.node(fields[0]), Some(ForeignDataNode::State(0))) {
+            return Err(ForeignExecutionError("arena storage owner slot differs"));
+        }
+        let Some(ForeignDataNode::LayoutWitness(witness)) = input.node(fields[1]) else {
+            return Err(ForeignExecutionError("arena storage witness absent"));
+        };
+        authenticate_layout(module, witness)?;
+        let dictionary = witness.dictionary();
+        let (kind, tag) = scalar_layout(witness)?;
+        if store {
+            let Some(ForeignDataNode::Integer(alignment)) = input.node(fields[2]) else {
+                return Err(ForeignExecutionError("arena storage alignment differs"));
+            };
+            work.charge(usize::try_from(alignment.magnitude_byte_length()).map_err(|_| ForeignExecutionError::WORK_EXHAUSTED)?.max(1))?;
+            let Some(alignment) = alignment.to_i64().and_then(|value| usize::try_from(value).ok()) else {
+                return allocation_refusal(module, AllocationError::InvalidAlignment, work).map(ForeignInvocation::Immediate);
+            };
+            let value = input.node(fields[3]).ok_or(ForeignExecutionError("arena stored value absent"))?;
+            if !scalar_node_matches(kind, value) { return Err(ForeignExecutionError("arena scalar witness differs from value")); }
+            let payload = match codec::prepare_scalar_with_work(tag, value, work) {
+                Ok(payload) => payload,
+                Err(codec::PreparationError::Refused(error)) => return allocation_refusal(module, error, work).map(ForeignInvocation::Immediate),
+                Err(codec::PreparationError::Internal(error)) => return Err(error),
+            };
+            if payload.layout().size() != dictionary.size() || payload.layout().natural_alignment() != dictionary.natural_alignment() {
+                return Err(ForeignExecutionError("arena encoded layout differs from dictionary"));
+            }
+            let prepared = {
+                let arena = owner.arena.try_borrow().map_err(|_| ForeignExecutionError("arena owner already borrowed"))?;
+                let arena = arena.as_ref().ok_or(ForeignExecutionError("arena storage after completion"))?;
+                match arena.prepare_allocation(payload.layout(), alignment) {
+                    Ok(prepared) => prepared,
+                    Err(error) => return allocation_refusal(module, error, work).map(ForeignInvocation::Immediate),
+                }
+            };
+            work.charge(6)?;
+            self.observations.reserve(1)?;
+            let candidate = prepared.candidate_key();
+            let reference = ForeignReference::candidate(witness.clone(), 0,
+                NonZeroU64::new(candidate.owner_id()).ok_or(ForeignExecutionError("arena owner identity is zero"))?,
+                NonZeroU64::new(candidate.object_id()).ok_or(ForeignExecutionError("arena object identity is zero"))?);
+            let mut nodes = Vec::new();
+            nodes.try_reserve_exact(2).map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
+            nodes.push(ForeignDataNode::Reference(reference));
+            nodes.push(ForeignDataNode::Constructor(storage.allocated_constructor(), Some(0)));
+            let output = ForeignData::new(nodes, 1)?;
+            Ok(ForeignInvocation::Prepared {
+                output,
+                commit: Box::new(ArenaStoreCommit {
+                    module: Arc::clone(module.manifest()), key, witness: witness.clone(),
+                    activation: owner.activation, observations: self.observations.clone(), prepared, payload,
+                }),
+            })
+        } else {
+            let Some(ForeignDataNode::Reference(reference)) = input.node(fields[2]) else {
+                return Err(ForeignExecutionError("arena load reference absent"));
+            };
+            if reference.owner_slot() != 0 || reference.witness().dictionary().as_ref() != dictionary.as_ref() {
+                return Err(ForeignExecutionError("arena load reference context differs"));
+            }
+            let allocation = AllocationKey::from_ids(reference.native_owner().get(), reference.native_object().get())
+                .ok_or(ForeignExecutionError("arena load key invalid"))?;
+            let arena = owner.arena.try_borrow().map_err(|_| ForeignExecutionError("arena owner already borrowed"))?;
+            let arena = arena.as_ref().ok_or(ForeignExecutionError("arena load after completion"))?;
+            let bytes = arena.read(allocation, tag).map_err(|_| ForeignExecutionError("arena load key differs"))?;
+            if bytes.len() != dictionary.size() { return Err(ForeignExecutionError("arena loaded extent differs")); }
+            let output = codec::decode_scalar_with_work(kind, bytes, work)?;
+            work.charge(1)?;
+            self.observations.reserve(1)?;
+            let bytes_read = bytes.len();
+            Ok(ForeignInvocation::Prepared {
+                output,
+                commit: Box::new(ArenaLoadCommit {
+                    module: Arc::clone(module.manifest()), key, witness: witness.clone(),
+                    activation: owner.activation, observations: self.observations.clone(),
+                    allocation, layout: tag, bytes_read,
+                }),
+            })
+        }
+    }
+
     fn finish(
         &self,
         key: ForeignOperationKey,
@@ -353,5 +496,112 @@ mod tests {
         assert_eq!(failure.reason(), ForeignExecutionReason::StorageRefused);
         assert!(observations.events().is_empty());
         assert_eq!(observations.0.borrow().outstanding, 0);
+    }
+}
+
+
+fn authenticate_layout(module: &ForeignModuleFact, witness: &ForeignLayoutWitness) -> Result<(), ForeignExecutionError> {
+    let canonical = module.layout.as_ref().and_then(|layout| layout.dictionary_for_producer(witness.dictionary().producer()))
+        .ok_or(ForeignExecutionError("arena witness is not from this module"))?;
+    if canonical.as_ref() != witness.dictionary().as_ref() { return Err(ForeignExecutionError("arena witness dictionary differs")); }
+    Ok(())
+}
+fn scalar_layout(witness: &ForeignLayoutWitness) -> Result<(codec::ScalarKind, LayoutTag), ForeignExecutionError> {
+    // These private physical discriminators never replace dictionary authority.
+    let (kind, tag, size, alignment) = match witness.dictionary().encoding() {
+        ForeignScalarEncoding::Unit => (codec::ScalarKind::Unit, 1, 0, 1),
+        ForeignScalarEncoding::Bool => (codec::ScalarKind::Boolean, 2, 1, 1),
+        ForeignScalarEncoding::Signed64 => (codec::ScalarKind::Integer, 3, 8, 8),
+    };
+    if witness.dictionary().size() != size || witness.dictionary().natural_alignment() != alignment {
+        return Err(ForeignExecutionError("arena scalar layout policy differs"));
+    }
+    Ok((kind, LayoutTag::new(tag)))
+}
+fn scalar_node_matches(kind: codec::ScalarKind, value: &ForeignDataNode) -> bool {
+    matches!((kind, value), (codec::ScalarKind::Unit, ForeignDataNode::Unit)
+        | (codec::ScalarKind::Boolean, ForeignDataNode::Boolean(_))
+        | (codec::ScalarKind::Integer, ForeignDataNode::Integer(_)))
+}
+fn allocation_refusal(module: &ForeignModuleFact, error: AllocationError, work: &mut ForeignInvocationWork<'_>) -> Result<ForeignData, ForeignExecutionError> {
+    work.charge(3)?;
+    let name = match error {
+        AllocationError::OutOfPayload => "OutOfPayload", AllocationError::OutOfObjects => "OutOfObjects",
+        AllocationError::InvalidAlignment => "InvalidAlignment", AllocationError::InvalidPayload => "InvalidPayload",
+    };
+    let id = *module.constructors.get(name).ok_or(ForeignExecutionError("arena refusal constructor absent"))?;
+    let storage = module.storage.as_ref().ok_or(ForeignExecutionError("arena storage contract absent"))?;
+    let mut nodes = Vec::new();
+    nodes.try_reserve_exact(2).map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
+    nodes.push(ForeignDataNode::Constructor(id, None));
+    nodes.push(ForeignDataNode::Constructor(storage.refused_constructor(), Some(0)));
+    ForeignData::new(nodes, 1)
+}
+#[derive(Debug)]
+struct ArenaStoreCommit {
+    module: Arc<ForeignManifest>, key: ForeignOperationKey, witness: ForeignLayoutWitness,
+    activation: u64, observations: ArenaObservations,
+    prepared: PreparedAllocation, payload: codec::PreparedPayload,
+}
+impl NativeInvocationCommit for ArenaStoreCommit {
+    fn commit(self: Box<Self>, key: ForeignOperationKey, module: &ForeignModuleFact,
+        states: &[&dyn NativeResourceOwner]) -> Result<(), ForeignExecutionError> {
+        if key != self.key || !Arc::ptr_eq(&self.module, module.manifest()) || states.len() != 1 {
+            return Err(ForeignExecutionError("arena prepared invocation context differs"));
+        }
+        authenticate_layout(module, &self.witness)?;
+        // Another host preparation may have consumed the earlier spare slot.
+        // Renew it before any native publication; refusal leaves storage intact.
+        self.observations.reserve(1)?;
+        let owner = states[0].as_any().downcast_ref::<ArenaOwner>().ok_or(ForeignExecutionError("arena prepared owner differs"))?;
+        if owner.activation != self.activation || !Rc::ptr_eq(&owner.observations.0, &self.observations.0) {
+            return Err(ForeignExecutionError("arena prepared activation differs"));
+        }
+        let mut arena = owner.arena.try_borrow_mut().map_err(|_| ForeignExecutionError("arena prepared owner already borrowed"))?;
+        let arena = arena.as_mut().ok_or(ForeignExecutionError("arena prepared owner completed"))?;
+        let layout = self.payload.layout();
+        let allocation = arena.commit_prepared(self.prepared, |bytes| {
+            bytes.copy_from_slice(self.payload.bytes());
+            Ok::<(), ForeignExecutionError>(())
+        }).map_err(|_| ForeignExecutionError("arena prepared allocation became stale"))?;
+        self.observations.record(ArenaEvent::Stored {
+            activation: self.activation, allocation, layout, usage: arena.usage(),
+        });
+        Ok(())
+    }
+}
+
+/// A load owns copied output and observation scratch, never an arena owner.
+#[derive(Debug)]
+struct ArenaLoadCommit {
+    module: Arc<ForeignManifest>, key: ForeignOperationKey, witness: ForeignLayoutWitness,
+    activation: u64, observations: ArenaObservations,
+    allocation: AllocationKey, layout: LayoutTag, bytes_read: usize,
+}
+impl NativeInvocationCommit for ArenaLoadCommit {
+    fn commit(self: Box<Self>, key: ForeignOperationKey, module: &ForeignModuleFact,
+        states: &[&dyn NativeResourceOwner]) -> Result<(), ForeignExecutionError> {
+        if key != self.key || !Arc::ptr_eq(&self.module, module.manifest()) || states.len() != 1 {
+            return Err(ForeignExecutionError("arena prepared load context differs"));
+        }
+        authenticate_layout(module, &self.witness)?;
+        // Another host preparation may have consumed the earlier spare slot.
+        // Renew it before any native publication; refusal leaves storage intact.
+        self.observations.reserve(1)?;
+        let owner = states[0].as_any().downcast_ref::<ArenaOwner>()
+            .ok_or(ForeignExecutionError("arena prepared load owner differs"))?;
+        if owner.activation != self.activation || !Rc::ptr_eq(&owner.observations.0, &self.observations.0) {
+            return Err(ForeignExecutionError("arena prepared load activation differs"));
+        }
+        let arena = owner.arena.try_borrow().map_err(|_| ForeignExecutionError("arena prepared load owner already borrowed"))?;
+        let arena = arena.as_ref().ok_or(ForeignExecutionError("arena prepared load owner completed"))?;
+        let bytes = arena.read(self.allocation, self.layout)
+            .map_err(|_| ForeignExecutionError("arena prepared load allocation differs"))?;
+        if bytes.len() != self.bytes_read { return Err(ForeignExecutionError("arena prepared load extent differs")); }
+        self.observations.record(ArenaEvent::Loaded {
+            activation: self.activation, allocation: self.allocation, layout: self.layout,
+            bytes_read: self.bytes_read, usage: arena.usage(),
+        });
+        Ok(())
     }
 }

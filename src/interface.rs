@@ -3314,6 +3314,8 @@ pub enum RequirementOwner {
     Global(BinderId),
     /// A prerequisite declared by an implementation.
     Impl(ImplId),
+    /// A requirement checked under one resource family's rigid payload binder.
+    ResourceFamily(crate::resolved::ResourceDefinitionId),
 }
 
 /// Stable identity of one ordered interface requirement.
@@ -3503,6 +3505,17 @@ impl Drop for EvidenceSubstitution {
 
 #[derive(Debug)]
 enum EvidenceNodeData {
+    ProviderFamily {
+        source: LexicalEvidenceId,
+        definition: crate::resolved::ResourceDefinitionId,
+        parameter: TypeVariableId,
+        application: InterfaceApplication,
+        prerequisites: Box<[EvidenceNodeId]>,
+        methods: Box<[MethodId]>,
+    },
+    NativeLayout {
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     Lexical {
         source: LexicalEvidenceId,
         methods: Box<[MethodId]>,
@@ -3528,6 +3541,27 @@ struct EvidencePlan {
 /// Read-only view of one structural evidence node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvidenceNode<'a> {
+    /// Provisional exact source family selection. Independent admission checks
+    /// the original family certificate and complete goal before executable use.
+    ProviderFamily {
+        /// Resolver-reserved lexical family candidate, not a member capability.
+        source: LexicalEvidenceId,
+        /// Original resource declaration owning this family.
+        definition: crate::resolved::ResourceDefinitionId,
+        /// Canonical rigid payload parameter in that original declaration.
+        parameter: TypeVariableId,
+        /// Complete selected goal, including ordered type and row arguments.
+        application: &'a InterfaceApplication,
+        /// Selected prerequisite nodes in original declaration order.
+        prerequisites: &'a [EvidenceNodeId],
+        /// Interface methods in original declaration order.
+        methods: &'a [MethodId],
+    },
+    /// One exact dictionary from the original sealed foreign Layout policy.
+    NativeLayout {
+        /// Qualified producer header; independent validation checks its dictionary.
+        producer: crate::foreign::ForeignLayoutProducer,
+    },
     /// One exact lexical source and its interface method order.
     Lexical {
         /// Canonical source selected at the occurrence's lexical scope.
@@ -3634,6 +3668,20 @@ impl EvidenceSelection {
         let mut builder = EvidenceSelectionBuilder::new();
         for node in &original.nodes {
             match node {
+                EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods } => {
+                    types.charge(application.arguments().len()).map_err(|()| type_resource())?;
+                    let mut actuals = InterfaceArgumentBuffer(Vec::new());
+                    actuals.0.try_reserve_exact(application.arguments().len()).map_err(|_| type_resource())?;
+                    for argument in application.arguments() { actuals.0.push(rewrite_argument(argument, types)?); }
+                    let application = InterfaceApplication::new_kinded(application.interface(), actuals.into_boxed_slice());
+                    let source = rewrite_lexical(*source, types)?;
+                    builder.push_provider_family(source, *definition, *parameter, application, prerequisites, methods, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
+                EvidenceNodeData::NativeLayout { producer } => {
+                    builder.push_native_layout(*producer, constraints)
+                        .map_err(|()| constraint_resource())?;
+                }
                 EvidenceNodeData::Lexical { source, methods } => {
                     let source = rewrite_lexical(*source, types)?;
                     builder
@@ -3726,6 +3774,12 @@ impl EvidenceSelection {
 
 fn evidence_node(plan: &EvidencePlan, id: EvidenceNodeId) -> Option<EvidenceNode<'_>> {
     match plan.nodes.get(id.0)? {
+        EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods } => Some(EvidenceNode::ProviderFamily {
+            source: *source, definition: *definition, parameter: *parameter, application, prerequisites, methods,
+        }),
+        EvidenceNodeData::NativeLayout { producer } => Some(EvidenceNode::NativeLayout {
+            producer: *producer,
+        }),
         EvidenceNodeData::Lexical { source, methods } => Some(EvidenceNode::Lexical {
             source: *source,
             methods,
@@ -3768,6 +3822,41 @@ pub(crate) struct EvidenceSelectionBuilder {
 impl EvidenceSelectionBuilder {
     pub(crate) const fn new() -> Self {
         Self { nodes: Vec::new() }
+    }
+
+    #[allow(clippy::too_many_arguments)] // Complete source identity, goal, and prerequisite order are independent claims.
+    pub(crate) fn push_provider_family(
+        &mut self,
+        source: LexicalEvidenceId,
+        definition: crate::resolved::ResourceDefinitionId,
+        parameter: TypeVariableId,
+        application: InterfaceApplication,
+        prerequisites: &[EvidenceNodeId],
+        methods: &[MethodId],
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        let retained = 1usize.checked_add(prerequisites.len()).and_then(|n| n.checked_add(methods.len())).ok_or(())?;
+        budget.charge(retained)?;
+        for argument in application.arguments() { budget.charge_argument(argument)?; }
+        if prerequisites.iter().any(|child| child.0 >= self.nodes.len()) { return Err(()); }
+        let prerequisites = try_copy_slice(prerequisites)?;
+        let methods = try_copy_slice(methods)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::ProviderFamily { source, definition, parameter, application, prerequisites, methods });
+        Ok(id)
+    }
+
+    pub(crate) fn push_native_layout(
+        &mut self,
+        producer: crate::foreign::ForeignLayoutProducer,
+        budget: &mut InterfaceConstraintBudget,
+    ) -> Result<EvidenceNodeId, ()> {
+        budget.charge(6)?;
+        self.nodes.try_reserve(1).map_err(|_| ())?;
+        let id = EvidenceNodeId(self.nodes.len());
+        self.nodes.push(EvidenceNodeData::NativeLayout { producer });
+        Ok(id)
     }
 
     pub(crate) fn push_lexical(

@@ -4628,6 +4628,13 @@ impl ImportedFacts {
             .any(|access| access.interface == id)
     }
 
+    pub(crate) fn foreign_layout_interface(&self, id: crate::interface::InterfaceId) -> bool {
+        self.foreign_modules
+            .values()
+            .filter_map(|module| module.layout.as_ref())
+            .any(|layout| layout.interface() == id)
+    }
+
     pub(crate) fn retain_provider_contracts(
         &mut self,
         summary: &ExportSummary,
@@ -19487,6 +19494,56 @@ impl ResolvedRegistry {
             .filter_map(|module| module.state_access.as_ref())
             .any(|access| access.interface == id)
     }
+    /// Borrows the original sealed layout contract by defining interface identity.
+    #[must_use]
+    pub fn foreign_layout(
+        &self,
+        id: crate::interface::InterfaceId,
+    ) -> Option<&crate::foreign::ForeignLayoutFact> {
+        self.foreign_modules
+            .values()
+            .filter_map(|module| module.layout.as_ref())
+            .find(|layout| layout.interface() == id)
+    }
+
+    /// Borrows the original sealed layout contract by defining method identity.
+    #[must_use]
+    pub fn foreign_layout_for_method(
+        &self,
+        id: crate::interface::MethodId,
+    ) -> Option<&crate::foreign::ForeignLayoutFact> {
+        self.foreign_modules
+            .values()
+            .filter_map(|module| module.layout.as_ref())
+            .find(|layout| layout.method() == id)
+    }
+
+    /// Authenticates a producer against the original immutable dictionary table.
+    pub(crate) fn foreign_layout_dictionary(
+        &self,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<crate::foreign::ForeignLayoutDictionary>, ResolvedBuildFailure> {
+        work.charge(self.foreign_modules.len().checked_add(1)
+            .ok_or(ResolvedBuildFailure::TypeResource)?)
+            .map_err(|()| ResolvedBuildFailure::TypeResource)?;
+        self.foreign_layout(producer.interface())
+            .and_then(|layout| layout.dictionary_for_producer(producer))
+            .ok_or(ResolvedBuildFailure::InvalidState)
+    }
+
+    /// Borrows the canonical native storage contract by defining effect identity.
+    #[must_use]
+    pub fn foreign_storage(
+        &self,
+        id: crate::types::EffectId,
+    ) -> Option<&crate::foreign::ForeignStorageFact> {
+        self.foreign_modules
+            .values()
+            .filter_map(|module| module.storage.as_ref())
+            .find(|storage| storage.effect() == id)
+    }
+
     /// Looks up a canonical opaque native state identity.
     #[must_use]
     pub fn foreign_state(&self, id: NominalTypeId) -> Option<&crate::foreign::ForeignStateFact> {
@@ -36477,6 +36534,9 @@ pub struct ResolvedProviderResourceExpr {
     pub(crate) prepared: ProviderInstanceSlot,
     /// Resolver-reserved sealed forwarding evidence identity.
     pub provider: crate::interface::LexicalEvidenceId,
+    /// Resolver-reserved family candidate identity, distinct from exact primary evidence.
+    /// It grants no family member or executable authority before checking.
+    pub family_provider: Option<crate::interface::LexicalEvidenceId>,
     /// Resolver-reserved forwarding binders, in interface method order.
     pub forwarding: Box<[ResourceForwardingBinder]>,
     /// Defining declaration identity.

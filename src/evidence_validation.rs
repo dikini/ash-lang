@@ -542,7 +542,8 @@ impl LinkedInterfaceRegistry {
                     .implementation_facts()
                     .get(fact_index)
                     .ok_or_else(|| unknown(group.span()))?;
-                if self.interface(program, fact.interface()).is_none() {
+                if self.interface(program, fact.interface()).is_none()
+                    || program.registry().foreign_layout(fact.interface()).is_some() {
                     return Err(unknown(fact.span));
                 }
                 let mut head_variables = Vec::new();
@@ -906,6 +907,12 @@ impl LinkedInterfaceRegistry {
             RequirementOwner::Impl(implementation) => self
                 .implementation(program, implementation)?
                 .prerequisites
+                .get(declaration)
+                .filter(|requirement| requirement.id == id),
+            RequirementOwner::ResourceFamily(definition) => program.registry()
+                .provider_contracts()
+                .find(|(module, _)| **module == definition.module())
+                .and_then(|(_, certificate)| certificate.family_requirements(definition))?
                 .get(declaration)
                 .filter(|requirement| requirement.id == id),
         }
@@ -2892,11 +2899,10 @@ pub(crate) fn validate_interface_evidence_with_budget(
             &program,
             &linked_interfaces,
             inventory.iter().flat_map(|source| {
-                preparation
+                let plan = preparation
                     .plan(source.resource.provider)
-                    .expect("inventory coverage authenticated above")
-                    .copies
-                    .iter()
+                    .expect("inventory coverage authenticated above");
+                plan.copies.iter().chain(plan.family_copies.iter())
             }),
             constraint_work,
             type_work,
@@ -2912,12 +2918,104 @@ pub(crate) fn validate_interface_evidence_with_budget(
     })
 }
 
+fn certified_family_requirements<'a>(
+    registry: &'a ResolvedRegistry,
+    definition: crate::resolved::ResourceDefinitionId,
+    budget: &mut InterfaceConstraintBudget,
+    span: Span,
+) -> Result<Option<&'a [CheckedRequirement]>, EvidenceValidationFailure> {
+    charge(budget, registry.provider_contract_count(), span)?;
+    let Some((_, certificate)) = registry.provider_contracts()
+        .find(|(module, _)| **module == definition.module()) else {
+        return Ok(None);
+    };
+    charge(budget, certificate.resource_count(), span)?;
+    Ok(certificate.family_requirements(definition))
+}
+
+/// Borrowed original family environment used before its declaration certificate
+/// exists. It grants preparation scope only and is never an export authority.
+#[derive(Clone, Copy)]
+pub(crate) struct ProviderFamilyEvidenceScope<'a> {
+    pub(crate) definition: &'a crate::resolved::ResolvedResourceDefinition,
+    pub(crate) requirements: &'a [CheckedRequirement],
+    pub(crate) dictionary_parameters: &'a [&'a crate::core::TypedBinder],
+}
+
+fn authenticate_family_evidence_scope(
+    scope: ProviderFamilyEvidenceScope<'_>,
+    facts: crate::resolved::ProviderExternalFacts<'_>,
+    registry: &ResolvedRegistry,
+    budget: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    let definition = scope.definition;
+    let family = definition.family_template.as_ref().ok_or_else(|| invalid_root(span))?;
+    charge(budget, definition.parameters.len().checked_add(1).ok_or_else(|| resource(span))?, span)?;
+    let canonical = registry.type_variable(family.parameter.id).ok_or_else(|| unknown(span))?;
+    if family.parameter.kind != Kind::Type || canonical.kind != Kind::Type
+        || family.parameter.id.module() != Some(definition.id.module())
+        || canonical.spelling != family.parameter.spelling
+        || !same_origin_charged(&canonical.origin, &family.parameter.origin, budget, span)?
+        || definition.parameters.iter().any(|parameter| parameter.id == family.parameter.id)
+        || definition.answer.id == family.parameter.id
+        || scope.requirements.len() != family.requirements.len()
+    { return Err(invalid_root(span)); }
+    registry.authenticate_owner_signature(crate::resolved::OwnerId::Resource(definition.id),
+        Some(definition.family), &definition.parameters, type_work)
+        .map_err(|failure| if failure.is_resource_exhaustion() { type_resource(span) } else { invalid_root(span) })?;
+    let mut variables = Vec::new();
+    variables.try_reserve_exact(definition.parameters.len() + 1).map_err(|_| resource(span))?;
+    variables.extend(definition.parameters.iter().map(|parameter| parameter.id));
+    variables.push(family.parameter.id);
+    let mut kinds = build_linked_kind_environments(registry, type_work, span)?;
+    kinds.install_canonical_owner_ids(registry, &variables, type_work, span)
+        .map_err(|failure| map_selected_kind_type_failure(failure, span))?;
+    let mut position = 0usize;
+    let mut binders = HashSet::new();
+    charge(budget, scope.dictionary_parameters.len(), span)?;
+    binders.try_reserve(scope.dictionary_parameters.len()).map_err(|_| resource(span))?;
+    for (index, (checked, written)) in scope.requirements.iter().zip(&family.requirements).enumerate() {
+        charge(budget, checked.arguments().len().checked_add(1).ok_or_else(|| resource(span))?, span)?;
+        if checked.id.owner() != RequirementOwner::ResourceFamily(definition.id)
+            || usize::try_from(checked.id.declaration()).ok() != Some(index)
+            || checked.span != written.span
+            || !same_origin_charged(&checked.origin, &Origin::Source(written.span), budget, span)?
+            || !same_source_application_charged(checked.application(), written, budget, span)?
+        { return Err(invalid_root(span)); }
+        let interface = facts.interface(checked.interface(), type_work)
+            .map_err(|()| type_resource(span))?.ok_or_else(|| unknown(span))?;
+        if interface.parameters.len() != checked.arguments().len() { return Err(invalid_root(span)); }
+        for argument in checked.arguments() {
+            validate_argument_with_policy(argument, registry, &variables, budget, span)?;
+        }
+        kinds.expect_body_free_interface_argument_with_ledger(checked.interface(), checked.arguments(), span, budget)
+            .map_err(|failure| map_selected_kind_constraint_failure(failure, span))?;
+        charge(budget, interface.methods.len(), span)?;
+        for (ordinal, method) in interface.methods.iter().enumerate() {
+            let binder = scope.dictionary_parameters.get(position).ok_or_else(|| invalid_root(span))?;
+            if method.id.interface() != interface.id
+                || usize::try_from(method.id.declaration()).ok() != Some(ordinal)
+                || !matches!(binder.id(), BinderId::Generated(_)) || !binders.insert(binder.id())
+                || !method.authoritative_type_parameters().is_empty()
+                || !same_type_after_interface_substitution(method.value_type(), &interface.parameters,
+                    checked.arguments(), binder.ty(), budget, span)?
+            { return Err(invalid_root(span)); }
+            position = position.checked_add(1).ok_or_else(|| resource(span))?;
+        }
+    }
+    if position != scope.dictionary_parameters.len() { return Err(invalid_root(span)); }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum MethodEvidenceInputs<'a> {
     Linked(&'a ResolvedModuleProgram),
     Imported {
         facts: &'a crate::resolved::ImportedFacts,
         defining: Option<&'a crate::resolved::ProviderDefiningFacts>,
+        family_scope: Option<ProviderFamilyEvidenceScope<'a>>,
         registry: &'a ResolvedRegistry,
         span: Span,
     },
@@ -2940,6 +3038,9 @@ impl<'a> MethodEvidenceInputs<'a> {
             Self::Imported { defining, .. } => defining,
             Self::Linked(_) => None,
         }
+    }
+    fn family_scope(self) -> Option<ProviderFamilyEvidenceScope<'a>> {
+        match self { Self::Imported { family_scope, .. } => family_scope, Self::Linked(_) => None }
     }
     fn span(self) -> Span {
         match self {
@@ -3129,8 +3230,68 @@ pub(crate) fn build_provider_method_evidence_catalog<'a>(
     constraint_work: &mut InterfaceConstraintBudget,
     type_work: &mut TypeWorkBudget,
 ) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
+    build_provider_method_evidence_catalog_with_family_scope(facts, registry, span, sources,
+        publication, constraint_work, type_work, None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "borrowed family preparation scope remains separate from original facts and work ledgers"
+)]
+pub(crate) fn build_provider_method_evidence_catalog_with_family_scope<'a>(
+    facts: crate::resolved::ProviderExternalFacts<'_>,
+    registry: &ResolvedRegistry,
+    span: Span,
+    sources: impl Iterator<Item = &'a ResolvedOccurrence>,
+    publication: &crate::evidence::PendingEvidencePublication,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    family_scope: Option<ProviderFamilyEvidenceScope<'_>>,
+) -> Result<MethodEvidenceCatalog, EvidenceValidationFailure> {
+    if let Some(scope) = family_scope {
+        authenticate_family_evidence_scope(scope, facts, registry, constraint_work, type_work, span)?;
+    }
     let mut occurrences = Vec::new();
     for source in sources {
+        if let ResolvedTermName::Method(id) = source.term {
+            let scope = family_scope.ok_or_else(|| invalid_root(span))?;
+            let [slot] = source.evidence.as_ref() else { return Err(invalid_root(span)); };
+            let pending = publication.occurrence(slot.storage_id(), Some(id), type_work)
+                .map_err(|failure| match failure {
+                    crate::evidence::SelectionFailure::TypeResource => type_resource(span),
+                    _ => invalid_root(span),
+                })?;
+            let interface = facts.interface(id.interface(), type_work)
+                .map_err(|()| type_resource(span))?.ok_or_else(|| unknown(span))?;
+            charge(constraint_work, interface.methods.len(), span)?;
+            let method = interface.methods.iter().find(|method| method.id == id)
+                .ok_or_else(|| unknown(span))?;
+            let value_type = pending.value_type.ok_or_else(|| invalid_root(span))?;
+            if pending.method != Some(id) || pending.application.interface() != interface.id
+                || !same_type_after_method_instantiation(method.value_type(), &interface.parameters,
+                    pending.application.arguments(), method.authoritative_type_parameters(),
+                    pending.method_arguments, value_type, constraint_work, span)?
+            { return Err(invalid_root(span)); }
+            charge(constraint_work, 2, span)?;
+            occurrences.try_reserve(1).map_err(|_| resource(span))?;
+            let mut arguments = TypeBuffer::new();
+            type_work.charge(pending.method_arguments.len()).map_err(|()| type_resource(span))?;
+            arguments.try_reserve(pending.method_arguments.len()).map_err(|_| type_resource(span))?;
+            for argument in pending.method_arguments {
+                arguments.push(clone_type_with_budget(argument, type_work).map_err(|()| type_resource(span))?);
+            }
+            occurrences.push(MethodEvidenceOccurrence {
+                slot: slot.storage_id(),
+                scope: Some(MethodEvidenceOwner::ResourceFamily(scope.definition.id)),
+                scope_binder: None, target_owner: None, target_requirement: None,
+                checked_method: Some(id),
+                checked_application: pending.application.clone_with_budget(type_work).map_err(|()| type_resource(span))?,
+                method_arguments: arguments.into_boxed_slice(),
+                checked_value_type: Some(clone_type_with_budget(value_type, type_work).map_err(|()| type_resource(span))?),
+                selection: pending.selection.clone(),
+            });
+            continue;
+        }
         let binder = source.global_binder().ok_or_else(|| invalid_root(span))?;
         let global = facts.global(binder).ok_or_else(|| unknown(span))?;
         charge(constraint_work, global.scheme().requirements.len(), span)?;
@@ -3155,7 +3316,7 @@ pub(crate) fn build_provider_method_evidence_catalog<'a>(
             occurrences.try_reserve(1).map_err(|_| resource(span))?;
             occurrences.push(MethodEvidenceOccurrence {
                 slot: slot.storage_id(),
-                scope: None,
+                scope: family_scope.map(|scope| MethodEvidenceOwner::ResourceFamily(scope.definition.id)),
                 scope_binder: None,
                 target_owner: Some(MethodEvidenceOwner::Global(binder)),
                 target_requirement: Some(requirement.id),
@@ -3174,6 +3335,7 @@ pub(crate) fn build_provider_method_evidence_catalog<'a>(
         MethodEvidenceInputs::Imported {
             facts: facts.imported,
             defining: facts.defining,
+            family_scope,
             registry,
             span,
         },
@@ -3184,10 +3346,44 @@ pub(crate) fn build_provider_method_evidence_catalog<'a>(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "canonical selected source and completed defining facts share explicit independent validation ledgers"
-)]
+fn validate_native_layout_dictionary(
+    registry: &ResolvedRegistry,
+    producer: crate::foreign::ForeignLayoutProducer,
+    application: &InterfaceApplication,
+    constraint_work: &mut InterfaceConstraintBudget,
+    type_work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<(), EvidenceValidationFailure> {
+    charge(constraint_work, 8, span)?;
+    let [KindedArgument::TypeArg(payload)] = application.arguments() else {
+        return Err(invalid_root(span));
+    };
+    let dictionary = registry.foreign_layout_dictionary(producer, type_work)
+        .map_err(|failure| match failure {
+            crate::resolved::ResolvedBuildFailure::TypeResource => type_resource(span),
+            _ => invalid_root(span),
+        })?;
+    use crate::foreign::ForeignScalarEncoding;
+    let (encoding, size, alignment) = match payload {
+        Type::Unit => (ForeignScalarEncoding::Unit, 0, 1),
+        Type::Bool => (ForeignScalarEncoding::Bool, 1, 1),
+        Type::Int => (ForeignScalarEncoding::Signed64, 8, 8),
+        _ => return Err(invalid_root(span)),
+    };
+    if producer.interface() != application.interface()
+        || producer.method().interface() != application.interface()
+        || producer.method().declaration() != 0
+        || dictionary.producer() != producer
+        || dictionary.payload_type() != payload
+        || producer.payload_type() != *payload
+        || dictionary.encoding() != encoding
+        || dictionary.size() != size
+        || dictionary.natural_alignment() != alignment {
+        return Err(invalid_root(span));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_provider_closed_selection(
     facts: crate::resolved::ProviderExternalFacts<'_>,
     registry: &ResolvedRegistry,
@@ -3232,6 +3428,14 @@ pub(crate) fn validate_provider_closed_selection(
             .interface(goal.application().interface(), type_work)
             .map_err(|()| type_resource(span))?
             .ok_or_else(|| unknown(span))?;
+        if let Some(EvidenceNode::NativeLayout { producer }) = selection.node(goal.node) {
+            validate_native_layout_dictionary(registry, producer, goal.application(),
+                constraint_work, type_work, span)?;
+            if interface.methods.len() != 1 || interface.methods[0].id != producer.method() {
+                return Err(invalid_root(span));
+            }
+            continue;
+        }
         let EvidenceNode::Implementation {
             implementation,
             substitution,
@@ -3856,13 +4060,28 @@ fn build_method_evidence_concrete_sources(
     if inputs.imported().is_some() {
         for occurrence in occurrences {
             charge(constraint_work, 1, span)?;
-            let EvidenceNode::Implementation {
-                methods: selected, ..
-            } = occurrence
-                .selection
-                .node(occurrence.selection.root())
-                .ok_or_else(|| invalid_root(span))?
-            else {
+            let root = occurrence.selection.node(occurrence.selection.root())
+                .ok_or_else(|| invalid_root(span))?;
+            if matches!(root, EvidenceNode::NativeLayout { .. }) {
+                continue;
+            }
+            if let EvidenceNode::Abstract { requirement, methods: selected } = root {
+                let family = inputs.family_scope().ok_or_else(|| invalid_root(span))?;
+                charge(constraint_work, family.requirements.len().checked_add(selected.len()).ok_or_else(|| resource(span))?, span)?;
+                let checked = family.requirements.iter().find(|candidate| candidate.id == requirement)
+                    .ok_or_else(|| invalid_root(span))?;
+                let interface = crate::resolved::ProviderExternalFacts {
+                    imported: inputs.imported().ok_or_else(|| invalid_root(span))?, defining: inputs.defining(),
+                }.interface(checked.interface(), type_work).map_err(|()| type_resource(span))?
+                    .ok_or_else(|| invalid_root(span))?;
+                if occurrence.scope != Some(MethodEvidenceOwner::ResourceFamily(family.definition.id))
+                    || !same_application_parts_charged(checked.application(), occurrence.checked_application.interface(),
+                        occurrence.checked_application.arguments(), constraint_work, span)?
+                    || !selected.iter().copied().eq(interface.methods.iter().map(|method| method.id))
+                { return Err(invalid_root(span)); }
+                continue;
+            }
+            let EvidenceNode::Implementation { methods: selected, .. } = root else {
                 return Err(invalid_root(span));
             };
             charge(constraint_work, selected.len(), span)?;
@@ -3946,10 +4165,12 @@ fn build_method_evidence_concrete_sources(
                 .node(*prerequisite)
                 .ok_or_else(|| invalid_root(span))?
             {
-                EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+                EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+                | EvidenceNode::ProviderFamily { methods, .. } => {
                     methods.len()
                 }
-                EvidenceNode::Implementation { methods, .. } => methods.len(),
+                EvidenceNode::NativeLayout { .. } => 1,
+            EvidenceNode::Implementation { methods, .. } => methods.len(),
             };
             prerequisite_count = prerequisite_count
                 .checked_add(methods)
@@ -3982,6 +4203,20 @@ fn build_method_evidence_concrete_sources(
                 .node(*prerequisite)
                 .ok_or_else(|| invalid_root(span))?
             {
+                EvidenceNode::NativeLayout { producer } => {
+                    retained_prerequisites.push(crate::core::dialect::MethodEvidenceConcretePrerequisite {
+                        selection_node: *prerequisite, method: producer.method(), scope_position: None,
+                    });
+                }
+                EvidenceNode::ProviderFamily { methods, .. } => {
+                    for method in methods {
+                        provider_family_selection(inputs, &occurrence.selection, *prerequisite, *method,
+                            constraint_work, type_work, span)?;
+                        retained_prerequisites.push(crate::core::dialect::MethodEvidenceConcretePrerequisite {
+                            selection_node: *prerequisite, method: *method, scope_position: None,
+                        });
+                    }
+                }
                 EvidenceNode::Lexical { methods, .. } => {
                     for method in methods {
                         retained_prerequisites.push(
@@ -4053,6 +4288,27 @@ fn build_method_evidence_concrete_sources(
         });
     }
     Ok(sources)
+}
+
+fn provider_family_selection(
+    inputs: MethodEvidenceInputs<'_>,
+    selection: &EvidenceSelection,
+    node: EvidenceNodeId,
+    method: MethodId,
+    budget: &mut InterfaceConstraintBudget,
+    work: &mut TypeWorkBudget,
+    span: Span,
+) -> Result<provider_sources::ValidatedProviderFamilySelection, EvidenceValidationFailure> {
+    let program = inputs.linked().ok_or_else(|| invalid_root(span))?;
+    let Some(EvidenceNode::ProviderFamily { source, .. }) = selection.node(node) else {
+        return Err(invalid_root(span));
+    };
+    let sources = source_provider_occurrences(program, work)?;
+    charge(budget, sources.len(), span)?;
+    let resource = sources.iter().find(|entry| entry.resource.family_provider == Some(source))
+        .ok_or_else(|| invalid_root(span))?.resource;
+    provider_sources::validate_provider_family_selection(program, resource, selection, node, method,
+        budget, work, span)
 }
 
 #[allow(
@@ -4169,6 +4425,44 @@ fn build_method_evidence_expectations(
         while let Some(identity) = pending.pop() {
             charge(constraint_work, 1, span)?;
             if !visited.insert(identity) {
+                continue;
+            }
+            if let Some(EvidenceNode::ProviderFamily { source, prerequisites, methods: selected, .. })
+                = occurrence.selection.node(identity) {
+                charge(constraint_work, selected.len().checked_add(prerequisites.len()).ok_or_else(|| resource(span))?, span)?;
+                for method in selected {
+                    if identity == occurrence.selection.root()
+                        && occurrence.checked_method.is_some_and(|requested| requested != *method) { continue; }
+                    let member = provider_family_selection(inputs, &occurrence.selection, identity, *method,
+                        constraint_work, type_work, span)?;
+                    charge(constraint_work, 1, span)?;
+                    expectations.try_reserve(1).map_err(|_| resource(span))?;
+                    expectations.push(MethodEvidenceExpectation {
+                        occurrence: Some(occurrence.slot), method: *method,
+                        role: MethodEvidenceExpectedRole::ProviderFamilyUse {
+                            source, member: member.member, selection_node: identity, binder: member.binder,
+                        },
+                    });
+                }
+                pending.try_reserve(prerequisites.len()).map_err(|_| resource(span))?;
+                pending.extend(prerequisites.iter().copied());
+                continue;
+            }
+            if let Some(EvidenceNode::NativeLayout { producer }) = occurrence.selection.node(identity) {
+                let dictionary = inputs.registry().foreign_layout_dictionary(producer, type_work)
+                    .map_err(|failure| match failure {
+                        crate::resolved::ResolvedBuildFailure::TypeResource => type_resource(span),
+                        _ => invalid_root(span),
+                    })?;
+                if dictionary.producer() != producer {
+                    return Err(invalid_root(span));
+                }
+                charge(constraint_work, 1, span)?;
+                expectations.try_reserve(1).map_err(|_| resource(span))?;
+                expectations.push(MethodEvidenceExpectation {
+                    occurrence: Some(occurrence.slot), method: producer.method(),
+                    role: MethodEvidenceExpectedRole::NativeLayoutUse { producer, selection_node: identity },
+                });
                 continue;
             }
             let Some(EvidenceNode::Implementation {
@@ -4292,9 +4586,11 @@ fn build_method_evidence_expectations(
             .node(occurrence.selection.root())
             .ok_or_else(|| invalid_root(span))?
         {
-            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => {
+            EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+                | EvidenceNode::ProviderFamily { methods, .. } => {
                 methods.len()
             }
+            EvidenceNode::NativeLayout { .. } => 1,
             EvidenceNode::Implementation { methods, .. } => methods.len(),
         };
         let lexical_node_count = if lexical_owners.is_empty() {
@@ -4491,8 +4787,10 @@ fn build_method_evidence_expectations(
                         .ok_or_else(|| invalid_root(span))?;
                     let methods = match child {
                         EvidenceNode::Abstract { methods, .. }
-                        | EvidenceNode::Lexical { methods, .. } => methods.len(),
-                        EvidenceNode::Implementation { methods, .. } => methods.len(),
+                        | EvidenceNode::Lexical { methods, .. }
+                        | EvidenceNode::ProviderFamily { methods, .. } => methods.len(),
+                        EvidenceNode::NativeLayout { .. } => 1,
+            EvidenceNode::Implementation { methods, .. } => methods.len(),
                     };
                     adapter_edge_count = adapter_edge_count
                         .checked_add(methods)
@@ -4518,9 +4816,12 @@ fn build_method_evidence_expectations(
                                 .checked_add(domains.len())
                                 .and_then(|count| count.checked_add(domain_expectations.len()))
                                 .and_then(|count| count.checked_add(adapter_expectations.len()))
+                                .and_then(|count| count.checked_add(expectations.len()))
                                 .and_then(|count| {
                                     let child_methods = match child {
-                                        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. } => methods.len(),
+                                        EvidenceNode::NativeLayout { .. } => 1,
+                                        EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+                | EvidenceNode::ProviderFamily { methods, .. } => methods.len(),
                                         EvidenceNode::Implementation { methods, .. } => {
                                             methods.len()
                                         }
@@ -4550,6 +4851,8 @@ fn build_method_evidence_expectations(
                                     &occurrence.selection,
                                     *prerequisite,
                                     method,
+                                    occurrence.slot,
+                                    &expectations,
                                     span,
                                 )?;
                                 let producer_scope_position = match semantic_producer {
@@ -4565,7 +4868,9 @@ fn build_method_evidence_expectations(
                                     )?),
                                     crate::core::dialect::MethodEvidenceProducer::Adapter {
                                         ..
-                                    } | crate::core::dialect::MethodEvidenceProducer::Lexical { .. } => None,
+                                    } | crate::core::dialect::MethodEvidenceProducer::Lexical { .. }
+                                    | crate::core::dialect::MethodEvidenceProducer::NativeLayout { .. }
+                                    | crate::core::dialect::MethodEvidenceProducer::ProviderFamily { .. } => None,
                                 };
                                 crate::core::dialect::MethodEvidenceExpectedProducer::Monomorphic {
                                     selection_node: *prerequisite,
@@ -4650,8 +4955,12 @@ fn build_method_evidence_expectations(
                         }};
                     }
                     match child {
+                        EvidenceNode::NativeLayout { producer } => {
+                            retain_edge!(producer.method());
+                        }
                         EvidenceNode::Abstract { methods, .. }
-                        | EvidenceNode::Lexical { methods, .. } => {
+                        | EvidenceNode::Lexical { methods, .. }
+                        | EvidenceNode::ProviderFamily { methods, .. } => {
                             for method in methods {
                                 retain_edge!(*method);
                             }
@@ -4700,6 +5009,9 @@ fn method_evidence_producer_expectation(
         .node(node)
         .ok_or_else(|| invalid_root(span))?
     {
+        // The registered witness method has no method-local polymorphism;
+        // it cannot authorize an abstract producer instantiation anchor.
+        EvidenceNode::NativeLayout { .. } | EvidenceNode::ProviderFamily { .. } => Err(invalid_root(span)),
         EvidenceNode::Lexical { source, methods } if methods.contains(&method) => {
             lexical_expectations
                 .get(&(source, method))
@@ -4735,9 +5047,25 @@ fn method_evidence_semantic_producer(
     selection: &EvidenceSelection,
     node: EvidenceNodeId,
     method: MethodId,
+    occurrence: usize,
+    expectations: &[MethodEvidenceExpectation],
     span: Span,
 ) -> Result<crate::core::dialect::MethodEvidenceProducer, EvidenceValidationFailure> {
     match selection.node(node).ok_or_else(|| invalid_root(span))? {
+        EvidenceNode::ProviderFamily { source, methods, .. } if methods.contains(&method) => {
+            expectations.iter().find_map(|expected| match expected.role {
+                MethodEvidenceExpectedRole::ProviderFamilyUse { source: selected, member, selection_node, binder }
+                    if expected.occurrence == Some(occurrence) && expected.method == method
+                        && selected == source && selection_node == node => {
+                    Some(crate::core::dialect::MethodEvidenceProducer::ProviderFamily { source, member, binder })
+                }
+                _ => None,
+            }).ok_or_else(|| invalid_root(span))
+        }
+        EvidenceNode::NativeLayout { producer } => {
+            if producer.method() != method { return Err(invalid_root(span)); }
+            Ok(crate::core::dialect::MethodEvidenceProducer::NativeLayout { producer })
+        }
         EvidenceNode::Lexical { source, methods } if methods.contains(&method) => {
             Ok(crate::core::dialect::MethodEvidenceProducer::Lexical { source })
         }
@@ -4757,7 +5085,8 @@ fn method_evidence_semantic_producer(
                 },
             )
             .ok_or_else(|| invalid_root(span)),
-        EvidenceNode::Abstract { .. } | EvidenceNode::Lexical { .. } => Err(invalid_root(span)),
+        EvidenceNode::Abstract { .. } | EvidenceNode::Lexical { .. }
+        | EvidenceNode::ProviderFamily { .. } => Err(invalid_root(span)),
     }
 }
 
@@ -4786,24 +5115,32 @@ fn method_evidence_scope_position(
         MethodEvidenceOwner::Implementation(_) => {
             inputs.implementation_method_count(constraint_work, span)?
         }
+        MethodEvidenceOwner::ResourceFamily(_) => 0,
     };
     charge(constraint_work, candidate_count, span)?;
-    let scheme = match owner {
+    let requirements = match owner {
         MethodEvidenceOwner::Global(binder) => inputs
             .globals()
             .find(|(id, _, _)| *id == binder)
-            .map(|(_, scheme, _)| scheme),
+            .map(|(_, scheme, _)| scheme.requirements.as_ref()),
         MethodEvidenceOwner::Implementation(implementation) => inputs
             .implementations()
             .flat_map(|implementation| implementation.methods.iter())
             .find(|candidate| candidate.id == implementation)
-            .map(|method| &method.scheme),
+            .map(|method| method.scheme.requirements.as_ref()),
+        MethodEvidenceOwner::ResourceFamily(definition) => {
+            if let Some(scope) = inputs.family_scope() {
+                if scope.definition.id != definition { return Err(invalid_root(span)); }
+                Some(scope.requirements)
+            } else {
+                certified_family_requirements(inputs.registry(), definition, constraint_work, span)?
+            }
+        },
     }
     .ok_or_else(|| invalid_root(span))?;
     let requirement_position =
         usize::try_from(requirement.declaration()).map_err(|_| invalid_root(span))?;
-    let requirements = scheme
-        .requirements
+    let requirements = requirements
         .get(..=requirement_position)
         .ok_or_else(|| invalid_root(span))?;
     charge(constraint_work, requirements.len(), span)?;
@@ -4904,7 +5241,8 @@ fn selection_has_lexical(
         LEXICAL_PLAN_INSPECTIONS.with(|count| count.set(count.get() + 1));
         if matches!(
             selection.node(EvidenceNodeId::new(index)),
-            Some(EvidenceNode::Lexical { .. })
+            Some(EvidenceNode::Lexical { .. } | EvidenceNode::NativeLayout { .. }
+                | EvidenceNode::ProviderFamily { .. })
         ) {
             return Ok(true);
         }
@@ -5379,6 +5717,7 @@ fn collect_method_evidence_expression_occurrences<'a>(
                     {
                         charge(constraint_work, methods.len(), expression.span)?;
                         if !interface_has_polymorphic_method(methods, requirement.interface())
+                            && program.registry().foreign_layout(requirement.interface()).is_none()
                             && (lexical_owners.is_empty()
                                 || !slot
                                     .selection()
@@ -5422,6 +5761,7 @@ fn collect_method_evidence_expression_occurrences<'a>(
                     if !methods
                         .iter()
                         .any(|row| row.id == method && method_is_polymorphic(row))
+                        && program.registry().foreign_layout_for_method(method).is_none()
                         && (lexical_owners.is_empty()
                             || !slot
                                 .selection()
@@ -5516,6 +5856,9 @@ fn collect_method_evidence_expression_occurrences<'a>(
                                         }
                                         MethodEvidenceOwner::Implementation(method) => {
                                             RequirementOwner::Impl(method.implementation())
+                                        }
+                                        MethodEvidenceOwner::ResourceFamily(definition) => {
+                                            RequirementOwner::ResourceFamily(definition)
                                         }
                                     }),
                                     variables: &[],
@@ -5629,6 +5972,9 @@ fn collect_method_evidence_expression_occurrences<'a>(
                                         }
                                         MethodEvidenceOwner::Implementation(method) => {
                                             RequirementOwner::Impl(method.implementation())
+                                        }
+                                        MethodEvidenceOwner::ResourceFamily(definition) => {
+                                            RequirementOwner::ResourceFamily(definition)
                                         }
                                     }),
                                     variables: &[],
@@ -5827,7 +6173,7 @@ fn push_method_evidence_occurrence(
                     .binder,
             )
         }
-        None => None,
+        Some(MethodEvidenceOwner::ResourceFamily(_)) | None => None,
     };
     let mut retained_arguments = Vec::new();
     type_work
@@ -7059,8 +7405,10 @@ fn validate_occurrence<'a>(
                 span,
             )?;
             let authentic_method_relation = match selection.node(selection.root()) {
+                Some(EvidenceNode::NativeLayout { producer }) => producer.method() == checked_method,
                 Some(
-                    EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. },
+                    EvidenceNode::Abstract { methods, .. } | EvidenceNode::Lexical { methods, .. }
+                | EvidenceNode::ProviderFamily { methods, .. },
                 ) => method_relation_slot_matches(methods, checked_method, &checked_method),
                 Some(EvidenceNode::Implementation {
                     implementation,
@@ -7354,7 +7702,61 @@ fn validate_evidence_node(
         .interface(program, expected_application.interface())
         .ok_or_else(|| unknown(span))?;
     match selection.node(node).ok_or_else(|| invalid_root(span))? {
+        EvidenceNode::ProviderFamily { source, application, prerequisites, methods, .. } => {
+            if mandated_requirement.is_some()
+                || program.registry().foreign_layout(expected_application.interface()).is_some()
+                || first_identity_equal_abstract_requirement(program, registry, scope,
+                    expected_application, budget, span)?.is_some()
+                || !same_application_parts_charged(application, expected_application.interface(),
+                    expected_application.arguments(), budget, span)?
+                || identity_equal_lexical_source(program, registry, scope, expected_application,
+                    budget, type_work, span)?.is_some()
+            { return Err(invalid_root(span)); }
+            if let Some(RequirementOwner::Impl(current)) = scope.owner {
+                let current = registry.implementation(program, current).ok_or_else(|| unknown(span))?;
+                if same_application_parts_charged(current.application(), expected_application.interface(),
+                    expected_application.arguments(), budget, span)? { return Err(invalid_root(span)); }
+            }
+            charge(budget, methods.len().checked_add(prerequisites.len()).ok_or_else(|| resource(span))?, span)?;
+            if !methods.iter().copied().eq(interface.methods.iter().map(|method| method.id)) {
+                return Err(invalid_root(span));
+            }
+            let mut head = scope.lexical_head;
+            let mut resource_source = None;
+            while let Some(index) = head {
+                charge(budget, 1, span)?;
+                let (candidate, parent) = scope.lexical_sources.get(index).ok_or_else(|| invalid_root(span))?;
+                if let LinkedLexicalSource::Provider(resource) = *candidate
+                    && resource.family_provider == Some(source) { resource_source = Some(resource); break; }
+                head = *parent;
+            }
+            let resource_source = resource_source.ok_or_else(|| invalid_root(span))?;
+            let method = methods.first().copied().ok_or_else(|| invalid_root(span))?;
+            let checked = provider_sources::validate_provider_family_selection(program, resource_source,
+                selection, node, method, budget, type_work, span)?;
+            if checked.requirements.len() != prerequisites.len() { return Err(invalid_root(span)); }
+            reserve_pending_goals(pending, prerequisites.len(), budget, span)?;
+            for (prerequisite, application) in prerequisites.iter().copied().zip(checked.requirements.into_vec()).rev() {
+                if prerequisite.index() >= node.index() { return Err(invalid_root(span)); }
+                pending.push(PendingGoal::new(prerequisite, application, None));
+            }
+        }
+        EvidenceNode::NativeLayout { producer } => {
+            if mandated_requirement.is_some()
+                || first_identity_equal_abstract_requirement(program, registry, scope,
+                    expected_application, budget, span)?.is_some() {
+                return Err(invalid_root(span));
+            }
+            validate_native_layout_dictionary(program.registry(), producer, expected_application,
+                budget, type_work, span)?;
+            if interface.methods.len() != 1 || interface.methods[0].id != producer.method() {
+                return Err(invalid_root(span));
+            }
+        }
         EvidenceNode::Lexical { source, methods } => {
+            if program.registry().foreign_layout(expected_application.interface()).is_some() {
+                return Err(invalid_root(span));
+            }
             if mandated_requirement.is_some() {
                 return Err(invalid_root(span));
             }
@@ -7467,6 +7869,10 @@ fn validate_evidence_node(
             methods,
         } => {
             charge(budget, methods.len().saturating_add(1), span)?;
+            if let RequirementOwner::ResourceFamily(definition) = requirement.owner() {
+                certified_family_requirements(program.registry(), definition, budget, span)?
+                    .ok_or_else(|| unknown(span))?;
+            }
             let checked = registry
                 .requirement(program, requirement)
                 .ok_or_else(|| unknown(span))?;
@@ -7507,6 +7913,9 @@ fn validate_evidence_node(
             prerequisites,
             methods,
         } => {
+            if program.registry().foreign_layout(expected_application.interface()).is_some() {
+                return Err(invalid_root(span));
+            }
             if mandated_requirement.is_some() {
                 return Err(invalid_root(span));
             }
@@ -7531,7 +7940,7 @@ fn validate_evidence_node(
                             .ok_or_else(|| unknown(span))?,
                     )
                 }
-                Some(RequirementOwner::Global(_)) | None => None,
+                Some(RequirementOwner::Global(_) | RequirementOwner::ResourceFamily(_)) | None => None,
             };
             let exact_current = match current {
                 Some(current) if current.interface() == expected_application.interface() => {
@@ -7678,6 +8087,8 @@ fn first_identity_equal_abstract_requirement(
         RequirementOwner::Impl(implementation) => registry
             .implementation(program, implementation)
             .map(|fact| fact.prerequisites.as_ref()),
+        RequirementOwner::ResourceFamily(definition) => certified_family_requirements(
+            program.registry(), definition, budget, span)?,
     }
     .ok_or_else(|| unknown(span))?;
 
@@ -8534,6 +8945,9 @@ fn authenticate_lexical_header(
         .interface(program, checked.application.interface())
         .ok_or_else(|| unknown(source.span))?;
     if interface.id.module().is_builtin_resource() && source.acquisition.is_none() {
+        return Err(invalid_root(source.span));
+    }
+    if program.registry().foreign_layout(interface.id).is_some() {
         return Err(invalid_root(source.span));
     }
     let keys = linked_selection_key_types(

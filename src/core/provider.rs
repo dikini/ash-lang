@@ -32,17 +32,20 @@ pub(in crate::core) mod projection;
 mod scope;
 pub(in crate::core) mod specialization;
 pub(crate) use scope::{
-    AdmittedProviderScope, ProviderForwardingMethod, ProviderLifecycleEntry,
+    AdmittedProviderScope, ProviderAttachedHandler, ProviderForwardingMethod, ProviderLifecycleEntry,
     ProviderScopeAuthority, ProviderScopeNode, ProviderScopeProtocol,
     derive_provider_scope_protocol, interpret_native_phase_row,
 };
 pub(crate) use specialization::{
     DeferredProviderHandlerRows, DeferredProviderRowPosition, LifecycleOriginal,
+    ProviderGroupRowsInput, prepare_group_handler_rows,
     ResolvedProviderHandlerRows, admit_lifecycle_original,
 };
 pub(crate) use specialization::{
     ProviderCopiedTemplate, ProviderFreshening, ProviderOccurrenceRelocation,
-    ProviderOriginalTemplate, ProviderScopeAdmission, ProviderSpecializationEntries,
+    ProviderOriginalTemplate, ProviderFamilyAdmission, ProviderScopeAdmission, ProviderSpecializationEntries,
+    ProviderSpecializationFamilyEntries, ProviderSpecializationDictionaryEntry,
+    AdmittedNativeStorageRelation,
     ProviderTemplateSubstitution,
 };
 mod external;
@@ -102,6 +105,14 @@ pub(crate) use access::{AccessMutation, deepen_state_access_argument, mutate_sta
 #[cfg(test)]
 pub(crate) use entry::{EntryMutation, mutate_entry_for_test};
 pub(crate) use entry::{LifecycleDefinitionView, LifecycleEntryContext, check_lifecycle_entry};
+
+/// Original source family coordinates. An occurrence or template ordinal alone
+/// cannot identify the payload binder authenticated by a family certificate.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ProviderFamilyIdentity {
+    pub(crate) definition: crate::resolved::ResourceDefinitionId,
+    pub(crate) parameter: crate::types::TypeVariableId,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LifecyclePhase {
@@ -612,6 +623,8 @@ enum Fact {
     Data(ConstructorId, Option<usize>),
     Tuple(Box<[usize]>),
     State(State),
+    /// Nonowning reference lineage; never a native state or keepalive.
+    Reference(State),
     ResourceInput {
         clause: NodeId,
         path: Box<[usize]>,
@@ -757,6 +770,21 @@ impl Facts {
                         .map_err(|_| resource())?;
                     pending.extend(elements.iter().copied());
                 }
+                _ => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    fn family_data(&self, root: usize, work: &mut TypeWorkBudget) -> Result<bool, ValidationError> {
+        let mut pending = Vec::new(); charge(work, 1)?;
+        pending.try_reserve(1).map_err(|_| resource())?; pending.push(root);
+        while let Some(id) = pending.pop() {
+            charge(work, 1)?;
+            match &self.0[id] {
+                Fact::Independent | Fact::Reference(_) | Fact::Data(_, None) => {},
+                Fact::Data(_, Some(payload)) => { charge(work, 1)?; pending.try_reserve(1).map_err(|_| resource())?; pending.push(*payload); },
+                Fact::Tuple(elements) => { charge(work, elements.len())?; pending.try_reserve(elements.len()).map_err(|_| resource())?; pending.extend(elements.iter().copied()); },
                 _ => return Ok(false),
             }
         }
@@ -1183,6 +1211,7 @@ fn check_lifecycle_flow_context(
         &mut facts,
         independent,
         pending,
+        None,
         work,
     )
 }
@@ -1193,6 +1222,59 @@ pub(in crate::core) fn check_handler_native_flow(
     externals: Option<&AuthenticatedProviderExternals<'_>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
+    check_handler_native_storage_relations(entry, associations, externals, work).map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::core) enum HandlerNativeStorageResult {
+    Store { allocated: ConstructorId, refused: ConstructorId },
+    Load,
+}
+
+/// A relation emitted only after the original handler flow has checked the
+/// actual State and Ref operand paths. Copied requests require reauthentication.
+pub(in crate::core) struct HandlerNativeStorageRelation {
+    request: NodeId,
+    operation: OperationId,
+    effect: EffectInstance,
+    owner: crate::types::TypeVariableId,
+    family: ProviderFamilyIdentity,
+    result: HandlerNativeStorageResult,
+}
+impl HandlerNativeStorageRelation {
+    pub(in crate::core) fn request(&self) -> NodeId { self.request }
+    pub(in crate::core) fn operation(&self) -> OperationId { self.operation }
+    pub(in crate::core) fn effect(&self) -> &EffectInstance { &self.effect }
+    pub(in crate::core) fn owner(&self) -> crate::types::TypeVariableId { self.owner }
+    pub(in crate::core) fn family(&self) -> ProviderFamilyIdentity { self.family }
+    pub(in crate::core) fn result(&self) -> HandlerNativeStorageResult { self.result }
+}
+
+fn retain_handler_storage_relation(
+    relations: &mut Option<&mut Vec<HandlerNativeStorageRelation>>,
+    entry: &HandlerFragmentEntry<'_>,
+    id: NodeId,
+    request: &super::RequestNode,
+    result: HandlerNativeStorageResult,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    let Some(relations) = relations.as_deref_mut() else { return Ok(()); };
+    charge(work, relations.len().checked_add(1).ok_or_else(resource)?)?;
+    if relations.iter().any(|relation| relation.request == id) { return Ok(()); }
+    let family = entry.family_identity().ok_or_else(|| invalid(id))?;
+    let owner = entry.definition.parameters.first().ok_or_else(|| invalid(id))?.id;
+    let effect = crate::types::clone_effect_instance_with_budget(request.effect(), work).map_err(|()| resource())?;
+    relations.try_reserve(1).map_err(|_| resource())?;
+    relations.push(HandlerNativeStorageRelation { request: id, operation: request.operation(), effect, owner, family, result });
+    Ok(())
+}
+
+pub(in crate::core) fn check_handler_native_storage_relations(
+    entry: &HandlerFragmentEntry<'_>,
+    associations: &[DraftStateAssociation<'_>],
+    externals: Option<&AuthenticatedProviderExternals<'_>>,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[HandlerNativeStorageRelation]>, ValidationError> {
     let program = &entry.draft.program;
     let native = NativeFacts::index(program, work)?;
     let associations =
@@ -1227,10 +1309,13 @@ pub(in crate::core) fn check_handler_native_flow(
                 if let Some(operation) = native.operation(request.operation(), work)?
                     && (!controlled
                         || operation.role != ForeignOperationRole::Borrow
-                        || !matches!(operation.result, ForeignResultFact::Independent)
+                        || !(matches!(operation.result, ForeignResultFact::Independent)
+                            || (entry.family_identity().is_some() && matches!(operation.result,
+                                ForeignResultFact::Store { storage } | ForeignResultFact::Load { storage }
+                                    if storage == entry.interpreted().effect())))
                         || compare_effect_instances_with_budget(
                             request.effect(),
-                            &entry.definition.interpreted.instance,
+                            entry.interpreted(),
                             work,
                         )
                         .map_err(|()| resource())?
@@ -1297,6 +1382,7 @@ pub(in crate::core) fn check_handler_native_flow(
         path.tasks(&[Task::Evaluate(clause.body())], work)?;
         paths.push(path);
     }
+    let mut relations = Vec::new();
     execute_flow_paths(
         program,
         &native,
@@ -1306,8 +1392,10 @@ pub(in crate::core) fn check_handler_native_flow(
         &mut facts,
         independent,
         paths,
+        Some(&mut relations),
         work,
-    )
+    )?;
+    Ok(relations.into_boxed_slice())
 }
 
 fn handler_domain_fact(
@@ -1357,7 +1445,21 @@ fn handler_domain_fact(
                         .iter()
                         .any(|definition| definition.family == family)
                 });
-                let value = if is_resource {
+                let storage = entry.family_identity().and_then(|_| entry.canonical.foreign_storage(entry.interpreted().effect()));
+                let reference = if let Some(storage) = storage {
+                    if family == Some(storage.reference()) {
+                        let arguments = handler::type_arguments(ty, work)?;
+                        let payload = entry.family_identity().ok_or_else(|| invalid(root))?.parameter;
+                        if !matches!(arguments.get(storage.reference_owner_parameter()), Some(Type::Variable(owner)) if *owner == entry.definition.parameters[0].id)
+                            || !matches!(arguments.get(storage.reference_payload_parameter()), Some(Type::Variable(actual)) if *actual == payload) {
+                            return Err(invalid(root));
+                        }
+                        true
+                    } else { false }
+                } else { false };
+                let value = if reference {
+                    facts.add(Fact::Reference(State::Current), work)?
+                } else if is_resource {
                     facts.add(
                         Fact::ResourceInput {
                             clause: root,
@@ -1412,6 +1514,7 @@ fn execute_flow_paths(
     facts: &mut Facts,
     independent: usize,
     mut pending: Vec<Path>,
+    mut relations: Option<&mut Vec<HandlerNativeStorageRelation>>,
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     while let Some(mut path) = pending.pop() {
@@ -1809,16 +1912,20 @@ fn execute_flow_paths(
                     };
                     let operation = native.operation(request.operation(), work)?;
                     if matches!(mode, FlowMode::Handler(_)) && operation.is_none() {
-                        if !facts.independent_data(operand, work)? {
-                            return Err(invalid(id));
-                        }
+                        let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some()) {
+                            facts.family_data(operand, work)?
+                        } else { facts.independent_data(operand, work)? };
+                        if !admitted { return Err(invalid(id)); }
                         path.value(independent, work)?;
                         continue;
                     }
                     let fact = operation.ok_or_else(|| invalid(id))?;
                     if let FlowMode::Handler(entry) = mode {
                         if fact.role != ForeignOperationRole::Borrow
-                            || !matches!(fact.result, ForeignResultFact::Independent)
+                            || !(matches!(fact.result, ForeignResultFact::Independent)
+                                || (entry.family_identity().is_some() && matches!(fact.result,
+                                    ForeignResultFact::Store { storage } | ForeignResultFact::Load { storage }
+                                        if storage == entry.interpreted().effect())))
                         {
                             return Err(invalid(id));
                         }
@@ -1838,7 +1945,34 @@ fn execute_flow_paths(
                                 _ => return Err(invalid(id)),
                             }
                         }
-                        path.value(independent, work)?;
+                        match fact.result {
+                            ForeignResultFact::Store { storage } => {
+                                let storage = entry.canonical.foreign_storage(storage).ok_or_else(|| invalid(id))?;
+                                if request.operation() != storage.store() { return Err(invalid(id)); }
+                                let state = facts.at_path(operand, &[0], work)?.ok_or_else(|| invalid(id))?;
+                                if !matches!(facts.0[state], Fact::State(State::Current)) { return Err(invalid(id)); }
+                                retain_handler_storage_relation(&mut relations, entry, id, request,
+                                    HandlerNativeStorageResult::Store { allocated: storage.allocated_constructor(), refused: storage.refused_constructor() }, work)?;
+                                let reference = facts.add(Fact::Reference(State::Current), work)?;
+                                let allocated = facts.add(Fact::Data(storage.allocated_constructor(), Some(reference)), work)?;
+                                let refused = facts.add(Fact::Data(storage.refused_constructor(), Some(independent)), work)?;
+                                let mut refusal = path.fork(work)?; refusal.value(refused, work)?;
+                                pending.try_reserve(1).map_err(|_| resource())?; pending.push(refusal);
+                                path.value(allocated, work)?;
+                            }
+                            ForeignResultFact::Load { storage } => {
+                                let storage = entry.canonical.foreign_storage(storage).ok_or_else(|| invalid(id))?;
+                                if request.operation() != storage.load() { return Err(invalid(id)); }
+                                let state = facts.at_path(operand, &[0], work)?.ok_or_else(|| invalid(id))?;
+                                let reference = facts.at_path(operand, &[2], work)?.ok_or_else(|| invalid(id))?;
+                                if !matches!((
+                                    &facts.0[state], &facts.0[reference]),
+                                    (Fact::State(State::Current), Fact::Reference(State::Current))) { return Err(invalid(id)); }
+                                retain_handler_storage_relation(&mut relations, entry, id, request, HandlerNativeStorageResult::Load, work)?;
+                                path.value(independent, work)?;
+                            }
+                            _ => path.value(independent, work)?,
+                        }
                         continue;
                     }
                     let FlowMode::Lifecycle(context, _) = mode else {
@@ -1927,9 +2061,10 @@ fn execute_flow_paths(
                 }
                 Task::ResumeArgument(id) => {
                     let value = path.pop(id)?;
-                    if !facts.independent_data(value, work)? {
-                        return Err(invalid(id));
-                    }
+                    let admitted = if matches!(mode, FlowMode::Handler(entry) if entry.family_identity().is_some()) {
+                        facts.family_data(value, work)?
+                    } else { facts.independent_data(value, work)? };
+                    if !admitted { return Err(invalid(id)); }
                     path.value(independent, work)?;
                 }
                 Task::CleanupAction(id) => {

@@ -34,6 +34,7 @@ pub(crate) struct AdmittedProviderScope {
     pub(super) native_effect: EffectInstance,
     pub(super) protocol: ProviderScopeProtocol,
     pub(super) specialization: OriginalProviderSpecialization,
+    pub(super) families: Box<[super::specialization::ProviderFamilyAdmission]>,
 }
 
 impl PartialEq for AdmittedProviderScope {
@@ -46,6 +47,7 @@ impl PartialEq for AdmittedProviderScope {
             && self.native_effect == other.native_effect
             && self.protocol == other.protocol
             && self.specialization == other.specialization
+            && self.families == other.families
     }
 }
 impl Eq for AdmittedProviderScope {}
@@ -74,6 +76,13 @@ impl AdmittedProviderScope {
     }
     pub(crate) fn specialization(&self) -> &OriginalProviderSpecialization {
         &self.specialization
+    }
+    pub(crate) fn native_effect_member(&self, member: usize) -> Option<&EffectInstance> {
+        if member == 0 { Some(&self.native_effect) }
+        else { self.families.get(member - 1).map(|family| &family.native_effect) }
+    }
+    pub(crate) fn families(&self) -> &[super::specialization::ProviderFamilyAdmission] {
+        &self.families
     }
 }
 
@@ -156,6 +165,19 @@ impl ProviderScopeAuthority {
             Self::Admitted(facts) => facts.native_effect(),
         }
     }
+    pub(crate) fn native_effect_member(&self, member: usize) -> Option<&EffectInstance> {
+        match self {
+            Self::Prepared(facts) => if member == 0 { Some(&facts.metadata.native_effect) }
+                else { facts.metadata.families.get(member - 1).map(|family| &family.native_effect) },
+            Self::Admitted(facts) => facts.native_effect_member(member),
+        }
+    }
+    pub(crate) fn family_members(&self) -> &[super::specialization::ProviderFamilyAdmission] {
+        match self {
+            Self::Prepared(facts) => &facts.metadata.families,
+            Self::Admitted(facts) => facts.families(),
+        }
+    }
     pub(crate) fn protocol(&self) -> ProviderScopeProtocol {
         match self {
             Self::Prepared(facts) => facts.metadata.protocol,
@@ -194,6 +216,15 @@ pub(crate) struct ProviderForwardingMethod {
     pub(crate) binder: BinderId,
 }
 
+/// One exact, nonowning handler attached to the scope's single native owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProviderAttachedHandler {
+    pub(crate) handler: HandlerNode,
+    pub(crate) state: TypedBinder,
+    pub(crate) lexical: LexicalEvidenceId,
+    pub(crate) forwardings: Box<[ProviderForwardingMethod]>,
+}
+
 /// One lexical instance. Lifecycle entries and handler clauses are ordinary
 /// Core graphs authenticated against the original checked specialization.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -208,6 +239,10 @@ pub struct ProviderScopeNode {
     pub(crate) descriptor: ProviderScopeAuthority,
     pub(crate) lexical: LexicalEvidenceId,
     pub(crate) forwardings: Box<[ProviderForwardingMethod]>,
+    pub(crate) attached: Box<[ProviderAttachedHandler]>,
+    /// Exact source-order clause coordinates, retained once for constant-time graph edges.
+    /// Empty for legacy single-handler scopes.
+    pub(crate) family_clause_index: Box<[(usize, usize)]>,
 }
 
 impl ProviderScopeNode {
@@ -232,10 +267,26 @@ impl ProviderScopeNode {
     pub(crate) fn descriptor(&self) -> &ProviderScopeAuthority {
         &self.descriptor
     }
+    pub(crate) fn handler_member(&self, member: usize) -> Option<&HandlerNode> {
+        if member == 0 { Some(&self.handler) }
+        else { self.attached.get(member - 1).map(|attached| &attached.handler) }
+    }
+    pub(crate) fn handler_state_member(&self, member: usize) -> Option<&TypedBinder> {
+        if member == 0 { Some(&self.handler_state) }
+        else { self.attached.get(member - 1).map(|attached| &attached.state) }
+    }
+    pub(crate) fn member_count(&self) -> usize { self.attached.len() + 1 }
+    pub(crate) fn clause_member_at(&self, clause: usize) -> Option<(usize, &HandlerNode, &crate::core::EffectClause)> {
+        let (member, local) = if self.attached.is_empty() { (0, clause) }
+            else { *self.family_clause_index.get(clause)? };
+        let handler = self.handler_member(member)?;
+        Some((member, handler, handler.clauses().get(local)?))
+    }
 
     /// Returns all initializer, lifecycle, body, and clause edges.
     pub fn child_count(&self) -> usize {
-        self.handler.clauses().len() + 4
+        if self.attached.is_empty() { self.handler.clauses().len() + 4 }
+        else { self.family_clause_index.len() + 4 }
     }
     /// Returns one child in deterministic phase order.
     pub fn child_at(&self, index: usize) -> Option<NodeId> {
@@ -244,11 +295,7 @@ impl ProviderScopeNode {
             1 => Some(self.acquire.body),
             2 => Some(self.finish.body),
             3 => Some(self.handler.body()),
-            index => self
-                .handler
-                .clauses()
-                .get(index - 4)
-                .map(|clause| clause.body()),
+            index => self.clause_member_at(index - 4).map(|(_, _, clause)| clause.body()),
         }
     }
 }
@@ -518,6 +565,22 @@ impl ProviderScopeNode {
         };
         let definition = self.descriptor.definition();
         let admitted = self.descriptor.admitted_arc().ok_or_else(invalid)?;
+        if self.attached.is_empty() {
+            if !self.family_clause_index.is_empty() { return Err(invalid()); }
+        } else {
+            budget.charge(self.member_count().checked_add(self.family_clause_index.len()).ok_or_else(resource)?)
+                .map_err(|()| resource())?;
+            let mut flat = 0usize;
+            for member in 0..self.member_count() {
+                let handler = self.handler_member(member).ok_or_else(invalid)?;
+                if handler.body() != self.handler.body() { return Err(invalid()); }
+                for clause in 0..handler.clauses().len() {
+                    if self.family_clause_index.get(flat) != Some(&(member, clause)) { return Err(invalid()); }
+                    flat = flat.checked_add(1).ok_or_else(resource)?;
+                }
+            }
+            if flat != self.family_clause_index.len() { return Err(invalid()); }
+        }
         budget
             .charge(program.registry.provider_contract_count())
             .map_err(|()| resource())?;
@@ -686,6 +749,57 @@ impl ProviderScopeNode {
         for actual in [self.finish.parameter.ty(), self.handler_state.ty()] {
             if !same_type_with_budget(&state, actual, budget).map_err(|()| resource())? {
                 return Err(invalid());
+            }
+        }
+        if self.attached.len() != admitted.families.len() { return Err(invalid()); }
+        if !self.attached.is_empty() {
+            let original = definition.family_template.as_ref().ok_or_else(invalid)?;
+            budget.charge(self.attached.len()).map_err(|()| resource())?;
+            for (index, (attached, member)) in self.attached.iter().zip(&admitted.families).enumerate() {
+                if member.identity.definition != definition.id || member.identity.parameter != original.parameter.id
+                    || attached.lexical != member.lexical || attached.lexical == self.lexical
+                    || attached.handler.hook_root().is_some() || attached.handler.hook_registration.is_some()
+                    || attached.handler.id() == self.handler.id()
+                    || attached.state.id() == self.handler_state.id()
+                    || !matches!(member.payload, Type::Unit | Type::Bool | Type::Int)
+                    || !same_type_with_budget(attached.state.ty(), &state, budget).map_err(|()| resource())? {
+                    return Err(invalid());
+                }
+                budget.charge(index).map_err(|()| resource())?;
+                for previous in &self.attached[..index] {
+                    if previous.handler.id() == attached.handler.id() || previous.state.id() == attached.state.id() { return Err(invalid()); }
+                }
+                if !substitutions.insert_type(original.parameter.id, clone_type_with_budget(&member.payload, budget).map_err(|()| resource())?) {
+                    return Err(invalid());
+                }
+                let selected_provided = substitutions.instantiate_effect(&original.provided.instance, budget)?;
+                let selected_native = substitutions.instantiate_effect(&original.interpreted.instance, budget)?;
+                if crate::types::compare_effect_instances_with_budget(&selected_provided, attached.handler.effect(), budget).map_err(|()| resource())? != std::cmp::Ordering::Equal
+                    || crate::types::compare_effect_instances_with_budget(&selected_native, &member.native_effect, budget).map_err(|()| resource())? != std::cmp::Ordering::Equal
+                    || member.application.interface() != original.provider_application.interface()
+                    || member.application.arguments().len() != original.provider_application.arguments().len() {
+                    return Err(invalid());
+                }
+                budget.charge(member.application.arguments().len()).map_err(|()| resource())?;
+                for (written, actual) in original.provider_application.arguments().iter().zip(member.application.arguments()) {
+                    let expected = crate::types::substitute_kinded_argument_with(written, &substitutions.types, &substitutions.rows,
+                        |units| budget.charge(units)).map_err(|()| resource())?.map_err(|_| invalid())?;
+                    let expected = crate::types::IterativeArgumentOwner::new(expected);
+                    if !crate::types::same_kinded_argument_with_budget(&expected, actual, budget).map_err(|()| resource())? {
+                        return Err(invalid());
+                    }
+                }
+                if let Some(payload) = substitutions.types.remove(&original.parameter.id) { crate::types::discard_type_iteratively(payload); }
+                let interface = member.application.interface();
+                budget.charge(catalog.methods().len().checked_add(attached.forwardings.len()).ok_or_else(resource)?).map_err(|()| resource())?;
+                let expected = catalog.methods().iter().filter(|method| method.id.interface() == interface).count();
+                if attached.forwardings.len() != expected { return Err(invalid()); }
+                for (ordinal, forwarding) in attached.forwardings.iter().enumerate() {
+                    if forwarding.method.interface() != interface || usize::try_from(forwarding.method.declaration()).map_err(|_| invalid())? != ordinal
+                        || !matches!(forwarding.binder, crate::resolved::BinderId::Generated(_)) { return Err(invalid()); }
+                    budget.charge(ordinal).map_err(|()| resource())?;
+                    if attached.forwardings[..ordinal].iter().any(|other| other.binder == forwarding.binder) { return Err(invalid()); }
+                }
             }
         }
         // A handle is a family instance, never the owned native state.
@@ -889,6 +1003,10 @@ impl AdmittedProviderScope {
             crate::types::clone_effect_instance_with_budget(&self.native_effect, budget)
                 .map_err(|()| crate::core::BuildError::TypeWorkExceeded)?;
         let specialization = self.specialization.relocate(remapped, budget)?;
+        budget.charge(self.families.len()).map_err(|()| crate::core::BuildError::TypeWorkExceeded)?;
+        let mut families = Vec::new();
+        families.try_reserve_exact(self.families.len()).map_err(|_| crate::core::BuildError::TypeWorkExceeded)?;
+        for family in &self.families { families.push(family.clone_with_budget(budget)?); }
         Ok(Self {
             definition: Arc::clone(&self.definition),
             native: Arc::clone(&self.native),
@@ -902,6 +1020,7 @@ impl AdmittedProviderScope {
             native_effect,
             protocol: self.protocol,
             specialization,
+            families: families.into_boxed_slice(),
         })
     }
 }

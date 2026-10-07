@@ -100,6 +100,7 @@ impl PreparedPhaseCopy {
 }
 pub(in crate::elaborate) struct PreparedScopeCopyPlan {
     pub(in crate::elaborate) phases: [PreparedPhaseCopy; 3],
+    pub(in crate::elaborate) family_phases: Box<[PreparedPhaseCopy]>,
 }
 pub(in crate::elaborate) struct ScopeCopiedEntries {
     pub(in crate::elaborate) acquire: ProviderLifecycleEntry,
@@ -108,6 +109,72 @@ pub(in crate::elaborate) struct ScopeCopiedEntries {
     pub(in crate::elaborate) handler: HandlerId,
     pub(in crate::elaborate) clauses: Vec<EffectClause>,
     pub(in crate::elaborate) forests: [ProviderCopiedForest; 3],
+}
+
+pub(in crate::elaborate) struct FamilyCopiedEntries {
+    pub(in crate::elaborate) state: TypedBinder,
+    pub(in crate::elaborate) handler: HandlerId,
+    pub(in crate::elaborate) clauses: Vec<EffectClause>,
+    pub(in crate::elaborate) dictionaries: Vec<TypedBinder>,
+    pub(in crate::elaborate) forest: ProviderCopiedForest,
+}
+
+pub(in crate::elaborate) fn lower_family_scope_copies(
+    builder: &mut crate::core::EffectCoreBuilder,
+    source: &super::super::provider::ProviderTemplateSource<'_>,
+    plan: &PreparedScopeCopyPlan,
+    catalogs: Option<&[Vec<ProviderCatalogRelocation>]>,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<FamilyCopiedEntries>, TypeError> {
+    use crate::core::{provider::{copy_prepared_provider_forest, copy_provider_forest}, transform};
+    fn failure(error: transform::TransformError) -> TypeError {
+        match error { transform::TransformError::Build(error) => error.into(), _ => invalid_state() }
+    }
+    if catalogs.is_some_and(|catalogs| catalogs.len() != plan.family_phases.len()) {
+        return Err(invalid_state());
+    }
+    if plan.family_phases.is_empty() { return Ok(Vec::new()); }
+    let original = source.family.ok_or_else(invalid_state)?.handler;
+    work.charge(plan.family_phases.len()).map_err(|()| type_resource())?;
+    let mut copied = Vec::new();
+    copied.try_reserve_exact(plan.family_phases.len()).map_err(|_| type_resource())?;
+    transform::begin_provider_draft_work(builder, work.remaining());
+    let result = (|| {
+        for (index, phase) in plan.family_phases.iter().enumerate() {
+            work.charge(original.original_clauses().len().checked_add(original.original_dictionary_parameters().len()).ok_or_else(type_resource)?)
+                .map_err(|()| type_resource())?;
+            let mut roots = Vec::new();
+            roots.try_reserve_exact(original.original_clauses().len()).map_err(|_| type_resource())?;
+            roots.extend(original.original_clauses().iter().map(EffectClause::body));
+            let context = phase.context();
+            let replacements = HashMap::new();
+            let forest = match catalogs {
+                Some(catalogs) => copy_provider_forest(builder, original.original_program(), &roots, &replacements, &context, &catalogs[index]),
+                None => copy_prepared_provider_forest(builder, original.original_program(), &roots, &replacements, &context),
+            }.map_err(failure)?;
+            if forest.roots.len() != original.original_clauses().len() { return Err(invalid_state()); }
+            let state = transform::rebuild_provider_fragment_binder_with_context(builder, original.original_state(), &context).map_err(failure)?;
+            let handler = *phase.handlers.get(&original.original_handler()).ok_or_else(invalid_state)?;
+            let mut dictionaries = Vec::new();
+            dictionaries.try_reserve_exact(original.original_dictionary_parameters().len()).map_err(|_| type_resource())?;
+            for binder in original.original_dictionary_parameters() {
+                dictionaries.push(transform::rebuild_provider_fragment_binder_with_context(builder, binder, &context).map_err(failure)?);
+            }
+            let mut clauses = Vec::new();
+            clauses.try_reserve_exact(original.original_clauses().len()).map_err(|_| type_resource())?;
+            for (clause, body) in original.original_clauses().iter().zip(&forest.roots) {
+                let resume = context.resume(clause.resume(), work)?;
+                let origin = transform::rebuild_provider_fragment_origin(builder, clause.origin()).map_err(failure)?;
+                let pattern = transform::rebuild_provider_fragment_pattern_with_context(builder, clause.pattern(), &context).map_err(failure)?;
+                clauses.push(EffectClause::new(clause.operation(), resume, crate::core::CoreMatchArm::new(pattern, *body, origin)));
+            }
+            copied.push(FamilyCopiedEntries { state, handler, clauses, dictionaries, forest });
+        }
+        Ok(())
+    })();
+    transform::discharge_provider_draft_work(builder, work)?;
+    result?;
+    Ok(copied)
 }
 
 fn reserve_pair<K: Eq + std::hash::Hash + Copy>(
@@ -285,6 +352,42 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::elaborate) fn prepare_scope_copy_plan_with_family_rows(
+        &mut self,
+        source: &super::super::provider::ProviderTemplateSource<'_>,
+        actuals: &ResourceActuals,
+        body: &ComputationType,
+        primary: &crate::core::provider::ResolvedProviderHandlerRows,
+        members: &[std::sync::Arc<super::PreparedProviderFamilyInstance>],
+        rows: &[crate::core::provider::ResolvedProviderHandlerRows],
+        module: crate::module::ModuleId,
+        origin: Span,
+    ) -> Result<PreparedScopeCopyPlan, TypeError> {
+        if members.len() != rows.len() { return Err(invalid_state()); }
+        let mut plan = self.prepare_scope_copy_plan(source, actuals, body, primary, module, origin)?;
+        if members.is_empty() { return Ok(plan); }
+        let family = source.family.as_ref().ok_or_else(invalid_state)?;
+        self.type_work.charge(members.len()).map_err(|()| type_resource())?;
+        let mut phases = Vec::new(); phases.try_reserve_exact(members.len()).map_err(|_| type_resource())?;
+        let family_source = super::super::provider::ProviderTemplateSource {
+            handler: family.handler, handler_occurrences: family.occurrences, methods: family.methods, ..*source
+        };
+        for (member, rows) in members.iter().zip(rows) {
+            if member.identity() != family.identity { return Err(invalid_state()); }
+            // Reuse the existing charged allocator and complete forbidden-ID
+            // reconstruction. Lifecycle scratch phases are discarded; only
+            // this member's handler phase enters the single-owner scope.
+            let prepared = self.prepare_scope_copy_plan_with_payload(&family_source, actuals, body,
+                ProviderScopeCopyRows { residual: rows.residual(), pending: rows.pending(), nodes: rows.node_rows() },
+                module, origin, Some((family.identity.parameter, &member.payload)))?;
+            let [_, _, handler] = prepared.phases;
+            phases.push(handler);
+        }
+        plan.family_phases = phases.into_boxed_slice();
+        Ok(plan)
+    }
+
     pub(in crate::elaborate) fn prepare_scope_copy_plan_with_rows(
         &mut self,
         source: &super::super::provider::ProviderTemplateSource<'_>,
@@ -293,6 +396,20 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
         rows: ProviderScopeCopyRows<'_>,
         module: crate::module::ModuleId,
         origin: Span,
+    ) -> Result<PreparedScopeCopyPlan, TypeError> {
+        self.prepare_scope_copy_plan_with_payload(source, actuals, body, rows, module, origin, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_scope_copy_plan_with_payload(
+        &mut self,
+        source: &super::super::provider::ProviderTemplateSource<'_>,
+        actuals: &ResourceActuals,
+        body: &ComputationType,
+        rows: ProviderScopeCopyRows<'_>,
+        module: crate::module::ModuleId,
+        origin: Span,
+        payload: Option<(TypeVariableId, &Type)>,
     ) -> Result<PreparedScopeCopyPlan, TypeError> {
         if actuals.arguments().len() != source.fact.parameters.len() {
             return Err(invalid_state());
@@ -328,6 +445,9 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                             .insert_cloned(formal.id, actual, &mut self.type_work)?;
                     }
                 }
+            }
+            if index == 2 && let Some((parameter, payload)) = payload {
+                phase.sigma.insert_borrowed(parameter, crate::elaborate::BorrowedOwnerArgument::TypeArg(payload), &mut self.type_work)?;
             }
             let hidden = match originals[index] {
                 ProviderOriginalTemplate::Lifecycle(original, _) => original.hidden(),
@@ -559,7 +679,7 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 insert_pair(&mut phase.lexicals, &mut phase.lexical_pairs, *old, fresh)?;
             }
         }
-        Ok(PreparedScopeCopyPlan { phases })
+        Ok(PreparedScopeCopyPlan { phases, family_phases: Box::new([]) })
     }
 }
 
