@@ -76,6 +76,7 @@ pub fn arena_manifest(
                 ],
             }],
             state_access: None,
+            foundation: None,
         },
     )
 }

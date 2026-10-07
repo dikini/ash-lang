@@ -6010,10 +6010,11 @@ mod tests {
             "@foreign.wide",
             ForeignRegistrationId::new(990),
             ForeignManifestSchema {
+                foundation: None,
                 types: vec![ForeignTypeDeclaration {
                     name: "WideState".into(),
                     parameters: vec!["R".into()],
-                    opaque_state: true,
+                    category: crate::foreign::ForeignTypeCategory::State,
                     constructors: vec![],
                 }],
                 effects: vec![ForeignEffectDeclaration {

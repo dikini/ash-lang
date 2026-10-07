@@ -53,7 +53,11 @@ fn mock_schema() -> ForeignManifestSchema {
         ForeignTypeDeclaration {
             name: name.into(),
             parameters: params.iter().map(|s| s.to_string()).collect(),
-            opaque_state: opaque,
+            category: if opaque {
+                ForeignTypeCategory::State
+            } else {
+                ForeignTypeCategory::Data
+            },
             constructors: cases
                 .iter()
                 .map(|(name, payload)| ForeignConstructorDeclaration {
@@ -127,6 +131,7 @@ fn mock_schema() -> ForeignManifestSchema {
             ],
         }],
         state_access: None,
+        foundation: None,
     }
 }
 fn mock() -> ForeignManifest {
@@ -351,7 +356,7 @@ fn borrowed_independent_results_cannot_hide_native_states_in_data() {
             schema.types.push(ForeignTypeDeclaration {
                 name: "Wrapped".into(),
                 parameters: vec!["T".into()],
-                opaque_state: false,
+                category: ForeignTypeCategory::Data,
                 constructors: vec![ForeignConstructorDeclaration {
                     name: "Wrap".into(),
                     payload: Some("T".into()),
@@ -548,7 +553,7 @@ fn acquisition_cannot_omit_native_parent_lineage_from_its_retained_result() {
         schema.types.push(ForeignTypeDeclaration {
             name: "Parent".into(),
             parameters: vec!["C".into()],
-            opaque_state: true,
+            category: ForeignTypeCategory::State,
             constructors: vec![],
         });
         schema.effects[0].parameters.push("C".into());
@@ -572,5 +577,220 @@ fn acquisition_cannot_omit_native_parent_lineage_from_its_retained_result() {
         let entry = tree.write("entry.ash", "import @foreign.bad as Bad\n");
         let graph = load_module_graph(&entry, &roots(manifest)).unwrap();
         assert!(resolve_module(&graph.modules()[0], &[]).is_err());
+    }
+}
+
+// These descriptions are passive admission preparation. Reaching the final
+// refusal below does not expose Layout evidence or executable storage authority.
+fn foundation_schema() -> ForeignManifestSchema {
+    let mut schema = mock_schema();
+    schema.types.extend([
+        ForeignTypeDeclaration {
+            name: "Measured".into(),
+            parameters: vec!["Payload".into()],
+            category: ForeignTypeCategory::LayoutWitness {
+                payload_parameter: 0,
+            },
+            constructors: vec![],
+        },
+        ForeignTypeDeclaration {
+            name: "Handle".into(),
+            parameters: vec!["Region".into(), "Payload".into()],
+            category: ForeignTypeCategory::Reference {
+                owner_parameter: 0,
+                payload_parameter: 1,
+            },
+            constructors: vec![],
+        },
+        ForeignTypeDeclaration {
+            name: "Outcome".into(),
+            parameters: vec!["Value".into()],
+            category: ForeignTypeCategory::Data,
+            constructors: vec![
+                ForeignConstructorDeclaration {
+                    name: "Reserved".into(),
+                    payload: Some("Value".into()),
+                },
+                ForeignConstructorDeclaration {
+                    name: "RejectedStorage".into(),
+                    payload: Some("Fault".into()),
+                },
+            ],
+        },
+    ]);
+    schema.foundation = Some(ForeignFoundationDeclaration {
+        layout: ForeignLayoutDeclaration {
+            name: "Metric".into(),
+            parameter: "Payload".into(),
+            witness: "Measured".into(),
+            method: ForeignFoundationOperationDeclaration {
+                name: "measure".into(),
+                signature: "Unit -> Measured<Payload>".into(),
+            },
+        },
+        storage: ForeignStorageDeclaration {
+            name: "StorageRequests".into(),
+            parameters: vec!["Region".into(), "Payload".into()],
+            owner_parameter: 0,
+            payload_parameter: 1,
+            state: "Token".into(),
+            reference: "Handle".into(),
+            allocation_result: "Outcome".into(),
+            allocation_error: "Fault".into(),
+            allocated_constructor: "Reserved".into(),
+            refused_constructor: "RejectedStorage".into(),
+            store: ForeignFoundationOperationDeclaration {
+                name: "put".into(),
+                signature: "(Token<Region>, Measured<Payload>, Int, Payload) -> Outcome<Handle<Region, Payload>>".into(),
+            },
+            load: ForeignFoundationOperationDeclaration {
+                name: "get".into(),
+                signature: "(Token<Region>, Measured<Payload>, Handle<Region, Payload>) -> Payload".into(),
+            },
+        },
+    });
+    schema
+}
+
+const STORAGE_NOT_EXECUTABLE: &str =
+    "typed foreign storage is not executable in this admission phase";
+
+fn foundation_rejection(schema: ForeignManifestSchema, malformed: bool) -> String {
+    let manifest = match ForeignManifest::new(
+        "@foreign.mock.renamed",
+        ForeignRegistrationId::new(101),
+        schema,
+    ) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            assert!(
+                malformed,
+                "valid foundation failed manifest construction: {error}"
+            );
+            return error.to_string();
+        }
+    };
+    let tree = Tree::new();
+    let entry = tree.write("entry.ash", "import @foreign.mock.renamed as Native\n");
+    let graph = load_module_graph(&entry, &roots(manifest)).unwrap();
+    let native = graph
+        .modules()
+        .iter()
+        .find(|module| module.foreign_admission().is_some())
+        .unwrap();
+    let failure = resolve_module(native, &[]).unwrap_err();
+    let ash::resolve::ResolveModuleError::Resolution(diagnostic) = failure else {
+        panic!("expected foreign contract admission refusal: {failure:?}");
+    };
+    assert_ne!(
+        diagnostic.reason,
+        ash::resolve::ResolveReason::TypeResourceExhausted
+    );
+    diagnostic.primary.message().to_owned()
+}
+
+#[test]
+fn renamed_typed_foundation_validates_then_refuses_executable_admission() {
+    let schema = foundation_schema();
+    assert_eq!(schema.effects[0].operations.len(), 3);
+    assert!(matches!(
+        schema.effects[0].operations[1].result,
+        ForeignResultRelation::Independent
+    ));
+    assert_eq!(foundation_rejection(schema, false), STORAGE_NOT_EXECUTABLE);
+}
+
+#[test]
+fn malformed_typed_foundation_contracts_reject_before_execution_boundary() {
+    let mutations: [(&str, fn(&mut ForeignManifestSchema)); 10] = [
+        ("witness coordinate", |schema| {
+            schema.types[4].category = ForeignTypeCategory::LayoutWitness {
+                payload_parameter: 1,
+            };
+        }),
+        ("reference coordinates", |schema| {
+            schema.types[5].category = ForeignTypeCategory::Reference {
+                owner_parameter: 0,
+                payload_parameter: 0,
+            };
+        }),
+        ("storage coordinates", |schema| {
+            schema
+                .foundation
+                .as_mut()
+                .unwrap()
+                .storage
+                .payload_parameter = 0;
+        }),
+        ("success branch", |schema| {
+            schema.types[6].constructors[0].payload = Some("Fault".into());
+        }),
+        ("refusal independence", |schema| {
+            schema.types[6].constructors[1].payload = Some("Token<Int>".into());
+        }),
+        ("unsaturated error payload", |schema| {
+            schema.types[1].constructors[0].payload = Some("Box".into());
+            schema.types.push(ForeignTypeDeclaration {
+                name: "Box".into(),
+                parameters: vec!["T".into()],
+                category: ForeignTypeCategory::Data,
+                constructors: vec![ForeignConstructorDeclaration {
+                    name: "Boxed".into(),
+                    payload: Some("T".into()),
+                }],
+            });
+        }),
+        ("layout method", |schema| {
+            schema.foundation.as_mut().unwrap().layout.method.signature = "Unit -> Int".into();
+        }),
+        ("store witness", |schema| {
+            schema.foundation.as_mut().unwrap().storage.store.signature =
+                "(Token<Region>, Measured<Region>, Int, Payload) -> Outcome<Handle<Region, Payload>>".into();
+        }),
+        ("store reference", |schema| {
+            schema.foundation.as_mut().unwrap().storage.store.signature =
+                "(Token<Region>, Measured<Payload>, Int, Payload) -> Outcome<Handle<Payload, Region>>".into();
+        }),
+        ("load payload", |schema| {
+            schema.foundation.as_mut().unwrap().storage.load.signature =
+                "(Token<Region>, Measured<Payload>, Handle<Region, Payload>) -> Int".into();
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut schema = foundation_schema();
+        mutate(&mut schema);
+        let message = foundation_rejection(schema, true);
+        assert_ne!(message, STORAGE_NOT_EXECUTABLE, "{label}");
+        assert!(!message.contains("budget exhausted"), "{label}: {message}");
+    }
+}
+
+#[test]
+fn typed_foundation_parameter_coordinates_are_independent() {
+    for reverse_storage in [true, false] {
+        let mut schema = foundation_schema();
+        if reverse_storage {
+            let storage = &mut schema.foundation.as_mut().unwrap().storage;
+            storage.parameters.swap(0, 1);
+            storage.owner_parameter = 1;
+            storage.payload_parameter = 0;
+        } else {
+            let reference = &mut schema.types[5];
+            reference.parameters.swap(0, 1);
+            reference.category = ForeignTypeCategory::Reference {
+                owner_parameter: 1,
+                payload_parameter: 0,
+            };
+            let storage = &mut schema.foundation.as_mut().unwrap().storage;
+            storage.store.signature =
+                "(Token<Region>, Measured<Payload>, Int, Payload) -> Outcome<Handle<Payload, Region>>".into();
+            storage.load.signature =
+                "(Token<Region>, Measured<Payload>, Handle<Payload, Region>) -> Payload".into();
+        }
+        assert_eq!(
+            foundation_rejection(schema, false),
+            STORAGE_NOT_EXECUTABLE,
+            "reverse_storage={reverse_storage}"
+        );
     }
 }
