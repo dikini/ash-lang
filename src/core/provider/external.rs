@@ -3275,10 +3275,10 @@ pub(crate) fn put_state_access_in_local_callable_for_test(
             matches!(
                 &node.kind,
                 EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function)))
-                    if function.parameter().ty() == &Type::Bytes
+                    if function.parameter().ty() == &Type::String
             )
         })
-        .expect("the constrained statement fixture has a packed Bytes forwarder");
+        .expect("the constrained statement fixture has a packed String forwarder");
     let dialect = program.nodes[target].dialect;
     let origin = program.nodes[target].origin.clone().unwrap();
     let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(function))) =

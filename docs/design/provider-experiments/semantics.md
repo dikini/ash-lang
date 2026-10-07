@@ -40,7 +40,9 @@ verified argument-carrier and declaration publication evidence in
 [execution](execution.md#current-checkpoint). Public SQLite and basic arena
 programs are verified and integrated into `codex/provider-experiments` at
 `7c97a45` and `53db4eb`, respectively. The selected advanced row and control
-delivery remains in progress on the common branch.
+delivery is integrated at `3f9dd75`, with tracking tip `b04ff1c`. The following
+String/TEXT SQLite contract remains a pending delivery; the execution record
+separates its passing cases from the larger default-budget refusals.
 P-1 tests S-01 first, then the
 remaining cases in [the execution record](execution.md). A successful scalar
 example alone does not establish success for DN-0036.
@@ -85,9 +87,10 @@ follows from those proofs. Adapter correctness, native ABI facts and safe
 destruction remain foreign assumptions checked by the recorded native tests.
 The formal open-Delta callback and the separate same-substitution, same-body-row
 witness with different per-request captured-control demands have passing public
-receipts on the moving common branch. These specific observations do not
-complete Batch 3. The [execution record](execution.md#current-checkpoint)
-separates passing source cases, remaining failures and integrated deliveries.
+receipts. These individual observations establish only the boundaries they
+exercise; the [execution record](execution.md#current-checkpoint) records the
+completed Batch 3 gates and integration separately. The pending String/TEXT
+SQLite delivery has its own checks and remaining larger-program refusals.
 
 ### Declaration and instance
 
@@ -166,22 +169,23 @@ pub type StepResult = Row
 The library maps native operation results into these constructors in its checked
 handlers; it cannot add constructors to the native error nominal. Thus the S-01
 fixture's `MissingRow` and `UnexpectedRow` branches have type `Error`.
-`OpenConfig` initially has `InMemory` and `File(Bytes)` cases. `SqlText` wraps
-independent `Bytes`. The shared copying-value batch replaces the initial
-integer-list representation with the built-in packed type described
-[below](#selected-copying-values-and-literals-sqlite-workstream). At that batch
-boundary SQL and paths still use checked UTF-8 bytes; the following SQLite batch
-migrates them to `String`. Malformed SQL, empty SQL and paths are actual inputs,
-not native operation IDs standing in for SQL text. Neither boundary silently
+The first registered SQLite contract used `File(Bytes)`, copied byte
+diagnostics and a source `SqlText` wrapping `Bytes`. The shared copying-value
+batch replaced the initial integer-list representation with the built-in packed
+type described [below](#selected-copying-values-and-literals-sqlite-workstream).
+The selected String/TEXT contract supersedes those SQL, path and diagnostic
+payloads with `String`; `SqlText` now wraps `String`. BLOB payloads remain
+independent `Bytes`. Malformed SQL, empty SQL and paths are actual inputs, not
+native operation IDs standing in for SQL text. Neither boundary silently
 narrows integers.
 
-The first registered SQLite module has the following complete ordinary data
+The selected registered SQLite module has the following complete ordinary data
 shapes. Constructor identities and field order are manifest facts; codec
 dispatch uses those identities rather than searching for spellings at each call.
 
 ```text
 pub type OpenConfig = InMemory
-| File(Bytes)
+| File(String)
 pub type InputFault = BadIndex
 | BadInteger
 | BadBytes
@@ -190,11 +194,12 @@ pub type InputFault = BadIndex
 | BadSql
 | MultipleStatements
 | BadPath
+| BadText
 pub type ProtocolFault = NotPrepared
 | NotRow
 | AfterDone
 | ClosedOwner
-pub type Error = NativeFailure(Int, Bytes)
+pub type Error = NativeFailure(Int, String)
 | InputFailure(InputFault)
 | ProtocolFailure(ProtocolFault)
 | ConversionFailure
@@ -216,7 +221,16 @@ pub type Acquire<State, E> = Acquired(State)
 pub type Finish<State, E> = Consumed
 | ConsumedFailure(E)
 | Retained(State, E)
+pub type TextOrNull = NullText
+| TextValue(String)
 ```
+
+`BadText` is appended after `BadPath`, and `TextOrNull` is appended after the
+existing `Finish` declaration. `BytesOrNull` and all preceding declaration and
+constructor coordinates remain unchanged. The changed schema requires its own
+exact manifest admission and executable binding; stable prior coordinates or
+matching names do not authorize reuse of an old certificate or a separately
+allocated manifest.
 
 The two state families are public opaque native nominal families of kinds
 `ConnectionState : Type -> Type` and `StatementState : Type -> Type -> Type`.
@@ -228,7 +242,7 @@ checking and runtime postcondition tokens are required even if a client
 constructs a `Consumed` value.
 
 `NativeFailure` stores the exact native result code and a copied diagnostic as
-independent bytes. Input/protocol faults map the safe adapter's structured
+independent UTF-8 `String`. Input/protocol faults map the safe adapter's structured
 failure before native use. Native column-kind rejection is `ColumnTypeMismatch`;
 a failed native conversion is `ConversionFailure`; an actual recoverable native
 copy-allocation failure is `AllocationFailure`. Internal Ash work/storage
@@ -239,23 +253,30 @@ codec. Empty SQL maps to `Refused(EmptySql)`; malformed SQL maps to a
 state token. These wrappers keep the error families distinct without duplicate
 constructor names in the registered module.
 
-The shared-batch codec admits bounded packed bytes and produces independent
-packed copies from native diagnostics/output. The initial `MoreBytes`/
-`EmptyBytes` family is removed from the manifest and source re-exports. `File` requires a valid owned UTF-8 path
-with no embedded zero; `InMemory` supplies the native `:memory:` filename.
-`SqlText` remains a source newtype over these bytes; preparation passes their
-checked explicit length and rejects multiple statements. Empty `BlobBytes` is a
-BLOB and `NullBytes` is SQL null. Neither turns into the other through a null
-host slice pointer. Source error mapping adds only the library protocol cases
-shown above.
+The selected codec admits bounded packed `Bytes` and `String` and produces
+independent copies from native diagnostics and columns. The initial
+`MoreBytes`/`EmptyBytes` family is absent from the manifest and source re-exports.
+`String` generally permits NUL, as specified
+[below](#selected-copying-values-and-literals-sqlite-workstream). The selected
+adapter rejects embedded NUL in paths, SQL and bound TEXT. `InMemory` supplies
+the native `:memory:` filename. Preparation passes the SQL's checked explicit
+byte length and rejects multiple statements. Returned TEXT uses its explicit
+byte length, preserves embedded NUL and requires valid UTF-8 without replacement;
+malformed native TEXT produces a conversion failure. These are selected adapter
+contracts, not restrictions on all `String` values.
+
+Empty `BlobBytes` is a BLOB, empty `TextValue` is TEXT, and `NullBytes` and
+`NullText` denote SQL null in their respective result families. Empty payloads
+do not become null through a null host slice pointer. Source error mapping adds
+only the library protocol cases shown above.
 
 Registered native modules define canonical `OpenConfig`, error, `Result`,
 `StepResult`, `Acquire` and `Finish` families independently of the resource
-library. `Bytes` is a built-in type. The SQLite source module re-exports
-configuration and
-lifecycle-error families, maps native operation results into source result
-families, and wraps SQL bytes in its own `SqlText`. The native module does not
-import the SQLite source module. Exact first signatures are:
+library. `Bytes` and `String` are distinct built-in types. The SQLite source
+module re-exports configuration and lifecycle-error families, maps native
+operation results into source result families, and wraps SQL `String` in its
+own `SqlText`. The native module does not import the SQLite source module.
+Exact selected signatures are:
 
 ```text
 Native.Connection<R>.open:
@@ -265,7 +286,7 @@ Native.Connection<R>.diagnostic:
 Native.Connection<R>.close:
   Native.ConnectionState<R> -> Native.Finish<Native.ConnectionState<R>, Native.CloseError>
 Native.Statement<S,C>.prepare:
-  (Native.ConnectionState<C>, Bytes) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
+  (Native.ConnectionState<C>, String) -> Native.Acquire<Native.StatementState<S,C>, Native.PrepareError>
 Native.Statement<S,C>.bind_int:
   (Native.StatementState<S,C>, Int, Int) -> Native.Result<Unit>
 Native.Statement<S,C>.step:
@@ -282,7 +303,18 @@ Native.Statement<S,C>.reset:
   Native.StatementState<S,C> -> Native.Result<Unit>
 Native.Statement<S,C>.clear_bindings:
   Native.StatementState<S,C> -> Native.Result<Unit>
+Native.Statement<S,C>.bind_text:
+  (Native.StatementState<S,C>, Int, Native.TextOrNull) -> Native.Result<Unit>
+Native.Statement<S,C>.column_text:
+  (Native.StatementState<S,C>, Int) -> Native.Result<Native.TextOrNull>
 ```
+
+Connection retains its three operation coordinates. Statement appends
+`bind_text` and `column_text` at coordinates 9 and 10 after `clear_bindings`,
+preserving its preceding nine operations. The selected manifest has fourteen
+operations in total. Both TEXT operations borrow the tuple's state operand at
+position 0 and return independent data; they add no acquisition or completion
+authority.
 
 These are pure operation arrows inside their respective parameterized native
 effects; a request adds that exact native instance. None refers to the source
@@ -294,7 +326,8 @@ SQL before returning. It does not retain the SQL input.
 The manifest records relational results, not only value types: `diagnostic`
 returns independent `Native.Error`; bind returns independent `Ok(Unit)` or
 `Err(Error)`; step returns independent `Row`, `Done` or `StepError(Error)`;
-column access returns independent copied `Ok(Int)` or `Err(Error)`. Those
+column access returns independent copied `Ok(Int)`, `Ok(BytesOrNull)`,
+`Ok(TextOrNull)` or `Err(Error)`. Those
 nominal constructor alternatives contain no state/owner dependency. The source
 mapping clauses preserve that fact in their own constructors. A default
 opaque/unknown external-result summary is insufficient to prove their matches
@@ -304,8 +337,9 @@ retain their controlled state/capability relation separately from these copied
 borrowed results.
 
 The copying additions borrow statement state and return independent constructor
-shapes as well. `bind_bytes` uses the adapter's transient/copy operation;
-`column_bytes` returns a fresh copied `BlobBytes` list or `NullBytes`. Reset and
+shapes as well. `bind_bytes` and `bind_text` use the adapter's transient/copy
+operations. `column_bytes` returns a fresh packed `BlobBytes` or `NullBytes`;
+`column_text` returns a fresh copied `TextValue` or `NullText`. Reset and
 clear-bindings return copied unit/error results. They are distinct operations:
 reset alone makes no retention-release claim. Their later retained/view variants
 need separate declared relations, not a changed meaning for these copying calls.

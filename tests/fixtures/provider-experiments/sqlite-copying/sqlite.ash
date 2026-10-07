@@ -1,9 +1,8 @@
-import @builtin.string as TextOps
 import @foreign.sqlite as Native
 import provider as Provider
-pub import @foreign.sqlite (OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)
+pub import @foreign.sqlite (BytesOrNull, NullBytes, BlobBytes, TextOrNull, NullText, TextValue, OpenConfig, InMemory, File, OpenError, OpenFailure, CloseError, CloseFailure, PrepareError, PrepareFailure, EmptySql, FinalizeError, FinalizeFailure)
 
-pub newtype SqlText = SqlText(Bytes)
+pub newtype SqlText = SqlText(String)
 
 pub type Error = ForeignError(Native.Error)
 | MissingRow
@@ -25,11 +24,23 @@ pub effect StatementOps<S, C> {
 bind_int : (Statement<S, C>, Int, Int) -> Result<Unit>
 step : Statement<S, C> -> StepResult
 column_int : (Statement<S, C>, Int) -> Result<Int>
+bind_bytes : (Statement<S, C>, Int, BytesOrNull) -> Result<Unit>
+column_bytes : (Statement<S, C>, Int) -> Result<BytesOrNull>
+bind_text : (Statement<S, C>, Int, TextOrNull) -> Result<Unit>
+column_text : (Statement<S, C>, Int) -> Result<TextOrNull>
+reset : Statement<S, C> -> Result<Unit>
+clear_bindings : Statement<S, C> -> Result<Unit>
 }
 pub interface StatementProvider<S, C> {
 bind_int : (Statement<S, C>, Int, Int) -> Result<Unit> ! {StatementOps<S, C>}
 step : Statement<S, C> -> StepResult ! {StatementOps<S, C>}
 column_int : (Statement<S, C>, Int) -> Result<Int> ! {StatementOps<S, C>}
+bind_bytes : (Statement<S, C>, Int, BytesOrNull) -> Result<Unit> ! {StatementOps<S, C>}
+column_bytes : (Statement<S, C>, Int) -> Result<BytesOrNull> ! {StatementOps<S, C>}
+bind_text : (Statement<S, C>, Int, TextOrNull) -> Result<Unit> ! {StatementOps<S, C>}
+column_text : (Statement<S, C>, Int) -> Result<TextOrNull> ! {StatementOps<S, C>}
+reset : Statement<S, C> -> Result<Unit> ! {StatementOps<S, C>}
+clear_bindings : Statement<S, C> -> Result<Unit> ! {StatementOps<S, C>}
 }
 
 pub resource Connection<R> {
@@ -75,6 +86,38 @@ Native.Ok(value) => resume (Ok value)
 Native.Err(error) => resume (Err (ForeignError error))
 }
 }
+bind_bytes operand => match operand {
+(stmt, index, value) => match (perform Native.Statement<S, C>.bind_bytes (state, index, value)) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
+}
+column_bytes operand => match operand {
+(stmt, index) => match (perform Native.Statement<S, C>.column_bytes (state, index)) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
+}
+bind_text operand => match operand {
+(stmt, index, value) => match (perform Native.Statement<S, C>.bind_text (state, index, value)) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
+}
+column_text operand => match operand {
+(stmt, index) => match (perform Native.Statement<S, C>.column_text (state, index)) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
+}
+reset stmt => match (perform Native.Statement<S, C>.reset state) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
+clear_bindings stmt => match (perform Native.Statement<S, C>.clear_bindings state) {
+Native.Ok(value) => resume (Ok value)
+Native.Err(error) => resume (Err (ForeignError error))
+}
 }
 }
 
@@ -82,4 +125,4 @@ pub memory : Unit -> OpenConfig
 memory () = InMemory
 
 pub select_parameter : Unit -> SqlText
-select_parameter () = SqlText (TextOps.to_utf8 "SELECT ?1")
+select_parameter () = SqlText "SELECT ?1"
