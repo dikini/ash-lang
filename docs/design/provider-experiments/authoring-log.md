@@ -2850,3 +2850,17 @@ alone is insufficient when measured work rises. A private typed-route/frame
 candidate targets contextual expansion and has no execution claim yet. Shared
 compiler ownership remains Common's, native/library ownership remains SQLite's,
 and engine windows remain serial. DN-0036 retains experimental authority.
+
+
+## 2026-10-07: completed-phase integration
+
+Common commit `1fa1f4f91d2c29bd8f38d180991336963d9aff75` is integrated by
+unsigned Original merge `f0a8e59a8ac824af959f72ff19af10a7563d0ba7`.
+The original-worktree full gate passes all six stages with 3,364 parent passes,
+zero failures or ignored cases, and all unrelated work preserved. Receipt 284
+records the actual return and independent raw-log and guard audit. No limits
+change, and the three larger SQLite normal-budget deficits remain unresolved.
+Fusion continues the private frame consumer; a smaller context-extension reuse
+candidate is source-reviewed but uncompiled and unmeasured. Neither candidate
+is part of this verified delivery. Library/native ownership and serial engine
+coordination remain unchanged.

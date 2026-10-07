@@ -71,13 +71,14 @@ final-binder delivery `70e97735` merged at `13d2b89` and passed the complete
 original-worktree gate in receipt 282; documentation-only merges advance the
 original tip to `0d0c2bd`.
 
-The next selected delivery tracks completed control-call suffixes, carries
+The selected delivery tracks completed control-call suffixes, carries
 unproved row equations explicitly and borrows immutable replacement Types.
 Receipt 284 passes the connected Common normal gate, including independent
 Core, public control/row programs, architecture and strict quality checks.
-Its commit, original merge and integrated full gate remain pending. Dirty-edge,
-strict-predecessor and global-constructor staging trials increased measured
-work and were exactly reversed. The larger three SQLite cases still exceed
+Common commit `1fa1f4f` is integrated by unsigned Original merge `f0a8e59`,
+and the complete normal-policy original-worktree gate passes receipt 284.
+Dirty-edge, strict-predecessor and global-constructor staging trials increased
+measured work and were exactly reversed. The larger three SQLite cases still exceed
 normal limits; the next private fusion study targets contextual child expansion.
 No work or depth limit changes are selected.
 
