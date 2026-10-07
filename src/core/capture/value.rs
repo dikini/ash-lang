@@ -323,6 +323,29 @@ pub(super) struct CallSuccessors {
     pub(super) returns: bool,
 }
 
+// Owned only by one exact observed control State inside one discover invocation.
+// It records delivered work, not a stable classification of the growing port.
+// The immutable graph and append-only Analysis slots keep this coordinate exact;
+// focused queries start a fresh discover and never import these tokens.
+pub(super) struct DeliveredCallPrefix {
+    end: usize,
+    opaque: u8,
+}
+
+pub(super) struct PendingCallPrefix(DeliveredCallPrefix);
+
+impl PendingCallPrefix {
+    // The control consumer calls this only after the complete successor and
+    // opaque branches succeed. Refusal cannot advance its retained frontier.
+    pub(super) fn publish(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<DeliveredCallPrefix, Failure> {
+        charge(budget, 1)?;
+        Ok(self.0)
+    }
+}
+
 #[cfg(test)]
 pub(super) fn provider_typed_capture_graph_for_test(
     metadata: Option<crate::types::TypeVariableId>,
@@ -939,27 +962,20 @@ impl Graph {
     }
 
     #[allow(clippy::too_many_arguments)] // Explicit graph inputs share the owning work ledger.
-    fn abstract_captures<F: CoreOperationFamily>(
+    fn abstract_captures(
         &mut self,
-        nodes: &[StoredNode<F>],
-        root: usize,
+        steps: &[super::AbstractCaptureStep],
+        invalid: bool,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         symbols: &mut HashMap<BinderId, usize>,
         captures: &mut Vec<usize>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let mut pending = copy_slice(&[root], budget)?;
-        let mut visited = HashSet::new();
-        while let Some(id) = pending.pop() {
+        for step in steps {
             charge(budget, 1)?;
-            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
-            if !visited.insert(id) {
-                continue;
-            }
-            if !self.capture_ports().is_empty() {
-                charge(budget, self.capture_ports().len())?;
-                if self.capture_ports().contains(&id) {
+            let id = match *step {
+                super::AbstractCaptureStep::Port(id) => {
                     charge(budget, captures.len())?;
                     if !captures.contains(&id) {
                         captures.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -967,7 +983,8 @@ impl Graph {
                     }
                     continue;
                 }
-            }
+                super::AbstractCaptureStep::Methods(id) => id,
+            };
             for method in methods.at(id, budget)? {
                 if index(method.node) == id {
                     if let super::MethodTarget::Adapter { value, .. } = method.target {
@@ -1014,17 +1031,12 @@ impl Graph {
                     }
                 }
             }
-            let node = nodes.get(id).ok_or(Failure::Invalid)?;
-            let count = F::child_count(&node.kind);
-            charge(budget, count)?;
-            pending.try_reserve(count).map_err(|_| Failure::Resource)?;
-            for ordinal in 0..count {
-                pending.push(index(
-                    F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
-                ));
-            }
         }
-        Ok(())
+        if invalid {
+            Err(Failure::Invalid)
+        } else {
+            Ok(())
+        }
     }
 
     fn push(
@@ -1272,14 +1284,19 @@ impl Graph {
                 self.targets.insert(id, id);
                 let parameter = self.symbol(symbols, function.parameter().id(), source, budget)?;
                 let mut captures = Vec::new();
-                for binder in super::free_values_with_methods(
+                let super::CaptureProjections {
+                    free_values,
+                    abstract_steps,
+                    invalid_abstract,
+                } = super::capture_projections(
                     nodes,
                     index(function.body()),
                     &[function.parameter().id()],
                     methods,
                     self.capture_ports(),
                     budget,
-                )? {
+                )?;
+                for binder in free_values {
                     let slot = self.symbol(symbols, binder, source, budget)?;
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
@@ -1291,8 +1308,8 @@ impl Graph {
                     captures.push(slot);
                 }
                 self.abstract_captures(
-                    nodes,
-                    index(function.body()),
+                    &abstract_steps,
+                    invalid_abstract,
                     methods,
                     adapters,
                     symbols,
@@ -1438,14 +1455,19 @@ impl Graph {
                     parameters.push(slot);
                 }
                 let mut captures = Vec::new();
-                for binder in super::free_values_with_methods(
+                let super::CaptureProjections {
+                    free_values,
+                    abstract_steps,
+                    invalid_abstract,
+                } = super::capture_projections(
                     nodes,
                     index(abstraction.body()),
                     &[],
                     methods,
                     self.capture_ports(),
                     budget,
-                )? {
+                )?;
+                for binder in free_values {
                     let slot = self.symbol(symbols, binder, source, budget)?;
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
@@ -1460,8 +1482,8 @@ impl Graph {
                     }
                 }
                 self.abstract_captures(
-                    nodes,
-                    index(abstraction.body()),
+                    &abstract_steps,
+                    invalid_abstract,
                     methods,
                     adapters,
                     symbols,
@@ -1567,14 +1589,12 @@ impl Graph {
         let input = self.push(Expr::Slot, source, budget)?;
         let bindings = self.pattern(pattern, input, symbols, budget)?;
         let mut captures = Vec::new();
-        for binder in super::free_values_with_methods(
-            nodes,
-            body,
-            &[],
-            methods,
-            self.capture_ports(),
-            budget,
-        )? {
+        let super::CaptureProjections {
+            free_values,
+            abstract_steps,
+            invalid_abstract,
+        } = super::capture_projections(nodes, body, &[], methods, self.capture_ports(), budget)?;
+        for binder in free_values {
             let slot = self.symbol(symbols, binder, source, budget)?;
             charge(budget, bindings.len())?;
             if !bindings.iter().any(|(bound, _)| *bound == slot) {
@@ -1589,8 +1609,8 @@ impl Graph {
             captures.push(slot);
         }
         self.abstract_captures(
-            nodes,
-            body,
+            &abstract_steps,
+            invalid_abstract,
             methods,
             adapters,
             symbols,
@@ -2283,6 +2303,198 @@ enum Transition {
     Restore(usize, usize, usize),
 }
 
+// Every nonempty canonical path shares its already published prefix. These
+// nodes own no recursive storage, values, environments or execution authority.
+#[derive(Clone, Copy, Debug)]
+enum ContextPath {
+    Empty,
+    Step {
+        parent: usize,
+        transition: Transition,
+        length: usize,
+    },
+}
+
+impl ContextPath {
+    fn length(self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Step { length, .. } => length,
+        }
+    }
+}
+
+struct ContextPaths {
+    paths: Vec<ContextPath>,
+    extensions: HashMap<(usize, Transition), usize>,
+}
+
+// Absence and the exact immutable parent remain borrowed through reservation.
+// Only successful reservation produces the state that can publish both entries.
+struct PendingContextExtension<'a> {
+    paths: &'a mut ContextPaths,
+    parent: usize,
+    transition: Transition,
+    length: usize,
+}
+
+struct ReservedContextExtension<'a>(PendingContextExtension<'a>);
+
+impl<'a> PendingContextExtension<'a> {
+    fn reserve(self, budget: &mut TypeWorkBudget) -> Result<ReservedContextExtension<'a>, Failure> {
+        // One new flat path record and one exact index entry, before either
+        // allocation or publication. No full-prefix copy or hash is performed.
+        charge(budget, 2)?;
+        self.paths
+            .paths
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.paths
+            .extensions
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        Ok(ReservedContextExtension(self))
+    }
+}
+
+impl ReservedContextExtension<'_> {
+    fn publish(self) -> usize {
+        let PendingContextExtension {
+            paths,
+            parent,
+            transition,
+            length,
+        } = self.0;
+        let id = paths.paths.len();
+        paths.paths.push(ContextPath::Step {
+            parent,
+            transition,
+            length,
+        });
+        paths.extensions.insert((parent, transition), id);
+        id
+    }
+}
+
+impl ContextPaths {
+    fn new(budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, 1)?;
+        let mut paths = Vec::new();
+        paths.try_reserve(1).map_err(|_| Failure::Resource)?;
+        paths.push(ContextPath::Empty);
+        Ok(Self {
+            paths,
+            extensions: HashMap::new(),
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    fn intern(
+        &mut self,
+        parent: usize,
+        transition: Transition,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, bool), Failure> {
+        let length = self.paths.get(parent).ok_or(Failure::Invalid)?.length();
+        // Only completed nonrecurrence walks publish this exact extension.
+        // Its parent chain is immutable, including in a focused complete copy.
+        charge(budget, 1)?;
+        if let Some(&id) = self.extensions.get(&(parent, transition)) {
+            return Ok((id, false));
+        }
+        // The original recurrence relation is checked along the whole parent
+        // chain. Walking backwards must retain the OLDEST match, not the nearest.
+        charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
+        let mut cursor = parent;
+        let mut repeated = None;
+        while let ContextPath::Step {
+            parent,
+            transition: site,
+            ..
+        } = self.paths[cursor]
+        {
+            let matches = match (site, transition) {
+                (Transition::Root(target), Transition::Invoke(_, callee))
+                | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => {
+                    target == callee
+                }
+                _ => site == transition,
+            };
+            if matches {
+                repeated = Some(cursor);
+            }
+            cursor = parent;
+        }
+        if let Some(id) = repeated {
+            return Ok((id, false));
+        }
+        let id = PendingContextExtension {
+            paths: self,
+            parent,
+            transition,
+            length: length.checked_add(1).ok_or(Failure::Resource)?,
+        }
+        .reserve(budget)?
+        .publish();
+        Ok((id, true))
+    }
+
+    fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        // The borrowed private owner already establishes every prefix relation.
+        // Copy flat nodes once, rebuilding the complete index in original ID order.
+        let paths = copy_slice(&self.paths, budget)?;
+        let count = paths.len().checked_sub(1).ok_or(Failure::Invalid)?;
+        charge(budget, count.checked_mul(2).ok_or(Failure::Resource)?)?;
+        let mut extensions = HashMap::new();
+        extensions
+            .try_reserve(count)
+            .map_err(|_| Failure::Resource)?;
+        for (id, path) in paths.iter().enumerate().skip(1) {
+            let ContextPath::Step {
+                parent, transition, ..
+            } = *path
+            else {
+                return Err(Failure::Invalid);
+            };
+            extensions.insert((parent, transition), id);
+        }
+        Ok(Self { paths, extensions })
+    }
+
+    fn forward(
+        &self,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<Transition>, Failure> {
+        let length = self.paths.get(context).ok_or(Failure::Invalid)?.length();
+        // Pay scratch allocation, the parent walk and its reversal. Source
+        // provenance is still validated FORWARDS by the original consumer.
+        charge(
+            budget,
+            length
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(1))
+                .ok_or(Failure::Resource)?,
+        )?;
+        let mut path = Vec::new();
+        path.try_reserve_exact(length)
+            .map_err(|_| Failure::Resource)?;
+        let mut cursor = context;
+        while let ContextPath::Step {
+            parent, transition, ..
+        } = self.paths[cursor]
+        {
+            path.push(transition);
+            cursor = parent;
+        }
+        path.reverse();
+        Ok(path)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Cut {
     pub(super) context: usize,
@@ -2892,6 +3104,15 @@ impl<'s, 'g> ReadyClosure<'s, 'g> {
     }
 }
 
+// Only successful fixed-setup Expr arms produce FixedSetupReady. The queue
+// consumes this transient result after its exact ordered propagation completes.
+// Dynamic expressions and unfinished readiness never acquire this authority.
+#[derive(Debug, Eq, PartialEq)]
+enum SetupOutcome {
+    FixedSetupReady,
+    NeedsInputsOrDynamic,
+}
+
 // A queue-owned evaluation carries its exact reader through one exclusive visit.
 // The original edge owns the source notification for structural Alias/Merge links.
 struct QueuedEvaluation<'s, 'g> {
@@ -2942,7 +3163,7 @@ impl AliasLinkPolicy for QueuedAliasLinks {
 }
 
 impl<'s, 'g> QueuedEvaluation<'s, 'g> {
-    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<SetupOutcome, Failure> {
         self.analysis
             .evaluate_with_alias_links::<QueuedAliasLinks>(self.slot, budget)
     }
@@ -3198,8 +3419,7 @@ pub(super) struct Analysis<'a> {
     // The graph is borrowed immutably for the complete lifetime of this index.
     capture_topology_indices: HashMap<(usize, usize), usize>,
     capture_topologies: Vec<CaptureTopology>,
-    contexts: Vec<Vec<Transition>>,
-    context_indices: HashMap<Vec<Transition>, usize>,
+    contexts: ContextPaths,
     slots: Vec<Slot>,
     atom_pairs: HashSet<(usize, Atom)>,
     // One exact relation retains watch-only or linked-prefix progress.
@@ -3355,24 +3575,8 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         let mut query = Self::new(self.graph, budget)?;
-        query.contexts.clear();
-        query.context_indices.clear();
-        charge(budget, self.contexts.len() + self.slots.len())?;
-        query
-            .contexts
-            .try_reserve(self.contexts.len())
-            .map_err(|_| Failure::Resource)?;
-        query
-            .context_indices
-            .try_reserve(self.contexts.len())
-            .map_err(|_| Failure::Resource)?;
-        for context in &self.contexts {
-            charge(budget, context.len() + 1)?;
-            query
-                .context_indices
-                .insert(copy_slice(context, budget)?, query.contexts.len());
-            query.contexts.push(copy_slice(context, budget)?);
-        }
+        charge(budget, self.slots.len())?;
+        query.contexts = self.contexts.copy(budget)?;
         query.frozen_contexts = query.contexts.len();
         query
             .slots
@@ -3590,7 +3794,7 @@ impl<'a> Analysis<'a> {
     ) -> Result<(Span, Vec<super::ActualValuePathStep>), Failure> {
         let (expression, _) = self.slots.get(port).ok_or(Failure::Invalid)?.key;
         let request = *self.graph.sources.get(expression).ok_or(Failure::Invalid)?;
-        let path = self.contexts.get(context).ok_or(Failure::Invalid)?;
+        let path = self.contexts.forward(context, budget)?;
         charge(budget, path.len())?;
         let mut output = Vec::new();
         output
@@ -3603,7 +3807,7 @@ impl<'a> Analysis<'a> {
                 .copied()
                 .ok_or(Failure::Invalid)
         };
-        for step in path {
+        for step in &path {
             charge(budget, 1)?;
             output.push(match *step {
                 Transition::Root(expression) => {
@@ -3691,6 +3895,58 @@ impl<'a> Analysis<'a> {
             unknown,
             returns,
         })
+    }
+
+    // Only discover's exact observed-State record supplies a delivered prefix.
+    // Other callers keep calls(), including provider-independent queries.
+    pub(super) fn calls_after(
+        &mut self,
+        code: usize,
+        context: usize,
+        delivered: Option<&DeliveredCallPrefix>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(CallSuccessors, PendingCallPrefix), Failure> {
+        let port = self.port(code, context, budget)?;
+        self.close(budget)?;
+        let (expression, _) = self.slots[port].key;
+        let Expr::Call { function, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let function = self.slot(function, context, budget)?;
+        // Snapshot BEFORE successor processing can install further live routes.
+        // Phase dispatch and the retained endpoint read are bounded scalar work.
+        charge(budget, 2)?;
+        let end = self.slots[function].atoms.len();
+        let (start, mut opaque) = match delivered {
+            Some(prefix) => (prefix.end, prefix.opaque),
+            None => (0, 0),
+        };
+        let mut targets = Vec::new();
+        for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
+            match atom {
+                Atom::Closure(target, _) => {
+                    let context =
+                        self.context(context, Transition::Invoke(expression, target), budget)?;
+                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
+                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    targets.push((target, context));
+                }
+                Atom::Unknown => opaque |= 1,
+                Atom::Constructor(_) => opaque |= 2,
+                _ => {}
+            }
+        }
+        // Flags are an exact monotone summary of the delivered ordered prefix.
+        // Their two scalar projections replace the original bool assignments.
+        charge(budget, 2)?;
+        Ok((
+            CallSuccessors {
+                targets,
+                unknown: opaque & 1 != 0,
+                returns: opaque & 2 != 0,
+            },
+            PendingCallPrefix(DeliveredCallPrefix { end, opaque }),
+        ))
     }
 
     pub(super) fn dispatch(
@@ -3926,15 +4182,7 @@ impl<'a> Analysis<'a> {
             positions.try_reserve(1).map_err(|_| Failure::Resource)?;
             positions.push(position);
         }
-        charge(budget, 2)?;
-        let mut contexts = Vec::new();
-        contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
-        contexts.push(Vec::new());
-        let mut context_indices = HashMap::new();
-        context_indices
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        context_indices.insert(Vec::new(), 0);
+        let contexts = ContextPaths::new(budget)?;
         Ok(Self {
             graph,
             evidence_ports,
@@ -3943,7 +4191,6 @@ impl<'a> Analysis<'a> {
             capture_topology_indices: HashMap::new(),
             capture_topologies: Vec::new(),
             contexts,
-            context_indices,
             slots: Vec::new(),
             atom_pairs: HashSet::new(),
             dependencies: DependencyRelations::default(),
@@ -3967,40 +4214,10 @@ impl<'a> Analysis<'a> {
         call: Transition,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
-        let path = &self.contexts[parent];
-        charge(budget, path.len() + 1)?;
-        // Preserve separate entry call sites, but join recursive arguments and
-        // captures at the existing callee entry. Enumerating permutations of
-        // recursive call sites multiplies equivalent control histories.
-        let repeated = path.iter().position(|site| match (site, call) {
-            (Transition::Root(target), Transition::Invoke(_, callee))
-            | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => *target == callee,
-            _ => *site == call,
-        });
-        let mut context = copy_slice(
-            &path[..repeated.map_or(path.len(), |index| index + 1)],
-            budget,
-        )?;
-        if repeated.is_none() {
-            context.try_reserve(1).map_err(|_| Failure::Resource)?;
-            context.push(call);
+        let (id, published) = self.contexts.intern(parent, call, budget)?;
+        if published {
+            self.revision += 1;
         }
-        charge(budget, context.len() + 1)?;
-        if let Some(&id) = self.context_indices.get(&context) {
-            return Ok(id);
-        }
-        self.contexts
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        self.context_indices
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let id = self.contexts.len();
-        charge(budget, context.len() + 1)?;
-        self.context_indices
-            .insert(copy_slice(&context, budget)?, id);
-        self.contexts.push(context);
-        self.revision += 1;
         Ok(id)
     }
 
@@ -4170,39 +4387,19 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             self.slots[slot].queued = false;
             self.current = Some(slot);
-            let complete_setup = if self.slots[slot].terminal {
-                false
-            } else if matches!(
-                self.graph.expressions[self.slots[slot].key.0],
-                Expr::Alias(_)
-                    | Expr::Merge(_)
-                    | Expr::Function { .. }
-                    | Expr::Tuple(_)
-                    | Expr::Cleanup { .. }
-                    | Expr::Bind { .. }
-                    | Expr::Recursive { .. }
-                    | Expr::Match { .. }
-                    | Expr::Resource { .. }
-            ) {
-                // The queue visit already admits its bounded kind dispatch.
-                // Pay this eligible classification and completion-field lookup.
-                charge(budget, 2)?;
-                if self.slots[slot].preparation == SlotPreparation::EdgesInstalled {
-                    false
-                } else {
-                    QueuedEvaluation {
-                        analysis: self,
-                        slot,
-                    }
-                    .evaluate(budget)?
-                }
+            // The existing queue admission covers this bounded phase dispatch.
+            // EdgesInstalled can only come from a fixed Expr's successful setup
+            // and full propagation; every other expression still evaluates live.
+            let setup = if self.slots[slot].terminal
+                || self.slots[slot].preparation == SlotPreparation::EdgesInstalled
+            {
+                SetupOutcome::NeedsInputsOrDynamic
             } else {
                 QueuedEvaluation {
                     analysis: self,
                     slot,
                 }
-                .evaluate(budget)?;
-                false
+                .evaluate(budget)?
             };
             // Live ordered edges are processed on every visit, including after
             // setup completion. A later owner/Unknown is never a cached answer.
@@ -4243,7 +4440,7 @@ impl<'a> Analysis<'a> {
                 }
                 cursor.publish();
             }
-            if complete_setup {
+            if matches!(setup, SetupOutcome::FixedSetupReady) {
                 // The existing Slot admission already reserves this scalar
                 // field. Commit only after all original setup AND this slot's
                 // current ordered propagation succeed. No fallible work follows
@@ -4279,28 +4476,38 @@ impl<'a> Analysis<'a> {
     #[cfg(test)]
     fn evaluate(&mut self, slot: usize, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
         self.evaluate_with_alias_links::<ObservedAliasLinks>(slot, budget)
+            .map(|setup| matches!(setup, SetupOutcome::FixedSetupReady))
     }
 
     fn evaluate_with_alias_links<P: AliasLinkPolicy>(
         &mut self,
         slot: usize,
         budget: &mut TypeWorkBudget,
-    ) -> Result<bool, Failure> {
-        // This reports setup readiness only. The queue owns its completion bit
-        // and commits it after propagation; direct evaluation always runs.
-        let mut fixed_setup = true;
+    ) -> Result<SetupOutcome, Failure> {
+        // Only the nine fixed-setup arms below can produce readiness. The queue
+        // commits it after propagation; direct evaluation still always runs.
         let (expression, context) = self.slots[slot].key;
         let graph = self.graph;
-        match &graph.expressions[expression] {
-            Expr::Scalar => self.atom(slot, Atom::Free, budget)?,
-            Expr::Slot => {}
-            Expr::Unknown => self.atom(slot, Atom::Unknown, budget)?,
-            Expr::Alias(value) => P::link(self, slot, *value, context, budget)?,
+        let setup = match &graph.expressions[expression] {
+            Expr::Scalar => {
+                self.atom(slot, Atom::Free, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::Slot => SetupOutcome::NeedsInputsOrDynamic,
+            Expr::Unknown => {
+                self.atom(slot, Atom::Unknown, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::Alias(value) => {
+                P::link(self, slot, *value, context, budget)?;
+                SetupOutcome::FixedSetupReady
+            }
             Expr::Merge(values) => {
                 self.atom(slot, Atom::Free, budget)?;
                 for value in values {
                     P::link(self, slot, *value, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Function { captures, body, .. } => {
                 FunctionCaptureInstallation {
@@ -4312,9 +4519,11 @@ impl<'a> Analysis<'a> {
                     captures,
                 }
                 .install(budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Constructor(constructor) => {
-                self.atom(slot, Atom::Constructor(*constructor), budget)?
+                self.atom(slot, Atom::Constructor(*constructor), budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Tuple(fields) => {
                 let mut ready = true;
@@ -4323,9 +4532,10 @@ impl<'a> Analysis<'a> {
                     ready &= !self.slots[field].atoms.is_empty();
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 self.atom(slot, Atom::Aggregate(expression, context), budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Call {
                 function,
@@ -4333,7 +4543,6 @@ impl<'a> Analysis<'a> {
                 scalar,
                 type_application,
             } => {
-                fixed_setup = false;
                 let function = self.slot(*function, context, budget)?;
                 charge(budget, arguments.len())?;
                 let mut actual = Vec::new();
@@ -4347,7 +4556,7 @@ impl<'a> Analysis<'a> {
                     actual.push(argument);
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 // Atom storage is append-only; preserve the original prefix while routing.
                 let atom_count = self.slots[function].atoms.len();
@@ -4421,13 +4630,13 @@ impl<'a> Analysis<'a> {
                         _ => {}
                     }
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Project {
                 value,
                 field,
                 constructor,
             } => {
-                fixed_setup = false;
                 let value = self.slot(*value, context, budget)?;
                 let atom_count = self.slots[value].atoms.len();
                 charge(budget, atom_count)?;
@@ -4476,17 +4685,19 @@ impl<'a> Analysis<'a> {
                         _ => {}
                     }
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Cleanup { body, action } => {
                 let body = self.slot(*body, context, budget)?;
                 if self.slots[body].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 let action = self.slot(*action, context, budget)?;
                 if self.slots[action].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 self.edge(slot, body, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Bind {
                 binder,
@@ -4496,9 +4707,10 @@ impl<'a> Analysis<'a> {
                 let binder = self.slot(*binder, context, budget)?;
                 self.link(binder, *initializer, context, budget)?;
                 if self.slots[binder].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Recursive { bindings, body } => {
                 let mut ready = true;
@@ -4509,14 +4721,15 @@ impl<'a> Analysis<'a> {
                     ready &= !self.slots[initializer].atoms.is_empty();
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Match { scrutinee, arms } => {
                 let scrutinee = self.slot(*scrutinee, context, budget)?;
                 if self.slots[scrutinee].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 for (bindings, body) in arms {
                     for &(binder, initializer) in bindings {
@@ -4525,6 +4738,7 @@ impl<'a> Analysis<'a> {
                     }
                     P::link(self, slot, *body, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Resource {
                 success,
@@ -4536,7 +4750,7 @@ impl<'a> Analysis<'a> {
             } => {
                 let initializer = self.slot(*initializer, context, budget)?;
                 if self.slots[initializer].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 let handle = self.slot(*handle, context, budget)?;
                 let identity = self.slot(*identity, context, budget)?;
@@ -4550,18 +4764,23 @@ impl<'a> Analysis<'a> {
                 } else {
                     P::link(self, slot, *body, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Request { operand, scalar } => {
                 self.slot(*operand, context, budget)?;
                 let _ = scalar;
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Resume { operand } => {
                 self.slot(*operand, context, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
             }
-            Expr::Handler { body, .. } => P::link(self, slot, *body, context, budget)?,
+            Expr::Handler { body, .. } => {
+                P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
             // ASH_INPUT169_BEGIN_EVALUATE
             Expr::Evidence { value, bindings } => {
-                fixed_setup = false;
                 let InstalledEvidenceInputs { mut visit, value } = EvidenceInputVisit {
                     analysis: self,
                     slot,
@@ -4576,9 +4795,10 @@ impl<'a> Analysis<'a> {
                     let atom = visit.analysis.slots[value].atoms[atom_index];
                     visit = visit.route_atom(atom, budget)?;
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             } // ASH_INPUT169_END_EVALUATE
-        }
-        Ok(fixed_setup)
+        };
+        Ok(setup)
     }
 
     fn build_binding_index(
@@ -4914,6 +5134,148 @@ impl<'a> Analysis<'a> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn clause_capture_projection_preserves_shared_cuts_and_allocation_order() {
+        use super::super::{MethodAdapter, MethodTarget, MethodUse, MethodUses};
+        use crate::{
+            core::{
+                EffectCoreBuilder,
+                effect::{EffectExprKind, EffectOperationFamily},
+            },
+            interface::{InterfaceId, MethodId, RequirementId, RequirementOwner},
+            module::ModuleId,
+            source::Origin,
+            types::TypeVariableId,
+        };
+
+        let fixture = graph(vec![Expr::Scalar]);
+        let origin = Origin::Source(fixture.sources[0]);
+        let module = ModuleId::new(44_211);
+        let shared_binder = BinderId::resolved(module, 0);
+        let selected = BinderId::resolved(module, 1);
+        let prerequisite = BinderId::resolved(module, 2);
+        let variable = TypeVariableId::generated(44_211);
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::new(Vec::new(), Vec::new()),
+        ));
+        let shared = builder
+            .variable(shared_binder, Type::Variable(variable), origin.clone())
+            .unwrap();
+        let port = builder
+            .variable(BinderId::resolved(module, 3), Type::Unit, origin.clone())
+            .unwrap();
+        let cut = builder
+            .tuple(vec![shared], Type::Unit, origin.clone())
+            .unwrap();
+        // LIFO visits shared through the evidence-only cut first, then later
+        // through the active lexical path. A union visited set loses its binder.
+        let body = builder
+            .tuple(vec![shared, port, cut], Type::Unit, origin.clone())
+            .unwrap();
+        let method = MethodId::new(InterfaceId::new(module, 0), 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(selected), 0);
+        let methods = [
+            MethodUse {
+                node: cut,
+                target: MethodTarget::Adapter {
+                    value: 0,
+                    binder: selected,
+                },
+                method,
+                requirement: None,
+                arguments: 0,
+            },
+            MethodUse {
+                node: cut,
+                target: MethodTarget::Abstract(requirement),
+                method,
+                requirement: None,
+                arguments: 0,
+            },
+        ];
+        let adapters = [
+            MethodAdapter {
+                binder: selected,
+                head_arguments: Vec::new(),
+                method_parameters: 0,
+                prerequisites: vec![(
+                    requirement,
+                    method,
+                    MethodTarget::Adapter {
+                        value: 1,
+                        binder: prerequisite,
+                    },
+                )],
+                source: fixture.sources[0],
+            },
+            MethodAdapter {
+                binder: prerequisite,
+                head_arguments: Vec::new(),
+                method_parameters: 0,
+                prerequisites: Vec::new(),
+                source: fixture.sources[0],
+            },
+        ];
+        let pattern = CorePattern::new(Type::Unit, origin, CorePatternKind::Wildcard);
+        let operation: fn(&EffectExprKind) -> Option<&EffectOperation> = |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        };
+        let run = |budget: &mut TypeWorkBudget| -> Result<(), Failure> {
+            let original_count = builder.nodes.len();
+            let mut value = graph((0..original_count).map(|_| Expr::Scalar).collect());
+            value.install_provider_ports(&[port], budget)?;
+            let mut symbols = HashMap::new();
+            let mut types = HashMap::new();
+            let indexed = MethodUses::new(&methods, budget)?;
+            let mut headers = FunctionMetadataPreparation::<EffectOperationFamily>::new(
+                &builder.nodes,
+                operation,
+            );
+            let clause = value.clause_data(
+                &pattern,
+                index(body),
+                fixture.sources[0],
+                &builder.nodes,
+                &mut symbols,
+                &mut types,
+                &indexed,
+                &adapters,
+                &mut headers,
+                budget,
+            )?;
+            assert_eq!(clause.input, original_count);
+            assert_eq!(symbols[&selected], original_count + 1);
+            assert_eq!(symbols[&shared_binder], original_count + 2);
+            assert_eq!(types[&variable], original_count + 3);
+            assert_eq!(symbols[&prerequisite], original_count + 4);
+            assert_eq!(
+                value.evidence,
+                vec![((requirement, method), original_count + 5)]
+            );
+            assert_eq!(
+                clause.captures,
+                vec![
+                    original_count + 1,
+                    original_count + 2,
+                    original_count + 3,
+                    original_count + 4,
+                    index(cut),
+                    original_count + 5,
+                    index(port)
+                ]
+            );
+            Ok(())
+        };
+        let mut complete = TypeWorkBudget::unbounded();
+        run(&mut complete).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(complete.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(complete.used())).unwrap();
+    }
+
     fn graph(expressions: Vec<Expr>) -> Graph {
         let source = crate::source::SourceFile::new("value-cut.ash", "x").unwrap();
         let span = source
@@ -5064,6 +5426,11 @@ mod tests {
         // after the eligible slots' complete first queue visits.
         analysis.slot(3, 0, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
+        let scalar = analysis.indices[&(2, 0)];
+        assert!(
+            !analysis.slots[scalar].preparation.is_edges_installed(),
+            "ordinary Scalar evaluation must not mint fixed-setup authority"
+        );
         let owner = Atom::Resource(3, 0);
         assert!(analysis.revision > atom_revision);
         for &slot in &outputs {
@@ -5950,6 +6317,120 @@ mod tests {
     }
 
     #[test]
+    fn delivered_control_call_prefix_keeps_late_arguments_and_opaque_replays_live() {
+        let mut graph = call_transfer_graph();
+        graph.positions.insert(6, 6);
+        graph.targets.extend([(5, 50), (7, 70)]);
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let function = analysis.slot(0, 0, &mut work).unwrap();
+            analysis
+                .atom(function, Atom::Closure(5, 0), &mut work)
+                .unwrap();
+            let argument = analysis.slot(1, 0, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            let capture = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.atom(capture, Atom::Free, &mut work).unwrap();
+            let call = analysis.slot(6, 0, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            (analysis, function, argument, call)
+        };
+        let (mut analysis, function, argument, call) = setup();
+        let mut work = TypeWorkBudget::unbounded();
+        let (first, publication) = analysis.calls_after(6, 0, None, &mut work).unwrap();
+        assert_eq!(first.targets.len(), 1);
+        assert_eq!(first.targets[0].0, 50);
+        assert!(!first.unknown && !first.returns);
+        let delivered = publication.publish(&mut work).unwrap();
+        assert_eq!(delivered.end, analysis.slots[function].atoms.len());
+        let (unchanged, _) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert!(unchanged.targets.is_empty());
+        assert!(!unchanged.unknown && !unchanged.returns);
+
+        // Callee-prefix completion never freezes its argument/capture/body facts.
+        let late_owner = Atom::Resource(9, 0);
+        analysis.atom(argument, late_owner, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[call].atoms.contains(&late_owner));
+        assert_eq!(delivered.end, analysis.slots[function].atoms.len());
+
+        analysis
+            .atom(function, Atom::Closure(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(function, Atom::Unknown, &mut work).unwrap();
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let constructor = ConstructorId::new(family, 0);
+        analysis
+            .atom(function, Atom::Constructor(constructor), &mut work)
+            .unwrap();
+        assert!(delivered.end < analysis.slots[function].atoms.len());
+        let (suffix, publication) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert_eq!(suffix.targets.len(), 1);
+        assert_eq!(suffix.targets[0].0, 70);
+        assert!(suffix.unknown && suffix.returns);
+        assert!(analysis.slots[call].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&late_owner));
+
+        // An atom appended after query completion is beyond its fixed snapshot,
+        // even when the control consumer publishes after handling successors.
+        let creation = analysis
+            .context(0, Transition::Root(20), &mut work)
+            .unwrap();
+        let capture = analysis.slot(3, creation, &mut work).unwrap();
+        analysis.atom(capture, Atom::Free, &mut work).unwrap();
+        analysis
+            .atom(function, Atom::Closure(5, creation), &mut work)
+            .unwrap();
+        let opaque = publication.publish(&mut work).unwrap();
+        let (late, publication) = analysis
+            .calls_after(6, 0, Some(&opaque), &mut work)
+            .unwrap();
+        assert_eq!(late.targets.len(), 1);
+        assert_eq!(late.targets[0].0, 50);
+        assert!(late.unknown && late.returns);
+        let opaque = publication.publish(&mut work).unwrap();
+        assert_ne!(opaque.opaque, 0);
+        let (repeat, _) = analysis
+            .calls_after(6, 0, Some(&opaque), &mut work)
+            .unwrap();
+        assert!(repeat.targets.is_empty());
+        assert!(repeat.unknown && repeat.returns);
+
+        // Every first-query/publication cut refuses a completed token. Retrying
+        // with the exact measured work uses a fresh original Analysis setup.
+        let (mut measured, ..) = setup();
+        let mut exact = TypeWorkBudget::unbounded();
+        let (expected, publication) = measured.calls_after(6, 0, None, &mut exact).unwrap();
+        publication.publish(&mut exact).unwrap();
+        let required = exact.used();
+        for available in 0..required {
+            let (mut refused, ..) = setup();
+            let mut short = TypeWorkBudget::with_limit(available);
+            let result = refused
+                .calls_after(6, 0, None, &mut short)
+                .and_then(|(_, publication)| publication.publish(&mut short));
+            assert!(matches!(result, Err(Failure::Resource)));
+            let (mut retried, ..) = setup();
+            let mut retry = TypeWorkBudget::with_limit(required);
+            let (actual, publication) = retried.calls_after(6, 0, None, &mut retry).unwrap();
+            let completed = publication.publish(&mut retry).unwrap();
+            assert_eq!(actual.targets, expected.targets);
+            assert_eq!(actual.unknown, expected.unknown);
+            assert_eq!(actual.returns, expected.returns);
+            assert_eq!(retry.used(), required);
+            assert_eq!(
+                completed.end,
+                retried.slots[retried.indices[&(0, 0)]].atoms.len()
+            );
+        }
+    }
+
+    #[test]
     fn completed_callable_transfers_keep_late_values_creation_contexts_and_unknown_readers() {
         let graph = call_transfer_graph();
         let mut work = TypeWorkBudget::unbounded();
@@ -6602,9 +7083,9 @@ mod tests {
         let mut measured = TypeWorkBudget::unbounded();
         let linked_phase_reads = run(&mut measured).unwrap();
         assert_eq!(linked_phase_reads, WIDTH * WIDTH);
-        // new(2) + target(2) + W * [context(8) + slot(2) + vacant edge(6)]
+        // Empty context(1) + target(2) + W * [context(4) + slot(2) + vacant edge(6)]
         // + W^2 * linked hit(2) + close [W + 1 pops + W empty edges].
-        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 18 * WIDTH + 5);
+        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 14 * WIDTH + 4);
         let linked_phase_read_work = 1;
         let original_tariff_work = measured.used() - linked_phase_reads * linked_phase_read_work;
         assert!(
@@ -8754,6 +9235,45 @@ mod tests {
                     second
                 );
             }
+            // A later Root and an earlier Invoke can both match the next
+            // Invoke. Reverse parent traversal must still select the first one.
+            let later_root = analysis.context(first, Transition::Root(10), budget)?;
+            assert_eq!(
+                analysis.context(later_root, Transition::Invoke(99, 10), budget)?,
+                first
+            );
+            // Recurrence results are never installed as extensions: a lookup
+            // miss still executes the original full oldest-match walk. Moving
+            // the lookup before that walk adds exactly one unit on this path.
+            let transition = Transition::Invoke(99, 10);
+            assert!(
+                !analysis
+                    .contexts
+                    .extensions
+                    .contains_key(&(later_root, transition))
+            );
+            let recurrence_work = analysis.contexts.paths[later_root].length() + 2;
+            let before_len = analysis.contexts.len();
+            let before_revision = analysis.revision;
+            assert!(matches!(
+                analysis.context(
+                    later_root,
+                    transition,
+                    &mut TypeWorkBudget::with_limit(recurrence_work - 1)
+                ),
+                Err(Failure::Resource)
+            ));
+            let mut exact = TypeWorkBudget::with_limit(recurrence_work);
+            assert_eq!(analysis.context(later_root, transition, &mut exact)?, first);
+            assert_eq!(exact.used(), recurrence_work);
+            assert_eq!(analysis.contexts.len(), before_len);
+            assert_eq!(analysis.revision, before_revision);
+            assert!(
+                !analysis
+                    .contexts
+                    .extensions
+                    .contains_key(&(later_root, transition))
+            );
             let root = analysis.context(0, Transition::Root(10), budget)?;
             assert_eq!(
                 analysis.context(root, Transition::Invoke(6, 10), budget)?,
@@ -8815,6 +9335,162 @@ mod tests {
             exact
         };
         assert_eq!(lookup(4), lookup(64));
+    }
+
+    #[test]
+    fn canonical_context_prefixes_preserve_source_order_and_atomic_cold_publication() {
+        let mut graph = graph(vec![Expr::Scalar, Expr::Scalar, Expr::Scalar, Expr::Scalar]);
+        let file = crate::source::SourceFile::new("context-path-source", "abcd").unwrap();
+        graph.sources = (0..4)
+            .map(|offset| {
+                file.span(crate::source::ByteRange::new(offset, offset + 1).unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let mut parent = 0;
+            for transition in [
+                Transition::Root(0),
+                Transition::Call(1),
+                Transition::Invoke(2, 3),
+                Transition::Dispatch(1, 2, 4),
+            ] {
+                parent = analysis.context(parent, transition, &mut work).unwrap();
+            }
+            (analysis, parent)
+        };
+        let (mut measured, parent) = setup();
+        let port = measured
+            .install_slot(0, parent, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        let (request, path) = measured
+            .actual_request_path(port, parent, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(request, graph.sources[0]);
+        assert_eq!(
+            path,
+            vec![
+                super::super::ActualValuePathStep::Root(graph.sources[0]),
+                super::super::ActualValuePathStep::Call(graph.sources[1]),
+                super::super::ActualValuePathStep::Invoke(graph.sources[2], graph.sources[3]),
+                super::super::ActualValuePathStep::Dispatch(graph.sources[1], graph.sources[2], 4),
+            ]
+        );
+        let mut cold = TypeWorkBudget::unbounded();
+        let focused = measured
+            .context(parent, Transition::Focus, &mut cold)
+            .unwrap();
+        let exact = cold.used();
+        let restored = measured
+            .context(
+                parent,
+                Transition::Restore(1, 2, 3),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let malformed_source = measured
+            .context(
+                parent,
+                Transition::Call(99),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        for context in [focused, restored, malformed_source] {
+            assert!(matches!(
+                measured.actual_request_path(port, context, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+        }
+        let mut inherited = measured
+            .contexts
+            .copy(&mut TypeWorkBudget::unbounded())
+            .unwrap();
+        // A complete focused copy retains the same extension proofs for all
+        // six transition variants. Hits neither walk nor publish a new path.
+        let extensions = inherited
+            .paths
+            .iter()
+            .enumerate()
+            .filter_map(|(id, path)| match *path {
+                ContextPath::Empty => None,
+                ContextPath::Step {
+                    parent, transition, ..
+                } => Some((parent, transition, id)),
+            })
+            .collect::<Vec<_>>();
+        let before_index = inherited.extensions.clone();
+        for (parent, transition, id) in extensions {
+            assert!(matches!(
+                inherited.intern(parent, transition, &mut TypeWorkBudget::with_limit(0)),
+                Err(Failure::Resource)
+            ));
+            let mut exact = TypeWorkBudget::with_limit(1);
+            assert_eq!(
+                inherited.intern(parent, transition, &mut exact).unwrap(),
+                (id, false)
+            );
+            assert_eq!(exact.used(), 1);
+            assert_eq!(inherited.extensions, before_index);
+        }
+        let before_revision = measured.revision;
+        let mut warm = TypeWorkBudget::with_limit(1);
+        assert_eq!(
+            measured
+                .context(parent, Transition::Focus, &mut warm)
+                .unwrap(),
+            focused
+        );
+        assert_eq!(warm.used(), 1);
+        assert_eq!(measured.revision, before_revision);
+        assert!(matches!(
+            inherited.intern(
+                usize::MAX,
+                Transition::Focus,
+                &mut TypeWorkBudget::with_limit(0)
+            ),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(inherited.len(), measured.contexts.len());
+        for context in 0..inherited.len() {
+            assert_eq!(
+                inherited
+                    .forward(context, &mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                measured
+                    .contexts
+                    .forward(context, &mut TypeWorkBudget::unbounded())
+                    .unwrap()
+            );
+        }
+        for prefix in [0, 9] {
+            for available in 0..exact {
+                let (mut analysis, parent) = setup();
+                let before_len = analysis.contexts.len();
+                let before_revision = analysis.revision;
+                let before_index = analysis.contexts.extensions.clone();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    analysis.context(parent, Transition::Focus, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(analysis.contexts.len(), before_len);
+                assert_eq!(analysis.contexts.extensions, before_index);
+                assert_eq!(analysis.revision, before_revision);
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).unwrap();
+                assert_eq!(
+                    analysis
+                        .context(parent, Transition::Focus, &mut retry)
+                        .unwrap(),
+                    focused
+                );
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(analysis.revision, before_revision + 1);
+            }
+        }
     }
 
     #[test]
