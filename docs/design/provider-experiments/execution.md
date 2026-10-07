@@ -4740,3 +4740,60 @@ foreign callback ABI or new resource semantics belong to this delivery.
 The normal copying, bound-NUL and persistence deficits remain open. No quota or
 depth limit changes, intrinsic lower bound, full resource proof or production
 architecture acceptance follows from this experimental DN-0036 evidence.
+
+### Canonical value-context prefixes (2026-10-07, receipts 274 and 277)
+
+The selected candidate replaces independently copied value-context paths with
+flat prefix records indexed by the exact parent and transition. Every record
+retains its original context ID. Recursive calls still choose the oldest
+matching ancestor; function roots, invocation sites, owner identities and
+captured environments remain distinct. A private pending extension borrows the
+exact parent and missing key. Successful fallible reservation produces the only
+phase that can publish both the path record and its index entry. No RC, GC,
+abstract answer cache or skipped function-body analysis is introduced.
+
+Original forward path consumers reconstruct a charged ordered scratch path from
+the prefix records. This preserves the original forward source-validation order, focus and restore
+coordinates, and full owner Type/Row arguments. The implementation removes cold
+prefix copies and whole-path hashing; it does not identify contexts by scalar
+results, names or alpha-equivalence. All live propagation, watches, transfer
+stamps and independent Core checks remain.
+
+Receipt 277 passes all 58 value-analysis laws under normal limits, including
+ordered recurrence, malformed provenance, atomic cold publication and exact
+refusal/retry boundaries. The earlier receipt 276 preserves its 57 passes and
+one stale exact-work assertion. That assertion still priced each new root path
+at eight units and the empty path at two. The corrected test uses four and one,
+respectively; its one-short, prefilled-budget and exact-retry assertions remain.
+
+Receipt 274 runs twelve original public/native executions: four plain, four
+with bounded observation, and four with the candidate. Each uses the identical
+explicitly temporary diagnostic completion ceilings. All twelve pass. The
+observer preserves all six raw owner endpoints exactly in each case. Candidate
+source-checking/Core reductions are 85,237/17,999 units for copying and bound-NUL,
+7,963/14,881 for persistence, and 1,173/2,623 for resume. The other four owner
+endpoints are unchanged. Normalized fixture inputs and original assertions match; raw PID contents may
+differ at the fixed padded width. Ordered binder scans, capacity debits and
+scan remainders agree; no capacity discount or owner-budget sum is used. The candidate and observer are measured separately.
+
+These completed traces still exceed normal source limits by 915,916 units for
+copying/bound-NUL and 286,307 for persistence. Persistence additionally exceeds
+normal final-elaboration and independent Core limits by 49,298 and 660,320.
+Copying's Core endpoint is below its normal ceiling in both variants; that does
+not establish normal whole-pipeline completion. Normal copying, bound-NUL and
+persistence deficits remain open. No production quota or depth limit changes.
+
+Connected normal verification 278 passes: sixteen public integration binaries
+(230 parent cases), the realistic resume case, 43 architecture cases,
+all-target checking, formatting, strict workspace/all-feature Clippy and
+warning-denied rustdoc. The already successful 58-law receipt is carried rather
+than rerun as a separate filtered command. Complete guards preserve all other
+Common sources, SQLite and Original worktrees, indexes and histories. Full
+library and native verification remains required in the Original integrated
+`CARGO_BUILD_JOBS=1 cargo xtask verify` gate; no integrated-delivery claim precedes
+that result.
+
+This remains tested finite evidence for the bounded
+[DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md)
+experiment. It does not establish current Ash semantics, a complete formal
+resource proof, a foreign ABI change or accepted production architecture.
