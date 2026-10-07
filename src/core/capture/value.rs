@@ -2283,6 +2283,196 @@ enum Transition {
     Restore(usize, usize, usize),
 }
 
+// Every nonempty canonical path shares its already published prefix. These
+// nodes own no recursive storage, values, environments or execution authority.
+#[derive(Clone, Copy, Debug)]
+enum ContextPath {
+    Empty,
+    Step {
+        parent: usize,
+        transition: Transition,
+        length: usize,
+    },
+}
+
+impl ContextPath {
+    fn length(self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::Step { length, .. } => length,
+        }
+    }
+}
+
+struct ContextPaths {
+    paths: Vec<ContextPath>,
+    extensions: HashMap<(usize, Transition), usize>,
+}
+
+// Absence and the exact immutable parent remain borrowed through reservation.
+// Only successful reservation produces the state that can publish both entries.
+struct PendingContextExtension<'a> {
+    paths: &'a mut ContextPaths,
+    parent: usize,
+    transition: Transition,
+    length: usize,
+}
+
+struct ReservedContextExtension<'a>(PendingContextExtension<'a>);
+
+impl<'a> PendingContextExtension<'a> {
+    fn reserve(self, budget: &mut TypeWorkBudget) -> Result<ReservedContextExtension<'a>, Failure> {
+        // One new flat path record and one exact index entry, before either
+        // allocation or publication. No full-prefix copy or hash is performed.
+        charge(budget, 2)?;
+        self.paths
+            .paths
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.paths
+            .extensions
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        Ok(ReservedContextExtension(self))
+    }
+}
+
+impl ReservedContextExtension<'_> {
+    fn publish(self) -> usize {
+        let PendingContextExtension {
+            paths,
+            parent,
+            transition,
+            length,
+        } = self.0;
+        let id = paths.paths.len();
+        paths.paths.push(ContextPath::Step {
+            parent,
+            transition,
+            length,
+        });
+        paths.extensions.insert((parent, transition), id);
+        id
+    }
+}
+
+impl ContextPaths {
+    fn new(budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, 1)?;
+        let mut paths = Vec::new();
+        paths.try_reserve(1).map_err(|_| Failure::Resource)?;
+        paths.push(ContextPath::Empty);
+        Ok(Self {
+            paths,
+            extensions: HashMap::new(),
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    fn intern(
+        &mut self,
+        parent: usize,
+        transition: Transition,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, bool), Failure> {
+        let length = self.paths.get(parent).ok_or(Failure::Invalid)?.length();
+        // The original recurrence relation is checked along the whole parent
+        // chain. Walking backwards must retain the OLDEST match, not the nearest.
+        charge(budget, length.checked_add(1).ok_or(Failure::Resource)?)?;
+        let mut cursor = parent;
+        let mut repeated = None;
+        while let ContextPath::Step {
+            parent,
+            transition: site,
+            ..
+        } = self.paths[cursor]
+        {
+            let matches = match (site, transition) {
+                (Transition::Root(target), Transition::Invoke(_, callee))
+                | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => {
+                    target == callee
+                }
+                _ => site == transition,
+            };
+            if matches {
+                repeated = Some(cursor);
+            }
+            cursor = parent;
+        }
+        if let Some(id) = repeated {
+            return Ok((id, false));
+        }
+        charge(budget, 1)?;
+        if let Some(&id) = self.extensions.get(&(parent, transition)) {
+            return Ok((id, false));
+        }
+        let id = PendingContextExtension {
+            paths: self,
+            parent,
+            transition,
+            length: length.checked_add(1).ok_or(Failure::Resource)?,
+        }
+        .reserve(budget)?
+        .publish();
+        Ok((id, true))
+    }
+
+    fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        // The borrowed private owner already establishes every prefix relation.
+        // Copy flat nodes once, rebuilding the complete index in original ID order.
+        let paths = copy_slice(&self.paths, budget)?;
+        let count = paths.len().checked_sub(1).ok_or(Failure::Invalid)?;
+        charge(budget, count.checked_mul(2).ok_or(Failure::Resource)?)?;
+        let mut extensions = HashMap::new();
+        extensions
+            .try_reserve(count)
+            .map_err(|_| Failure::Resource)?;
+        for (id, path) in paths.iter().enumerate().skip(1) {
+            let ContextPath::Step {
+                parent, transition, ..
+            } = *path
+            else {
+                return Err(Failure::Invalid);
+            };
+            extensions.insert((parent, transition), id);
+        }
+        Ok(Self { paths, extensions })
+    }
+
+    fn forward(
+        &self,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<Transition>, Failure> {
+        let length = self.paths.get(context).ok_or(Failure::Invalid)?.length();
+        // Pay scratch allocation, the parent walk and its reversal. Source
+        // provenance is still validated FORWARDS by the original consumer.
+        charge(
+            budget,
+            length
+                .checked_mul(3)
+                .and_then(|n| n.checked_add(1))
+                .ok_or(Failure::Resource)?,
+        )?;
+        let mut path = Vec::new();
+        path.try_reserve_exact(length)
+            .map_err(|_| Failure::Resource)?;
+        let mut cursor = context;
+        while let ContextPath::Step {
+            parent, transition, ..
+        } = self.paths[cursor]
+        {
+            path.push(transition);
+            cursor = parent;
+        }
+        path.reverse();
+        Ok(path)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Cut {
     pub(super) context: usize,
@@ -3198,8 +3388,7 @@ pub(super) struct Analysis<'a> {
     // The graph is borrowed immutably for the complete lifetime of this index.
     capture_topology_indices: HashMap<(usize, usize), usize>,
     capture_topologies: Vec<CaptureTopology>,
-    contexts: Vec<Vec<Transition>>,
-    context_indices: HashMap<Vec<Transition>, usize>,
+    contexts: ContextPaths,
     slots: Vec<Slot>,
     atom_pairs: HashSet<(usize, Atom)>,
     // One exact relation retains watch-only or linked-prefix progress.
@@ -3355,24 +3544,8 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         let mut query = Self::new(self.graph, budget)?;
-        query.contexts.clear();
-        query.context_indices.clear();
-        charge(budget, self.contexts.len() + self.slots.len())?;
-        query
-            .contexts
-            .try_reserve(self.contexts.len())
-            .map_err(|_| Failure::Resource)?;
-        query
-            .context_indices
-            .try_reserve(self.contexts.len())
-            .map_err(|_| Failure::Resource)?;
-        for context in &self.contexts {
-            charge(budget, context.len() + 1)?;
-            query
-                .context_indices
-                .insert(copy_slice(context, budget)?, query.contexts.len());
-            query.contexts.push(copy_slice(context, budget)?);
-        }
+        charge(budget, self.slots.len())?;
+        query.contexts = self.contexts.copy(budget)?;
         query.frozen_contexts = query.contexts.len();
         query
             .slots
@@ -3590,7 +3763,7 @@ impl<'a> Analysis<'a> {
     ) -> Result<(Span, Vec<super::ActualValuePathStep>), Failure> {
         let (expression, _) = self.slots.get(port).ok_or(Failure::Invalid)?.key;
         let request = *self.graph.sources.get(expression).ok_or(Failure::Invalid)?;
-        let path = self.contexts.get(context).ok_or(Failure::Invalid)?;
+        let path = self.contexts.forward(context, budget)?;
         charge(budget, path.len())?;
         let mut output = Vec::new();
         output
@@ -3603,7 +3776,7 @@ impl<'a> Analysis<'a> {
                 .copied()
                 .ok_or(Failure::Invalid)
         };
-        for step in path {
+        for step in &path {
             charge(budget, 1)?;
             output.push(match *step {
                 Transition::Root(expression) => {
@@ -3926,15 +4099,7 @@ impl<'a> Analysis<'a> {
             positions.try_reserve(1).map_err(|_| Failure::Resource)?;
             positions.push(position);
         }
-        charge(budget, 2)?;
-        let mut contexts = Vec::new();
-        contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
-        contexts.push(Vec::new());
-        let mut context_indices = HashMap::new();
-        context_indices
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        context_indices.insert(Vec::new(), 0);
+        let contexts = ContextPaths::new(budget)?;
         Ok(Self {
             graph,
             evidence_ports,
@@ -3943,7 +4108,6 @@ impl<'a> Analysis<'a> {
             capture_topology_indices: HashMap::new(),
             capture_topologies: Vec::new(),
             contexts,
-            context_indices,
             slots: Vec::new(),
             atom_pairs: HashSet::new(),
             dependencies: DependencyRelations::default(),
@@ -3967,40 +4131,10 @@ impl<'a> Analysis<'a> {
         call: Transition,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
-        let path = &self.contexts[parent];
-        charge(budget, path.len() + 1)?;
-        // Preserve separate entry call sites, but join recursive arguments and
-        // captures at the existing callee entry. Enumerating permutations of
-        // recursive call sites multiplies equivalent control histories.
-        let repeated = path.iter().position(|site| match (site, call) {
-            (Transition::Root(target), Transition::Invoke(_, callee))
-            | (Transition::Invoke(_, target), Transition::Invoke(_, callee)) => *target == callee,
-            _ => *site == call,
-        });
-        let mut context = copy_slice(
-            &path[..repeated.map_or(path.len(), |index| index + 1)],
-            budget,
-        )?;
-        if repeated.is_none() {
-            context.try_reserve(1).map_err(|_| Failure::Resource)?;
-            context.push(call);
+        let (id, published) = self.contexts.intern(parent, call, budget)?;
+        if published {
+            self.revision += 1;
         }
-        charge(budget, context.len() + 1)?;
-        if let Some(&id) = self.context_indices.get(&context) {
-            return Ok(id);
-        }
-        self.contexts
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        self.context_indices
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let id = self.contexts.len();
-        charge(budget, context.len() + 1)?;
-        self.context_indices
-            .insert(copy_slice(&context, budget)?, id);
-        self.contexts.push(context);
-        self.revision += 1;
         Ok(id)
     }
 
@@ -6602,9 +6736,9 @@ mod tests {
         let mut measured = TypeWorkBudget::unbounded();
         let linked_phase_reads = run(&mut measured).unwrap();
         assert_eq!(linked_phase_reads, WIDTH * WIDTH);
-        // new(2) + target(2) + W * [context(8) + slot(2) + vacant edge(6)]
+        // Empty context(1) + target(2) + W * [context(4) + slot(2) + vacant edge(6)]
         // + W^2 * linked hit(2) + close [W + 1 pops + W empty edges].
-        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 18 * WIDTH + 5);
+        assert_eq!(measured.used(), 2 * WIDTH * WIDTH + 14 * WIDTH + 4);
         let linked_phase_read_work = 1;
         let original_tariff_work = measured.used() - linked_phase_reads * linked_phase_read_work;
         assert!(
@@ -8754,6 +8888,13 @@ mod tests {
                     second
                 );
             }
+            // A later Root and an earlier Invoke can both match the next
+            // Invoke. Reverse parent traversal must still select the first one.
+            let later_root = analysis.context(first, Transition::Root(10), budget)?;
+            assert_eq!(
+                analysis.context(later_root, Transition::Invoke(99, 10), budget)?,
+                first
+            );
             let root = analysis.context(0, Transition::Root(10), budget)?;
             assert_eq!(
                 analysis.context(root, Transition::Invoke(6, 10), budget)?,
@@ -8815,6 +8956,117 @@ mod tests {
             exact
         };
         assert_eq!(lookup(4), lookup(64));
+    }
+
+    #[test]
+    fn canonical_context_prefixes_preserve_source_order_and_atomic_cold_publication() {
+        let mut graph = graph(vec![Expr::Scalar, Expr::Scalar, Expr::Scalar, Expr::Scalar]);
+        let file = crate::source::SourceFile::new("context-path-source", "abcd").unwrap();
+        graph.sources = (0..4)
+            .map(|offset| {
+                file.span(crate::source::ByteRange::new(offset, offset + 1).unwrap())
+                    .unwrap()
+            })
+            .collect();
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let mut parent = 0;
+            for transition in [
+                Transition::Root(0),
+                Transition::Call(1),
+                Transition::Invoke(2, 3),
+                Transition::Dispatch(1, 2, 4),
+            ] {
+                parent = analysis.context(parent, transition, &mut work).unwrap();
+            }
+            (analysis, parent)
+        };
+        let (mut measured, parent) = setup();
+        let port = measured
+            .install_slot(0, parent, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        let (request, path) = measured
+            .actual_request_path(port, parent, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(request, graph.sources[0]);
+        assert_eq!(
+            path,
+            vec![
+                super::super::ActualValuePathStep::Root(graph.sources[0]),
+                super::super::ActualValuePathStep::Call(graph.sources[1]),
+                super::super::ActualValuePathStep::Invoke(graph.sources[2], graph.sources[3]),
+                super::super::ActualValuePathStep::Dispatch(graph.sources[1], graph.sources[2], 4),
+            ]
+        );
+        let mut cold = TypeWorkBudget::unbounded();
+        let focused = measured
+            .context(parent, Transition::Focus, &mut cold)
+            .unwrap();
+        let exact = cold.used();
+        let restored = measured
+            .context(
+                parent,
+                Transition::Restore(1, 2, 3),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        let malformed_source = measured
+            .context(
+                parent,
+                Transition::Call(99),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        for context in [focused, restored, malformed_source] {
+            assert!(matches!(
+                measured.actual_request_path(port, context, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+        }
+        let inherited = measured
+            .contexts
+            .copy(&mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(inherited.len(), measured.contexts.len());
+        for context in 0..inherited.len() {
+            assert_eq!(
+                inherited
+                    .forward(context, &mut TypeWorkBudget::unbounded())
+                    .unwrap(),
+                measured
+                    .contexts
+                    .forward(context, &mut TypeWorkBudget::unbounded())
+                    .unwrap()
+            );
+        }
+        for prefix in [0, 9] {
+            for available in 0..exact {
+                let (mut analysis, parent) = setup();
+                let before_len = analysis.contexts.len();
+                let before_revision = analysis.revision;
+                let before_index = analysis.contexts.extensions.clone();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    analysis.context(parent, Transition::Focus, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(analysis.contexts.len(), before_len);
+                assert_eq!(analysis.contexts.extensions, before_index);
+                assert_eq!(analysis.revision, before_revision);
+                let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+                retry.charge(prefix).unwrap();
+                assert_eq!(
+                    analysis
+                        .context(parent, Transition::Focus, &mut retry)
+                        .unwrap(),
+                    focused
+                );
+                assert_eq!(retry.used(), prefix + exact);
+                assert_eq!(analysis.revision, before_revision + 1);
+            }
+        }
     }
 
     #[test]
