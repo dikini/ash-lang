@@ -58,8 +58,23 @@ does not count as successful merely because it has a plausible law.
 - Independent source review accepts F-2 as a bounded experiment with separate
   concern cuts, deferred evidence publication and charged preparation costs.
   F-1 still requires concrete typed operators and a composition proof.
-- Shared Rust changes, fresh compiler measurements and rewrite acceptance
-  remain pending. No Cargo window has been taken by this task.
+- Common merged the reviewed plan through unsigned integration `f7e9411`.
+  This worktree imported that checkpoint without rewriting either history.
+- The first F-2 candidate combines lexical and abstract structural collection,
+  retains separate concern cuts and replays abstract actions after unchanged
+  metadata installation. One graph-construction regression covers shared DAG
+  visitation, capture ports and the original allocation order.
+- Common compiled the handed-off patch in its coordinated window. Receipt 280
+  passes 1,635 Ash library tests, 40 adapter tests, six native-buffer tests,
+  230 public integration cases and the original realistic resume case. Nested
+  subprocess reruns are not additional unique cases.
+- Four completed diagnostic programs preserve their native assertions and
+  reduce source/Core work. The [algebra study](../design/provider-experiments/analysis-algebra.md#f-2-measured-candidate)
+  records exact totals, the persistence capacity component and memory limits.
+  Source, formatted-successor, raw-receipt and retention reviews pass.
+- Retention is conditional on Common's full integrated repository gate.
+  The three larger normal-program acceptance cases remain open. This task has
+  run no separate compiler engine; Common owns the shared verification window.
 
 ## Verification
 

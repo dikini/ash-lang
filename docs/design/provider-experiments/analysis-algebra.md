@@ -258,3 +258,53 @@ Receipt inputs are `author/context-prefix-measurement-runner-274/return.json`,
 `bounds/actual-residual-decisions-274/report-corrected.md` and
 `author/fanout-census-274/report.md`. Task progress distinguishes later retained
 implementation from this read-only analysis.
+
+## F-2 measured candidate
+
+Common compiled and measured the first product-fold candidate after importing
+the reviewed plan. The existing metadata producer, contextual solver, control
+graph and validation policy remain unchanged. A shared iterative walk emits
+ordered lexical free binders and sparse abstract Port/Methods steps. Original
+method and adapter actions replay after lexical and metadata installation.
+The implementation charges concern state, recipe retention and replay.
+
+Normal connected receipt 280 passes 1,635 Ash library cases, 40 adapter cases,
+six native-buffer cases, 230 public integration cases and the original realistic
+resume case. It includes a graph-construction regression for the shared-DAG
+cut counterexample and exact metadata/adapter/evidence allocation order.
+Independent review verifies the source law, formatted successor and raw logs.
+
+The following diagnostic completed-program comparison uses the authenticated
+Outcome 279 candidate as its baseline. It runs the four original programs and
+native assertions, with temporary completion allowances restored afterward.
+These are separate work-budget owners, not additive runtime costs:
+
+| Program | Source work | Source raw change | Independent Core work | Core raw change |
+| --- | ---: | ---: | ---: | ---: |
+| Copying | 1,214,621 | -1,997 | 909,269 | -5,259 |
+| Bound-NUL copying | 1,214,621 | -1,997 | 909,264 | -5,259 |
+| Persistence | 599,918 | -5,051 | 1,618,759 | -7,309 |
+| Captured resume | 203,519 | -1,298 | 290,599 | -1,786 |
+
+Resolution, module linking, linked-interface checking and final elaboration
+are exactly unchanged for all four programs. Persistence's source raw change
+includes a separately observed -51 original binder-capacity debit; the remaining
+change outside that debit is -5,000. Preserve the raw total and both components;
+neither component is a quota discount or a replacement total.
+
+The candidate adds temporary key/mask state, wider pending entries and a sparse
+ordered recipe for one body. It introduces no per-context or per-slot cache.
+Allocation bytes and peak resident memory have not been measured, so this
+result establishes reduced charged work, not reduced memory or an asymptotic
+improvement. Source checking still exceeds 327,680 for copying, NUL copying
+and persistence. Persistence also exceeds independent Core and final
+elaboration. The candidate therefore remains a partial reduction.
+
+Retention review passes, conditional on the full integrated repository gate.
+The raw measurement archive is `requested-root-metadata-160/author/f2-candidate-only-measurement-runner/`
+under the external Common evidence root. Its `return.json` hash is
+`df5f900004db12f7a629d4cf2bd5661411cd9271e3ceba865f0f3e2821642ad4`.
+The formatted candidate and normal logs are in `f2-product-candidate-280/`
+under `/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/`.
+The task records the later integrated disposition; this study does not claim
+that the normal three-program acceptance objective has been met.
