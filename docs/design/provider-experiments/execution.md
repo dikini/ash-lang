@@ -4835,3 +4835,95 @@ production work or depth limit changed. This is tested finite evidence under
 Ash semantics, a complete formal resource proof or accepted production
 architecture. The algebraic-analysis workstream has a separately bounded
 lexical/evidence product study; it is not part of this delivered code.
+
+
+### Queued setup, capture products and final binder preparation (2026-10-07, receipts 279–281)
+
+This selected experimental batch changes `src/core/capture/value.rs`,
+`src/core/capture.rs`, `src/elaborate.rs` and their carrier inventory in
+`tests/architecture.rs`. It preserves the original function
+roots, exact creation and invocation contexts, full owner Type/Row arguments,
+late dependencies and independent Core checks. It changes no resource semantics,
+foreign ABI, production work ceiling or depth limit.
+
+Queued evaluation now returns a transient setup outcome from the actual matched
+expression. Only successful fixed setup can publish `EdgesInstalled`, after its
+complete ordered edge propagation and paid publication. Dynamic expressions and
+unfinished inputs remain live. Every visit still propagates its ordered edges;
+the completed setup phase is neither a cached answer nor capture permission.
+
+The F2 structural product shares lexical and abstract-capture child enumeration
+while keeping separate concern bits, cuts and discovery order. Lexical output
+still uses the complete binding filter; method replacement can cut lexical
+traversal while abstract evidence continues. A temporary scalar recipe defers
+abstract symbol/evidence allocation until after lexical and unchanged metadata
+installation. This preserves original graph coordinates and malformed-input
+phase ordering. The tradeoff is a fallibly allocated recipe and concern state
+retained through one producer call. No graph/body cache is added; peak memory
+bytes were not measured, so this is not a measured peak-memory reduction.
+
+Final Effect global synthesis borrows one completed checked source scheme and
+its non-freshened lowering. Original source, requirement, kinded-parameter and
+lowered-type comparisons precede the private consuming binder loan. It omits a
+temporary projection and `Forall` construction that the old final branch then
+discarded, pays its three-unit selection cost, and still clones the actual
+lowered Core scheme into its iterative owner. Other elaboration purposes retain
+their original path. The loan grants no independent Core authority.
+
+The measurements reuse authenticated preceding runs rather than repeating the
+baseline: receipt 279 has four baseline and four candidate executions; F2 and
+FinalBinder each add four candidate executions. Every original public/native
+assertion passes under identical explicitly temporary diagnostic completion
+ceilings. Normalized fixture inputs match; raw PID contents can differ at the
+fixed padded width. Each comparison retains six separate raw owner endpoints
+and ordered Binder facts. No owner-budget sum or capacity discount is used.
+
+| Change | Copy/NUL source/Core delta | Persistence source/Core delta | Resume source/Core delta |
+| --- | ---: | ---: | ---: |
+| Queued setup | −26,978 / −18,580 | −9,018 / −17,292 | −1,444 / −3,208 |
+| F2 product | −1,997 / −5,259 | −5,051 / −7,309 | −1,298 / −1,786 |
+| FinalBinder | 0 / 0 | +51 / 0 | 0 / 0 |
+
+FinalBinder separately reduces final elaboration by 290 units for copy/NUL, 337
+for persistence and 128 for resume. Persistence's source increase remains in
+the raw total: recorded Binder capacity debits change 285→336, with identical
+ordered scan identities, lengths and remainders. Its final-elaboration capacity
+debit stays 336. These observations do not discount either endpoint.
+
+The combined raw source/Core endpoints are 1,214,621/909,269 for copying,
+599,969/1,618,759 for persistence and 203,519/290,599 for resume. Bound-NUL has
+source 1,214,621 and Core 909,264. Final elaboration is 165,717 for copy/NUL,
+376,641 for persistence and 103,738 for resume. Copy/NUL still exceed normal
+source work by 886,941 units. Persistence still exceeds source work by 272,289,
+final elaboration by 48,961 and Core by 635,719. The four completed diagnostic
+executions therefore do not establish normal whole-pipeline completion.
+
+Normal connected validation passes the 58 value laws for queued setup; F2 then
+passes Ash library 1,635, sixteen public suites (230 cases) and realistic resume.
+The combined FinalBinder tree passes workspace library 1,682 (Ash 1,636 plus 40
+and six in the other library groups), the same public 230 and resume. The new
+producer/refusal/exact-retry law passes. Historical guards authenticate each
+intended source transformation and preserve the other Common bytes, SQLite,
+Original, branches and indexes; every diagnostic return restores normal policy.
+The evidence is in `queued-setup-outcome-279/`, `f2-product-candidate-280/`,
+`prepared-final-binder-281/` and their independent author audits under the Common
+evidence directory.
+
+The first connected architecture attempt passed 42 of 43 cases and exposed
+missing inventory entries for the two borrowed `PreparedFinalBinder` fields
+and two shifted local census coordinates. A test-inventory-only correction
+records the existing checked/transient borrowing profiles and updates those
+coordinates; it changes no compiler behavior or test assertion. The successor
+passes all 43 architecture cases, all-target checking, formatting, strict
+workspace/all-feature Clippy and warning-denied rustdoc. Its explicit return is
+2026-10-07 10:36:39 UTC after 708.538 seconds; all three historical worktree
+guards match exactly and normal policies remain in force. The failed initial
+attempt and successful successor remain separate receipts in
+`prepared-final-binder-281/` and its `quality-v2/` directory.
+
+At this draft checkpoint, commit, merge and full Original verification remain
+pending and must be recorded from their actual returns. This is tested finite
+evidence for
+[DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md), not new
+Ash semantics, a complete formal resource proof or accepted production
+architecture.

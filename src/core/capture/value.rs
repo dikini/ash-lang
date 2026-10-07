@@ -939,27 +939,20 @@ impl Graph {
     }
 
     #[allow(clippy::too_many_arguments)] // Explicit graph inputs share the owning work ledger.
-    fn abstract_captures<F: CoreOperationFamily>(
+    fn abstract_captures(
         &mut self,
-        nodes: &[StoredNode<F>],
-        root: usize,
+        steps: &[super::AbstractCaptureStep],
+        invalid: bool,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
         symbols: &mut HashMap<BinderId, usize>,
         captures: &mut Vec<usize>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        let mut pending = copy_slice(&[root], budget)?;
-        let mut visited = HashSet::new();
-        while let Some(id) = pending.pop() {
+        for step in steps {
             charge(budget, 1)?;
-            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
-            if !visited.insert(id) {
-                continue;
-            }
-            if !self.capture_ports().is_empty() {
-                charge(budget, self.capture_ports().len())?;
-                if self.capture_ports().contains(&id) {
+            let id = match *step {
+                super::AbstractCaptureStep::Port(id) => {
                     charge(budget, captures.len())?;
                     if !captures.contains(&id) {
                         captures.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -967,7 +960,8 @@ impl Graph {
                     }
                     continue;
                 }
-            }
+                super::AbstractCaptureStep::Methods(id) => id,
+            };
             for method in methods.at(id, budget)? {
                 if index(method.node) == id {
                     if let super::MethodTarget::Adapter { value, .. } = method.target {
@@ -1014,17 +1008,12 @@ impl Graph {
                     }
                 }
             }
-            let node = nodes.get(id).ok_or(Failure::Invalid)?;
-            let count = F::child_count(&node.kind);
-            charge(budget, count)?;
-            pending.try_reserve(count).map_err(|_| Failure::Resource)?;
-            for ordinal in 0..count {
-                pending.push(index(
-                    F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
-                ));
-            }
         }
-        Ok(())
+        if invalid {
+            Err(Failure::Invalid)
+        } else {
+            Ok(())
+        }
     }
 
     fn push(
@@ -1272,14 +1261,19 @@ impl Graph {
                 self.targets.insert(id, id);
                 let parameter = self.symbol(symbols, function.parameter().id(), source, budget)?;
                 let mut captures = Vec::new();
-                for binder in super::free_values_with_methods(
+                let super::CaptureProjections {
+                    free_values,
+                    abstract_steps,
+                    invalid_abstract,
+                } = super::capture_projections(
                     nodes,
                     index(function.body()),
                     &[function.parameter().id()],
                     methods,
                     self.capture_ports(),
                     budget,
-                )? {
+                )?;
+                for binder in free_values {
                     let slot = self.symbol(symbols, binder, source, budget)?;
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
@@ -1291,8 +1285,8 @@ impl Graph {
                     captures.push(slot);
                 }
                 self.abstract_captures(
-                    nodes,
-                    index(function.body()),
+                    &abstract_steps,
+                    invalid_abstract,
                     methods,
                     adapters,
                     symbols,
@@ -1438,14 +1432,19 @@ impl Graph {
                     parameters.push(slot);
                 }
                 let mut captures = Vec::new();
-                for binder in super::free_values_with_methods(
+                let super::CaptureProjections {
+                    free_values,
+                    abstract_steps,
+                    invalid_abstract,
+                } = super::capture_projections(
                     nodes,
                     index(abstraction.body()),
                     &[],
                     methods,
                     self.capture_ports(),
                     budget,
-                )? {
+                )?;
+                for binder in free_values {
                     let slot = self.symbol(symbols, binder, source, budget)?;
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
@@ -1460,8 +1459,8 @@ impl Graph {
                     }
                 }
                 self.abstract_captures(
-                    nodes,
-                    index(abstraction.body()),
+                    &abstract_steps,
+                    invalid_abstract,
                     methods,
                     adapters,
                     symbols,
@@ -1567,14 +1566,12 @@ impl Graph {
         let input = self.push(Expr::Slot, source, budget)?;
         let bindings = self.pattern(pattern, input, symbols, budget)?;
         let mut captures = Vec::new();
-        for binder in super::free_values_with_methods(
-            nodes,
-            body,
-            &[],
-            methods,
-            self.capture_ports(),
-            budget,
-        )? {
+        let super::CaptureProjections {
+            free_values,
+            abstract_steps,
+            invalid_abstract,
+        } = super::capture_projections(nodes, body, &[], methods, self.capture_ports(), budget)?;
+        for binder in free_values {
             let slot = self.symbol(symbols, binder, source, budget)?;
             charge(budget, bindings.len())?;
             if !bindings.iter().any(|(bound, _)| *bound == slot) {
@@ -1589,8 +1586,8 @@ impl Graph {
             captures.push(slot);
         }
         self.abstract_captures(
-            nodes,
-            body,
+            &abstract_steps,
+            invalid_abstract,
             methods,
             adapters,
             symbols,
@@ -3082,6 +3079,15 @@ impl<'s, 'g> ReadyClosure<'s, 'g> {
     }
 }
 
+// Only successful fixed-setup Expr arms produce FixedSetupReady. The queue
+// consumes this transient result after its exact ordered propagation completes.
+// Dynamic expressions and unfinished readiness never acquire this authority.
+#[derive(Debug, Eq, PartialEq)]
+enum SetupOutcome {
+    FixedSetupReady,
+    NeedsInputsOrDynamic,
+}
+
 // A queue-owned evaluation carries its exact reader through one exclusive visit.
 // The original edge owns the source notification for structural Alias/Merge links.
 struct QueuedEvaluation<'s, 'g> {
@@ -3132,7 +3138,7 @@ impl AliasLinkPolicy for QueuedAliasLinks {
 }
 
 impl<'s, 'g> QueuedEvaluation<'s, 'g> {
-    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<SetupOutcome, Failure> {
         self.analysis
             .evaluate_with_alias_links::<QueuedAliasLinks>(self.slot, budget)
     }
@@ -4304,39 +4310,19 @@ impl<'a> Analysis<'a> {
             charge(budget, 1)?;
             self.slots[slot].queued = false;
             self.current = Some(slot);
-            let complete_setup = if self.slots[slot].terminal {
-                false
-            } else if matches!(
-                self.graph.expressions[self.slots[slot].key.0],
-                Expr::Alias(_)
-                    | Expr::Merge(_)
-                    | Expr::Function { .. }
-                    | Expr::Tuple(_)
-                    | Expr::Cleanup { .. }
-                    | Expr::Bind { .. }
-                    | Expr::Recursive { .. }
-                    | Expr::Match { .. }
-                    | Expr::Resource { .. }
-            ) {
-                // The queue visit already admits its bounded kind dispatch.
-                // Pay this eligible classification and completion-field lookup.
-                charge(budget, 2)?;
-                if self.slots[slot].preparation == SlotPreparation::EdgesInstalled {
-                    false
-                } else {
-                    QueuedEvaluation {
-                        analysis: self,
-                        slot,
-                    }
-                    .evaluate(budget)?
-                }
+            // The existing queue admission covers this bounded phase dispatch.
+            // EdgesInstalled can only come from a fixed Expr's successful setup
+            // and full propagation; every other expression still evaluates live.
+            let setup = if self.slots[slot].terminal
+                || self.slots[slot].preparation == SlotPreparation::EdgesInstalled
+            {
+                SetupOutcome::NeedsInputsOrDynamic
             } else {
                 QueuedEvaluation {
                     analysis: self,
                     slot,
                 }
-                .evaluate(budget)?;
-                false
+                .evaluate(budget)?
             };
             // Live ordered edges are processed on every visit, including after
             // setup completion. A later owner/Unknown is never a cached answer.
@@ -4377,7 +4363,7 @@ impl<'a> Analysis<'a> {
                 }
                 cursor.publish();
             }
-            if complete_setup {
+            if matches!(setup, SetupOutcome::FixedSetupReady) {
                 // The existing Slot admission already reserves this scalar
                 // field. Commit only after all original setup AND this slot's
                 // current ordered propagation succeed. No fallible work follows
@@ -4413,28 +4399,38 @@ impl<'a> Analysis<'a> {
     #[cfg(test)]
     fn evaluate(&mut self, slot: usize, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
         self.evaluate_with_alias_links::<ObservedAliasLinks>(slot, budget)
+            .map(|setup| matches!(setup, SetupOutcome::FixedSetupReady))
     }
 
     fn evaluate_with_alias_links<P: AliasLinkPolicy>(
         &mut self,
         slot: usize,
         budget: &mut TypeWorkBudget,
-    ) -> Result<bool, Failure> {
-        // This reports setup readiness only. The queue owns its completion bit
-        // and commits it after propagation; direct evaluation always runs.
-        let mut fixed_setup = true;
+    ) -> Result<SetupOutcome, Failure> {
+        // Only the nine fixed-setup arms below can produce readiness. The queue
+        // commits it after propagation; direct evaluation still always runs.
         let (expression, context) = self.slots[slot].key;
         let graph = self.graph;
-        match &graph.expressions[expression] {
-            Expr::Scalar => self.atom(slot, Atom::Free, budget)?,
-            Expr::Slot => {}
-            Expr::Unknown => self.atom(slot, Atom::Unknown, budget)?,
-            Expr::Alias(value) => P::link(self, slot, *value, context, budget)?,
+        let setup = match &graph.expressions[expression] {
+            Expr::Scalar => {
+                self.atom(slot, Atom::Free, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::Slot => SetupOutcome::NeedsInputsOrDynamic,
+            Expr::Unknown => {
+                self.atom(slot, Atom::Unknown, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::Alias(value) => {
+                P::link(self, slot, *value, context, budget)?;
+                SetupOutcome::FixedSetupReady
+            }
             Expr::Merge(values) => {
                 self.atom(slot, Atom::Free, budget)?;
                 for value in values {
                     P::link(self, slot, *value, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Function { captures, body, .. } => {
                 FunctionCaptureInstallation {
@@ -4446,9 +4442,11 @@ impl<'a> Analysis<'a> {
                     captures,
                 }
                 .install(budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Constructor(constructor) => {
-                self.atom(slot, Atom::Constructor(*constructor), budget)?
+                self.atom(slot, Atom::Constructor(*constructor), budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Tuple(fields) => {
                 let mut ready = true;
@@ -4457,9 +4455,10 @@ impl<'a> Analysis<'a> {
                     ready &= !self.slots[field].atoms.is_empty();
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 self.atom(slot, Atom::Aggregate(expression, context), budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Call {
                 function,
@@ -4467,7 +4466,6 @@ impl<'a> Analysis<'a> {
                 scalar,
                 type_application,
             } => {
-                fixed_setup = false;
                 let function = self.slot(*function, context, budget)?;
                 charge(budget, arguments.len())?;
                 let mut actual = Vec::new();
@@ -4481,7 +4479,7 @@ impl<'a> Analysis<'a> {
                     actual.push(argument);
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 // Atom storage is append-only; preserve the original prefix while routing.
                 let atom_count = self.slots[function].atoms.len();
@@ -4555,13 +4553,13 @@ impl<'a> Analysis<'a> {
                         _ => {}
                     }
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Project {
                 value,
                 field,
                 constructor,
             } => {
-                fixed_setup = false;
                 let value = self.slot(*value, context, budget)?;
                 let atom_count = self.slots[value].atoms.len();
                 charge(budget, atom_count)?;
@@ -4610,17 +4608,19 @@ impl<'a> Analysis<'a> {
                         _ => {}
                     }
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Cleanup { body, action } => {
                 let body = self.slot(*body, context, budget)?;
                 if self.slots[body].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 let action = self.slot(*action, context, budget)?;
                 if self.slots[action].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 self.edge(slot, body, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Bind {
                 binder,
@@ -4630,9 +4630,10 @@ impl<'a> Analysis<'a> {
                 let binder = self.slot(*binder, context, budget)?;
                 self.link(binder, *initializer, context, budget)?;
                 if self.slots[binder].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Recursive { bindings, body } => {
                 let mut ready = true;
@@ -4643,14 +4644,15 @@ impl<'a> Analysis<'a> {
                     ready &= !self.slots[initializer].atoms.is_empty();
                 }
                 if !ready {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Match { scrutinee, arms } => {
                 let scrutinee = self.slot(*scrutinee, context, budget)?;
                 if self.slots[scrutinee].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 for (bindings, body) in arms {
                     for &(binder, initializer) in bindings {
@@ -4659,6 +4661,7 @@ impl<'a> Analysis<'a> {
                     }
                     P::link(self, slot, *body, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Resource {
                 success,
@@ -4670,7 +4673,7 @@ impl<'a> Analysis<'a> {
             } => {
                 let initializer = self.slot(*initializer, context, budget)?;
                 if self.slots[initializer].atoms.is_empty() {
-                    return Ok(false);
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
                 }
                 let handle = self.slot(*handle, context, budget)?;
                 let identity = self.slot(*identity, context, budget)?;
@@ -4684,18 +4687,23 @@ impl<'a> Analysis<'a> {
                 } else {
                     P::link(self, slot, *body, context, budget)?;
                 }
+                SetupOutcome::FixedSetupReady
             }
             Expr::Request { operand, scalar } => {
                 self.slot(*operand, context, budget)?;
                 let _ = scalar;
+                SetupOutcome::NeedsInputsOrDynamic
             }
             Expr::Resume { operand } => {
                 self.slot(*operand, context, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
             }
-            Expr::Handler { body, .. } => P::link(self, slot, *body, context, budget)?,
+            Expr::Handler { body, .. } => {
+                P::link(self, slot, *body, context, budget)?;
+                SetupOutcome::NeedsInputsOrDynamic
+            }
             // ASH_INPUT169_BEGIN_EVALUATE
             Expr::Evidence { value, bindings } => {
-                fixed_setup = false;
                 let InstalledEvidenceInputs { mut visit, value } = EvidenceInputVisit {
                     analysis: self,
                     slot,
@@ -4710,9 +4718,10 @@ impl<'a> Analysis<'a> {
                     let atom = visit.analysis.slots[value].atoms[atom_index];
                     visit = visit.route_atom(atom, budget)?;
                 }
+                SetupOutcome::NeedsInputsOrDynamic
             } // ASH_INPUT169_END_EVALUATE
-        }
-        Ok(fixed_setup)
+        };
+        Ok(setup)
     }
 
     fn build_binding_index(
@@ -5048,6 +5057,148 @@ impl<'a> Analysis<'a> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn clause_capture_projection_preserves_shared_cuts_and_allocation_order() {
+        use super::super::{MethodAdapter, MethodTarget, MethodUse, MethodUses};
+        use crate::{
+            core::{
+                EffectCoreBuilder,
+                effect::{EffectExprKind, EffectOperationFamily},
+            },
+            interface::{InterfaceId, MethodId, RequirementId, RequirementOwner},
+            module::ModuleId,
+            source::Origin,
+            types::TypeVariableId,
+        };
+
+        let fixture = graph(vec![Expr::Scalar]);
+        let origin = Origin::Source(fixture.sources[0]);
+        let module = ModuleId::new(44_211);
+        let shared_binder = BinderId::resolved(module, 0);
+        let selected = BinderId::resolved(module, 1);
+        let prerequisite = BinderId::resolved(module, 2);
+        let variable = TypeVariableId::generated(44_211);
+        let mut builder = EffectCoreBuilder::with_effect_registry(std::sync::Arc::new(
+            crate::resolved::ResolvedRegistry::new(Vec::new(), Vec::new()),
+        ));
+        let shared = builder
+            .variable(shared_binder, Type::Variable(variable), origin.clone())
+            .unwrap();
+        let port = builder
+            .variable(BinderId::resolved(module, 3), Type::Unit, origin.clone())
+            .unwrap();
+        let cut = builder
+            .tuple(vec![shared], Type::Unit, origin.clone())
+            .unwrap();
+        // LIFO visits shared through the evidence-only cut first, then later
+        // through the active lexical path. A union visited set loses its binder.
+        let body = builder
+            .tuple(vec![shared, port, cut], Type::Unit, origin.clone())
+            .unwrap();
+        let method = MethodId::new(InterfaceId::new(module, 0), 0);
+        let requirement = RequirementId::new(RequirementOwner::Global(selected), 0);
+        let methods = [
+            MethodUse {
+                node: cut,
+                target: MethodTarget::Adapter {
+                    value: 0,
+                    binder: selected,
+                },
+                method,
+                requirement: None,
+                arguments: 0,
+            },
+            MethodUse {
+                node: cut,
+                target: MethodTarget::Abstract(requirement),
+                method,
+                requirement: None,
+                arguments: 0,
+            },
+        ];
+        let adapters = [
+            MethodAdapter {
+                binder: selected,
+                head_arguments: Vec::new(),
+                method_parameters: 0,
+                prerequisites: vec![(
+                    requirement,
+                    method,
+                    MethodTarget::Adapter {
+                        value: 1,
+                        binder: prerequisite,
+                    },
+                )],
+                source: fixture.sources[0],
+            },
+            MethodAdapter {
+                binder: prerequisite,
+                head_arguments: Vec::new(),
+                method_parameters: 0,
+                prerequisites: Vec::new(),
+                source: fixture.sources[0],
+            },
+        ];
+        let pattern = CorePattern::new(Type::Unit, origin, CorePatternKind::Wildcard);
+        let operation: fn(&EffectExprKind) -> Option<&EffectOperation> = |kind| match kind {
+            EffectExprKind::Operation(operation) => Some(operation),
+            _ => None,
+        };
+        let run = |budget: &mut TypeWorkBudget| -> Result<(), Failure> {
+            let original_count = builder.nodes.len();
+            let mut value = graph((0..original_count).map(|_| Expr::Scalar).collect());
+            value.install_provider_ports(&[port], budget)?;
+            let mut symbols = HashMap::new();
+            let mut types = HashMap::new();
+            let indexed = MethodUses::new(&methods, budget)?;
+            let mut headers = FunctionMetadataPreparation::<EffectOperationFamily>::new(
+                &builder.nodes,
+                operation,
+            );
+            let clause = value.clause_data(
+                &pattern,
+                index(body),
+                fixture.sources[0],
+                &builder.nodes,
+                &mut symbols,
+                &mut types,
+                &indexed,
+                &adapters,
+                &mut headers,
+                budget,
+            )?;
+            assert_eq!(clause.input, original_count);
+            assert_eq!(symbols[&selected], original_count + 1);
+            assert_eq!(symbols[&shared_binder], original_count + 2);
+            assert_eq!(types[&variable], original_count + 3);
+            assert_eq!(symbols[&prerequisite], original_count + 4);
+            assert_eq!(
+                value.evidence,
+                vec![((requirement, method), original_count + 5)]
+            );
+            assert_eq!(
+                clause.captures,
+                vec![
+                    original_count + 1,
+                    original_count + 2,
+                    original_count + 3,
+                    original_count + 4,
+                    index(cut),
+                    original_count + 5,
+                    index(port)
+                ]
+            );
+            Ok(())
+        };
+        let mut complete = TypeWorkBudget::unbounded();
+        run(&mut complete).unwrap();
+        assert!(matches!(
+            run(&mut TypeWorkBudget::with_limit(complete.used() - 1)),
+            Err(Failure::Resource)
+        ));
+        run(&mut TypeWorkBudget::with_limit(complete.used())).unwrap();
+    }
+
     fn graph(expressions: Vec<Expr>) -> Graph {
         let source = crate::source::SourceFile::new("value-cut.ash", "x").unwrap();
         let span = source
@@ -5198,6 +5349,11 @@ mod tests {
         // after the eligible slots' complete first queue visits.
         analysis.slot(3, 0, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
+        let scalar = analysis.indices[&(2, 0)];
+        assert!(
+            !analysis.slots[scalar].preparation.is_edges_installed(),
+            "ordinary Scalar evaluation must not mint fixed-setup authority"
+        );
         let owner = Atom::Resource(3, 0);
         assert!(analysis.revision > atom_revision);
         for &slot in &outputs {

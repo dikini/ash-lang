@@ -825,27 +825,18 @@ impl<'a> MethodUses<'a> {
         Ok(records)
     }
 
-    fn lexical_at(
+    fn capture_at(
         &self,
         node: usize,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(bool, &[BinderId]), Failure> {
+    ) -> Result<Option<&MethodUseGroup<'a>>, Failure> {
         if self.by_node.is_empty() {
-            return Ok((false, &[]));
+            return Ok(None);
         }
         charge(budget, 1)?;
-        let Some(group) = self.by_node.get(&node) else {
-            return Ok((false, &[]));
-        };
-        charge(
-            budget,
-            group
-                .free_binders
-                .len()
-                .checked_add(1)
-                .ok_or(Failure::Resource)?,
-        )?;
-        Ok((group.replaces_node, &group.free_binders))
+        // Consumers pay their actual binder/record traversals. The product
+        // collector borrows this original descriptor without a second index.
+        Ok(self.by_node.get(&node))
     }
 }
 
@@ -1061,112 +1052,185 @@ fn index(node: NodeId) -> usize {
     node.value() as usize
 }
 
-// A function retains only referenced values from outside its body. Bindings
-// evaluated when it is called are not part of its stored environment.
-fn free_values_with_methods<F: CoreOperationFamily>(
+#[derive(Debug, Eq, PartialEq)]
+enum AbstractCaptureStep {
+    Port(usize),
+    Methods(usize),
+}
+
+#[derive(Default)]
+struct CaptureProjections {
+    free_values: Vec<BinderId>,
+    abstract_steps: Vec<AbstractCaptureStep>,
+    invalid_abstract: bool,
+}
+
+impl CaptureProjections {
+    fn retain_abstract(
+        &mut self,
+        step: AbstractCaptureStep,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        self.abstract_steps
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.abstract_steps.push(step);
+        Ok(())
+    }
+}
+
+// Product of two structural folds, with independent cuts and visited bits.
+// Lexical references keep their original duplicates and complete bound filter.
+// The abstract recipe performs no symbol/evidence allocation: replay follows
+// lexical and metadata installation, preserving graph coordinates and errors.
+fn capture_projections<F: CoreOperationFamily>(
     nodes: &[StoredNode<F>],
     root: usize,
     parameters: &[BinderId],
     methods: &MethodUses<'_>,
     capture_ports: &[usize],
     budget: &mut TypeWorkBudget,
-) -> Result<Vec<BinderId>, Failure> {
-    let mut pending = copy_slice(&[root], budget)?;
-    let mut seen = std::collections::HashSet::new();
+) -> Result<CaptureProjections, Failure> {
+    const LEXICAL: u8 = 1;
+    const ABSTRACT: u8 = 2;
+    let mut pending = copy_slice(&[(root, LEXICAL | ABSTRACT)], budget)?;
+    let mut seen = HashMap::<usize, u8>::new();
     let mut bound = std::collections::HashSet::new();
-    let mut references = Vec::new();
+    let mut result = CaptureProjections::default();
     charge(budget, parameters.len() + 1)?;
     bound
         .try_reserve(parameters.len())
         .map_err(|_| Failure::Resource)?;
     bound.extend(parameters);
-    while let Some(id) = pending.pop() {
-        charge(budget, 1)?;
+    while let Some((id, mut concerns)) = pending.pop() {
+        // Pay the visit and its per-concern state even when one concern has
+        // already visited this DAG node through a differently pruned path.
+        charge(budget, 2)?;
+        if result.invalid_abstract {
+            concerns &= !ABSTRACT;
+        }
         seen.try_reserve(1).map_err(|_| Failure::Resource)?;
-        if !seen.insert(id) {
+        let visited = seen.entry(id).or_default();
+        concerns &= !*visited;
+        *visited |= concerns;
+        if concerns == 0 {
             continue;
         }
-        let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        // Lexical validation precedes its capture-port cut. Abstract-only
+        // invalid input belongs to the deferred abstract phase instead.
+        let node = nodes.get(id);
+        if concerns & LEXICAL != 0 && node.is_none() {
+            return Err(Failure::Invalid);
+        }
         if !capture_ports.is_empty() {
             charge(budget, capture_ports.len())?;
             if capture_ports.contains(&id) {
+                if concerns & ABSTRACT != 0 {
+                    result.retain_abstract(AbstractCaptureStep::Port(id), budget)?;
+                }
                 continue;
             }
         }
-        let (replaces_node, free_binders) = methods.lexical_at(id, budget)?;
-        for &binder in free_binders {
-            references.try_reserve(1).map_err(|_| Failure::Resource)?;
-            references.push(binder);
-        }
-        // A selected source method occurrence is replaced by its authenticated
-        // route in the value graph. Its obsolete placeholder children are not
-        // lexical dependencies of the selected callable.
-        if replaces_node {
-            continue;
-        }
-        let mut binders = Vec::new();
-        let mut failed = false;
-        F::visit_operation_binders(&node.kind, &mut |binder| {
-            if charge(budget, 1).is_err() || binders.try_reserve(1).is_err() {
-                failed = true;
-            } else {
-                binders.push(binder.id());
+        if let Some(group) = methods.capture_at(id, budget)? {
+            if concerns & ABSTRACT != 0 {
+                result.retain_abstract(AbstractCaptureStep::Methods(id), budget)?;
             }
-        });
-        if failed {
-            return Err(Failure::Resource);
-        }
-        match F::pure(&node.kind) {
-            Some(PureExprKind::Variable(variable)) => {
-                charge(budget, 1)?;
-                references.try_reserve(1).map_err(|_| Failure::Resource)?;
-                references.push(variable.binder());
-            }
-            Some(PureExprKind::Value(PureValue::Function(function))) => {
-                binders.try_reserve(1).map_err(|_| Failure::Resource)?;
-                binders.push(function.parameter().id());
-            }
-            Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
-                binders.try_reserve(1).map_err(|_| Failure::Resource)?;
-                binders.push(binding.binder().id());
-            }
-            Some(PureExprKind::Computation(PureComputation::RecursiveBind(binding))) => {
-                charge(budget, binding.members().len())?;
-                binders
-                    .try_reserve(binding.members().len())
+            if concerns & LEXICAL != 0 {
+                charge(budget, group.free_binders.len() + 1)?;
+                result
+                    .free_values
+                    .try_reserve(group.free_binders.len())
                     .map_err(|_| Failure::Resource)?;
-                binders.extend(binding.members().iter().map(|member| member.binder().id()));
-            }
-            Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
-                for arm in matching.arms() {
-                    for binder in arm.pattern().binder_iter() {
-                        charge(budget, 1)?;
-                        binders.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        binders.push(binder.id());
-                    }
+                result.free_values.extend_from_slice(&group.free_binders);
+                // Selected methods replace obsolete lexical placeholders;
+                // abstract evidence still visits their original children.
+                if group.replaces_node {
+                    concerns &= !LEXICAL;
                 }
             }
-            _ => {}
         }
-        charge(budget, binders.len() + F::child_count(&node.kind))?;
+        if concerns == 0 {
+            continue;
+        }
+        let Some(node) = node else {
+            charge(budget, 1)?;
+            result.invalid_abstract = true;
+            continue;
+        };
+        let mut binders = Vec::new();
+        let mut failed = false;
+        if concerns & LEXICAL != 0 {
+            F::visit_operation_binders(&node.kind, &mut |binder| {
+                if charge(budget, 1).is_err() || binders.try_reserve(1).is_err() {
+                    failed = true;
+                } else {
+                    binders.push(binder.id());
+                }
+            });
+            if failed {
+                return Err(Failure::Resource);
+            }
+            match F::pure(&node.kind) {
+                Some(PureExprKind::Variable(variable)) => {
+                    charge(budget, 1)?;
+                    result
+                        .free_values
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    result.free_values.push(variable.binder());
+                }
+                Some(PureExprKind::Value(PureValue::Function(function))) => {
+                    binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    binders.push(function.parameter().id());
+                }
+                Some(PureExprKind::Computation(PureComputation::Bind(binding))) => {
+                    binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    binders.push(binding.binder().id());
+                }
+                Some(PureExprKind::Computation(PureComputation::RecursiveBind(binding))) => {
+                    charge(budget, binding.members().len())?;
+                    binders
+                        .try_reserve(binding.members().len())
+                        .map_err(|_| Failure::Resource)?;
+                    binders.extend(binding.members().iter().map(|member| member.binder().id()));
+                }
+                Some(PureExprKind::Computation(PureComputation::Match(matching))) => {
+                    for arm in matching.arms() {
+                        for binder in arm.pattern().binder_iter() {
+                            charge(budget, 1)?;
+                            binders.try_reserve(1).map_err(|_| Failure::Resource)?;
+                            binders.push(binder.id());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let child_count = F::child_count(&node.kind);
+        charge(budget, binders.len() + child_count)?;
         bound
             .try_reserve(binders.len())
             .map_err(|_| Failure::Resource)?;
         bound.extend(binders);
-        seen.try_reserve(F::child_count(&node.kind))
-            .map_err(|_| Failure::Resource)?;
         pending
-            .try_reserve(F::child_count(&node.kind))
+            .try_reserve(child_count)
             .map_err(|_| Failure::Resource)?;
-        for ordinal in 0..F::child_count(&node.kind) {
-            pending.push(index(
-                F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?,
-            ));
+        for ordinal in 0..child_count {
+            let Some(child) = F::child_at(&node.kind, ordinal) else {
+                if concerns & LEXICAL != 0 {
+                    return Err(Failure::Invalid);
+                }
+                charge(budget, 1)?;
+                result.invalid_abstract = true;
+                break;
+            };
+            pending.push((index(child), concerns));
         }
     }
-    charge(budget, references.len())?;
-    references.retain(|binder| !bound.contains(binder));
-    Ok(references)
+    charge(budget, result.free_values.len())?;
+    result.free_values.retain(|binder| !bound.contains(binder));
+    Ok(result)
 }
 
 #[derive(Default)]
@@ -6381,17 +6445,20 @@ mod tests {
                 &methods[1]
             ));
             assert!(indexed.at(usize::MAX, budget)?.is_empty());
+            let group = indexed.capture_at(index(first), budget)?.unwrap();
             assert_eq!(
-                indexed.lexical_at(index(first), budget)?,
+                (group.replaces_node, group.free_binders.as_slice()),
                 (true, &[binder][..])
             );
-            assert_eq!(indexed.lexical_at(index(second), budget)?, (false, &[][..]));
-            assert_eq!(indexed.lexical_at(usize::MAX, budget)?, (false, &[][..]));
+            let group = indexed.capture_at(index(second), budget)?.unwrap();
+            assert!(!group.replaces_node && group.free_binders.is_empty());
+            assert!(indexed.capture_at(usize::MAX, budget)?.is_none());
             Ok::<(), Failure>(())
         };
         // Original construction 3M, two descriptors and one retained lexical
-        // binder; unchanged full-record lookups, then exact lexical projection.
-        const EXACT: usize = 3 * 4 + 2 + 1 + (1 + 3) + (1 + 1) + 1 + (1 + 1 + 1) + (1 + 1) + 1;
+        // binder; unchanged full-record lookups, then three borrowed descriptors.
+        // Descriptor consumers separately pay their binder/record traversals.
+        const EXACT: usize = 3 * 4 + 2 + 1 + (1 + 3) + (1 + 1) + 1 + 1 + 1 + 1;
         for prefix in [0, 9] {
             for allowance in 0..EXACT {
                 let mut short = TypeWorkBudget::with_limit(prefix + allowance);
@@ -6411,15 +6478,17 @@ mod tests {
         let mut abstract_only = methods;
         abstract_only[1].requirement = None;
         let indexed = MethodUses::new(&abstract_only, &mut TypeWorkBudget::unbounded()).unwrap();
+        let group = indexed
+            .capture_at(index(second), &mut TypeWorkBudget::unbounded())
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            indexed
-                .lexical_at(index(second), &mut TypeWorkBudget::unbounded())
-                .unwrap(),
+            (group.replaces_node, group.free_binders.as_slice()),
             (true, &[][..])
         );
         let indexed = MethodUses::new(&methods, &mut TypeWorkBudget::unbounded()).unwrap();
         assert_eq!(
-            free_values_with_methods(
+            capture_projections(
                 &builder.nodes,
                 index(first),
                 &[],
@@ -6427,12 +6496,13 @@ mod tests {
                 &[],
                 &mut TypeWorkBudget::unbounded(),
             )
-            .unwrap(),
+            .unwrap()
+            .free_values,
             vec![binder],
             "the selected original binder remains a lexical dependency"
         );
         assert!(
-            free_values_with_methods(
+            capture_projections(
                 &builder.nodes,
                 index(first),
                 &[binder],
@@ -6441,11 +6511,12 @@ mod tests {
                 &mut TypeWorkBudget::unbounded(),
             )
             .unwrap()
+            .free_values
             .is_empty(),
             "ordinary local ownership still removes a bound binder"
         );
         assert!(
-            free_values_with_methods(
+            capture_projections(
                 &builder.nodes,
                 index(second),
                 &[],
@@ -6454,6 +6525,7 @@ mod tests {
                 &mut TypeWorkBudget::unbounded(),
             )
             .unwrap()
+            .free_values
             .is_empty(),
             "dictionary prerequisites are not ordinary lexical binders"
         );
@@ -6465,12 +6537,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert_eq!(
+        assert!(
             MethodUses::new(&[], &mut zero)
                 .unwrap()
-                .lexical_at(0, &mut zero)
-                .unwrap(),
-            (false, &[][..])
+                .capture_at(0, &mut zero)
+                .unwrap()
+                .is_none()
         );
     }
 

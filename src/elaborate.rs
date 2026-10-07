@@ -1260,6 +1260,24 @@ struct LoweredScheme {
     core_scheme: Type,
 }
 
+// This loan is minted only after matching one original checked global and its
+// completed, non-freshened lowering. It carries no Core admission authority.
+struct PreparedFinalBinder<'a> {
+    checked: &'a CheckedGlobalScheme,
+    lowered: &'a LoweredScheme,
+}
+
+impl PreparedFinalBinder<'_> {
+    fn into_binder_type(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(BinderId, IterativeTypeOwner), TypeError> {
+        let ty = clone_type_with_budget(&self.lowered.core_scheme, budget)
+            .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
+        Ok((self.checked.binder, IterativeTypeOwner::new(ty)))
+    }
+}
+
 impl LoweredScheme {
     fn source_binder_parameters(&self) -> Option<&[(TypeVariableId, Kind)]> {
         self.source_type_parameters.as_deref()
@@ -10867,21 +10885,37 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 ));
             }
             let quantified = quantified.into_boxed_slice();
-            let binder_body = IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
-            let core_quantified = F::project_parameters(&quantified, &mut self.type_work)
-                .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-            let binder_type = if core_quantified.is_empty() {
-                binder_body
+            // The final Effect global uses the completed original scheme below.
+            // None schedules that choice; only PreparedFinalBinder carries its proof.
+            let binder_type = if F::EFFECTS
+                && self.purpose == ElaborationPurpose::FinalSynthesis
+                && checked_by_binder.is_some()
+            {
+                // Selection, retained source/lowering loan, and consuming dispatch.
+                self.type_work.charge(3).map_err(|()| type_resource())?;
+                None
             } else {
-                self.type_work
-                    .charge(1)
-                    .map_err(|()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted))?;
-                IterativeTypeOwner::new(Type::Forall(
-                    core_quantified.into_boxed_slice(),
-                    Box::new(binder_body.into_inner()),
-                ))
+                Some({
+                    let binder_body =
+                        IterativeTypeOwner::new(self.pure_core_type(&function_type.ty)?);
+                    let core_quantified = F::project_parameters(&quantified, &mut self.type_work)
+                        .map_err(|()| {
+                        TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                    })?;
+                    if core_quantified.is_empty() {
+                        binder_body
+                    } else {
+                        self.type_work.charge(1).map_err(|()| {
+                            TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                        })?;
+                        IterativeTypeOwner::new(Type::Forall(
+                            core_quantified.into_boxed_slice(),
+                            Box::new(binder_body.into_inner()),
+                        ))
+                    }
+                })
             };
-            let binder_type = if let Some(checked) = &checked_by_binder {
+            let checked_global = if let Some(checked) = &checked_by_binder {
                 let checked = checked.get(&name.id).ok_or_else(invalid_state)?;
                 let requirements_match = checked.scheme.requirements.len() == requirements.len()
                     && checked.scheme.requirements.iter().zip(requirements).all(
@@ -10908,11 +10942,11 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 {
                     return Err(invalid_state());
                 }
-                binder_type
+                Some(*checked)
             } else {
-                binder_type
+                None
             };
-            let binder_type = if self.purpose == ElaborationPurpose::FinalSynthesis {
+            let (binder_id, binder_type) = if self.purpose == ElaborationPurpose::FinalSynthesis {
                 drop(binder_type);
                 let lowered = self
                     .evidence_lowering
@@ -10933,16 +10967,27 @@ impl<F: CoreLoweringFamily> CoreElaborator<F> {
                 {
                     return Err(invalid_state());
                 }
-                IterativeTypeOwner::new(
-                    clone_type_with_budget(&lowered.core_scheme, &mut self.type_work).map_err(
-                        |()| TypeError::Internal(ElaborationFailure::TypeResourceExhausted),
-                    )?,
-                )
+                if F::EFFECTS
+                    && let Some(checked) = checked_global
+                {
+                    PreparedFinalBinder { checked, lowered }
+                        .into_binder_type(&mut self.type_work)?
+                } else {
+                    (
+                        name.id,
+                        IterativeTypeOwner::new(
+                            clone_type_with_budget(&lowered.core_scheme, &mut self.type_work)
+                                .map_err(|()| {
+                                    TypeError::Internal(ElaborationFailure::TypeResourceExhausted)
+                                })?,
+                        ),
+                    )
+                }
             } else {
-                binder_type
+                (name.id, binder_type.ok_or_else(invalid_state)?)
             };
             let binder = self.builder.resolved_binder(
-                name.id,
+                binder_id,
                 binder_type.into_inner(),
                 Origin::Generated {
                     cause: Box::new(name.origin.clone()),
@@ -30868,6 +30913,80 @@ mod tests {
         );
         assert!(!resolved.definitions().is_empty());
         assert!(!resolved.implementations().is_empty());
+    }
+
+    #[test]
+    fn final_effect_binder_preparation_matches_completed_source_and_exact_retry() {
+        let resolved = resolved_module_fixture(
+            "prepared-final-binder.ash",
+            "value : Unit -> Unit\nvalue argument = argument\n",
+            "Unit",
+            "()",
+        );
+        let module = resolved.module();
+        let checked = check_module(resolved).expect("source checks");
+        let linked = link_modules(vec![checked], module).expect("module links");
+        let program = crate::evidence_validation::validate_interface_evidence(linked)
+            .expect("original evidence authenticates");
+        let group = &program.groups()[0];
+        let prepare = |allowance| {
+            let mut elaborator =
+                EffectElaborator::for_module_program(&program).expect("completed global lowering");
+            elaborator.type_work = TypeWorkBudget::with_limit(allowance);
+            let result = elaborator.prepare_definition_views(
+                group.definitions().iter(),
+                Some(group.schemes()),
+                TypeContext::new(),
+            );
+            (elaborator.type_work.used(), result)
+        };
+        let (work, result) = prepare(usize::MAX);
+        let prepared = result.expect("original checked globals prepare");
+        assert_eq!(prepared.binders.len(), group.definitions().len());
+        for checked in group.schemes() {
+            assert_eq!(
+                prepared.context.lookup(checked.binder),
+                Some(&checked.scheme.value_type)
+            );
+        }
+        drop(prepared);
+        for allowance in 0..work {
+            assert!(matches!(
+                prepare(allowance).1,
+                Err(TypeError::Internal(
+                    ElaborationFailure::TypeResourceExhausted
+                ))
+            ));
+        }
+        let (retry_work, retry) = prepare(work);
+        assert_eq!(retry_work, work);
+        drop(retry.expect("fresh exact allowance retries the whole preparation"));
+
+        // Public programs cannot forge a mismatched private completed scheme.
+        // The phase producer must still compare its exact original source.
+        let binder = group.schemes()[0].binder;
+        let mut mismatched = EffectElaborator::for_module_program(&program)
+            .expect("fresh completed global lowering");
+        let lowered = mismatched
+            .evidence_lowering
+            .as_mut()
+            .unwrap()
+            .global_schemes
+            .get_mut(&binder)
+            .unwrap();
+        let old = std::mem::replace(&mut lowered.value_type, Type::Bool);
+        drop(IterativeTypeOwner::new(old));
+        mismatched.type_work = TypeWorkBudget::unbounded();
+        let checkpoint = mismatched.builder.node_checkpoint();
+        assert!(matches!(
+            mismatched.prepare_definition_views(
+                group.definitions().iter(),
+                Some(group.schemes()),
+                TypeContext::new(),
+            ),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        ));
+        assert_eq!(mismatched.builder.node_checkpoint(), checkpoint);
     }
 
     #[test]
