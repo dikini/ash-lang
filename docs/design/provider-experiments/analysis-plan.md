@@ -145,6 +145,10 @@ Primary candidate boundaries, owned by Common unless transferred:
 2. Express the current two transports as typed operators on immutable routing
    recipes and live original ports. Derive a composed recipe for the common
    structural work. Do not compose or cache current atom answers.
+   Strengthen its logical result with separate specialized output and generic
+   symbolic-root projections. Prove each required observation; replacing a
+   pre-specialization root feed by a dictionary-specialized value is not a
+   general identity.
 3. Establish a representation correspondence for symbolic roots, required
    queries and focused cuts. Preserve source/owner identities, actual lexical
    creation/control environments and complete Type/Row/evidence inputs.

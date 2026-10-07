@@ -395,6 +395,77 @@ there is no authorization to merge environments or suppress symbolic roots.
 Common owns the role/phase study and any implementation handoff. This task
 supplies the inductive law and review rather than a competing implementation.
 
+#### Separate the output and symbolic-root projections
+
+The follow-up source review uses Common's frozen `value.rs` revision
+`6a900a2c22206274e056cb93a53ff0b20d94d7d01084171e9353eb88f92c1e17`
+and `bounds/wrapper-evidence-fusion-proof-6a9/proposal.md` in the external
+evidence archive. It identifies two distinct observations of inner Function
+construction, which a strengthened inductive result must retain.
+
+Let `V(q,c)` denote the live value equation at original capture coordinate `q`
+in exact environment `c`. Let `R(G,q)` denote that capture's port in the symbolic
+root for `G`'s body. `Graph::start` seeds this port from `V(q,0)` and admits the
+body with Unknown formal inputs. Each later `FunctionCaptureInstallation` of
+`G` at creation `c` adds a live edge from `V(q,c)` into `R(G,q)`, then publishes
+`Closure(G,c)`. These are separate actions, not one output-value projection.
+
+For the proposed wrapper, `c` is the outer type Invoke `I`. Evidence routing
+then constructs specialized environment `E`, installs exact dictionary routes
+and publishes `Closure(G,E)`. `ReadyClosure::publish` does not itself add the
+Function-construction root feeds. Control discovery later calls `root_context`
+and `port` for required body roots; provider and resource checks also inspect
+closure capture projections. Root contributions therefore cannot be discarded
+merely because ordinary source calls consume the specialized Evidence output.
+
+Replacing the removed generic feed with the specialized capture is not a
+general algebraic identity. A symbolic countermodel is:
+
+```text
+V(q,0) has no owner
+V(q,I) reaches owner A
+V(q,E) reaches owner B after dictionary replacement
+
+original root contribution:    A
+substituted root contribution: B
+```
+
+Exact evidence replacement can change a captured dependency; the existing
+`topology_graph` law retains different binding routes for Evidence 8 and 9.
+The countermodel falsifies unconditional feed substitution. It is not a newly
+executed Ash program, a demonstrated lifecycle failure or proof that a suitable
+representation relation is impossible. A semantic rejection still needs a
+required query that distinguishes the representations.
+
+Fission exposes a stronger logical result: specialized output equations,
+generic root-feed equations and correspondence for required queries. Their
+producers share the original typed structure but inherit different inputs:
+
+```text
+prepare    : OriginalShape -> Result PreparedRouting Failure
+generic    : (PreparedRouting, ExactEnv) -> Result RootFeedEquations Failure
+specialize : (PreparedRouting, ExactEnv, DictionaryEnv)
+             -> Result OutputEquations Failure
+```
+
+These are candidate internal roles, not new APIs or implemented carriers.
+`OriginalShape` includes authenticated Function/capture/method provenance;
+`ExactEnv` includes the saved lexical and complete Type/Row inputs. Equations
+retain live input coordinates rather than current atoms. Preserve every
+creation contribution, late update and original source owner. Neither the
+output nor the generic projection is the union of all free input owners: an
+input type owner can be absent from the returned Function's captures.
+
+The next inductive proof must either derive both projections from this shared
+routing result or show the generic contribution redundant under every required
+root/query observation. Alias/Merge ordering, current formals, dictionary
+replacement, opaque cuts and Function output capture sets are separate cases.
+Conserve the original fallible publication barrier and account for cycles with
+the actual fixed-point relation; the total structural induction does not settle
+them. Keeping the original generic expansion as a fallback can preserve its
+behavior, but may retain the multiplying channel. Removing only the intermediate
+Closure allocation therefore establishes no improved context-growth bound.
+
 ### F-2: lexical and evidence capture product
 
 For ordinary Functions, TypeAbstractions and handler clauses, current value

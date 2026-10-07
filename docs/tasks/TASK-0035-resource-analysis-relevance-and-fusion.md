@@ -92,6 +92,13 @@ does not count as successful merely because it has a plausible law.
   imply Haskell call-by-need sharing. Alternative formulations remain available.
   The follow-up distinguishes bottom/definedness obligations from operational
   cost and from explicit errors or incomplete analysis facts.
+- After the coordination lapse, this task resumed independent source review
+  of Common's narrow Evidence-owned wrapper proposal. The study now derives
+  separate specialized-output and generic symbolic-root observations, with a
+  symbolic countermodel to unconditional root-feed substitution. The next
+  proof must retain both projections or prove redundancy under required queries.
+  This is source-only law evidence, not a new executed Ash failure or an
+  implementation handoff. Shared Rust and engines remain Common-owned.
 
 ## Verification
 
