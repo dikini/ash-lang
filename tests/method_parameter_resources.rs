@@ -403,13 +403,13 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
             "concrete Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_monomorphic_source_validation_has_an_exact_retry_boundary()",
-            "632\n            + 1\n            + 1\n            + 1\n            + 1\n            + CHECKED_STACK_CAPACITY_WORK\n            + 1\n            + 1\n            + SCOPED_OWNER_PARAMETER_WORK\n            + 24;",
+            "632\n            + 1\n            + 1\n            + 1\n            + 1\n            + CHECKED_STACK_CAPACITY_WORK\n            + 1\n            + 1\n            + SCOPED_OWNER_PARAMETER_WORK\n            + CONCRETE_OCCURRENCE_LOOKUP_DELTA\n            + 24;",
         ),
         (
             "wide-prerequisite Core validation",
             CORE_VALIDATE_SOURCE,
             "fn concrete_source_with_wide_abstract_prerequisite_has_an_exact_retry_boundary()",
-            "const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;",
+            "const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK\n            + CONCRETE_OCCURRENCE_LOOKUP_DELTA\n            + PREREQUISITE_METHOD_LIST_WORK\n            + EXACT_PREREQUISITE_SEQUENCE_WORK\n            + 1\n            + 1 // producer matcher entry and exact prefix capacity\n            + SCOPED_OWNER_PARAMETER_WORK\n            + 26;",
         ),
         (
             "monomorphic adapter producer validation",
@@ -512,8 +512,8 @@ fn exact_unit_formulas_remain_attached_to_their_owning_probes() {
     assert_eq!(7 - 1, 6);
     assert_eq!(85 + 2 * 2, 89);
     assert_eq!(122 + 8 + 1 + 1 + 2 + 1 + 1 + 5 * 4 + 2 + 7, 165);
-    assert_eq!(632 + 1 + 1 + 1 + 1 + 45 + 1 + 1 + 1 + 24, 708);
-    assert_eq!(1_175 + 2 * 2 + 2 + 2 + 1 + 1, 1_185);
+    assert_eq!(632 + 1 + 1 + 1 + 1 + 45 + 1 + 1 + 1 + (4 - 1) + 24, 711);
+    assert_eq!(1_175 + (4 - 1) + 2 * 2 + (2 + 2) + 1 + 1 + 1 + 26, 1_215);
     assert_eq!(705 + (49 + 5 + 1) + 45 + 1 + 1 + 1 + 25, 833);
     assert_eq!(
         2_284 + 22 + 28 + 92 + 2 + 1 + 2 + 2 + (1 + 1 + 2) + 81,
