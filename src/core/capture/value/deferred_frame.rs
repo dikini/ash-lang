@@ -159,26 +159,26 @@ impl Arena {
         Ok(PendingFrame(result))
     }
 
-    // The caller is the exclusive matched definition Function visit. It has
-    // proved all complete capture classes and installed the original live
-    // capture/root equations before calling this method. Keep the exact old
-    // Closure(G,0) identity for operations retaining original transport.
-    pub(super) fn definition_frame(
-        &mut self, function: usize, captures: &[usize],
+    // The caller is the exclusive matched source Function visit. It has proved
+    // complete capture classes and installed the original live capture/root
+    // equations. Preserve exact Closure(G,C) identity and full original context
+    // provenance; a typed-body visit does not normalize Type/Row inputs here.
+    pub(super) fn original_constructor_frame(
+        &mut self, function: usize, creation: usize, captures: &[usize],
         bindings: &[(usize, RouteId)], classes: &[ProjectionClass],
         admitted: &super::AdmittedFrame, budget: &mut TypeWorkBudget,
     ) -> Result<CompletedFrame, Failure> {
         charge(budget, 1)?;
-        if let Some(frame) = self.originals.get(&(function, 0)) { return Ok(*frame); }
+        if let Some(frame) = self.originals.get(&(function, creation)) { return Ok(*frame); }
         // Reserve the cache before constructing or completing the new record.
         charge(budget, 1)?;
         self.originals.try_reserve(1).map_err(|_| Failure::Resource)?;
         let pending = self.bindings(function, captures, bindings, classes,
-            TypeOrigin::OriginalContext(0), budget)?;
-        self.frames[pending.0.0].original_creation = Some(0);
+            TypeOrigin::OriginalContext(creation), budget)?;
+        self.frames[pending.0.0].original_creation = Some(creation);
         charge(budget, 2)?; // completion lookup and cache publication
         let completed = self.complete_under(pending, admitted)?;
-        self.originals.insert((function, 0), completed);
+        self.originals.insert((function, creation), completed);
         Ok(completed)
     }
 

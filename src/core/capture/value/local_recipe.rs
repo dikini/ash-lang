@@ -19,6 +19,8 @@ const DICTIONARY: u8 = 4;
 const GLOBAL: u8 = 8;
 const AMBIGUOUS_GLOBAL: u8 = 16;
 const OPAQUE_PROVIDER: u8 = 32;
+const LEXICAL: u8 = 64;
+const AMBIGUOUS_LEXICAL: u8 = 128;
 
 #[derive(Clone, Copy)]
 struct Ownership {
@@ -37,12 +39,22 @@ pub(super) struct DictionarySource {
     pub(super) evidence_ordinal: usize,
 }
 
+// One original Bind initializer occurrence. This is code-shape
+// provenance only: an unentered binding can stay empty and capture transport
+// can supply the same code with a different creation. Always retain Head(b,c).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LexicalSource {
+    pub(super) owner: usize,
+    pub(super) initializer: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum SlotRole {
     Unbound,
     Metadata,
     Resource,
     Global { source: usize },
+    Lexical { source: usize },
     Dictionary { start: usize, len: usize },
 }
 
@@ -120,6 +132,7 @@ pub(super) struct Compiler<'g> {
     // CSR groups actual source binding matches by original target port. This
     // is derived provenance, not a duplicate evidence-key/port lookup map.
     dictionary: Vec<DictionarySource>,
+    lexical: Vec<LexicalSource>,
     cells: Vec<Cell>,
 }
 
@@ -128,6 +141,26 @@ fn flag(ownership: &mut [Ownership], port: usize, bits: u8,
 {
     charge(budget, 1)?;
     ownership.get_mut(port).ok_or(Failure::Invalid)?.flags |= bits;
+    Ok(())
+}
+
+fn lexical_source(
+    ownership: &mut [Ownership], sources: &mut Vec<LexicalSource>,
+    binder: usize, source: LexicalSource, budget: &mut TypeWorkBudget,
+) -> Result<(), Failure> {
+    charge(budget, 3)?; // role lookup, uniqueness test and role publication
+    let role = ownership.get_mut(binder).ok_or(Failure::Invalid)?;
+    if role.flags & LEXICAL != 0 {
+        role.flags |= AMBIGUOUS_LEXICAL;
+        return Ok(());
+    }
+    charge(budget, 2)?; // reserve and append the original occurrence record
+    sources.try_reserve(1).map_err(|_| Failure::Resource)?;
+    // GLOBAL and LEXICAL are mutually exclusive in every accepted role. Reuse
+    // this scalar index; conflicting roles decline before either interpretation.
+    role.global = sources.len();
+    role.flags |= LEXICAL;
+    sources.push(source);
     Ok(())
 }
 
@@ -183,12 +216,17 @@ impl<'g> Compiler<'g> {
             else { role.global = source; }
             role.flags |= GLOBAL;
         }
-        for expression in &graph.expressions {
+        let mut lexical = Vec::new();
+        for (owner, expression) in graph.expressions.iter().enumerate() {
             charge(budget, 1)?;
             match expression {
-                Expr::Bind { binder, .. } => flag(&mut ownership, *binder, ASSIGNED, budget)?,
+                Expr::Bind { binder, initializer, .. } => lexical_source(
+                    &mut ownership, &mut lexical, *binder,
+                    LexicalSource { owner, initializer: *initializer }, budget)?,
                 Expr::Recursive { bindings, .. } => {
-                    for (binder, _) in bindings { flag(&mut ownership, *binder, ASSIGNED, budget)?; }
+                    for (binder, _) in bindings {
+                        flag(&mut ownership, *binder, ASSIGNED, budget)?;
+                    }
                 }
                 Expr::Match { arms, .. } => {
                     for (bindings, _) in arms {
@@ -293,7 +331,7 @@ impl<'g> Compiler<'g> {
         if ownership.iter().zip(cursors).any(|(role, cursor)| role.dictionary_len != cursor) {
             return Err(Failure::Invalid);
         }
-        Ok(Self { graph, ownership, dictionary, cells })
+        Ok(Self { graph, ownership, dictionary, lexical, cells })
     }
 
     fn witness(&self, expression: usize) -> Option<&'g ProducerWitness> {
@@ -319,7 +357,7 @@ impl<'g> Compiler<'g> {
             return Ok(None);
         }
         let role = self.ownership.get(*global).ok_or(Failure::Invalid)?;
-        if role.flags & (GLOBAL | ASSIGNED | AMBIGUOUS_GLOBAL | OPAQUE_PROVIDER | DICTIONARY | RESOURCE) != GLOBAL
+        if role.flags & (GLOBAL | ASSIGNED | AMBIGUOUS_GLOBAL | OPAQUE_PROVIDER | DICTIONARY | RESOURCE | LEXICAL | AMBIGUOUS_LEXICAL) != GLOBAL
             || !matches!(self.graph.expressions.get(*global), Some(Expr::Slot))
             || self.graph.metadata.contains_key(global)
         { return Ok(None); }
@@ -378,14 +416,30 @@ impl<'g> Compiler<'g> {
         Ok(Ok(match source {
             Expr::Scalar => RecipeTag::Scalar,
             Expr::Slot => {
-                if role.flags & (ASSIGNED | AMBIGUOUS_GLOBAL) != 0 { return Ok(Err(Decline::ConflictingOwnership)); }
+                if role.flags & (ASSIGNED | AMBIGUOUS_GLOBAL | AMBIGUOUS_LEXICAL) != 0 { return Ok(Err(Decline::ConflictingOwnership)); }
                 let metadata = self.graph.metadata.contains_key(&expression);
-                let categories = usize::from(metadata) + usize::from(role.flags & RESOURCE != 0)
-                    + usize::from(role.flags & GLOBAL != 0) + usize::from(role.flags & DICTIONARY != 0);
+                // Resource identity is also typed metadata. Both writer kinds
+                // produce the same metadata projection; this is one category.
+                let categories = usize::from(metadata || role.flags & RESOURCE != 0)
+                    + usize::from(role.flags & GLOBAL != 0) + usize::from(role.flags & DICTIONARY != 0)
+                    + usize::from(role.flags & LEXICAL != 0);
                 if categories > 1 { return Ok(Err(Decline::ConflictingOwnership)); }
-                RecipeTag::Slot(if metadata { SlotRole::Metadata }
-                    else if role.flags & RESOURCE != 0 { SlotRole::Resource }
+                RecipeTag::Slot(if role.flags & RESOURCE != 0 { SlotRole::Resource }
+                    else if metadata { SlotRole::Metadata }
                     else if role.flags & GLOBAL != 0 { SlotRole::Global { source: role.global } }
+                    else if role.flags & LEXICAL != 0 {
+                        charge(budget, 3)?; // occurrence record, owning Bind, literal Function
+                        let source = self.lexical.get(role.global).ok_or(Failure::Invalid)?;
+                        let actual = match self.graph.expressions.get(source.owner) {
+                            Some(Expr::Bind { binder, initializer, .. }) => Some((*binder, *initializer)),
+                            _ => None,
+                        };
+                        if actual != Some((expression, source.initializer)) { return Err(Failure::Invalid); }
+                        if !matches!(self.graph.expressions.get(source.initializer), Some(Expr::Function { .. })) {
+                            return Ok(Err(Decline::Unsupported));
+                        }
+                        SlotRole::Lexical { source: source.initializer }
+                    }
                     else if role.flags & DICTIONARY != 0 { SlotRole::Dictionary {
                         start: role.dictionary_start, len: role.dictionary_len } }
                     else { SlotRole::Unbound })
@@ -407,7 +461,7 @@ impl<'g> Compiler<'g> {
 
     fn child_count(&self, expression: usize, tag: RecipeTag) -> Result<usize, Failure> {
         Ok(match (tag, self.graph.expressions.get(expression).ok_or(Failure::Invalid)?) {
-            (RecipeTag::Slot(SlotRole::Global { .. }) | RecipeTag::Alias, _) => 1,
+            (RecipeTag::Slot(SlotRole::Global { .. } | SlotRole::Lexical { .. }) | RecipeTag::Alias, _) => 1,
             (RecipeTag::Slot(SlotRole::Dictionary { len, .. }), _) => len,
             (RecipeTag::Merge, Expr::Merge(values)) => values.len(),
             (RecipeTag::Function, Expr::Function { .. }) => 0,
@@ -421,7 +475,7 @@ impl<'g> Compiler<'g> {
     fn child(&self, expression: usize, tag: RecipeTag, position: usize) -> Result<usize, Failure> {
         let source = self.graph.expressions.get(expression).ok_or(Failure::Invalid)?;
         Ok(match (tag, source) {
-            (RecipeTag::Slot(SlotRole::Global { source }), _) if position == 0 => source,
+            (RecipeTag::Slot(SlotRole::Global { source } | SlotRole::Lexical { source }), _) if position == 0 => source,
             (RecipeTag::Slot(SlotRole::Dictionary { start, len }), _) if position < len => {
                 let original = self.dictionary.get(start.checked_add(position).ok_or(Failure::Resource)?).ok_or(Failure::Invalid)?;
                 let binding = self.dictionary_binding(*original).ok_or(Failure::Invalid)?;
@@ -473,7 +527,7 @@ impl<'g> Compiler<'g> {
                     if !matches!(prepared.shape, LocalShape::Callable(_)) { return Ok(Err(Decline::MixedProjection)); }
                     union = prepared.shape;
                 }
-                RecipeTag::Alias | RecipeTag::Slot(SlotRole::Global { .. }) => union = prepared.shape,
+                RecipeTag::Alias | RecipeTag::Slot(SlotRole::Global { .. } | SlotRole::Lexical { .. }) => union = prepared.shape,
                 _ => {}
             }
         }
