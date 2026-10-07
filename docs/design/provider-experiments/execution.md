@@ -7406,3 +7406,47 @@ this native publication delivery does not reduce their source-analysis costs.
 Typed arena allocation and its Layout/reference/family foundations remain
 separate work. These are finite DN-0036 experimental results, without new
 normative language authority or a complete formal resource proof.
+
+### Architecture analysis preparation (2026-10-07)
+
+The architecture test implementation now constructs retention membership sets
+once per immutable fixed-point round and once for the final snapshot. Field
+queries borrow that snapshot. Owner mutation analysis reuses its token scope
+paths and rejects irrelevant tokens before looking up lexical owner bindings.
+The existing aliases, imports, shadowing rules, collect-then-merge order, fixture
+programs and all 43 test assertions remain unchanged. This changes test
+implementation only; it adds no Ash semantics or resource capability.
+
+Independent source review passed. On the Original source tree at `aacf2214`,
+one cached architecture-only compilation took 10.64 seconds, and ten scanner
+fixtures, three owner fixtures and both dominant production checks passed. The
+retention check took 12.79 seconds and the owner check 27.32 seconds, run
+separately with one test thread. The complete architecture gate remains due
+once after integration. The earlier full architecture run took 456.60 seconds
+with concurrent tests; that is not an equivalent individual timing baseline.
+No speedup ratio or production typing-cost reduction follows from these focused
+measurements. The reviewed packet and raw results are retained under
+`requested-root-metadata-160/{bounds/architecture-work-candidate-v1,author/architecture-work-feedback-v2}/`
+in the Common evidence root. All three worktree source/index/HEAD guards were
+restored after focused verification.
+
+The architecture optimisation is integrated by real unsigned Original merge
+`dc49a6d8b1d988fd8582babe7376b59206b505e5`, preserving Common commit
+`5b2c1c2032ff7d5d552420a64866f3ad536dd615`. Original then passed
+`CARGO_BUILD_JOBS=1 cargo test --locked -p ash --all-features --test architecture`:
+all 43 tests passed, none failed or were ignored. The full test group took
+28.27 seconds; the command including its cached rebuild took 30.92 seconds.
+The previous integrated group took 456.60 seconds. Source comparison confirms
+that only execution prose changed between that earlier gate and this candidate
+base; all production inputs and the old architecture test source were identical.
+These are single-run elapsed observations, not a statistical benchmark.
+
+The raw integrated log SHA-256 is
+`9fe8224c10b5f7713c7ac190e76547c997c29e1ac3c4314c77c91c1025831130`.
+The complete output, explicit return, source comparison and preservation guards
+are retained in `author/architecture-work-feedback-v2/` beside the focused
+packet. All three source/index/HEAD guards remained unchanged during this gate.
+The earlier full workspace verification remains historical evidence; this
+test-only delivery ran its affected architecture gate, and the next combined
+feature or final checkpoint still requires full `cargo xtask verify`.
+Core alignment remains paused pending SQLite and Arena stabilisation.
