@@ -3626,3 +3626,46 @@ and [public acceptance](../../target/core-boolean-ticket-integration-20261005/ro
 Unsigned commit verification is recorded separately after the final checks and
 commit. Whole C1–C5 completion, generic cleanup completion and full C3 coverage
 remain open.
+
+The normal-cleanup phase checkpoint retains full callback and saved-value
+contracts, private plans and rows, and current contextual and accounting facts.
+Its exact source passed development compilation with 47 ordered trust reports
+and 58 source checks. The historical UNCOMPILED source comment remains unchanged
+to preserve those tested bytes.
+
+The actual stock integration gate records 1,069 registered modules and 13,611
+ordered standard-axiom reports, with one validated receipt hit, zero productive
+compilation and 1,068 unchanged parent artifact/log pairs. Stock validation took
+18.620074697 seconds; metadata validation took 22.684300953 seconds. Both commands
+exited zero with empty stderr and no survivors. Resources were returned before
+diagnosis.
+
+Metadata acceptance retains all 625 archived dependency records and checks the
+current 619-module recursive closure, including 618 translated ancestors. The
+run records three actual dependency queries and one compiler version query;
+one new phase dependency query enters the current metadata record. Historical
+queries are neither rerun nor relabelled. The original 28 public checks, two
+historical missing-module RED observations at the published 1,059-module parent,
+and two generic negative reports keep their scopes. The 58 phase source checks
+remain separate component evidence.
+
+These observed stock and metadata results have ROOT and distinct independent
+review. This evidence does not include the final frozen audit, documentation
+lint, application, final independent review or unsigned commit verification;
+those gates require their own actual receipts and are recorded separately.
+
+This informative DN-0033 experiment leaves ordinary constructor coverage at
+14/16 and whole acceptance at C1 5/5, C2 0/4, C3 0/5, C4 2/3 and C5 0/4.
+Completed M0–M4 remain unchanged; deriving full M4 validity for translated Core
+states remains open. General cleanup completion and Core/Rust correspondence
+also remain open. The separate original-result interface, producer and finish
+modules remain uncompiled and outside this integration. Ash semantics, Core
+grammar and whole-fragment acceptance counts do not change.
+
+Evidence: [phase source](../design/direct-effects/one-shot/CoreCallableRichNormalCleanupPhases.lean),
+[actual stock gate](../../target/core-cleanup-phase-integration-20261007-v1/root-phase1-gate-v1-evidence.json),
+[metadata review](../../target/core-cleanup-phase-integration-20261007-v1/adapter-v2/root-dependency-supplement-v1/review.json),
+[public acceptance](../../target/core-cleanup-phase-integration-20261007-v1/adapter-v2/root-dependency-supplement-v1/acceptance.json),
+[ROOT actual review](../../target/core-cleanup-phase-integration-20261007-v1/root-actual-gate-review-v1.json),
+[independent actual review](../../target/core-cleanup-phase-integration-actual-independent-review-20261007/receipt.json)
+and [resource return](../../target/core-cleanup-phase-integration-20261007-v1/root-resource-return-20261007-a1.json).
