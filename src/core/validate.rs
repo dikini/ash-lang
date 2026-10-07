@@ -128,8 +128,9 @@ impl<'a, T> Iterator for RegistrySourceOrder<'a, T> {
     }
 }
 
-// Fallible sorting keeps every inventory allocation, key derivation, merge
-// comparison and retained reference copy in the caller's cumulative ledger.
+// Complete contextual keys determine natural nondecreasing runs. Merging
+// adjacent runs preserves source-order ties and keeps all retained storage,
+// comparisons and merge transfers in the caller's cumulative ledger.
 fn registry_source_order<T>(
     rows: &[T],
     reorder: bool,
@@ -141,55 +142,83 @@ fn registry_source_order<T>(
     }
     let resource = || ValidationError::new(ValidationReason::Resource, None);
     charge(rows.len())?;
+    let mut keys = Vec::new();
+    keys.try_reserve_exact(rows.len()).map_err(|_| resource())?;
+    for row in rows {
+        keys.push(key(row)?);
+    }
+    if rows.is_empty() {
+        return Ok(RegistrySourceOrder::Borrowed(rows.iter()));
+    }
+
+    // Every key must complete before classifying even the first run.
+    // There can be at most one run start per row.
+    charge(rows.len())?;
+    let mut runs = Vec::new();
+    runs.try_reserve_exact(rows.len()).map_err(|_| resource())?;
+    runs.push(0usize);
+    for (index, pair) in keys.windows(2).enumerate() {
+        charge(1)?;
+        if pair[0] > pair[1] {
+            runs.push(index.checked_add(1).ok_or_else(resource)?);
+        }
+    }
+    if runs.len() == 1 {
+        return Ok(RegistrySourceOrder::Borrowed(rows.iter()));
+    }
+
+    charge(rows.len())?;
     let mut order = Vec::new();
     order
         .try_reserve_exact(rows.len())
         .map_err(|_| resource())?;
     order.extend(0..rows.len());
-    if reorder {
-        charge(rows.len().checked_mul(2).ok_or_else(resource)?)?;
-        let mut keys = Vec::new();
-        keys.try_reserve_exact(rows.len()).map_err(|_| resource())?;
-        for row in rows {
-            keys.push(key(row)?);
-        }
-        let mut scratch = Vec::new();
-        scratch
-            .try_reserve_exact(rows.len())
-            .map_err(|_| resource())?;
-        scratch.extend_from_slice(&order);
-        let mut width = 1usize;
-        while width < rows.len() {
-            let mut start = 0usize;
-            while start < rows.len() {
-                let middle = start.saturating_add(width).min(rows.len());
-                let end = middle.saturating_add(width).min(rows.len());
-                let (mut left, mut right) = (start, middle);
-                for target in &mut scratch[start..end] {
+    charge(rows.len())?;
+    let mut scratch = Vec::new();
+    scratch
+        .try_reserve_exact(rows.len())
+        .map_err(|_| resource())?;
+    scratch.extend_from_slice(&order);
+    while runs.len() > 1 {
+        charge(1)?;
+        let run_count = runs.len();
+        let mut input = 0usize;
+        let mut output = 0usize;
+        while input < run_count {
+            // Three boundary reads and one in-place compacted start.
+            charge(4)?;
+            let next = input.checked_add(1).ok_or_else(resource)?;
+            let following = input.checked_add(2).ok_or_else(resource)?;
+            let start = runs[input];
+            let middle = runs.get(next).copied().unwrap_or(rows.len());
+            let end = runs.get(following).copied().unwrap_or(rows.len());
+            runs[output] = start;
+            let (mut left, mut right) = (start, middle);
+            for target in &mut scratch[start..end] {
+                charge(1)?;
+                let take_left = if left == middle {
+                    false
+                } else if right == end {
+                    true
+                } else {
                     charge(1)?;
-                    let take_left = if left == middle {
-                        false
-                    } else if right == end {
-                        true
-                    } else {
-                        charge(1)?;
-                        keys[order[left]] <= keys[order[right]]
-                    };
-                    *target = if take_left {
-                        let value = order[left];
-                        left += 1;
-                        value
-                    } else {
-                        let value = order[right];
-                        right += 1;
-                        value
-                    };
-                }
-                start = end;
+                    keys[order[left]] <= keys[order[right]]
+                };
+                *target = if take_left {
+                    let value = order[left];
+                    left += 1;
+                    value
+                } else {
+                    let value = order[right];
+                    right += 1;
+                    value
+                };
             }
-            std::mem::swap(&mut order, &mut scratch);
-            width = width.saturating_mul(2);
+            output = output.checked_add(1).ok_or_else(resource)?;
+            input = following;
         }
+        runs.truncate(output);
+        std::mem::swap(&mut order, &mut scratch);
     }
     charge(rows.len())?;
     let mut result = Vec::new();
@@ -5406,7 +5435,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         owner: &super::dialect::MethodEvidenceLexicalOwner,
         claimed: &mut HashSet<crate::types::TypeVariableId>,
     ) -> Result<bool, ValidationError> {
-        self.charge_type_work(self.program.method_evidence.method_count())?;
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.method_count())?;
         let method = self
             .program
             .method_evidence
@@ -5690,7 +5719,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 continue;
             };
             if self.method_evidence_subtree_contains(anchor.node, node)? {
-                self.charge_type_work(self.program.method_evidence.implementation_owner_count())?;
+                self.charge_method_catalog_binary_lookup(
+                    self.program.method_evidence.implementation_owner_count(),
+                )?;
                 self.charge_type_work(self.program.method_evidence_anchors.len())?;
                 return self.implementation_replacements(
                     implementation,
@@ -6428,7 +6459,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         implementation: crate::interface::ImplMethodId,
         source_node: NodeId,
     ) -> Result<bool, ValidationError> {
-        self.charge_type_work(self.program.method_evidence.occurrence_count())?;
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.occurrence_count())?;
         let occurrence = self
             .program
             .method_evidence
@@ -6601,7 +6632,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         else {
                             return Ok(false);
                         };
-                        self.charge_type_work(self.program.method_evidence.method_count())?;
+                        self.charge_method_catalog_binary_lookup(
+                            self.program.method_evidence.method_count(),
+                        )?;
                         if self
                             .program
                             .method_evidence
@@ -8617,6 +8650,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(false);
         };
         self.same_kind_charged(&kind, &Kind::Type)
+    }
+
+    fn charge_method_catalog_binary_lookup(&self, count: usize) -> Result<(), ValidationError> {
+        // Pay the bound calculation and fixed lookup/result access before either
+        // runs. Catalog keys contain fixed scalar identities, not type trees.
+        self.charge_type_work(3)?;
+        // Rust 1.97.1 binary_search_by halves upward until one element remains,
+        // then compares that element. Recheck this bound on toolchain changes.
+        let comparisons = if count == 0 {
+            0
+        } else {
+            (usize::BITS - (count - 1).leading_zeros()) as usize + 1
+        };
+        self.charge_type_work(comparisons)
     }
 
     fn charge_type_work(&self, cells: usize) -> Result<(), ValidationError> {
@@ -21300,10 +21347,15 @@ mod tests {
                         .expect("head equality")
                 );
             }
-            // Existing occurrence/source lookup, pending slot, selected method
-            // and head checks, prerequisite sequence and application edges;
-            // each lexical edge additionally reads L owners and M methods.
-            let exact_work = program.method_evidence.occurrence_count()
+            // The already selected occurrence makes this fixture catalog nonempty.
+            // Binary lookup pays three administration units, ceil(log2 O)
+            // reduction comparisons and one final comparison. Source lookup,
+            // pending slot, selected method/head checks and prerequisite edges
+            // retain their charges; each lexical edge reads L owners and M methods.
+            let occurrences = program.method_evidence.occurrence_count();
+            let occurrence_lookup_work =
+                4 + occurrences.next_power_of_two().trailing_zeros() as usize;
+            let exact_work = occurrence_lookup_work
                 + program.method_evidence.concrete_sources().len()
                 + 1
                 + methods.len()
@@ -21384,6 +21436,9 @@ mod tests {
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
         // The generic implementation head reads its one admitted parameter.
         const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
+        // The original subtotal includes one width-one occurrence lookup.
+        // Its dedicated binary tariff is four units instead of one.
+        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
         const EXACT_WORK: usize = 632
             + 1
             + 1
@@ -21393,6 +21448,7 @@ mod tests {
             + 1
             + 1
             + SCOPED_OWNER_PARAMETER_WORK
+            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
             + 24; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
@@ -21452,11 +21508,15 @@ mod tests {
         // methods of D=1 direct selected prerequisite:
         // 1,175 + Q*W + R + D*W = 1,183.
         const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
+        // The fixed subtotal includes one width-one occurrence lookup;
+        // the dedicated binary tariff replaces its one unit with four.
+        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
         const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
         // The polymorphic Convert head reads its one admitted parameter.
         const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
         const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
+            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
             + PREREQUISITE_METHOD_LIST_WORK
             + EXACT_PREREQUISITE_SEQUENCE_WORK
             + 1
@@ -22628,6 +22688,96 @@ mod tests {
     }
 
     #[test]
+    fn method_catalog_binary_lookup_bound_prepays_actual_key_comparisons() {
+        use crate::interface::{ImplId, ImplMethodId, InterfaceId, MethodId};
+        use crate::module::ModuleId;
+        // These include empty/singleton catalogs, both sides of powers of two,
+        // and a non-power-of-two catalog. Actual std comparisons are the witness.
+        for (count, exact_work) in [
+            (0, 3),
+            (1, 4),
+            (2, 5),
+            (3, 6),
+            (4, 6),
+            (16, 8),
+            (53, 10),
+            (64, 10),
+            (65, 11),
+            (128, 11),
+            (129, 12),
+        ] {
+            let keys = (0..count)
+                .map(|index| {
+                    let id = u32::try_from(index).unwrap();
+                    let method =
+                        MethodId::new(InterfaceId::new(ModuleId::new(id / 4), id % 4), id % 3);
+                    ImplMethodId::new(ImplId::new(ModuleId::new(id / 4), id % 4), method)
+                })
+                .collect::<Vec<_>>();
+            let missing_method = MethodId::new(InterfaceId::new(ModuleId::new(u32::MAX), 0), 0);
+            let missing_impl =
+                ImplMethodId::new(ImplId::new(ModuleId::new(u32::MAX), 0), missing_method);
+            for key in keys
+                .first()
+                .copied()
+                .into_iter()
+                .chain(keys.last().copied())
+                .chain([missing_impl])
+            {
+                let mut comparisons = 0;
+                let _ = keys.binary_search_by(|probe| {
+                    comparisons += 1;
+                    probe.cmp(&key)
+                });
+                assert_eq!(comparisons + 3, exact_work);
+                let mut method_comparisons = 0;
+                let _ = keys.binary_search_by(|probe| {
+                    method_comparisons += 1;
+                    probe.method().cmp(&key.method())
+                });
+                assert_eq!(method_comparisons + 3, exact_work);
+                let mut ordinal_comparisons = 0;
+                let ordinals = (0..count).collect::<Vec<_>>();
+                let _ = ordinals.binary_search_by(|probe| {
+                    ordinal_comparisons += 1;
+                    probe.cmp(&count)
+                });
+                assert_eq!(ordinal_comparisons + 3, exact_work);
+            }
+
+            let file = source();
+            let arena = super::super::dialect::ArenaId::new(118);
+            let program = UnvalidatedProgram {
+                registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+                method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+                method_evidence_anchors: Box::new([]),
+                arena,
+                nodes: vec![StoredNode {
+                    dialect: DialectId::PURE,
+                    effects: (),
+                    ty: Type::Unit,
+                    origin: Some(origin(&file)),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                }],
+                root: NodeId::new(arena, 0),
+            };
+            for remaining in 0..=exact_work {
+                let validator = Validator::new(&program, &[&file]);
+                validator
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining)
+                    .unwrap();
+                let result = validator.charge_method_catalog_binary_lookup(count);
+                if remaining < exact_work {
+                    assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+                } else {
+                    result.unwrap();
+                    assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn lexical_owner_parameter_authentication_has_an_exact_retry_boundary() {
         let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_AUTHENTICATION_SOURCE, &[]);
         let sources = linked_fixture_sources(&fixture);
@@ -22647,9 +22797,9 @@ mod tests {
                 if source == owner.source && binder == owner.binder)
             })
             .expect("owner anchor");
-        // Three method lookup cells, two retained identities, four spelling
-        // bytes and two kind cells authenticate the complete positional row.
-        const EXACT: usize = 3 + 2 + 4 + 2;
+        // Three bound/access cells and three binary comparisons, two retained
+        // identities, four spelling bytes and two kind cells authenticate the row.
+        const EXACT: usize = 6 + 2 + 4 + 2;
         for remaining in [EXACT - 1, EXACT, EXACT] {
             let validator =
                 Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)
@@ -32877,7 +33027,9 @@ mod contextual_registry_order_tests {
         let span = |start, end| file.span(ByteRange::new(start, end).unwrap()).unwrap();
         let first = crate::types::NominalTypeId::new(file.id(), 0);
         let second = crate::types::NominalTypeId::new(file.id(), 1);
-        for overlap in [false, true] {
+        for (overlap, already_ordered) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
             // Unchecked metadata deliberately supplies the same wrong ranges
             // on both sides of a mirror. The structural range check remains
             // necessary; this is not a checked provider context constructor.
@@ -32897,15 +33049,21 @@ mod contextual_registry_order_tests {
                 payload: None,
                 origin: Origin::Source(span(start, end)),
             };
+            let mut nominals = vec![
+                nominal(second, "Second", if overlap { 3 } else { 6 }, 11),
+                nominal(first, "First", 0, 5),
+            ];
+            let mut constructors = vec![
+                constructor(second, "SecondValue", 7, 8),
+                constructor(first, "FirstValue", 1, 2),
+            ];
+            if already_ordered {
+                nominals.reverse();
+                constructors.reverse();
+            }
             let registry = Arc::new(crate::resolved::ResolvedRegistry::new(
-                vec![
-                    nominal(second, "Second", if overlap { 3 } else { 6 }, 11),
-                    nominal(first, "First", 0, 5),
-                ],
-                vec![
-                    constructor(second, "SecondValue", 7, 8),
-                    constructor(first, "FirstValue", 1, 2),
-                ],
+                nominals,
+                constructors,
             ));
             let mut builder = CoreBuilder::<super::super::effect::EffectOperationFamily>::with_registry_for_family(Arc::clone(&registry));
             let root = builder
@@ -32924,10 +33082,95 @@ mod contextual_registry_order_tests {
             }
             let ordinary =
                 Validator::new_modules(&program, &[&file], &[(first.module(), file.id())]).unwrap();
-            assert_eq!(
-                ordinary.validate_registry().unwrap_err().reason(),
-                ValidationReason::Registry
-            );
+            let ordinary_result = ordinary.validate_registry();
+            assert_eq!(ordinary_result.is_ok(), already_ordered && !overlap);
+            if let Err(error) = ordinary_result {
+                assert_eq!(error.reason(), ValidationReason::Registry);
+            }
+        }
+    }
+
+    #[test]
+    fn contextual_order_classification_waits_for_all_keys() {
+        let rows = [3u32, 1, 2, 4];
+        let calls = std::cell::RefCell::new(Vec::new());
+        let charges = std::cell::RefCell::new(Vec::new());
+        let result = registry_source_order(
+            &rows,
+            true,
+            |row| {
+                calls.borrow_mut().push(*row);
+                if *row == 4 {
+                    Err(ValidationError::new(ValidationReason::Registry, None))
+                } else {
+                    Ok((ModuleId::new(0), *row))
+                }
+            },
+            |amount| {
+                charges.borrow_mut().push(amount);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err().reason(), ValidationReason::Registry);
+        assert_eq!(*calls.borrow(), rows);
+        assert_eq!(*charges.borrow(), [rows.len()]);
+        let ordinary = registry_source_order(
+            &rows,
+            false,
+            |_| panic!("ordinary order must not derive contextual keys"),
+            |_| panic!("ordinary order must not charge sorting work"),
+        )
+        .unwrap();
+        assert!(matches!(ordinary, RegistrySourceOrder::Borrowed(_)));
+    }
+
+    #[test]
+    fn contextual_order_is_stable_and_has_exact_refusal_cuts() {
+        type Fixture<'a> = (&'a [(u32, u32)], &'a [usize], usize, bool);
+        let fixtures: &[Fixture<'_>] = &[
+            (&[], &[], 0, true),
+            (&[(0, 1)], &[0], 2, true),
+            (&[(0, 1), (0, 1), (1, 0), (1, 2)], &[0, 1, 2, 3], 11, true),
+            (&[(1, 2), (0, 1), (1, 2), (0, 1)], &[1, 3, 0, 2], 49, false),
+            (&[(0, 0), (0, 2), (0, 1), (0, 3)], &[0, 2, 1, 3], 35, false),
+            (&[(0, 2), (0, 1), (0, 0)], &[2, 1, 0], 39, false),
+        ];
+        for &(rows, expected, cost, borrowed) in fixtures {
+            for allowance in 0..=cost {
+                for _ in 0..2 {
+                    let remaining = std::cell::Cell::new(allowance);
+                    let result = registry_source_order(
+                        rows,
+                        true,
+                        |row| Ok((ModuleId::new(row.0), row.1)),
+                        |amount| {
+                            let next = remaining.get().checked_sub(amount).ok_or_else(|| {
+                                ValidationError::new(ValidationReason::Resource, None)
+                            })?;
+                            remaining.set(next);
+                            Ok(())
+                        },
+                    );
+                    if allowance == cost {
+                        let ordered = result.unwrap();
+                        assert_eq!(
+                            matches!(&ordered, RegistrySourceOrder::Borrowed(_)),
+                            borrowed
+                        );
+                        let positions = ordered
+                            .map(|row| {
+                                rows.iter()
+                                    .position(|candidate| std::ptr::eq(candidate, row))
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(positions, expected);
+                        assert_eq!(remaining.get(), 0);
+                    } else {
+                        assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+                    }
+                }
+            }
         }
     }
 

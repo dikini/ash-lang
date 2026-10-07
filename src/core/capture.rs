@@ -117,7 +117,7 @@ impl CaptureValueSummary {
         let mut pending = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for target in &self.value.targets {
-            let callable = graph.callables.get(*target).ok_or(Failure::Invalid)?;
+            let callable = graph.callables.get(*target, budget)?;
             graph
                 .data
                 .as_ref()
@@ -169,7 +169,7 @@ impl CaptureValueSummary {
                             .as_ref()
                             .ok_or(Failure::Invalid)?
                             .check_provider_selected_captures(*target, metadata, budget)?;
-                        pending.push(graph.callables.get(*target).ok_or(Failure::Invalid)?.body);
+                        pending.push(graph.callables.get(*target, budget)?.body);
                     }
                 }
                 _ => return Err(Failure::Invalid),
@@ -225,7 +225,8 @@ impl CaptureValueSummary {
         )
     }
 
-    /// A callable summary owner exists only after ordinary capture admission.
+    /// Whether this summary retains a graph. Logical query projections also
+    /// retain graphs; presence alone does not prove ordinary capture admission.
     pub(crate) fn has_graph(&self) -> bool {
         self.graph.is_some()
     }
@@ -262,7 +263,6 @@ impl CaptureValueSummary {
         budget: &mut TypeWorkBudget,
     ) -> Result<impl Iterator<Item = &'a Type> + use<'a>, ()> {
         if let Some(graph) = &self.graph {
-            budget.charge(graph.callables.len())?;
             budget.charge(graph.types.0.len())?;
             budget.charge(graph.code.len())?;
         }
@@ -273,9 +273,12 @@ impl CaptureValueSummary {
                 .len()
                 .checked_add(graph.types.0.len())
                 .ok_or(())?;
-            budget.charge(count)?;
+            budget.charge(graph.types.0.len())?;
             types.try_reserve(count).map_err(|_| ())?;
-            types.extend(graph.callables.iter().map(|callable| &callable.ty));
+            graph
+                .callables
+                .extend_types(&mut types, budget)
+                .map_err(|_| ())?;
             types.extend(graph.types.0.iter());
             for request in graph.code.iter().filter_map(|code| match code {
                 Control::Request(request)
@@ -359,10 +362,97 @@ impl CaptureValueSummary {
 #[derive(Debug)]
 struct SummaryGraph {
     effects: bool,
-    callables: Vec<Callable>,
+    callables: CallableSlots,
     code: Vec<Control>,
     types: TypeArguments,
     data: Option<Arc<value::Graph>>,
+}
+
+// Dense original code coordinates remain stable even where no callable exists.
+// Absence is metadata presence, never a test of the original callable's Type.
+#[derive(Debug)]
+struct CallableSlots {
+    positions: Vec<Option<Callable>>,
+    absent_unit: Type,
+}
+
+impl CallableSlots {
+    fn new(budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        charge(budget, 1)?; // One private primitive universe witness.
+        Ok(Self {
+            positions: Vec::new(),
+            absent_unit: Type::Unit,
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    fn get(&self, target: usize, budget: &mut TypeWorkBudget) -> Result<&Callable, Failure> {
+        charge(budget, 1)?; // Original position presence classification.
+        self.positions
+            .get(target)
+            .and_then(Option::as_ref)
+            .ok_or(Failure::Invalid)
+    }
+
+    // Preserve ascending original root order while collapsing only absent
+    // metadata. The last absent position supplies the old LIFO first Unit.
+    fn extend_types<'a>(
+        &'a self,
+        pending: &mut Vec<&'a Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, self.positions.len())?; // Every presence classification.
+        let mut absent = None;
+        for position in &self.positions {
+            match position {
+                Some(callable) => {
+                    charge(budget, 1)?; // Retained original type reference.
+                    pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    pending.push(&callable.ty);
+                }
+                None => absent = Some(pending.len()),
+            }
+        }
+        if let Some(position) = absent {
+            // Witness read/retention plus the actual shifted reference suffix.
+            charge(
+                budget,
+                pending
+                    .len()
+                    .checked_sub(position)
+                    .and_then(|n| n.checked_add(2))
+                    .ok_or(Failure::Resource)?,
+            )?;
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.insert(position, &self.absent_unit);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Default for CallableSlots {
+    fn default() -> Self {
+        Self {
+            positions: Vec::new(),
+            absent_unit: Type::Unit,
+        }
+    }
+}
+
+// Existing explicit test callables are all genuine metadata. Production never
+// uses this conversion or an infallible allocator to publish a table.
+#[cfg(test)]
+impl From<Vec<Callable>> for CallableSlots {
+    fn from(callables: Vec<Callable>) -> Self {
+        Self {
+            positions: callables.into_iter().map(Some).collect(),
+            absent_unit: Type::Unit,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -379,7 +469,7 @@ impl Drop for Callable {
 }
 
 struct ImportedCallables<'a> {
-    callables: Vec<(&'a Callable, usize, usize)>,
+    callables: Vec<(&'a Option<Callable>, usize, usize)>,
     graphs: Vec<(&'a SummaryGraph, usize, usize, usize)>,
     values: HashMap<BinderId, Value>,
 }
@@ -420,6 +510,7 @@ impl<'a> ImportedCallables<'a> {
                     result.callables.extend(
                         graph
                             .callables
+                            .positions
                             .iter()
                             .map(|callable| (callable, offset, code_count)),
                     );
@@ -443,10 +534,16 @@ impl<'a> ImportedCallables<'a> {
         Ok(result)
     }
 
-    fn get(&self, target: usize, local_count: usize) -> Result<(&'a Callable, usize), Failure> {
+    fn get(
+        &self,
+        target: usize,
+        local_count: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(&'a Callable, usize), Failure> {
+        charge(budget, 1)?; // Imported original position presence classification.
         self.callables
             .get(target.checked_sub(local_count).ok_or(Failure::Invalid)?)
-            .map(|(callable, offset, _)| (*callable, *offset))
+            .and_then(|(callable, offset, _)| callable.as_ref().map(|callable| (callable, *offset)))
             .ok_or(Failure::Invalid)
     }
 }
@@ -1129,6 +1226,43 @@ fn retain_metadata_variables(
     root: Metadata<'_>,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
+    // Scalar roots own no nested Forall binding or structural worklist.
+    // Argument tags still pay their original dispatch; compound roots use the
+    // same complete Type/Row walk and shielding below.
+    let root = match root {
+        Metadata::Argument(crate::types::KindedArgument::TypeArg(ty)) => {
+            charge(budget, 1)?;
+            Metadata::Type(ty)
+        }
+        Metadata::Argument(crate::types::KindedArgument::RowArg(row)) => {
+            charge(budget, 1)?;
+            Metadata::Row(row)
+        }
+        root => root,
+    };
+    match root {
+        Metadata::Type(
+            Type::Bytes
+            | Type::String
+            | Type::Int
+            | Type::Bool
+            | Type::Unit
+            | Type::Nominal(_)
+            | Type::Inference(_),
+        ) => {
+            charge(budget, 1)?;
+            return Ok(());
+        }
+        Metadata::Type(Type::Variable(variable)) => {
+            charge(budget, 1)?;
+            return value.retain(*variable, budget);
+        }
+        Metadata::Row(row) if row.known().is_empty() && row.tail().is_none() => {
+            charge(budget, 1)?;
+            return Ok(());
+        }
+        _ => {}
+    }
     let mut pending = copy_slice(&[root], budget)?;
     let mut discovered = MetadataVariables::default();
     let mut bound = std::collections::HashSet::new();
@@ -1210,14 +1344,379 @@ fn retain_metadata_variables(
     Ok(())
 }
 
+// One exact original forest and projection own both header and requested-root
+// evidence. Rewrites and other projections construct a fresh owner.
+struct FunctionMetadataPreparation<'a, F: CoreOperationFamily> {
+    nodes: &'a [StoredNode<F>],
+    operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    headers: HashMap<usize, NodeMetadataHeader>,
+    completed: Vec<CompletedRoot>,
+}
+
+struct NodeMetadataHeader {
+    variables: Vec<TypeVariableId>,
+    requested: Option<std::num::NonZeroUsize>,
+}
+
+const REQUESTED_METADATA_FACTS: usize = 16;
+
+struct CompactRoot {
+    surviving: Vec<TypeVariableId>,
+    bound: Vec<TypeVariableId>,
+}
+
+enum CompletedRoot {
+    Compact(CompactRoot),
+    // The owner's borrowed original node supplies the child recipe.
+    OriginalRecipe,
+}
+
+enum RootQualification {
+    DescendingEdges,
+    OriginalRecipe,
+}
+
+struct PreparingRoot {
+    root: usize,
+    value: MetadataVariables,
+    bound: Vec<TypeVariableId>,
+    qualification: RootQualification,
+}
+
+impl PreparingRoot {
+    fn finish(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(usize, MetadataVariables, CompletedRoot), Failure> {
+        let representation = if matches!(self.qualification, RootQualification::OriginalRecipe)
+            || self.value.variables.len() > REQUESTED_METADATA_FACTS
+        {
+            CompletedRoot::OriginalRecipe
+        } else {
+            let mut bound = Vec::new();
+            let mut fits = true;
+            for &variable in &self.bound {
+                charge(budget, bound.len() + 1)?;
+                if bound.contains(&variable) {
+                    continue;
+                }
+                if self.value.variables.len() + bound.len() == REQUESTED_METADATA_FACTS {
+                    fits = false;
+                    break;
+                }
+                charge(budget, 1)?;
+                bound.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound.push(variable);
+            }
+            if fits {
+                CompletedRoot::Compact(CompactRoot {
+                    surviving: copy_slice(&self.value.variables, budget)?,
+                    bound,
+                })
+            } else {
+                CompletedRoot::OriginalRecipe
+            }
+        };
+        Ok((self.root, self.value, representation))
+    }
+}
+
+impl<'a, F: CoreOperationFamily> FunctionMetadataPreparation<'a, F> {
+    fn new(
+        nodes: &'a [StoredNode<F>],
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+    ) -> Self {
+        Self {
+            nodes,
+            operation,
+            headers: HashMap::new(),
+            completed: Vec::new(),
+        }
+    }
+
+    fn collect(
+        &mut self,
+        root: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<MetadataVariables, Failure> {
+        // Only one additional entry lookup per requested root, not per node.
+        charge(budget, 1)?;
+        let requested = self.headers.get(&root).and_then(|header| header.requested);
+        if let Some(requested) = requested {
+            charge(budget, 1)?;
+            if let CompletedRoot::Compact(facts) = self
+                .completed
+                .get(requested.get() - 1)
+                .ok_or(Failure::Invalid)?
+            {
+                let mut value = MetadataVariables::default();
+                charge(budget, facts.surviving.len())?;
+                for &variable in &facts.surviving {
+                    value.retain(variable, budget)?;
+                }
+                return Ok(value);
+            }
+        }
+        let mut preparation = PreparingRoot {
+            root,
+            value: MetadataVariables::default(),
+            bound: Vec::new(),
+            qualification: if requested.is_some() {
+                RootQualification::OriginalRecipe
+            } else {
+                RootQualification::DescendingEdges
+            },
+        };
+        self.read(&mut preparation, budget)?;
+        if requested.is_some() {
+            // OriginalRecipe never repeats requested-root summary preparation.
+            return Ok(preparation.value);
+        }
+        let (root, value, completed) = preparation.finish(budget)?;
+        let requested = self
+            .completed
+            .len()
+            .checked_add(1)
+            .and_then(std::num::NonZeroUsize::new)
+            .ok_or(Failure::Resource)?;
+        // Admit the arena slot, header lookup, and both publication moves first.
+        charge(budget, 4)?;
+        self.completed
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let header = self.headers.get_mut(&root).ok_or(Failure::Invalid)?;
+        self.completed.push(completed);
+        header.requested = Some(requested);
+        Ok(value)
+    }
+
+    fn read(
+        &mut self,
+        preparation: &mut PreparingRoot,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[preparation.root], budget)?;
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            charge(budget, 1)?;
+            seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+            if !seen.insert(id) {
+                continue;
+            }
+            let node = self.nodes.get(id).ok_or(Failure::Invalid)?;
+            if self.retain_node(preparation, id, budget)? {
+                continue;
+            }
+            match (self.operation)(&node.kind) {
+                Some(EffectOperation::Resource(resource)) => {
+                    preparation
+                        .bound
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    preparation.bound.push(resource.acquisition.identity);
+                }
+                Some(EffectOperation::ProviderScope(scope)) => {
+                    charge(budget, 1)?;
+                    preparation
+                        .bound
+                        .try_reserve(1)
+                        .map_err(|_| Failure::Resource)?;
+                    preparation.bound.push(scope.descriptor.identity());
+                }
+                _ => {}
+            }
+            if let Some(PureExprKind::Computation(PureComputation::TypeAbstraction(abstraction))) =
+                F::pure(&node.kind)
+            {
+                charge(budget, abstraction.parameters().len())?;
+                preparation
+                    .bound
+                    .try_reserve(abstraction.parameters().len())
+                    .map_err(|_| Failure::Resource)?;
+                preparation.bound.extend(
+                    abstraction
+                        .parameters()
+                        .iter()
+                        .map(|(variable, _)| *variable),
+                );
+            }
+            let children = F::child_count(&node.kind);
+            charge(budget, children)?;
+            pending
+                .try_reserve(children)
+                .map_err(|_| Failure::Resource)?;
+            for ordinal in 0..children {
+                let child = index(F::child_at(&node.kind, ordinal).ok_or(Failure::Invalid)?);
+                // Inspect each original parent edge, including seen children.
+                // Strict descent proves a closed acyclic recipe without Exit
+                // frames. Forward edges select fallback; they reject nothing.
+                if matches!(
+                    preparation.qualification,
+                    RootQualification::DescendingEdges
+                ) {
+                    charge(budget, 1)?;
+                    if child >= id {
+                        preparation.qualification = RootQualification::OriginalRecipe;
+                    }
+                }
+                pending.push(child);
+            }
+        }
+        // The complete traversal collected no binding that can remove a variable.
+        if preparation.bound.is_empty() {
+            charge(budget, 1)?;
+            return Ok(());
+        }
+        charge(
+            budget,
+            preparation
+                .value
+                .variables
+                .len()
+                .saturating_mul(preparation.bound.len() + 2),
+        )?;
+        let identities = &mut preparation.value.identities;
+        preparation.value.variables.retain(|variable| {
+            if preparation.bound.contains(variable) {
+                identities.remove(variable);
+                false
+            } else {
+                true
+            }
+        });
+        Ok(())
+    }
+
+    // Header lookup also discovers a prepared requested root. No second hash
+    // probe is added for ordinary descendant nodes.
+    fn retain_node(
+        &mut self,
+        preparation: &mut PreparingRoot,
+        id: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        charge(budget, 1)?;
+        if let Some(header) = self.headers.get(&id) {
+            if let Some(requested) = header.requested {
+                charge(budget, 1)?;
+                if let CompletedRoot::Compact(facts) = self
+                    .completed
+                    .get(requested.get() - 1)
+                    .ok_or(Failure::Invalid)?
+                {
+                    charge(budget, facts.surviving.len() + facts.bound.len())?;
+                    for &variable in &facts.surviving {
+                        preparation.value.retain(variable, budget)?;
+                    }
+                    preparation
+                        .bound
+                        .try_reserve(facts.bound.len())
+                        .map_err(|_| Failure::Resource)?;
+                    preparation.bound.extend(&facts.bound);
+                    return Ok(true);
+                }
+            }
+            charge(budget, header.variables.len())?;
+            for &variable in &header.variables {
+                preparation.value.retain(variable, budget)?;
+            }
+            return Ok(false);
+        }
+        let header = self.read_header(id, budget)?;
+        // Original header storage/index plus one scalar requested-root slot.
+        charge(
+            budget,
+            header.len().checked_add(2).ok_or(Failure::Resource)?,
+        )?;
+        self.headers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        charge(budget, header.len())?;
+        for &variable in &header {
+            preparation.value.retain(variable, budget)?;
+        }
+        // Refused output merges publish no completed header.
+        self.headers.insert(
+            id,
+            NodeMetadataHeader {
+                variables: header,
+                requested: None,
+            },
+        );
+        Ok(false)
+    }
+
+    #[cfg(test)]
+    fn retain_into(
+        &mut self,
+        value: &mut MetadataVariables,
+        root: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // The test witness preserves incoming state. It publishes no root facts
+        // from a caller-dependent derivation; prepared child S+B remain usable.
+        let mut preparation = PreparingRoot {
+            root,
+            value: std::mem::take(value),
+            bound: Vec::new(),
+            qualification: RootQualification::OriginalRecipe,
+        };
+        let result = self.read(&mut preparation, budget);
+        *value = preparation.value;
+        result
+    }
+
+    fn read_header(
+        &self,
+        id: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<TypeVariableId>, Failure> {
+        let node = self.nodes.get(id).ok_or(Failure::Invalid)?;
+        let mut header = MetadataVariables::default();
+        retain_type_variables(&mut header, &node.ty, budget)?;
+        retain_row_variables(&mut header, F::effect_row(&node.effects), budget)?;
+        match (self.operation)(&node.kind) {
+            Some(EffectOperation::ProviderScope(scope)) => {
+                for argument in scope
+                    .descriptor
+                    .arguments()
+                    .iter()
+                    .chain(scope.handler.effect().arguments())
+                {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+                retain_type_variables(&mut header, scope.handler_output.value(), budget)?;
+                retain_row_variables(&mut header, scope.handler_output.effects(), budget)?;
+            }
+            Some(EffectOperation::Handler(handler)) => {
+                for argument in handler.effect().arguments() {
+                    retain_metadata_variables(&mut header, Metadata::Argument(argument), budget)?;
+                }
+            }
+            _ => {}
+        }
+        if let Some(PureExprKind::Computation(PureComputation::TypeApplication(application))) =
+            F::pure(&node.kind)
+        {
+            for argument in application.arguments() {
+                retain_type_variables(&mut header, argument, budget)?;
+            }
+            for row in application.row_arguments() {
+                retain_row_variables(&mut header, row, budget)?;
+            }
+        }
+        Ok(header.variables)
+    }
+}
+
 // Created and discarded within one Graph::build_in_domain over its fixed
 // borrowed original nodes, operation family and operation projection. Keys are
 // original node coordinates in that slice, never names, spans or copied shapes.
+#[cfg(test)]
 #[derive(Default)]
 struct NodeMetadataHeaders {
     variables: HashMap<usize, Vec<TypeVariableId>>,
 }
 
+#[cfg(test)]
 impl NodeMetadataHeaders {
     fn retain<F: CoreOperationFamily>(
         &mut self,
@@ -1294,6 +1793,7 @@ impl NodeMetadataHeaders {
     }
 }
 
+#[cfg(test)]
 fn retain_function_metadata<F: CoreOperationFamily>(
     value: &mut MetadataVariables,
     nodes: &[StoredNode<F>],
@@ -1455,7 +1955,7 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     let mut graph = SummaryGraph {
         effects: F::ALLOWS_EFFECTFUL_TYPES,
         data: None,
-        callables: Vec::new(),
+        callables: CallableSlots::new(budget)?,
         code: Vec::new(),
         types: TypeArguments(Vec::new()),
     };
@@ -1474,15 +1974,10 @@ fn compile_with_boundary<F: CoreOperationFamily>(
     graph.code[0] = Control::Return;
     graph
         .callables
+        .positions
         .try_reserve(nodes.len() + imported.callables.len())
         .map_err(|_| Failure::Resource)?;
-    for _ in nodes {
-        graph.callables.push(Callable {
-            body: 0,
-            ty: Type::Unit,
-            result: Value::default(),
-        });
-    }
+    graph.callables.positions.resize_with(nodes.len(), || None);
     for (import, target_offset, code_offset, type_offset) in &imported.graphs {
         graph
             .code
@@ -1504,14 +1999,21 @@ fn compile_with_boundary<F: CoreOperationFamily>(
                 .0
                 .push(clone_type_with_budget(ty, budget).map_err(|_| Failure::Resource)?);
         }
-        for callable in &import.callables {
-            let mut result = callable.result.copy(budget)?;
-            result.relocate(*target_offset, budget)?;
-            graph.callables.push(Callable {
-                body: callable.body + code_offset,
-                ty: clone_type_with_budget(&callable.ty, budget).map_err(|_| Failure::Resource)?,
-                result,
-            });
+        for callable in &import.callables.positions {
+            charge(budget, 1)?; // Preserve every dense position and classify presence.
+            let copied = if let Some(callable) = callable {
+                let mut result = callable.result.copy(budget)?;
+                result.relocate(*target_offset, budget)?;
+                Some(Callable {
+                    body: callable.body + code_offset,
+                    ty: clone_type_with_budget(&callable.ty, budget)
+                        .map_err(|_| Failure::Resource)?,
+                    result,
+                })
+            } else {
+                None
+            };
+            graph.callables.positions.push(copied);
         }
     }
     let mut owners = HashMap::new();
@@ -1543,20 +2045,20 @@ fn compile_with_boundary<F: CoreOperationFamily>(
         let source = node.origin.as_ref().ok_or(Failure::Invalid)?.primary_span();
         let code = match F::pure(&node.kind) {
             Some(PureExprKind::Value(PureValue::Intrinsic(_))) => {
-                graph.callables[id] = Callable {
+                graph.callables.positions[id] = Some(Callable {
                     body: 0,
                     ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
                     result: Value::default(),
-                };
+                });
                 Control::Return
             }
             Some(PureExprKind::Value(PureValue::Function(function))) => {
                 let result = values[index(function.body())].copy(budget)?;
-                graph.callables[id] = Callable {
+                graph.callables.positions[id] = Some(Callable {
                     body: index(function.body()) + 1,
                     ty: clone_type_with_budget(&node.ty, budget).map_err(|_| Failure::Resource)?,
                     result,
-                };
+                });
                 roots.try_reserve(1).map_err(|_| Failure::Resource)?;
                 roots.push(index(function.body()) + 1);
                 Control::Return
@@ -3222,6 +3724,7 @@ pub(in crate::core) fn reconstruct_actual_provider_captures(
     actual
         .graph
         .callables
+        .positions
         .try_reserve(source.callables.len())
         .map_err(|_| Failure::Resource)?;
     actual
@@ -3277,17 +3780,23 @@ pub(in crate::core) fn reconstruct_actual_provider_captures(
     for ty in &source.types.0 {
         actual.graph.types.0.push(instantiate(ty, budget)?);
     }
-    for callable in &source.callables {
-        let mut result = callable.result.copy(budget)?;
-        result.relocate(target_offset, budget)?;
-        actual.graph.callables.push(Callable {
-            body: callable
-                .body
-                .checked_add(code_offset)
-                .ok_or(Failure::Resource)?,
-            ty: instantiate(&callable.ty, budget)?,
-            result,
-        });
+    for callable in &source.callables.positions {
+        charge(budget, 1)?; // Presence, not an instantiated Unit placeholder.
+        let copied = if let Some(callable) = callable {
+            let mut result = callable.result.copy(budget)?;
+            result.relocate(target_offset, budget)?;
+            Some(Callable {
+                body: callable
+                    .body
+                    .checked_add(code_offset)
+                    .ok_or(Failure::Resource)?,
+                ty: instantiate(&callable.ty, budget)?,
+                result,
+            })
+        } else {
+            None
+        };
+        actual.graph.callables.positions.push(copied);
     }
     let mut clauses = Vec::new();
     charge(budget, original.ports.clauses.len())?;
@@ -3959,7 +4468,8 @@ fn solve_capture_values<F: CoreOperationFamily>(
                         value.unknown = callee.unknown;
                         for target in &callee.targets {
                             if *target >= nodes.len() {
-                                let (callable, offset) = imported.get(*target, nodes.len())?;
+                                let (callable, offset) =
+                                    imported.get(*target, nodes.len(), budget)?;
                                 let mut result = callable.result.copy(budget)?;
                                 result.relocate(offset, budget)?;
                                 result = result.instantiate(
@@ -4306,6 +4816,538 @@ mod tests {
         match kind {
             super::super::EffectExprKind::Operation(operation) => Some(operation),
             _ => None,
+        }
+    }
+
+    fn metadata_recipe_nodes(
+        headers: &[Vec<u32>],
+        children: &[Vec<u32>],
+    ) -> Vec<StoredNode<super::super::effect::EffectOperationFamily>> {
+        use super::super::{data::TupleNode, dialect::ArenaId, effect::EffectExprKind};
+        headers
+            .iter()
+            .zip(children)
+            .map(|(header, children)| {
+                let mut node = metadata_header_nodes().pop().unwrap();
+                node.ty = match header.as_slice() {
+                    [] => Type::Unit,
+                    [variable] => Type::Variable(TypeVariableId::generated(*variable)),
+                    variables => Type::Tuple(
+                        variables
+                            .iter()
+                            .map(|variable| Type::Variable(TypeVariableId::generated(*variable)))
+                            .collect(),
+                    ),
+                };
+                node.effects = EffectRow::empty();
+                node.kind = EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::Tuple(TupleNode::new(
+                        children
+                            .iter()
+                            .map(|child| NodeId::new(ArenaId::new(0), *child))
+                            .collect(),
+                    )),
+                ));
+                node
+            })
+            .collect()
+    }
+
+    fn metadata_seed(variables: &[u32]) -> MetadataVariables {
+        let mut seed = MetadataVariables::default();
+        for &variable in variables {
+            seed.retain(
+                TypeVariableId::generated(variable),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        }
+        seed
+    }
+
+    fn metadata_reference(
+        nodes: &[StoredNode<super::super::effect::EffectOperationFamily>],
+        root: usize,
+        seed: &[u32],
+    ) -> MetadataVariables {
+        let mut value = metadata_seed(seed);
+        retain_function_metadata(
+            &mut value,
+            nodes,
+            root,
+            metadata_header_operation,
+            &mut NodeMetadataHeaders::default(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        value
+    }
+
+    fn requested_metadata_compact(
+        owner: &FunctionMetadataPreparation<'_, super::super::effect::EffectOperationFamily>,
+        root: usize,
+    ) -> bool {
+        let requested = owner
+            .headers
+            .get(&root)
+            .and_then(|header| header.requested)
+            .unwrap();
+        matches!(
+            owner.completed[requested.get() - 1],
+            CompletedRoot::Compact(_)
+        )
+    }
+
+    fn requested_metadata_matches(
+        owner: &mut FunctionMetadataPreparation<'_, super::super::effect::EffectOperationFamily>,
+        root: usize,
+        seed: &[u32],
+    ) {
+        let expected = metadata_reference(owner.nodes, root, seed);
+        let mut actual = metadata_seed(seed);
+        owner
+            .retain_into(&mut actual, root, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert_eq!(actual.variables, expected.variables);
+        assert_eq!(actual.identities, expected.identities);
+    }
+
+    #[test]
+    fn requested_metadata_empty_completed_bindings_preserve_large_metadata_and_seeded_membership() {
+        use super::super::{
+            dialect::ArenaId, effect::EffectExprKind, type_ops::TypeAbstractionNode,
+        };
+        use crate::types::Kind;
+        let mut nodes =
+            metadata_recipe_nodes(&[(1200..1264).collect(), vec![]], &[vec![], vec![0]]);
+        let Type::Tuple(elements) = &mut nodes[0].ty else {
+            unreachable!()
+        };
+        let mut expanded = std::mem::take(elements).into_vec();
+        expanded.extend([Type::Int, Type::Bool, Type::Unit, Type::String]);
+        *elements = expanded.into_boxed_slice();
+        let seed = [1500, 1200, 1201];
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        for _ in 0..2 {
+            requested_metadata_matches(&mut owner, 1, &seed);
+            let actual = owner.collect(1, &mut TypeWorkBudget::unbounded()).unwrap();
+            let expected = metadata_reference(&nodes, 1, &[]);
+            assert_eq!(actual.variables, expected.variables);
+            assert_eq!(actual.identities, expected.identities);
+            assert_eq!(actual.variables.len(), 64);
+        }
+        assert!(!requested_metadata_compact(&owner, 1));
+        drop(owner);
+        nodes[1].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                vec![(TypeVariableId::generated(1200), Kind::Type)],
+                NodeId::new(ArenaId::new(0), 0),
+            )),
+        ));
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        requested_metadata_matches(&mut owner, 1, &seed);
+        let mut actual = metadata_seed(&seed);
+        owner
+            .retain_into(&mut actual, 1, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert!(!actual.identities.contains(&TypeVariableId::generated(1200)));
+        assert!(actual.identities.contains(&TypeVariableId::generated(1500)));
+        assert!(actual.identities.contains(&TypeVariableId::generated(1201)));
+    }
+
+    #[test]
+    fn requested_metadata_distinct_roots_reuse_shared_descending_dag() {
+        let nodes = metadata_recipe_nodes(
+            &[vec![940], vec![941], vec![942], vec![943], vec![944]],
+            &[vec![], vec![0], vec![0], vec![1, 2], vec![3, 1]],
+        );
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        for root in [1, 2, 3, 4, 1] {
+            let actual = owner
+                .collect(root, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+            let expected = metadata_reference(&nodes, root, &[]);
+            assert_eq!(actual.variables, expected.variables);
+            assert_eq!(actual.identities, expected.identities);
+            assert!(requested_metadata_compact(&owner, root));
+            requested_metadata_matches(&mut owner, root, &[946, 940]);
+        }
+        assert!(
+            owner.headers[&0].requested.is_none(),
+            "visited leaves are not requested roots"
+        );
+        let mut fresh = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        fresh.collect(4, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(
+            fresh.completed.len(),
+            1,
+            "a fresh owner inherits no requested coordinates"
+        );
+    }
+
+    #[test]
+    fn requested_metadata_generic_function_body_order_is_a_structural_beneficiary() {
+        use super::super::{
+            TypedBinder, dialect::ArenaId, effect::EffectExprKind, function::FunctionNode,
+            type_ops::TypeAbstractionNode,
+        };
+        use crate::types::Kind;
+        let mut children = vec![vec![]];
+        for id in 1..24 {
+            children.push(vec![id - 1]);
+        }
+        children.extend([vec![23], vec![24]]);
+        let mut nodes = metadata_recipe_nodes(&vec![vec![]; 26], &children);
+        let arena = ArenaId::new(0);
+        nodes[24].kind =
+            EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(FunctionNode::new(
+                TypedBinder::new(
+                    arena,
+                    BinderId::generated(1500),
+                    Type::Unit,
+                    nodes[24].origin.clone().unwrap(),
+                ),
+                NodeId::new(arena, 23),
+            ))));
+        nodes[25].kind = EffectExprKind::Pure(PureExprKind::Computation(
+            PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                vec![(TypeVariableId::generated(1501), Kind::Type)],
+                NodeId::new(arena, 24),
+            )),
+        ));
+        // ValueGraph visits the Function first and requests M, then visits its
+        // enclosing TypeAbstraction and requests F. Those roots are distinct.
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        owner.collect(23, &mut TypeWorkBudget::unbounded()).unwrap();
+        let mut reused_budget = TypeWorkBudget::unbounded();
+        let reused = owner.collect(24, &mut reused_budget).unwrap();
+        let mut cold_owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        let mut cold_budget = TypeWorkBudget::unbounded();
+        let cold = cold_owner.collect(24, &mut cold_budget).unwrap();
+        assert_eq!(reused.variables, cold.variables);
+        assert_eq!(reused.identities, cold.identities);
+        assert!(reused_budget.used() < cold_budget.used());
+        assert_eq!(owner.completed.len(), 2);
+    }
+
+    #[test]
+    fn requested_metadata_cached_complete_bindings_filter_prefilled_state() {
+        let nodes = metadata_header_nodes();
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        for root in [0, 2, 3, 3] {
+            let actual = owner
+                .collect(root, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+            assert_eq!(
+                actual.variables,
+                metadata_reference(&nodes, root, &[]).variables
+            );
+            requested_metadata_matches(&mut owner, root, &[900, 901, 911, 947]);
+        }
+        assert!(requested_metadata_compact(&owner, 3));
+        let mut value = metadata_seed(&[900, 901, 911, 947]);
+        owner
+            .retain_into(&mut value, 3, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert!(!value.identities.contains(&TypeVariableId::generated(900)));
+        assert!(!value.identities.contains(&TypeVariableId::generated(901)));
+        assert!(
+            value.identities.contains(&TypeVariableId::generated(911)),
+            "Forall shielding remains header-local"
+        );
+    }
+
+    #[test]
+    fn requested_metadata_forward_and_cyclic_recipes_keep_independent_order() {
+        // R children [B,A]; independent R sees [x,z,y], A sees [x,y,z].
+        let nodes = metadata_recipe_nodes(
+            &[vec![], vec![951], vec![950], vec![952]],
+            &[vec![1, 2], vec![], vec![3, 0], vec![]],
+        );
+        for roots in [[3, 1, 0, 2, 0], [2, 3, 1, 0, 2]] {
+            let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+            for root in roots {
+                let actual = owner
+                    .collect(root, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(
+                    actual.variables,
+                    metadata_reference(&nodes, root, &[]).variables
+                );
+                requested_metadata_matches(&mut owner, root, &[952, 955]);
+            }
+            assert!(!requested_metadata_compact(&owner, 0));
+            assert!(!requested_metadata_compact(&owner, 2));
+        }
+        let forward = metadata_recipe_nodes(&[vec![956], vec![957]], &[vec![1], vec![]]);
+        let mut owner = FunctionMetadataPreparation::new(&forward, metadata_header_operation);
+        owner.collect(0, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(!requested_metadata_compact(&owner, 0));
+        requested_metadata_matches(&mut owner, 0, &[957]);
+        // The disqualifying edge targets the already-seen root, so proving
+        // only newly visited edges would incorrectly publish Compact.
+        let backedge = metadata_recipe_nodes(
+            &[vec![958], vec![959], vec![]],
+            &[vec![], vec![2], vec![0, 1]],
+        );
+        let mut owner = FunctionMetadataPreparation::new(&backedge, metadata_header_operation);
+        owner.collect(2, &mut TypeWorkBudget::unbounded()).unwrap();
+        assert!(!requested_metadata_compact(&owner, 2));
+        requested_metadata_matches(&mut owner, 2, &[958]);
+    }
+
+    #[test]
+    fn requested_metadata_capacity_bounds_complete_surviving_and_bound_facts() {
+        use super::super::{
+            dialect::ArenaId, effect::EffectExprKind, type_ops::TypeAbstractionNode,
+        };
+        use crate::types::Kind;
+        for width in [15, 16, 17, 33] {
+            let mut nodes =
+                metadata_recipe_nodes(&vec![vec![]; width + 1], &vec![vec![]; width + 1]);
+            for (id, node) in nodes.iter_mut().enumerate().skip(1) {
+                node.kind = EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                        vec![(TypeVariableId::generated(1100 + id as u32), Kind::Type)],
+                        NodeId::new(ArenaId::new(0), id as u32 - 1),
+                    )),
+                ));
+            }
+            let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+            owner
+                .collect(width, &mut TypeWorkBudget::unbounded())
+                .unwrap();
+            assert_eq!(requested_metadata_compact(&owner, width), width <= 16);
+            requested_metadata_matches(&mut owner, width, &[1101, 1133, 1200]);
+        }
+        for surviving in [15, 16, 17] {
+            let mut nodes = metadata_recipe_nodes(
+                &[vec![], (1250..1250 + surviving).collect()],
+                &[vec![], vec![0]],
+            );
+            nodes[1].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                PureComputation::TypeAbstraction(TypeAbstractionNode::new(
+                    vec![(TypeVariableId::generated(1249), Kind::Type)],
+                    NodeId::new(ArenaId::new(0), 0),
+                )),
+            ));
+            let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+            for _ in 0..2 {
+                owner.collect(1, &mut TypeWorkBudget::unbounded()).unwrap();
+                requested_metadata_matches(&mut owner, 1, &[1249]);
+            }
+            assert_eq!(requested_metadata_compact(&owner, 1), surviving == 15);
+            for completed in &owner.completed {
+                if let CompletedRoot::Compact(facts) = completed {
+                    assert!(facts.surviving.len() + facts.bound.len() <= REQUESTED_METADATA_FACTS);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn requested_metadata_every_work_cut_publishes_only_complete_roots_and_retries() {
+        let fixtures = [
+            metadata_recipe_nodes(
+                &[vec![980], vec![981], vec![], vec![982]],
+                &[vec![], vec![0], vec![0, 1], vec![2]],
+            ),
+            metadata_recipe_nodes(
+                &[vec![], vec![980], vec![981], vec![982]],
+                &[vec![1, 2], vec![], vec![3, 0], vec![]],
+            ),
+            metadata_recipe_nodes(&[(990..1007).collect()], &[vec![]]),
+            metadata_header_nodes(),
+        ];
+        for (fixture, nodes) in fixtures.iter().enumerate() {
+            let root = if fixture == 0 || fixture == 3 { 3 } else { 0 };
+            let expected = metadata_reference(nodes, root, &[]);
+            let mut measured = TypeWorkBudget::unbounded();
+            let mut owner = FunctionMetadataPreparation::new(nodes, metadata_header_operation);
+            owner.collect(root, &mut measured).unwrap();
+            let cold = measured.used();
+            for prefix in [0, 7] {
+                for available in 0..cold {
+                    let mut owner =
+                        FunctionMetadataPreparation::new(nodes, metadata_header_operation);
+                    let mut budget = TypeWorkBudget::with_limit(prefix + available);
+                    budget.charge(prefix).unwrap();
+                    assert!(matches!(
+                        owner.collect(root, &mut budget),
+                        Err(Failure::Resource)
+                    ));
+                    assert!(owner.completed.is_empty());
+                    assert!(
+                        owner
+                            .headers
+                            .values()
+                            .all(|header| header.requested.is_none())
+                    );
+                    let retry = owner
+                        .collect(root, &mut TypeWorkBudget::unbounded())
+                        .unwrap();
+                    assert_eq!(retry.variables, expected.variables);
+                    assert_eq!(retry.identities, expected.identities);
+                }
+                let mut budget = TypeWorkBudget::with_limit(prefix + cold);
+                budget.charge(prefix).unwrap();
+                let mut exact_owner =
+                    FunctionMetadataPreparation::new(nodes, metadata_header_operation);
+                exact_owner.collect(root, &mut budget).unwrap();
+                assert_eq!(budget.used(), prefix + cold);
+            }
+            let mut warm = TypeWorkBudget::unbounded();
+            owner.collect(root, &mut warm).unwrap();
+            for available in 0..warm.used() {
+                assert!(matches!(
+                    owner.collect(root, &mut TypeWorkBudget::with_limit(available)),
+                    Err(Failure::Resource)
+                ));
+                assert_eq!(owner.completed.len(), 1);
+                let retry = owner
+                    .collect(root, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                assert_eq!(retry.variables, expected.variables);
+                assert_eq!(retry.identities, expected.identities);
+            }
+        }
+    }
+
+    #[test]
+    fn requested_metadata_invalid_coordinates_do_not_publish_and_valid_retry_is_independent() {
+        let nodes = metadata_recipe_nodes(&[vec![1010], vec![1011]], &[vec![999], vec![]]);
+        let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+        for root in [999, 0] {
+            assert!(matches!(
+                owner.collect(root, &mut TypeWorkBudget::unbounded()),
+                Err(Failure::Invalid)
+            ));
+            assert!(
+                !owner
+                    .headers
+                    .get(&root)
+                    .is_some_and(|header| header.requested.is_some())
+            );
+            let value = owner.collect(1, &mut TypeWorkBudget::unbounded()).unwrap();
+            assert_eq!(value.variables, vec![TypeVariableId::generated(1011)]);
+        }
+    }
+
+    #[test]
+    fn requested_metadata_deep_preparation_and_drop_use_explicit_storage() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| {
+                const DEPTH: usize = 4096;
+                let nodes = metadata_recipe_nodes(
+                    &vec![vec![]; DEPTH],
+                    &(0..DEPTH)
+                        .map(|id| if id == 0 { vec![] } else { vec![id as u32 - 1] })
+                        .collect::<Vec<_>>(),
+                );
+                let mut owner = FunctionMetadataPreparation::new(&nodes, metadata_header_operation);
+                let value = owner
+                    .collect(DEPTH - 1, &mut TypeWorkBudget::with_limit(327_680))
+                    .unwrap();
+                assert!(value.variables.is_empty());
+                assert_eq!(owner.headers.len(), DEPTH);
+                assert_eq!(owner.completed.len(), 1);
+                drop(owner);
+                drop(nodes);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn metadata_scalar_admission_keeps_prior_facts_and_complete_row_shielding() {
+        use crate::types::{
+            EffectId, EffectRowVariable, Kind, KindedArgument, ResourceDefinitionId,
+        };
+        let variable = |id| TypeVariableId::generated(id);
+        let leaf = Type::Variable(variable(900));
+        let tagged_leaf = KindedArgument::TypeArg(leaf.clone());
+        let empty = EffectRow::empty();
+        let tagged_empty = KindedArgument::RowArg(empty.clone());
+        let rigid = EffectRow::open(EffectRowVariable::rigid(variable(911)), Box::new([]));
+        let inference = EffectRow::open(
+            EffectRowVariable::inference(crate::types::InferenceVariableId::new(0)),
+            Box::new([]),
+        );
+        let module = crate::module::ModuleId::new(0);
+        let complete = EffectRow::with_tail(
+            Box::new([EffectInstance::new(
+                EffectId::new(module, 0),
+                Box::new([Type::Variable(variable(905))]),
+            )]),
+            EffectRowVariable::rigid(variable(911)),
+            Box::new([EffectInstance::new(
+                EffectId::new(module, 1),
+                Box::new([Type::Variable(variable(906))]),
+            )]),
+        );
+        let scoped = Type::Forall(
+            Box::new([(variable(900), Kind::Type)]),
+            Box::new(Type::Tuple(Box::new([
+                Type::Variable(variable(900)),
+                Type::Variable(variable(903)),
+            ]))),
+        );
+        let owned = Type::ResourceApply(
+            ResourceDefinitionId::new(module, 0),
+            Box::new([
+                KindedArgument::TypeArg(leaf.clone()),
+                KindedArgument::RowArg(rigid.clone()),
+            ]),
+        );
+        for (root, additional) in [
+            (Metadata::Type(&Type::String), vec![]),
+            (Metadata::Type(&leaf), vec![900]),
+            (Metadata::Argument(&tagged_leaf), vec![900]),
+            (Metadata::Row(&empty), vec![]),
+            (Metadata::Argument(&tagged_empty), vec![]),
+            (Metadata::Row(&rigid), vec![911]),
+            (Metadata::Row(&inference), vec![]),
+            (Metadata::Row(&complete), vec![911, 906, 905]),
+            (Metadata::Type(&scoped), vec![903]),
+            (Metadata::Type(&owned), vec![911, 900]),
+        ] {
+            let seed = || {
+                let mut value = MetadataVariables::default();
+                value
+                    .retain(variable(902), &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                value
+            };
+            let mut measured = TypeWorkBudget::unbounded();
+            let mut output = seed();
+            retain_metadata_variables(&mut output, root, &mut measured).unwrap();
+            let expected = std::iter::once(variable(902))
+                .chain(additional.into_iter().map(variable))
+                .collect::<Vec<_>>();
+            assert_eq!(output.variables, expected);
+            for prefix in [0, 9] {
+                for available in 0..measured.used() {
+                    let mut refused = seed();
+                    let mut work = TypeWorkBudget::with_limit(prefix + available);
+                    work.charge(prefix).unwrap();
+                    assert!(matches!(
+                        retain_metadata_variables(&mut refused, root, &mut work),
+                        Err(Failure::Resource)
+                    ));
+                    assert!(refused.identities.contains(&variable(902)));
+                    let mut retry = seed();
+                    let mut exact = TypeWorkBudget::with_limit(prefix + measured.used());
+                    exact.charge(prefix).unwrap();
+                    retain_metadata_variables(&mut retry, root, &mut exact).unwrap();
+                    assert_eq!(exact.used(), prefix + measured.used());
+                    assert_eq!(retry.variables, expected);
+                }
+            }
+            // A second read preserves the original first-discovery order.
+            retain_metadata_variables(&mut output, root, &mut TypeWorkBudget::unbounded()).unwrap();
+            assert_eq!(output.variables, expected);
         }
     }
 
@@ -5082,7 +6124,7 @@ mod tests {
             let graph = SummaryGraph {
                 effects: true,
                 data: None,
-                callables: vec![],
+                callables: CallableSlots::default(),
                 types: TypeArguments(vec![]),
                 code: (0..width).map(|_| Control::Return).collect(),
             };
@@ -5183,7 +6225,7 @@ mod tests {
                 effects: true,
                 data: None,
                 types: TypeArguments(Vec::new()),
-                callables: Vec::new(),
+                callables: CallableSlots::default(),
                 code: Vec::new(),
             })),
             value: Value {
@@ -5221,7 +6263,7 @@ mod tests {
             effects: true,
             data: None,
             types: TypeArguments(Vec::new()),
-            callables: Vec::new(),
+            callables: CallableSlots::default(),
             code: Vec::new(),
         }));
         assert!(
@@ -5233,6 +6275,46 @@ mod tests {
             !matches(&imported),
             "the authenticated summary cannot disappear"
         );
+        let sparse = CaptureValueSummary {
+            graph: Some(Arc::new(SummaryGraph {
+                effects: false,
+                data: None,
+                code: vec![Control::Return],
+                types: TypeArguments(Vec::new()),
+                callables: CallableSlots {
+                    positions: vec![
+                        None,
+                        Some(Callable {
+                            body: 0,
+                            ty: Type::Unit,
+                            result: Value::default(),
+                        }),
+                        None,
+                    ],
+                    absent_unit: Type::Unit,
+                },
+            })),
+            value: Value {
+                targets: vec![1],
+                ..Value::default()
+            },
+        };
+        let first = BinderId::new(1);
+        let second = BinderId::new(2);
+        let mut work = TypeWorkBudget::unbounded();
+        let table =
+            ImportedCallables::new(&[(first, &sparse), (second, &sparse)], 4, &mut work).unwrap();
+        assert_eq!(table.callables.len(), 3);
+        assert_eq!(table.graphs.len(), 1);
+        assert_eq!(table.values[&first].targets, vec![5]);
+        assert_eq!(table.values[&second].targets, vec![5]);
+        assert_eq!(table.get(5, 4, &mut work).unwrap().0.ty, Type::Unit);
+        for target in [4, 6, 7] {
+            assert!(matches!(
+                table.get(target, 4, &mut work),
+                Err(Failure::Invalid)
+            ));
+        }
     }
 
     #[test]
@@ -5398,7 +6480,7 @@ mod tests {
             graph: Some(Arc::new(SummaryGraph {
                 effects: false,
                 data: None,
-                callables: Vec::new(),
+                callables: CallableSlots::default(),
                 types: TypeArguments(vec![Type::Int]),
                 code: (0..16).map(|_| Control::Return).collect(),
             })),
@@ -5455,7 +6537,7 @@ mod tests {
             graph: Some(Arc::new(SummaryGraph {
                 effects: true,
                 data: None,
-                callables: Vec::new(),
+                callables: CallableSlots::default(),
                 types: TypeArguments(Vec::new()),
                 code,
             })),
@@ -5573,11 +6655,11 @@ mod tests {
                     &mut TypeWorkBudget::unbounded(),
                 )
                 .unwrap();
-                // Compilation charges the node carrier and each of these two
-                // nodes before cloning the function type. This boundary used to
-                // exhaust in the following Value copy, before Callable existed.
+                // Compilation charges the primitive table witness, node carrier
+                // and each node before cloning the function type. Preserve the
+                // same refusal in the following Value copy after that clone.
                 let mut partial = TypeWorkBudget::with_limit(
-                    builder.nodes.len() + 1 + builder.nodes.len() + clone_work.used(),
+                    1 + builder.nodes.len() + 1 + builder.nodes.len() + clone_work.used(),
                 );
                 assert!(matches!(
                     compile(
@@ -5687,7 +6769,8 @@ mod tests {
                             body: 0,
                             ty,
                             result: Value::default(),
-                        }],
+                        }]
+                        .into(),
                         code: vec![Control::Return],
                     })),
                     value: Value {
@@ -5824,7 +6907,8 @@ mod provider_capture_tests {
                         body: 0,
                         ty: actual.clone(),
                         result: Value::default(),
-                    }],
+                    }]
+                    .into(),
                     code: vec![Control::Return],
                     types: TypeArguments(Vec::new()),
                     data: Some(Arc::new(value::provider_typed_capture_graph_for_test(
@@ -5857,7 +6941,8 @@ mod provider_capture_tests {
                     body: 0,
                     ty: actual.clone(),
                     result: Value::default(),
-                }],
+                }]
+                .into(),
                 code: vec![Control::Unavailable],
                 types: TypeArguments(Vec::new()),
                 data: Some(Arc::new(value::provider_typed_capture_graph_for_test(
@@ -5903,7 +6988,8 @@ mod provider_capture_tests {
                     body: 0,
                     ty: Type::Function(Box::new(Type::Unit), Box::new(Type::Unit)),
                     result: Value::default(),
-                }],
+                }]
+                .into(),
                 code: vec![Control::Return],
                 types: TypeArguments(Vec::new()),
                 data: Some(Arc::new(value::provider_capture_graph_for_test(

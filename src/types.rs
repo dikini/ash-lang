@@ -2877,6 +2877,9 @@ enum TypeHashTask<'a> {
     Instances(std::slice::Iter<'a, EffectInstance>),
     Instance(&'a EffectInstance),
     Sequence(std::slice::Iter<'a, Type>),
+    Parameters(std::slice::Iter<'a, (TypeVariableId, Kind)>),
+    Parameter(&'a (TypeVariableId, Kind)),
+    Kind(&'a Kind),
 }
 
 fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
@@ -2884,27 +2887,64 @@ fn hash_type<H: Hasher>(ty: &Type, state: &mut H) {
 }
 
 fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
-    let mut work = vec![root];
+    hash_type_or_effect_row_with_reservation(root, state, |_, _| Ok(()))
+        .expect("ordinary type hashing has no fallible admission");
+}
+
+fn hash_type_or_effect_row_with_reservation<'a, H: Hasher>(
+    root: TypeHashTask<'a>,
+    state: &mut H,
+    mut reserve: impl FnMut(&mut Vec<TypeHashTask<'a>>, &TypeHashTask<'a>) -> Result<(), ()>,
+) -> Result<(), ()> {
+    let mut work = Vec::new();
+    reserve(&mut work, &root)?;
+    work.push(root);
+    macro_rules! push {
+        ($task:expr) => {{
+            let task = $task;
+            reserve(&mut work, &task)?;
+            work.push(task);
+        }};
+    }
     while let Some(task) = work.pop() {
         match task {
+            TypeHashTask::Parameters(mut remaining) => {
+                if let Some(parameter) = remaining.next() {
+                    push!(TypeHashTask::Parameters(remaining));
+                    push!(TypeHashTask::Parameter(parameter));
+                }
+            }
+            TypeHashTask::Parameter((identity, kind)) => {
+                identity.hash(state);
+                push!(TypeHashTask::Kind(kind));
+            }
+            TypeHashTask::Kind(kind) => match kind {
+                Kind::Type => 0_u8.hash(state),
+                Kind::EffectRow => 1_u8.hash(state),
+                Kind::Arrow(domain, codomain) => {
+                    2_u8.hash(state);
+                    push!(TypeHashTask::Kind(codomain));
+                    push!(TypeHashTask::Kind(domain));
+                }
+            },
             TypeHashTask::Argument(KindedArgument::TypeArg(ty)) => {
                 0_u8.hash(state);
-                work.push(TypeHashTask::Visit(ty));
+                push!(TypeHashTask::Visit(ty));
             }
             TypeHashTask::Argument(KindedArgument::RowArg(row)) => {
                 1_u8.hash(state);
-                work.push(TypeHashTask::EffectRow(row));
+                push!(TypeHashTask::EffectRow(row));
             }
             TypeHashTask::Arguments(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(TypeHashTask::Arguments(remaining));
-                    work.push(TypeHashTask::Argument(next));
+                    push!(TypeHashTask::Arguments(remaining));
+                    push!(TypeHashTask::Argument(next));
                 }
             }
             TypeHashTask::Sequence(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(TypeHashTask::Sequence(remaining));
-                    work.push(TypeHashTask::Visit(next));
+                    push!(TypeHashTask::Sequence(remaining));
+                    push!(TypeHashTask::Visit(next));
                 }
             }
             TypeHashTask::EffectRow(row) => {
@@ -2916,21 +2956,21 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
                         1_u8.hash(state);
                         tail.variable.hash(state);
                         tail.lacks.len().hash(state);
-                        work.push(TypeHashTask::Instances(tail.lacks.iter()));
+                        push!(TypeHashTask::Instances(tail.lacks.iter()));
                     }
                 }
-                work.push(TypeHashTask::Instances(row.known.iter()));
+                push!(TypeHashTask::Instances(row.known.iter()));
             }
             TypeHashTask::Instances(mut remaining) => {
                 if let Some(next) = remaining.next() {
-                    work.push(TypeHashTask::Instances(remaining));
-                    work.push(TypeHashTask::Instance(next));
+                    push!(TypeHashTask::Instances(remaining));
+                    push!(TypeHashTask::Instance(next));
                 }
             }
             TypeHashTask::Instance(instance) => {
                 instance.effect.hash(state);
                 instance.arguments.len().hash(state);
-                work.push(TypeHashTask::Arguments(instance.arguments.iter()));
+                push!(TypeHashTask::Arguments(instance.arguments.iter()));
             }
             TypeHashTask::Visit(Type::Bytes) => 11_u8.hash(state),
             TypeHashTask::Visit(Type::String) => 12_u8.hash(state),
@@ -2940,7 +2980,7 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
             TypeHashTask::Visit(Type::Tuple(elements)) => {
                 3_u8.hash(state);
                 elements.len().hash(state);
-                work.push(TypeHashTask::Sequence(elements.iter()));
+                push!(TypeHashTask::Sequence(elements.iter()));
             }
             TypeHashTask::Visit(Type::Nominal(identity)) => {
                 4_u8.hash(state);
@@ -2958,43 +2998,62 @@ fn hash_type_or_effect_row<H: Hasher>(root: TypeHashTask<'_>, state: &mut H) {
                 10_u8.hash(state);
                 id.hash(state);
                 arguments.len().hash(state);
-                work.push(TypeHashTask::Arguments(arguments.iter()));
+                push!(TypeHashTask::Arguments(arguments.iter()));
             }
             TypeHashTask::Visit(Type::Application(function, argument)) => {
                 7_u8.hash(state);
-                work.push(TypeHashTask::Visit(argument));
-                work.push(TypeHashTask::Visit(function));
+                push!(TypeHashTask::Visit(argument));
+                push!(TypeHashTask::Visit(function));
             }
             TypeHashTask::Visit(Type::Forall(parameters, body)) => {
                 8_u8.hash(state);
-                parameters.hash(state);
-                work.push(TypeHashTask::Visit(body));
+                parameters.len().hash(state);
+                push!(TypeHashTask::Visit(body));
+                push!(TypeHashTask::Parameters(parameters.iter()));
             }
             TypeHashTask::Visit(Type::Function(domain, codomain)) => {
                 9_u8.hash(state);
-                EffectRow::empty().hash(state);
-                work.push(TypeHashTask::Visit(codomain));
-                work.push(TypeHashTask::Visit(domain));
+                10_u8.hash(state);
+                0_usize.hash(state);
+                0_u8.hash(state);
+                push!(TypeHashTask::Visit(codomain));
+                push!(TypeHashTask::Visit(domain));
             }
             TypeHashTask::Visit(Type::EffectfulFunction(domain, codomain)) => {
                 9_u8.hash(state);
-                work.push(TypeHashTask::Visit(&codomain.value));
-                work.push(TypeHashTask::Visit(domain));
-                work.push(TypeHashTask::EffectRow(&codomain.effects));
+                push!(TypeHashTask::Visit(&codomain.value));
+                push!(TypeHashTask::Visit(domain));
+                push!(TypeHashTask::EffectRow(&codomain.effects));
             }
         }
     }
+    Ok(())
 }
 
-#[cfg(test)]
 pub(crate) fn hash_type_with_budget<H: Hasher>(
     ty: &Type,
     state: &mut H,
     budget: &mut TypeWorkBudget,
 ) -> Result<(), ()> {
-    charge_type_cells(ty, budget)?;
-    hash_type(ty, state);
-    Ok(())
+    hash_type_or_effect_row_with_reservation(TypeHashTask::Visit(ty), state, |work, task| {
+        // The same complete cells as structural admission, paid before scratch retention.
+        // Iterator continuations reuse their admitted container and child cells.
+        let cells = match task {
+            TypeHashTask::Visit(Type::EffectfulFunction(_, _)) => 2,
+            TypeHashTask::Visit(_)
+            | TypeHashTask::Instance(_)
+            | TypeHashTask::Parameter(_)
+            | TypeHashTask::Kind(_) => 1,
+            TypeHashTask::EffectRow(row) => 1 + usize::from(row.tail.is_some()),
+            TypeHashTask::Argument(_)
+            | TypeHashTask::Arguments(_)
+            | TypeHashTask::Instances(_)
+            | TypeHashTask::Sequence(_)
+            | TypeHashTask::Parameters(_) => 0,
+        };
+        budget.charge(cells)?;
+        work.try_reserve(1).map_err(|_| ())
+    })
 }
 
 /// Charges the expanded result before applying one capture-free substitution.
@@ -5126,6 +5185,79 @@ mod tests {
             .expect("deep-disposal thread should start")
             .join()
             .expect("canonical application disposal should remain within 256 KiB");
+    }
+
+    #[test]
+    fn complete_budgeted_type_hash_preserves_rows_kinds_and_pure_function_equivalence() {
+        let module = ModuleId::new(0);
+        let variable = TypeVariableId::new(0);
+        let owner = ResourceDefinitionId::new(module, 0);
+        let effect = EffectId::new(module, 0);
+        let row = EffectRow::with_tail(
+            Box::new([EffectInstance::new_kinded(
+                effect,
+                Box::new([
+                    KindedArgument::RowArg(EffectRow::empty()),
+                    KindedArgument::TypeArg(Type::Bytes),
+                ]),
+            )]),
+            EffectRowVariable::rigid(variable),
+            Box::new([EffectInstance::new(EffectId::new(module, 1), Box::new([]))]),
+        );
+        let complete = Type::Forall(
+            Box::new([(
+                variable,
+                Kind::Arrow(Box::new(Kind::EffectRow), Box::new(Kind::Type)),
+            )]),
+            Box::new(Type::EffectfulFunction(
+                Box::new(Type::ResourceApply(
+                    owner,
+                    Box::new([
+                        KindedArgument::RowArg(row),
+                        KindedArgument::TypeArg(Type::String),
+                    ]),
+                )),
+                Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+            )),
+        );
+        let mut admission = TypeWorkBudget::unbounded();
+        charge_type_cells(&complete, &mut admission).unwrap();
+        let mut raw = DefaultHasher::new();
+        complete.hash(&mut raw);
+        for prefix in [0, 9] {
+            let mut exact = TypeWorkBudget::with_limit(prefix + admission.used());
+            exact.charge(prefix).unwrap();
+            let mut hashed = DefaultHasher::new();
+            hash_type_with_budget(&complete, &mut hashed, &mut exact).unwrap();
+            assert_eq!(exact.used(), prefix + admission.used());
+            assert_eq!(hashed.finish(), raw.finish());
+            let mut short = TypeWorkBudget::with_limit(prefix + admission.used() - 1);
+            short.charge(prefix).unwrap();
+            assert_eq!(
+                hash_type_with_budget(&complete, &mut DefaultHasher::new(), &mut short,),
+                Err(())
+            );
+        }
+        let pure = Type::function(Type::Unit, Type::Int);
+        let empty_effectful = Type::EffectfulFunction(
+            Box::new(Type::Unit),
+            Box::new(ComputationType::new(Type::Int, EffectRow::empty())),
+        );
+        assert!(
+            same_type_with_budget(&pure, &empty_effectful, &mut TypeWorkBudget::unbounded(),)
+                .unwrap()
+        );
+        let mut left = DefaultHasher::new();
+        let mut right = DefaultHasher::new();
+        hash_type_with_budget(&pure, &mut left, &mut TypeWorkBudget::unbounded()).unwrap();
+        hash_type_with_budget(
+            &empty_effectful,
+            &mut right,
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+        assert_eq!(left.finish(), right.finish());
+        discard_type_iteratively(complete);
     }
 
     #[test]

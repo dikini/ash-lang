@@ -3,10 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::{
-    Failure, MetadataVariables, NodeMetadataHeaders, charge, copy_slice, index,
-    retain_function_metadata,
-};
+use super::{Failure, FunctionMetadataPreparation, MetadataVariables, charge, copy_slice, index};
 use crate::{
     core::{
         PureComputation, PureExprKind, PureValue,
@@ -1261,7 +1258,7 @@ impl Graph {
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
-        headers: &mut NodeMetadataHeaders,
+        headers: &mut FunctionMetadataPreparation<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1287,15 +1284,7 @@ impl Graph {
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
                 }
-                let mut metadata = MetadataVariables::default();
-                retain_function_metadata(
-                    &mut metadata,
-                    nodes,
-                    index(function.body()),
-                    operation,
-                    headers,
-                    budget,
-                )?;
+                let metadata = headers.collect(index(function.body()), budget)?;
                 for variable in metadata.variables {
                     let slot = self.symbol(types, variable, source, budget)?;
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1367,7 +1356,6 @@ impl Graph {
                 nodes,
                 symbols,
                 types,
-                operation,
                 methods,
                 adapters,
                 headers,
@@ -1387,10 +1375,9 @@ impl Graph {
         nodes: &[StoredNode<F>],
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
-        operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
-        headers: &mut NodeMetadataHeaders,
+        headers: &mut FunctionMetadataPreparation<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1463,15 +1450,7 @@ impl Graph {
                     captures.try_reserve(1).map_err(|_| Failure::Resource)?;
                     captures.push(slot);
                 }
-                let mut metadata = MetadataVariables::default();
-                retain_function_metadata(
-                    &mut metadata,
-                    nodes,
-                    index(abstraction.body()),
-                    operation,
-                    headers,
-                    budget,
-                )?;
+                let metadata = headers.collect(index(abstraction.body()), budget)?;
                 for variable in metadata.variables {
                     let slot = self.symbol(types, variable, source, budget)?;
                     charge(budget, parameters.len())?;
@@ -1580,10 +1559,9 @@ impl Graph {
         nodes: &[StoredNode<F>],
         symbols: &mut HashMap<BinderId, usize>,
         types: &mut HashMap<crate::types::TypeVariableId, usize>,
-        operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
-        headers: &mut NodeMetadataHeaders,
+        headers: &mut FunctionMetadataPreparation<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<DataClause, Failure> {
         let input = self.push(Expr::Slot, source, budget)?;
@@ -1604,8 +1582,7 @@ impl Graph {
                 captures.push(slot);
             }
         }
-        let mut metadata = MetadataVariables::default();
-        retain_function_metadata(&mut metadata, nodes, body, operation, headers, budget)?;
+        let metadata = headers.collect(body, budget)?;
         for variable in metadata.variables {
             let slot = self.symbol(types, variable, source, budget)?;
             captures.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -1638,7 +1615,7 @@ impl Graph {
         operation: fn(&F::Kind) -> Option<&EffectOperation>,
         methods: &super::MethodUses<'_>,
         adapters: &[super::MethodAdapter],
-        headers: &mut NodeMetadataHeaders,
+        headers: &mut FunctionMetadataPreparation<'_, F>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
@@ -1691,7 +1668,6 @@ impl Graph {
                         nodes,
                         symbols,
                         types,
-                        operation,
                         methods,
                         adapters,
                         headers,
@@ -1859,7 +1835,7 @@ impl Graph {
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
         let methods = super::MethodUses::new(methods, budget)?;
-        let mut headers = NodeMetadataHeaders::default();
+        let mut headers = FunctionMetadataPreparation::new(nodes, operation);
         let mut graph = Self {
             expressions: Vec::new(),
             globals: Vec::new(),
@@ -2006,7 +1982,6 @@ impl Graph {
                     nodes,
                     &mut symbols,
                     &mut types,
-                    operation,
                     &methods,
                     adapters,
                     &mut headers,
@@ -2275,10 +2250,28 @@ struct Slot {
     readers: Vec<usize>,
     queued: bool,
     terminal: bool,
-    // Queue-owned completion of immutable Alias/Merge/Function setup only.
-    // This grants no frozen/cut authority and never suppresses direct evaluate.
-    immutable_setup_complete: bool,
+    // Fixed setup and Evidence input watches carry separate completed phases.
+    // Neither grants frozen/cut authority or a cached live answer.
+    preparation: SlotPreparation,
 }
+
+// ASH_INPUT169_BEGIN_PHASE
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SlotPreparation {
+    Pending,
+    // Existing queue-owned fixed setup plus successful current propagation.
+    EdgesInstalled,
+    // Every original Evidence input has its watch to this exact source slot.
+    EvidenceInputsInstalled,
+}
+
+#[cfg(test)]
+impl SlotPreparation {
+    fn is_edges_installed(self) -> bool {
+        self == Self::EdgesInstalled
+    }
+}
+// ASH_INPUT169_END_PHASE
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Transition {
@@ -2318,6 +2311,694 @@ struct CaptureVisit {
 struct CaptureTopology {
     visits: Vec<CaptureVisit>,
     bindings: Vec<usize>,
+    // The complete original dictionary projection, prepared for this exact
+    // Graph/function/Evidence pair. Transfer completion remains contextful.
+    dictionary: PreparedDictionaryRoutes,
+}
+
+// A matched Function installs structural capture coordinates, not live reads.
+// This temporary exclusive visit is consumed before Closure publication returns.
+struct FunctionCaptureInstallation<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+    expression: usize,
+    creation: usize,
+    body: usize,
+    captures: &'g [usize],
+}
+
+impl FunctionCaptureInstallation<'_, '_> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let Self {
+            analysis,
+            slot,
+            expression,
+            creation,
+            body,
+            captures,
+        } = self;
+        for capture in captures {
+            let source = analysis.install_slot(*capture, creation, budget)?;
+            if let Some(root) = analysis.roots.get(&body).copied() {
+                let target = analysis.install_slot(*capture, root, budget)?;
+                analysis.edge(target, source, budget)?;
+            }
+        }
+        analysis.atom(slot, Atom::Closure(expression, creation), budget)
+    }
+}
+
+// Private marker policies only distinguish structural coordinates from reads.
+struct ObservedCallInputs;
+struct OwnCallInputs;
+
+trait CallSlotPolicy {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure>;
+}
+
+impl CallSlotPolicy for ObservedCallInputs {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.slot(expression, context, budget)
+    }
+}
+
+impl CallSlotPolicy for OwnCallInputs {
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.install_slot(expression, context, budget)
+    }
+}
+
+// Produced only after the original live Call/Function match, arity validation,
+// exact full-stamp lookup and fallible completion reservation.
+struct CallTransferInstallation<'s, 'g, 'v> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+    expression: usize,
+    context: usize,
+    target: usize,
+    creation: usize,
+    parameters: &'g [usize],
+    captures: &'g [usize],
+    actual: &'v [usize],
+    body: usize,
+    transfer: (Option<usize>, usize, usize, usize),
+}
+
+impl CallTransferInstallation<'_, '_, '_> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        let invoked = self.analysis.context(
+            self.context,
+            Transition::Invoke(self.expression, self.target),
+            budget,
+        )?;
+        // Only this actual exact reader can omit structural shortcut watches.
+        charge(budget, 1)?;
+        if self.analysis.current == Some(self.slot) {
+            self.install_inputs(OwnCallInputs, invoked, budget)
+        } else {
+            self.install_inputs(ObservedCallInputs, invoked, budget)
+        }
+    }
+
+    fn install_inputs<P: CallSlotPolicy>(
+        self,
+        policy: P,
+        invoked: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Self {
+            analysis,
+            slot,
+            creation,
+            parameters,
+            captures,
+            actual,
+            body,
+            transfer,
+            ..
+        } = self;
+        for (&parameter, &argument) in parameters.iter().zip(actual) {
+            let parameter = policy.slot(analysis, parameter, invoked, budget)?;
+            analysis.edge(parameter, argument, budget)?;
+        }
+        for capture in captures {
+            let destination = policy.slot(analysis, *capture, invoked, budget)?;
+            let source = policy.slot(analysis, *capture, creation, budget)?;
+            analysis.edge(destination, source, budget)?;
+        }
+        // The body output remains observed and every live edge remains intact.
+        analysis.link(slot, body, invoked, budget)?;
+        analysis.callable_transfers.insert(transfer);
+        Ok(())
+    }
+}
+
+// Produced only by the paid exact own-reader guard of the actual Evidence visit.
+// The token remains transient under that visit's exclusive Analysis loan.
+#[derive(Clone, Copy)]
+struct OwnEvidenceReader;
+
+#[derive(Clone, Copy)]
+enum EvidenceReader {
+    Own(OwnEvidenceReader),
+    Other,
+}
+
+// Successful input installation consumes evaluate's actual Evidence match.
+// Its exact Analysis loan then stays with the succeeding dynamic phases and
+// returns after an atom is processed; no stored phase grants live answers.
+struct CheckedEvidenceVisit<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    reader: EvidenceReader,
+    slot: usize,
+    evidence: usize,
+    arguments_context: usize,
+    bindings: &'g [(
+        crate::interface::RequirementId,
+        crate::interface::MethodId,
+        usize,
+    )],
+}
+
+// ASH_INPUT169_BEGIN_INSTALL
+// Only evaluate's actual original Evidence match constructs this preparation.
+// Its borrowed bindings and exact slot/context remain with the consumed loan.
+struct EvidenceInputVisit<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+    evidence: usize,
+    arguments_context: usize,
+    value: usize,
+    bindings: &'g [(
+        crate::interface::RequirementId,
+        crate::interface::MethodId,
+        usize,
+    )],
+}
+
+struct InstalledEvidenceInputs<'s, 'g> {
+    visit: CheckedEvidenceVisit<'s, 'g>,
+    value: usize,
+}
+
+impl<'s, 'g> EvidenceInputVisit<'s, 'g> {
+    fn install_inputs(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<InstalledEvidenceInputs<'s, 'g>, Failure> {
+        let Self {
+            analysis,
+            slot,
+            evidence,
+            arguments_context: context,
+            value: original_value,
+            bindings,
+        } = self;
+        // Pay the exact-reader guard and scalar preparation classification.
+        charge(budget, 1)?;
+        let own_reader = analysis.current == Some(slot);
+        let value = if own_reader
+            && analysis.slots[slot].preparation == SlotPreparation::EvidenceInputsInstalled
+        {
+            // The completed phase proves this exact coordinate and its reader
+            // watch were installed. Read the original port; never fabricate it.
+            charge(budget, 1)?;
+            *analysis
+                .indices
+                .get(&(original_value, context))
+                .ok_or(Failure::Invalid)?
+        } else {
+            // Preserve every original input and ordered watch installation.
+            let value = analysis.slot(original_value, context, budget)?;
+            for (_, _, argument) in bindings {
+                analysis.slot(*argument, context, budget)?;
+            }
+            if own_reader {
+                // The Slot already owns this scalar phase. Publish only after
+                // the entire input prologue succeeds and its store is admitted.
+                charge(budget, 1)?;
+                analysis.slots[slot].preparation = SlotPreparation::EvidenceInputsInstalled;
+            }
+            value
+        };
+        Ok(InstalledEvidenceInputs {
+            value,
+            visit: CheckedEvidenceVisit {
+                analysis,
+                reader: if own_reader {
+                    EvidenceReader::Own(OwnEvidenceReader)
+                } else {
+                    EvidenceReader::Other
+                },
+                slot,
+                evidence,
+                arguments_context: context,
+                bindings,
+            },
+        })
+    }
+}
+// ASH_INPUT169_END_INSTALL
+
+struct ObservedCaptureSlots;
+
+// The two private policies share one exact installer; neither carries answers.
+trait CaptureSlotPolicy {
+    fn prepare(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure>;
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure>;
+}
+
+impl CaptureSlotPolicy for ObservedCaptureSlots {
+    fn prepare(&self, _budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.slot(expression, context, budget)
+    }
+}
+
+impl CaptureSlotPolicy for OwnEvidenceReader {
+    fn prepare(&self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, 1)
+    }
+    fn slot(
+        &self,
+        analysis: &mut Analysis<'_>,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
+        analysis.install_slot(expression, context, budget)
+    }
+}
+
+// Consumes the actual Evidence visit's reader proof and one exact transfer.
+// No phase completion survives outside the existing full transfer stamp.
+struct CaptureTransferInstallation<'s, 'g, P> {
+    analysis: &'s mut Analysis<'g>,
+    policy: P,
+    function: usize,
+    creation: usize,
+    specialized: usize,
+    evidence: usize,
+    arguments_context: usize,
+}
+
+impl<P: CaptureSlotPolicy> CaptureTransferInstallation<'_, '_, P> {
+    fn install(self, budget: &mut TypeWorkBudget) -> Result<usize, Failure> {
+        let Self {
+            analysis,
+            policy,
+            function,
+            creation,
+            specialized,
+            evidence,
+            arguments_context,
+        } = self;
+        let plan = analysis.prepare_capture_topology(function, evidence, budget)?;
+        let Expr::Evidence { bindings, .. } = &analysis.graph.expressions[evidence] else {
+            return Err(Failure::Invalid);
+        };
+        if analysis.capture_topologies[plan].visits.is_empty() {
+            return Ok(plan);
+        }
+        let transfer = (
+            analysis.current,
+            function,
+            creation,
+            specialized,
+            evidence,
+            arguments_context,
+        );
+        charge(budget, 1)?;
+        if analysis.specialization_transfers.contains(&transfer) {
+            return Ok(plan);
+        }
+        // Admit the completion entry before any transfer mutation. Only after
+        // every original slot/link succeeds may a repeated transfer be skipped.
+        charge(budget, 1)?;
+        analysis
+            .specialization_transfers
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        // Only the structural policy pays for consuming its owned-reader phase.
+        policy.prepare(budget)?;
+        let visit_count = analysis.capture_topologies[plan].visits.len();
+        for position in 0..visit_count {
+            charge(budget, 1)?;
+            let visit = analysis.capture_topologies[plan].visits[position];
+            // Structural destinations are never read here; installed edges remain live.
+            let destination = policy.slot(analysis, visit.expression, specialized, budget)?;
+            for position in visit.binding_start..visit.binding_end {
+                charge(budget, 1)?;
+                let original = analysis.capture_topologies[plan].bindings[position];
+                let source =
+                    policy.slot(analysis, bindings[original].2, arguments_context, budget)?;
+                analysis.edge(destination, source, budget)?;
+            }
+            if visit.lexical {
+                let source = policy.slot(analysis, visit.expression, creation, budget)?;
+                analysis.edge(destination, source, budget)?;
+            }
+        }
+        // Existing edges and watches still carry every later atom change.
+        analysis.specialization_transfers.insert(transfer);
+        Ok(plan)
+    }
+}
+
+struct ReservedEvidenceTransfer<'s, 'g> {
+    visit: CheckedEvidenceVisit<'s, 'g>,
+    function: usize,
+    creation: usize,
+    stamp: (Option<usize>, usize, usize, usize),
+}
+
+enum EvidenceTransferStage<'s, 'g> {
+    Complete(CheckedEvidenceVisit<'s, 'g>),
+    Reserved(ReservedEvidenceTransfer<'s, 'g>),
+}
+
+struct InstalledCaptureBindings<'s, 'g> {
+    visit: CheckedEvidenceVisit<'s, 'g>,
+    plan: usize,
+    specialized: usize,
+    function: usize,
+    stamp: (Option<usize>, usize, usize, usize),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum PreparedDictionaryRoutes {
+    Complete,
+    Pending(Vec<DictionaryObligation>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DictionaryObligation {
+    binding: usize,
+    evidence: usize,
+}
+
+// This phase means dictionary-complete and ready to publish, not yet published.
+struct ReadyClosure<'s, 'g> {
+    visit: CheckedEvidenceVisit<'s, 'g>,
+    function: usize,
+    specialized: usize,
+    stamp: (Option<usize>, usize, usize, usize),
+}
+
+impl<'s, 'g> CheckedEvidenceVisit<'s, 'g> {
+    fn reserve(
+        self,
+        function: usize,
+        creation: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<EvidenceTransferStage<'s, 'g>, Failure> {
+        // Each live Closure still proves its original Function code. The
+        // Evidence/slot association is already carried by this actual visit.
+        charge(budget, 1)?;
+        if !matches!(
+            self.analysis.graph.expressions.get(function),
+            Some(Expr::Function { .. })
+        ) {
+            return Err(Failure::Invalid);
+        }
+        let stamp = (self.analysis.current, self.slot, function, creation);
+        charge(budget, 1)?;
+        if self.analysis.callable_transfers.contains(&stamp) {
+            return Ok(EvidenceTransferStage::Complete(self));
+        }
+        charge(budget, 1)?;
+        self.analysis
+            .callable_transfers
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        Ok(EvidenceTransferStage::Reserved(ReservedEvidenceTransfer {
+            visit: self,
+            function,
+            creation,
+            stamp,
+        }))
+    }
+
+    fn route_atom(self, atom: Atom, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        match atom {
+            Atom::Closure(function, creation) => match self.reserve(function, creation, budget)? {
+                EvidenceTransferStage::Complete(visit) => Ok(visit),
+                EvidenceTransferStage::Reserved(pending) => pending
+                    .install_captures(budget)?
+                    .route_dictionary(budget)?
+                    .publish(budget),
+            },
+            other => {
+                self.analysis.atom(self.slot, other, budget)?;
+                if matches!(other, Atom::Unknown) {
+                    for (_, _, argument) in self.bindings {
+                        let argument =
+                            self.analysis
+                                .slot(*argument, self.arguments_context, budget)?;
+                        for dependency in self.analysis.dependencies(argument, budget)? {
+                            self.analysis.atom(self.slot, dependency, budget)?;
+                        }
+                    }
+                }
+                Ok(self)
+            }
+        }
+    }
+}
+
+impl<'s, 'g> ReservedEvidenceTransfer<'s, 'g> {
+    fn install_captures(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<InstalledCaptureBindings<'s, 'g>, Failure> {
+        let Self {
+            visit,
+            function,
+            creation,
+            stamp,
+        } = self;
+        let specialized = visit.analysis.context(
+            visit.arguments_context,
+            Transition::Call(visit.evidence),
+            budget,
+        )?;
+        let plan = match visit.reader {
+            EvidenceReader::Other => visit.analysis.specialize_captures(
+                function,
+                creation,
+                specialized,
+                visit.evidence,
+                visit.arguments_context,
+                budget,
+            )?,
+            EvidenceReader::Own(reader) => CaptureTransferInstallation {
+                analysis: visit.analysis,
+                policy: reader,
+                function,
+                creation,
+                specialized,
+                evidence: visit.evidence,
+                arguments_context: visit.arguments_context,
+            }
+            .install(budget)?,
+        };
+        Ok(InstalledCaptureBindings {
+            visit,
+            plan,
+            specialized,
+            function,
+            stamp,
+        })
+    }
+}
+
+impl<'s, 'g> InstalledCaptureBindings<'s, 'g> {
+    fn route_dictionary(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<ReadyClosure<'s, 'g>, Failure> {
+        let Self {
+            visit,
+            plan,
+            specialized,
+            function,
+            stamp,
+        } = self;
+        // Only this successful exact contextful transfer can consume the
+        // immutable projection. Every uncaptured original port remains pending.
+        charge(budget, 1)?;
+        match &visit.analysis.capture_topologies[plan].dictionary {
+            PreparedDictionaryRoutes::Complete => {}
+            PreparedDictionaryRoutes::Pending(obligations) => {
+                let count = obligations.len();
+                for position in 0..count {
+                    // Read both original coordinates, preserving their order.
+                    charge(budget, 2)?;
+                    let obligation = match &visit.analysis.capture_topologies[plan].dictionary {
+                        PreparedDictionaryRoutes::Pending(obligations) => obligations[position],
+                        PreparedDictionaryRoutes::Complete => return Err(Failure::Invalid),
+                    };
+                    let argument = visit
+                        .bindings
+                        .get(obligation.binding)
+                        .ok_or(Failure::Invalid)?
+                        .2;
+                    let port = visit
+                        .analysis
+                        .graph
+                        .evidence
+                        .get(obligation.evidence)
+                        .ok_or(Failure::Invalid)?
+                        .1;
+                    let target = visit.analysis.slot(port, specialized, budget)?;
+                    visit
+                        .analysis
+                        .link(target, argument, visit.arguments_context, budget)?;
+                }
+            }
+        }
+        Ok(ReadyClosure {
+            visit,
+            function,
+            specialized,
+            stamp,
+        })
+    }
+}
+
+impl<'s, 'g> ReadyClosure<'s, 'g> {
+    fn publish(self, budget: &mut TypeWorkBudget) -> Result<CheckedEvidenceVisit<'s, 'g>, Failure> {
+        self.visit.analysis.atom(
+            self.visit.slot,
+            Atom::Closure(self.function, self.specialized),
+            budget,
+        )?;
+        // Reservation belongs to this same exclusive loan. Commit only after
+        // dictionary routing and output succeed, then return the exact visit.
+        self.visit.analysis.callable_transfers.insert(self.stamp);
+        Ok(self.visit)
+    }
+}
+
+// A queue-owned evaluation carries its exact reader through one exclusive visit.
+// The original edge owns the source notification for structural Alias/Merge links.
+struct QueuedEvaluation<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    slot: usize,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct ObservedAliasLinks;
+#[derive(Clone, Copy)]
+struct QueuedAliasLinks;
+
+trait AliasLinkPolicy {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure>;
+}
+
+#[cfg(test)]
+impl AliasLinkPolicy for ObservedAliasLinks {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        analysis.link(target, expression, context, budget)
+    }
+}
+
+impl AliasLinkPolicy for QueuedAliasLinks {
+    fn link(
+        analysis: &mut Analysis<'_>,
+        target: usize,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let source = analysis.install_slot(expression, context, budget)?;
+        analysis.edge(target, source, budget)
+    }
+}
+
+impl<'s, 'g> QueuedEvaluation<'s, 'g> {
+    fn evaluate(self, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        self.analysis
+            .evaluate_with_alias_links::<QueuedAliasLinks>(self.slot, budget)
+    }
+}
+
+// This short loan contains precisely the mutable fields of original atom().
+// The edge-cursor table is absent, so propagation cannot invalidate its loan.
+struct AtomStore<'s> {
+    slots: &'s mut Vec<Slot>,
+    atom_pairs: &'s mut HashSet<(usize, Atom)>,
+    pending: &'s mut VecDeque<usize>,
+    revision: &'s mut usize,
+}
+
+impl AtomStore<'_> {
+    fn atom(
+        &mut self,
+        slot: usize,
+        atom: Atom,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // Slot identity includes its exact expression/context; Atom retains
+        // its variant and original code/creation coordinates. The ordered Vec
+        // remains the sole propagation source, while this set tests membership.
+        charge(budget, 1)?;
+        let pair = (slot, atom);
+        if self.atom_pairs.contains(&pair) {
+            return Ok(());
+        }
+        charge(budget, 2)?;
+        self.atom_pairs
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.slots[slot]
+            .atoms
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let reader_count = self.slots[slot].readers.len();
+        // Prepay the actual ordered notification walk and reserve its maximum
+        // possible queue growth. No fallible operation follows publication.
+        charge(budget, reader_count)?;
+        self.pending
+            .try_reserve(reader_count)
+            .map_err(|_| Failure::Resource)?;
+        self.atom_pairs.insert(pair);
+        self.slots[slot].atoms.push(atom);
+        *self.revision += 1;
+        for index in 0..reader_count {
+            let reader = self.slots[slot].readers[index];
+            if !self.slots[reader].queued {
+                self.pending.push_back(reader);
+                self.slots[reader].queued = true;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct Analysis<'a> {
@@ -2539,7 +3220,7 @@ impl<'a> Analysis<'a> {
                 readers: Vec::new(),
                 queued: false,
                 terminal: true,
-                immutable_setup_complete: false,
+                preparation: SlotPreparation::Pending,
             });
         }
         let context = query.context(0, Transition::Focus, budget)?;
@@ -3149,12 +3830,24 @@ impl<'a> Analysis<'a> {
         context: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<usize, Failure> {
+        let id = self.install_slot(expression, context, budget)?;
+        if let Some(reader) = self.current {
+            self.watch(id, reader, budget)?;
+        }
+        Ok(id)
+    }
+
+    // Construct exact coordinates and enqueue new slots without reading their atoms.
+    // Observing slot(), typed Function/Evidence/Call installers, and queue-owned Alias/Merge links use this constructor.
+    fn install_slot(
+        &mut self,
+        expression: usize,
+        context: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<usize, Failure> {
         charge(budget, 1)?;
         let key = (expression, context);
         if let Some(&id) = self.indices.get(&key) {
-            if let Some(reader) = self.current {
-                self.watch(id, reader, budget)?;
-            }
             return Ok(id);
         }
         self.slots.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -3167,14 +3860,11 @@ impl<'a> Analysis<'a> {
             readers: Vec::new(),
             queued: false,
             terminal: context < self.frozen_contexts,
-            immutable_setup_complete: false,
+            preparation: SlotPreparation::Pending,
         });
         self.indices.insert(key, id);
         self.revision += 1;
         self.enqueue(id, budget)?;
-        if let Some(reader) = self.current {
-            self.watch(id, reader, budget)?;
-        }
         Ok(id)
     }
 
@@ -3222,40 +3912,13 @@ impl<'a> Analysis<'a> {
         atom: Atom,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        // Slot identity includes its exact expression/context; Atom retains
-        // its variant and original code/creation coordinates. The ordered Vec
-        // remains the sole propagation source, while this set tests membership.
-        charge(budget, 1)?;
-        let pair = (slot, atom);
-        if self.atom_pairs.contains(&pair) {
-            return Ok(());
+        AtomStore {
+            slots: &mut self.slots,
+            atom_pairs: &mut self.atom_pairs,
+            pending: &mut self.pending,
+            revision: &mut self.revision,
         }
-        charge(budget, 2)?;
-        self.atom_pairs
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        self.slots[slot]
-            .atoms
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let reader_count = self.slots[slot].readers.len();
-        // Prepay the actual ordered notification walk and reserve its maximum
-        // possible queue growth. No fallible operation follows publication.
-        charge(budget, reader_count)?;
-        self.pending
-            .try_reserve(reader_count)
-            .map_err(|_| Failure::Resource)?;
-        self.atom_pairs.insert(pair);
-        self.slots[slot].atoms.push(atom);
-        self.revision += 1;
-        for index in 0..reader_count {
-            let reader = self.slots[slot].readers[index];
-            if !self.slots[reader].queued {
-                self.pending.push_back(reader);
-                self.slots[reader].queued = true;
-            }
-        }
-        Ok(())
+        .atom(slot, atom, budget)
     }
 
     fn edge(
@@ -3339,27 +4002,49 @@ impl<'a> Analysis<'a> {
                 false
             } else if matches!(
                 self.graph.expressions[self.slots[slot].key.0],
-                Expr::Alias(_) | Expr::Merge(_) | Expr::Function { .. }
+                Expr::Alias(_)
+                    | Expr::Merge(_)
+                    | Expr::Function { .. }
+                    | Expr::Tuple(_)
+                    | Expr::Cleanup { .. }
+                    | Expr::Bind { .. }
+                    | Expr::Recursive { .. }
+                    | Expr::Match { .. }
+                    | Expr::Resource { .. }
             ) {
                 // The queue visit already admits its bounded kind dispatch.
                 // Pay this eligible classification and completion-field lookup.
                 charge(budget, 2)?;
-                if self.slots[slot].immutable_setup_complete {
+                if self.slots[slot].preparation == SlotPreparation::EdgesInstalled {
                     false
                 } else {
-                    self.evaluate(slot, budget)?;
-                    true
+                    QueuedEvaluation {
+                        analysis: self,
+                        slot,
+                    }
+                    .evaluate(budget)?
                 }
             } else {
-                self.evaluate(slot, budget)?;
+                QueuedEvaluation {
+                    analysis: self,
+                    slot,
+                }
+                .evaluate(budget)?;
                 false
             };
             // Live ordered edges are processed on every visit, including after
             // setup completion. A later owner/Unknown is never a cached answer.
-            for source in copy_slice(&self.slots[slot].edges, budget)? {
+            // Evaluate has finished installing this visit's edges. atom() below
+            // changes atoms and queued readers, never edges, so scalar indexing
+            // preserves the original ordered snapshot without retaining a Vec.
+            let edge_count = self.slots[slot].edges.len();
+            for edge_index in 0..edge_count {
                 charge(budget, 1)?;
+                let source = self.slots[slot].edges[edge_index];
                 let pair = (slot, source);
-                let delivered = *self.edge_pairs.get(&pair).ok_or(Failure::Invalid)?;
+                // One exact entry loan proves the final publication coordinate.
+                let cursor = self.edge_pairs.get_mut(&pair).ok_or(Failure::Invalid)?;
+                let delivered = *cursor;
                 let end = self.slots[source].atoms.len();
                 let unread = self.slots[source]
                     .atoms
@@ -3368,14 +4053,25 @@ impl<'a> Analysis<'a> {
                 if unread.is_empty() {
                     continue;
                 }
-                // Prepay the existing-entry lookup and scalar cursor update.
-                // Advance only after every original atom transfer succeeds;
-                // a refused query is discarded as before.
-                charge(budget, 2)?;
-                for atom in copy_slice(unread, budget)? {
-                    self.atom(slot, atom, budget)?;
+                // The retained exact entry loan removes the second table lookup.
+                // Prepay its scalar write, then advance only after every original
+                // atom transfer succeeds; refusal retains the old cursor.
+                charge(budget, 1)?;
+                // A distinct source cannot change during atom(target). For a
+                // self-edge each source atom already belongs to that same target,
+                // so atom() only tests existing membership. Keep the original end
+                // and finish the complete ordered suffix before committing it.
+                let mut atoms = AtomStore {
+                    slots: &mut self.slots,
+                    atom_pairs: &mut self.atom_pairs,
+                    pending: &mut self.pending,
+                    revision: &mut self.revision,
+                };
+                for atom_index in delivered..end {
+                    let atom = atoms.slots[source].atoms[atom_index];
+                    atoms.atom(slot, atom, budget)?;
                 }
-                *self.edge_pairs.get_mut(&pair).ok_or(Failure::Invalid)? = end;
+                *cursor = end;
             }
             if complete_setup {
                 // The existing Slot admission already reserves this scalar
@@ -3383,35 +4079,49 @@ impl<'a> Analysis<'a> {
                 // current ordered propagation succeed. No fallible work follows
                 // in this slot visit.
                 charge(budget, 1)?;
-                self.slots[slot].immutable_setup_complete = true;
+                self.slots[slot].preparation = SlotPreparation::EdgesInstalled;
             }
             self.current = None;
         }
         Ok(())
     }
 
-    fn evaluate(&mut self, slot: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+    #[cfg(test)]
+    fn evaluate(&mut self, slot: usize, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        self.evaluate_with_alias_links::<ObservedAliasLinks>(slot, budget)
+    }
+
+    fn evaluate_with_alias_links<P: AliasLinkPolicy>(
+        &mut self,
+        slot: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        // This reports setup readiness only. The queue owns its completion bit
+        // and commits it after propagation; direct evaluation always runs.
+        let mut fixed_setup = true;
         let (expression, context) = self.slots[slot].key;
-        match &self.graph.expressions[expression] {
+        let graph = self.graph;
+        match &graph.expressions[expression] {
             Expr::Scalar => self.atom(slot, Atom::Free, budget)?,
             Expr::Slot => {}
             Expr::Unknown => self.atom(slot, Atom::Unknown, budget)?,
-            Expr::Alias(value) => self.link(slot, *value, context, budget)?,
+            Expr::Alias(value) => P::link(self, slot, *value, context, budget)?,
             Expr::Merge(values) => {
                 self.atom(slot, Atom::Free, budget)?;
                 for value in values {
-                    self.link(slot, *value, context, budget)?;
+                    P::link(self, slot, *value, context, budget)?;
                 }
             }
             Expr::Function { captures, body, .. } => {
-                for capture in captures {
-                    let source = self.slot(*capture, context, budget)?;
-                    if let Some(root) = self.roots.get(body).copied() {
-                        let target = self.slot(*capture, root, budget)?;
-                        self.edge(target, source, budget)?;
-                    }
+                FunctionCaptureInstallation {
+                    analysis: self,
+                    slot,
+                    expression,
+                    creation: context,
+                    body: *body,
+                    captures,
                 }
-                self.atom(slot, Atom::Closure(expression, context), budget)?;
+                .install(budget)?;
             }
             Expr::Constructor(constructor) => {
                 self.atom(slot, Atom::Constructor(*constructor), budget)?
@@ -3422,9 +4132,10 @@ impl<'a> Analysis<'a> {
                     let field = self.slot(*field, context, budget)?;
                     ready &= !self.slots[field].atoms.is_empty();
                 }
-                if ready {
-                    self.atom(slot, Atom::Aggregate(expression, context), budget)?;
+                if !ready {
+                    return Ok(false);
                 }
+                self.atom(slot, Atom::Aggregate(expression, context), budget)?;
             }
             Expr::Call {
                 function,
@@ -3432,6 +4143,7 @@ impl<'a> Analysis<'a> {
                 scalar,
                 type_application,
             } => {
+                fixed_setup = false;
                 let function = self.slot(*function, context, budget)?;
                 charge(budget, arguments.len())?;
                 let mut actual = Vec::new();
@@ -3445,9 +4157,13 @@ impl<'a> Analysis<'a> {
                     actual.push(argument);
                 }
                 if !ready {
-                    return Ok(());
+                    return Ok(false);
                 }
-                for atom in copy_slice(&self.slots[function].atoms, budget)? {
+                // Atom storage is append-only; preserve the original prefix while routing.
+                let atom_count = self.slots[function].atoms.len();
+                charge(budget, atom_count)?;
+                for atom_index in 0..atom_count {
+                    let atom = self.slots[function].atoms[atom_index];
                     match atom {
                         Atom::Closure(target, creation) => {
                             let Expr::Function {
@@ -3473,23 +4189,20 @@ impl<'a> Analysis<'a> {
                             self.callable_transfers
                                 .try_reserve(1)
                                 .map_err(|_| Failure::Resource)?;
-                            let invoked = self.context(
+                            CallTransferInstallation {
+                                analysis: self,
+                                slot,
+                                expression,
                                 context,
-                                Transition::Invoke(expression, target),
-                                budget,
-                            )?;
-                            for (&parameter, &argument) in parameters.iter().zip(&actual) {
-                                let parameter = self.slot(parameter, invoked, budget)?;
-                                self.edge(parameter, argument, budget)?;
+                                target,
+                                creation,
+                                parameters,
+                                captures,
+                                actual: &actual,
+                                body: *body,
+                                transfer,
                             }
-                            for capture in captures {
-                                let destination = self.slot(*capture, invoked, budget)?;
-                                let source = self.slot(*capture, creation, budget)?;
-                                self.edge(destination, source, budget)?;
-                            }
-                            self.link(slot, *body, invoked, budget)?;
-                            // Commit only after all original context/slot/edge work.
-                            self.callable_transfers.insert(transfer);
+                            .install(budget)?;
                         }
                         Atom::Constructor(_) => self.atom(
                             slot,
@@ -3524,8 +4237,12 @@ impl<'a> Analysis<'a> {
                 field,
                 constructor,
             } => {
+                fixed_setup = false;
                 let value = self.slot(*value, context, budget)?;
-                for atom in copy_slice(&self.slots[value].atoms, budget)? {
+                let atom_count = self.slots[value].atoms.len();
+                charge(budget, atom_count)?;
+                for atom_index in 0..atom_count {
+                    let atom = self.slots[value].atoms[atom_index];
                     match atom {
                         Atom::Aggregate(target, creation) => {
                             match &self.graph.expressions[target] {
@@ -3572,12 +4289,14 @@ impl<'a> Analysis<'a> {
             }
             Expr::Cleanup { body, action } => {
                 let body = self.slot(*body, context, budget)?;
-                if !self.slots[body].atoms.is_empty() {
-                    let action = self.slot(*action, context, budget)?;
-                    if !self.slots[action].atoms.is_empty() {
-                        self.edge(slot, body, budget)?;
-                    }
+                if self.slots[body].atoms.is_empty() {
+                    return Ok(false);
                 }
+                let action = self.slot(*action, context, budget)?;
+                if self.slots[action].atoms.is_empty() {
+                    return Ok(false);
+                }
+                self.edge(slot, body, budget)?;
             }
             Expr::Bind {
                 binder,
@@ -3586,9 +4305,10 @@ impl<'a> Analysis<'a> {
             } => {
                 let binder = self.slot(*binder, context, budget)?;
                 self.link(binder, *initializer, context, budget)?;
-                if !self.slots[binder].atoms.is_empty() {
-                    self.link(slot, *body, context, budget)?;
+                if self.slots[binder].atoms.is_empty() {
+                    return Ok(false);
                 }
+                self.link(slot, *body, context, budget)?;
             }
             Expr::Recursive { bindings, body } => {
                 let mut ready = true;
@@ -3598,14 +4318,15 @@ impl<'a> Analysis<'a> {
                     self.edge(binder, initializer, budget)?;
                     ready &= !self.slots[initializer].atoms.is_empty();
                 }
-                if ready {
-                    self.link(slot, *body, context, budget)?;
+                if !ready {
+                    return Ok(false);
                 }
+                self.link(slot, *body, context, budget)?;
             }
             Expr::Match { scrutinee, arms } => {
                 let scrutinee = self.slot(*scrutinee, context, budget)?;
                 if self.slots[scrutinee].atoms.is_empty() {
-                    return Ok(());
+                    return Ok(false);
                 }
                 for (bindings, body) in arms {
                     for &(binder, initializer) in bindings {
@@ -3625,7 +4346,7 @@ impl<'a> Analysis<'a> {
             } => {
                 let initializer = self.slot(*initializer, context, budget)?;
                 if self.slots[initializer].atoms.is_empty() {
-                    return Ok(());
+                    return Ok(false);
                 }
                 let handle = self.slot(*handle, context, budget)?;
                 let identity = self.slot(*identity, context, budget)?;
@@ -3648,73 +4369,26 @@ impl<'a> Analysis<'a> {
                 self.slot(*operand, context, budget)?;
             }
             Expr::Handler { body, .. } => self.link(slot, *body, context, budget)?,
+            // ASH_INPUT169_BEGIN_EVALUATE
             Expr::Evidence { value, bindings } => {
-                let value = self.slot(*value, context, budget)?;
-                for (_, _, argument) in bindings {
-                    self.slot(*argument, context, budget)?;
+                fixed_setup = false;
+                let InstalledEvidenceInputs { mut visit, value } = EvidenceInputVisit {
+                    analysis: self,
+                    slot,
+                    evidence: expression,
+                    arguments_context: context,
+                    value: *value,
+                    bindings,
                 }
-                for atom in copy_slice(&self.slots[value].atoms, budget)? {
-                    if let Atom::Closure(target, creation) = atom {
-                        // Original value and every dictionary argument are read
-                        // above on every visit, installing this reader's watches.
-                        charge(budget, 1)?;
-                        if !matches!(
-                            self.graph.expressions.get(target),
-                            Some(Expr::Function { .. })
-                        ) {
-                            return Err(Failure::Invalid);
-                        }
-                        let transfer = (self.current, slot, target, creation);
-                        charge(budget, 1)?;
-                        if self.callable_transfers.contains(&transfer) {
-                            continue;
-                        }
-                        charge(budget, 1)?;
-                        self.callable_transfers
-                            .try_reserve(1)
-                            .map_err(|_| Failure::Resource)?;
-                        let specialized =
-                            self.context(context, Transition::Call(expression), budget)?;
-                        self.specialize_captures(
-                            target,
-                            creation,
-                            specialized,
-                            expression,
-                            context,
-                            budget,
-                        )?;
-                        for (requirement, method, argument) in bindings {
-                            charge(budget, 1)?;
-                            let key = (*requirement, *method);
-                            let matching = self.evidence_keys.get(&key).map_or(0, Vec::len);
-                            for position in 0..matching {
-                                charge(budget, 1)?;
-                                let target =
-                                    self.graph.evidence[self.evidence_keys[&key][position]].1;
-                                let target = self.slot(target, specialized, budget)?;
-                                self.link(target, *argument, context, budget)?;
-                            }
-                        }
-                        self.atom(slot, Atom::Closure(target, specialized), budget)?;
-                        // Same exact slot cannot be both Call and Evidence in
-                        // the immutably borrowed graph. Commit only after all
-                        // original captures, dictionary links and result succeed.
-                        self.callable_transfers.insert(transfer);
-                    } else {
-                        self.atom(slot, atom, budget)?;
-                        if matches!(atom, Atom::Unknown) {
-                            for (_, _, argument) in bindings {
-                                let argument = self.slot(*argument, context, budget)?;
-                                for dependency in self.dependencies(argument, budget)? {
-                                    self.atom(slot, dependency, budget)?;
-                                }
-                            }
-                        }
-                    }
+                .install_inputs(budget)?;
+                let atom_count = visit.analysis.slots[value].atoms.len();
+                for atom_index in 0..atom_count {
+                    let atom = visit.analysis.slots[value].atoms[atom_index];
+                    visit = visit.route_atom(atom, budget)?;
                 }
-            }
+            } // ASH_INPUT169_END_EVALUATE
         }
-        Ok(())
+        Ok(fixed_setup)
     }
 
     fn build_binding_index(
@@ -3803,7 +4477,11 @@ impl<'a> Analysis<'a> {
         let mut topology = CaptureTopology {
             visits: Vec::new(),
             bindings: Vec::new(),
+            dictionary: PreparedDictionaryRoutes::Complete,
         };
+        // Constructor-local membership proves which original projection routes
+        // the full successful transfer will install; it never becomes a cache.
+        let mut bound_ports = HashSet::new();
         let mut pending = copy_slice(captures, budget)?;
         let mut visited = HashSet::new();
         while let Some(capture) = pending.pop() {
@@ -3844,6 +4522,13 @@ impl<'a> Analysis<'a> {
                 }
             }
             let replaced = binding_start != topology.bindings.len();
+            if replaced {
+                // This complete ordered port binding set is immutable structure,
+                // not transfer completion. Reserve before plan publication.
+                charge(budget, 2)?;
+                bound_ports.try_reserve(1).map_err(|_| Failure::Resource)?;
+                bound_ports.insert(capture);
+            }
             let mut lexical = false;
             if !replaced {
                 // Preserve the old stack push order, hence LIFO first-visit order.
@@ -3896,6 +4581,33 @@ impl<'a> Analysis<'a> {
                 lexical,
             });
         }
+        // Classify the entire original dictionary once, in binding order then
+        // original Graph evidence order. Bound-port completeness came from all
+        // original keys/positions above, not merely from a captured port name.
+        let mut residual = Vec::new();
+        for (binding, (requirement, method, _)) in bindings.iter().enumerate() {
+            charge(budget, 1)?;
+            let key = (*requirement, *method);
+            let matching = self.evidence_keys.get(&key).map_or(0, Vec::len);
+            for position in 0..matching {
+                charge(budget, 2)?; // Original evidence read and membership.
+                let evidence = self.evidence_keys[&key][position];
+                let port = self.graph.evidence[evidence].1;
+                if !bound_ports.contains(&port) {
+                    charge(budget, 1)?; // Retained ordered residual instruction.
+                    residual.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    residual.push(DictionaryObligation { binding, evidence });
+                }
+            }
+        }
+        // Pay the retained phase before any map/vector publication. Empty
+        // capture topology covers nothing; required routes stay residual.
+        charge(budget, 1)?;
+        topology.dictionary = if residual.is_empty() {
+            PreparedDictionaryRoutes::Complete
+        } else {
+            PreparedDictionaryRoutes::Pending(residual)
+        };
         // Reserve and admit every retained entry before publishing either map.
         // Refusal leaves no partial topology or binding index, and no dynamic
         // slots, edges, watches, atoms, revision or pending work have changed.
@@ -3929,50 +4641,17 @@ impl<'a> Analysis<'a> {
         evidence: usize,
         arguments_context: usize,
         budget: &mut TypeWorkBudget,
-    ) -> Result<(), Failure> {
-        let plan = self.prepare_capture_topology(function, evidence, budget)?;
-        let Expr::Evidence { bindings, .. } = &self.graph.expressions[evidence] else {
-            return Err(Failure::Invalid);
-        };
-        if self.capture_topologies[plan].visits.is_empty() {
-            return Ok(());
-        }
-        let transfer = (
-            self.current,
+    ) -> Result<usize, Failure> {
+        CaptureTransferInstallation {
+            analysis: self,
+            policy: ObservedCaptureSlots,
             function,
             creation,
             specialized,
             evidence,
             arguments_context,
-        );
-        charge(budget, 1)?;
-        if self.specialization_transfers.contains(&transfer) {
-            return Ok(());
         }
-        // Admit the completion entry before any transfer mutation. Only after
-        // every original slot/link succeeds may a repeated transfer be skipped.
-        charge(budget, 1)?;
-        self.specialization_transfers
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let visit_count = self.capture_topologies[plan].visits.len();
-        for position in 0..visit_count {
-            charge(budget, 1)?;
-            let visit = self.capture_topologies[plan].visits[position];
-            // Inert intermediate slots also retain their exact reader watches.
-            let destination = self.slot(visit.expression, specialized, budget)?;
-            for position in visit.binding_start..visit.binding_end {
-                charge(budget, 1)?;
-                let original = self.capture_topologies[plan].bindings[position];
-                self.link(destination, bindings[original].2, arguments_context, budget)?;
-            }
-            if visit.lexical {
-                self.link(destination, visit.expression, creation, budget)?;
-            }
-        }
-        // Existing edges and watches still carry every later atom change.
-        self.specialization_transfers.insert(transfer);
-        Ok(())
+        .install(budget)
     }
 
     fn dependencies(
@@ -3992,7 +4671,8 @@ impl<'a> Analysis<'a> {
             if let Some(reader) = self.current {
                 self.watch(slot, reader, budget)?;
             }
-            for atom in copy_slice(&self.slots[slot].atoms, budget)? {
+            // This walk only reads atoms; watches above change reader lists, not values.
+            for &atom in &self.slots[slot].atoms {
                 charge(budget, 1)?;
                 let fields = match atom {
                     Atom::Resource(..) => {
@@ -4063,6 +4743,73 @@ mod tests {
         }
     }
 
+    #[test]
+    fn productive_cursor_loans_keep_partial_refusal_self_edges_and_late_original_owners() {
+        let original = graph(vec![Expr::Slot, Expr::Slot, Expr::Slot]);
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&original, &mut work).unwrap();
+            for expression in 0..3 {
+                analysis.slot(expression, 0, &mut work).unwrap();
+            }
+            for atom in [Atom::Resource(9, 0), Atom::Resource(10, 0), Atom::Unknown] {
+                analysis.atom(1, atom, &mut work).unwrap();
+            }
+            analysis.atom(2, Atom::Resource(11, 0), &mut work).unwrap();
+            for source in [1, 2, 0] {
+                analysis.edge(0, source, &mut work).unwrap();
+            }
+            analysis
+        };
+        let expected = vec![
+            Atom::Resource(9, 0),
+            Atom::Resource(10, 0),
+            Atom::Unknown,
+            Atom::Resource(11, 0),
+        ];
+        let mut exact = TypeWorkBudget::unbounded();
+        let mut complete = setup();
+        complete.close(&mut exact).unwrap();
+        assert_eq!(complete.slots[0].atoms, expected);
+        assert_eq!(complete.edge_pairs[&(0, 1)], 3);
+        assert_eq!(complete.edge_pairs[&(0, 2)], 1);
+        assert_eq!(complete.edge_pairs[&(0, 0)], 4);
+        for cut in 0..exact.used() {
+            let mut refused = setup();
+            assert!(matches!(
+                refused.close(&mut TypeWorkBudget::with_limit(cut)),
+                Err(Failure::Resource)
+            ));
+            let cursor = refused.edge_pairs[&(0, 1)];
+            assert!(cursor == 0 || cursor == 3, "no partial suffix is complete");
+            if cursor == 3 {
+                assert!(
+                    expected[..3]
+                        .iter()
+                        .all(|atom| refused.slots[0].atoms.contains(atom))
+                );
+            }
+            assert!(refused.edge_pairs[&(0, 2)] <= 1);
+            assert!(refused.edge_pairs[&(0, 0)] <= refused.slots[0].atoms.len());
+            // A refused analysis is discarded; an exact retry starts fresh.
+            // The partial cursor assertions above still cover every failure cut.
+            let mut retry = setup();
+            retry
+                .close(&mut TypeWorkBudget::with_limit(exact.used()))
+                .unwrap();
+            assert_eq!(retry.slots[0].atoms, expected);
+            assert_eq!(retry.edge_pairs, complete.edge_pairs);
+        }
+        let later = Atom::Resource(9, 1);
+        complete
+            .atom(1, later, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        complete.close(&mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(complete.slots[0].atoms, [expected, vec![later]].concat());
+        assert_eq!(complete.edge_pairs[&(0, 1)], 4);
+        assert_eq!(complete.edge_pairs[&(0, 0)], 5);
+    }
+
     fn immutable_setup_graph() -> Graph {
         let mut original = graph(vec![
             Expr::Slot,
@@ -4100,12 +4847,12 @@ mod tests {
         let mut outputs = Vec::new();
         for expression in [4, 5, 6] {
             let slot = analysis.slot(expression, 0, &mut work).unwrap();
-            assert!(!analysis.slots[slot].immutable_setup_complete);
+            assert!(!analysis.slots[slot].preparation.is_edges_installed());
             outputs.push(slot);
         }
         analysis.close(&mut work).unwrap();
         for &slot in &outputs {
-            assert!(analysis.slots[slot].immutable_setup_complete);
+            assert!(analysis.slots[slot].preparation.is_edges_installed());
             assert!(!analysis.slots[slot].terminal);
         }
         assert_eq!(
@@ -4131,7 +4878,7 @@ mod tests {
         assert!(analysis.revision > atom_revision);
         for &slot in &outputs {
             assert_eq!(analysis.dependencies(slot, &mut work).unwrap(), vec![owner]);
-            assert!(analysis.slots[slot].immutable_setup_complete);
+            assert!(analysis.slots[slot].preparation.is_edges_installed());
         }
         assert_eq!(analysis.slots[outputs[0]].atoms, vec![Atom::Closure(4, 0)]);
         assert_eq!(analysis.slots[outputs[1]].atoms, vec![owner]);
@@ -4177,10 +4924,188 @@ mod tests {
             .context(0, Transition::Root(99), &mut work)
             .unwrap();
         let fresh = analysis.slot(4, context, &mut work).unwrap();
-        assert!(!analysis.slots[fresh].immutable_setup_complete);
+        assert!(!analysis.slots[fresh].preparation.is_edges_installed());
         analysis.close(&mut work).unwrap();
         assert_eq!(analysis.slots[fresh].atoms, vec![Atom::Closure(4, context)]);
-        assert!(analysis.slots[fresh].immutable_setup_complete);
+        assert!(analysis.slots[fresh].preparation.is_edges_installed());
+    }
+
+    #[test]
+    fn function_capture_installation_keeps_live_edges_without_structural_reader_watches() {
+        for captures in [vec![0], vec![0, 2]] {
+            let mut graph = graph(vec![
+                Expr::Slot,
+                Expr::Scalar,
+                Expr::Function {
+                    parameters: Vec::new(),
+                    body: 1,
+                    captures,
+                },
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+            ]);
+            graph.expressions[5] = Expr::Resource {
+                success: None,
+                failure: None,
+                handle: 0,
+                identity: 3,
+                initializer: 1,
+                body: 1,
+                source: graph.sources[5],
+            };
+            graph.globals.push((4, 2));
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = graph.start(&mut work).unwrap();
+            let function = analysis.indices[&(2, 0)];
+            let source = analysis.indices[&(0, 0)];
+            let root = analysis.roots[&1];
+            let routed = analysis.indices[&(0, root)];
+            assert!(!analysis.watched_pairs.contains(&(source, function)));
+            assert!(!analysis.watched_pairs.contains(&(routed, function)));
+            assert!(analysis.edge_pairs.contains_key(&(routed, source)));
+            assert!(analysis.watched_pairs.contains(&(source, routed)));
+            assert_eq!(analysis.slots[function].atoms, vec![Atom::Closure(2, 0)]);
+
+            // A genuine live dependency reader still subscribes to every capture.
+            let reader = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            analysis.current = Some(reader);
+            assert!(
+                analysis
+                    .dependencies(function, &mut work)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(analysis.watched_pairs.contains(&(source, reader)));
+            analysis.current = None;
+            let owner = Atom::Resource(5, 0);
+            analysis.atom(source, owner, &mut work).unwrap();
+            assert!(analysis.slots[routed].queued);
+            assert!(analysis.slots[reader].queued);
+            assert!(!analysis.slots[function].queued);
+            analysis.close(&mut work).unwrap();
+            assert!(analysis.slots[routed].atoms.contains(&owner));
+            assert_eq!(
+                analysis.dependencies(function, &mut work).unwrap(),
+                vec![owner]
+            );
+            assert_eq!(analysis.slots[function].atoms, vec![Atom::Closure(2, 0)]);
+
+            // Incoming data edges, including self-capture cycles, remain live.
+            let incoming = analysis.slot(6, 0, &mut work).unwrap();
+            analysis.edge(function, incoming, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            analysis.atom(incoming, Atom::Unknown, &mut work).unwrap();
+            assert!(analysis.slots[function].queued);
+            analysis.close(&mut work).unwrap();
+            assert_eq!(
+                analysis.slots[function].atoms,
+                vec![Atom::Closure(2, 0), Atom::Unknown]
+            );
+            assert_eq!(analysis.edge_pairs[&(function, incoming)], 1);
+            if matches!(&graph.expressions[2], Expr::Function { captures, .. } if captures.contains(&2))
+            {
+                // The self-capture root has its ordinary incoming edge and suffix.
+                let root_function = analysis.indices[&(2, root)];
+                assert!(analysis.slots[root_function].atoms.contains(&Atom::Unknown));
+                assert_eq!(analysis.edge_pairs[&(root_function, function)], 2);
+            }
+        }
+    }
+
+    #[test]
+    fn queued_alias_merge_links_keep_edge_watches_late_identity_and_direct_readers() {
+        let mut graph = graph(vec![
+            Expr::Slot,
+            Expr::Alias(0),
+            Expr::Merge(vec![0, 1, 2]),
+            Expr::Tuple(vec![1]),
+            Expr::Scalar,
+        ]);
+        for _ in 0..2 {
+            graph.expressions.push(Expr::Resource {
+                success: None,
+                failure: None,
+                handle: 0,
+                identity: 1,
+                initializer: 4,
+                body: 2,
+                source: graph.sources[0],
+            });
+            graph.sources.push(graph.sources[0]);
+        }
+        fn setup(graph: &Graph) -> Analysis<'_> {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(graph, &mut work).unwrap();
+            for expression in 0..4 {
+                analysis.slot(expression, 0, &mut work).unwrap();
+            }
+            analysis
+        }
+        let mut analysis = setup(&graph);
+        let mut work = TypeWorkBudget::unbounded();
+        analysis.close(&mut work).unwrap();
+        let exact = work.used();
+        let [source, alias, merge, reader] = [0, 1, 2, 3];
+        assert_eq!(analysis.slots[source].readers, vec![alias, merge]);
+        assert!(analysis.edge_pairs.contains_key(&(merge, merge)));
+        for cut in 0..exact {
+            let mut refused = setup(&graph);
+            let mut short = TypeWorkBudget::with_limit(cut);
+            assert!(matches!(refused.close(&mut short), Err(Failure::Resource)));
+            for (target, input) in [
+                (alias, source),
+                (merge, source),
+                (merge, alias),
+                (merge, merge),
+            ] {
+                assert_eq!(
+                    refused.watched_pairs.contains(&(input, target)),
+                    refused.edge_pairs.contains_key(&(target, input)),
+                    "a queued structural link publishes its edge-owned watch atomically"
+                );
+            }
+            let mut retry = setup(&graph);
+            retry.close(&mut TypeWorkBudget::with_limit(exact)).unwrap();
+            assert_eq!(retry.edge_pairs, analysis.edge_pairs);
+            assert_eq!(retry.watched_pairs, analysis.watched_pairs);
+        }
+
+        // Independent direct evaluation still observes for its actual reader.
+        analysis.current = Some(reader);
+        analysis.evaluate(alias, &mut work).unwrap();
+        assert!(analysis.watched_pairs.contains(&(source, reader)));
+        analysis.current = None;
+        for expression in [5, 6] {
+            let owner = Atom::Resource(expression, 0);
+            analysis.atom(source, owner, &mut work).unwrap();
+            assert!(analysis.slots[alias].queued);
+            assert!(analysis.slots[merge].queued);
+            assert!(analysis.slots[reader].queued);
+            analysis.close(&mut work).unwrap();
+            assert!(analysis.slots[alias].atoms.contains(&owner));
+            assert!(analysis.slots[merge].atoms.contains(&owner));
+            assert!(
+                analysis
+                    .dependencies(reader, &mut work)
+                    .unwrap()
+                    .contains(&owner)
+            );
+            assert_eq!(
+                analysis.edge_pairs[&(alias, source)],
+                analysis.slots[source].atoms.len()
+            );
+            assert_eq!(
+                analysis.edge_pairs[&(merge, source)],
+                analysis.slots[source].atoms.len()
+            );
+        }
+        assert_eq!(
+            analysis.dependencies(reader, &mut work).unwrap(),
+            vec![Atom::Resource(5, 0), Atom::Resource(6, 0)]
+        );
     }
 
     #[test]
@@ -4190,7 +5115,7 @@ mod tests {
         let mut work = TypeWorkBudget::unbounded();
         let mut normal = graph.start(&mut work).unwrap();
         let function = normal.indices[&(4, 0)];
-        assert!(normal.slots[function].immutable_setup_complete);
+        assert!(normal.slots[function].preparation.is_edges_installed());
         let root = normal.root_context(21, &mut work).unwrap();
         assert_ne!(root, 0);
         normal.slot(3, 0, &mut work).unwrap();
@@ -4206,15 +5131,15 @@ mod tests {
         for original in 0..normal.slots.len() {
             assert!(focused.slots[original].terminal);
             assert!(
-                !focused.slots[original].immutable_setup_complete,
+                !focused.slots[original].preparation.is_edges_installed(),
                 "frozen copies carry atoms, never queue setup completion"
             );
         }
         let function = focused.slot(4, context, &mut work).unwrap();
         assert!(!focused.slots[function].terminal);
-        assert!(!focused.slots[function].immutable_setup_complete);
+        assert!(!focused.slots[function].preparation.is_edges_installed());
         focused.close(&mut work).unwrap();
-        assert!(focused.slots[function].immutable_setup_complete);
+        assert!(focused.slots[function].preparation.is_edges_installed());
         assert!(
             focused
                 .dependencies(function, &mut work)
@@ -4234,7 +5159,7 @@ mod tests {
             .restore_cut(0, 21, 9, 21, &[], false, &mut work)
             .unwrap();
         assert!(focused.slots[cut.input].terminal);
-        assert!(!focused.slots[cut.input].immutable_setup_complete);
+        assert!(!focused.slots[cut.input].preparation.is_edges_installed());
         let handle = focused.indices[&(0, context)];
         focused.join_ports(cut.input, handle, &mut work).unwrap();
         focused.close(&mut work).unwrap();
@@ -4244,12 +5169,12 @@ mod tests {
                 .contains(&Atom::Resource(3, context))
         );
         assert!(focused.slots[cut.input].terminal);
-        assert!(!focused.slots[cut.input].immutable_setup_complete);
+        assert!(!focused.slots[cut.input].preparation.is_edges_installed());
         let restored = focused
             .restore_event(normal.indices[&(4, 0)], &mut work)
             .unwrap();
         assert!(focused.slots[restored].terminal);
-        assert!(!focused.slots[restored].immutable_setup_complete);
+        assert!(!focused.slots[restored].preparation.is_edges_installed());
     }
 
     #[test]
@@ -4273,7 +5198,7 @@ mod tests {
                         .all(|source| analysis.edge_pairs[&(slot, *source)] == 0)
                 );
             }
-            assert!(!analysis.slots[slot].immutable_setup_complete);
+            assert!(!analysis.slots[slot].preparation.is_edges_installed());
             assert_eq!(
                 analysis.pending.iter().copied().collect::<Vec<_>>(),
                 vec![slot]
@@ -4285,7 +5210,7 @@ mod tests {
             let mut work = TypeWorkBudget::unbounded();
             measured.close(&mut work).unwrap();
             let exact = work.used();
-            assert!(measured.slots[slot].immutable_setup_complete);
+            assert!(measured.slots[slot].preparation.is_edges_installed());
             assert!(
                 measured
                     .dependencies(slot, &mut TypeWorkBudget::unbounded())
@@ -4298,7 +5223,7 @@ mod tests {
                     let mut short = TypeWorkBudget::with_limit(prefix + available);
                     short.charge(prefix).unwrap();
                     assert!(matches!(refused.close(&mut short), Err(Failure::Resource)));
-                    assert!(!refused.slots[attempted].immutable_setup_complete);
+                    assert!(!refused.slots[attempted].preparation.is_edges_installed());
                     if available == exact - 1 {
                         // The last debit follows all original output/link work
                         // and every actual source atom's ordered delivery.
@@ -4322,11 +5247,134 @@ mod tests {
                     exact_work.charge(prefix).unwrap();
                     retried.close(&mut exact_work).unwrap();
                     assert_eq!(exact_work.used(), prefix + exact);
-                    assert!(retried.slots[attempted].immutable_setup_complete);
+                    assert!(retried.slots[attempted].preparation.is_edges_installed());
                     assert_eq!(retried.slots[attempted].atoms, measured.slots[slot].atoms);
                     assert_eq!(retried.edge_pairs, measured.edge_pairs);
                     assert_eq!(retried.watched_pairs, measured.watched_pairs);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn ready_setup_completion_refuses_before_publication_and_keeps_live_inputs() {
+        for shape in 0..6 {
+            let mut graph = graph(vec![
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+                Expr::Slot,
+            ]);
+            graph.expressions[3] = match shape {
+                0 => Expr::Tuple(vec![0, 1]),
+                1 => Expr::Cleanup { body: 1, action: 0 },
+                2 => Expr::Bind {
+                    binder: 2,
+                    initializer: 0,
+                    body: 1,
+                },
+                3 => Expr::Recursive {
+                    bindings: vec![(2, 2)],
+                    body: 1,
+                },
+                4 => Expr::Match {
+                    scrutinee: 0,
+                    arms: vec![(Vec::new(), 1)],
+                },
+                5 => Expr::Resource {
+                    success: None,
+                    failure: None,
+                    handle: 4,
+                    identity: 5,
+                    initializer: 0,
+                    body: 1,
+                    source: graph.sources[3],
+                },
+                _ => unreachable!(),
+            };
+            let setup = || {
+                let mut work = TypeWorkBudget::unbounded();
+                let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+                for expression in [0, 1, 2, 4, 5] {
+                    analysis.slot(expression, 0, &mut work).unwrap();
+                }
+                for expression in [0, 1, 2] {
+                    let input = analysis.indices[&(expression, 0)];
+                    analysis
+                        .atom(input, Atom::Resource(80 + expression, 0), &mut work)
+                        .unwrap();
+                }
+                let binder = analysis.indices[&(2, 0)];
+                let input = analysis.indices[&(0, 0)];
+                analysis.edge(binder, input, &mut work).unwrap();
+                analysis.edge(binder, binder, &mut work).unwrap();
+                analysis.close(&mut work).unwrap();
+                let result = analysis.slot(3, 0, &mut work).unwrap();
+                assert!(analysis.evaluate(result, &mut work).unwrap());
+                assert!(!analysis.slots[result].preparation.is_edges_installed());
+                assert_eq!(
+                    analysis.pending.iter().copied().collect::<Vec<_>>(),
+                    vec![result]
+                );
+                (analysis, result)
+            };
+            let (mut measured, result) = setup();
+            let mut work = TypeWorkBudget::unbounded();
+            measured.close(&mut work).unwrap();
+            let exact = work.used();
+            assert!(measured.slots[result].preparation.is_edges_installed());
+            for prefix in [0, 9] {
+                for available in 0..exact {
+                    let (mut refused, result) = setup();
+                    let mut short = TypeWorkBudget::with_limit(prefix + available);
+                    short.charge(prefix).unwrap();
+                    assert!(
+                        matches!(refused.close(&mut short), Err(Failure::Resource)),
+                        "shape={shape} available={available}"
+                    );
+                    assert!(!refused.slots[result].preparation.is_edges_installed());
+                    if available == exact - 1 {
+                        for &source in &refused.slots[result].edges {
+                            assert_eq!(
+                                refused.edge_pairs[&(result, source)],
+                                refused.slots[source].atoms.len()
+                            );
+                        }
+                    }
+                }
+                let (mut retried, result) = setup();
+                let mut exact_work = TypeWorkBudget::with_limit(prefix + exact);
+                exact_work.charge(prefix).unwrap();
+                retried.close(&mut exact_work).unwrap();
+                assert_eq!(exact_work.used(), prefix + exact);
+                assert!(retried.slots[result].preparation.is_edges_installed());
+                assert_eq!(retried.slots[result].atoms, measured.slots[result].atoms);
+                assert_eq!(retried.edge_pairs, measured.edge_pairs);
+                assert_eq!(retried.watched_pairs, measured.watched_pairs);
+                // Newly arriving ownership/Unknown cannot reopen fixed setup,
+                // but its original source slots and result dependencies stay live.
+                let input = retried.indices[&(1, 0)];
+                retried
+                    .atom(
+                        input,
+                        Atom::Resource(99, 0),
+                        &mut TypeWorkBudget::unbounded(),
+                    )
+                    .unwrap();
+                retried
+                    .atom(input, Atom::Unknown, &mut TypeWorkBudget::unbounded())
+                    .unwrap();
+                retried.close(&mut TypeWorkBudget::unbounded()).unwrap();
+                assert!(
+                    retried
+                        .dependencies(result, &mut TypeWorkBudget::unbounded())
+                        .unwrap()
+                        .contains(&Atom::Resource(99, 0)),
+                    "shape={shape}"
+                );
+                assert!(!retried.slots[result].terminal);
             }
         }
     }
@@ -4405,6 +5453,51 @@ mod tests {
         graph.sources.push(graph.sources[0]);
         graph.evidence = vec![((requirement, method), 2)];
         graph
+    }
+
+    #[test]
+    fn evidence_self_source_snapshot_keeps_unknown_and_late_resource_dependencies() {
+        let mut graph = evidence_completion_graph();
+        let Expr::Evidence { value, .. } = &mut graph.expressions[6] else {
+            unreachable!()
+        };
+        *value = 6;
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        analysis.slot(8, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let owner = Atom::Resource(8, 0);
+        let handle = analysis.indices[&(2, 0)];
+        assert!(analysis.slots[handle].atoms.contains(&owner));
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, owner, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.atom(evidence, Atom::Unknown, &mut work).unwrap();
+        analysis.current = Some(evidence);
+        analysis.evaluate(evidence, &mut work).unwrap();
+        assert_eq!(analysis.slots[evidence].atoms, vec![Atom::Unknown, owner]);
+        analysis.current = None;
+        analysis.close(&mut work).unwrap();
+        let creation = analysis
+            .context(0, Transition::Root(190), &mut work)
+            .unwrap();
+        analysis.slot(8, creation, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let late = Atom::Resource(8, creation);
+        let handle = analysis.indices[&(2, creation)];
+        assert!(analysis.slots[handle].atoms.contains(&late));
+        analysis.atom(argument, late, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(
+            analysis.slots[evidence].atoms,
+            vec![Atom::Unknown, owner, late]
+        );
+        assert_eq!(
+            analysis.dependencies(evidence, &mut work).unwrap(),
+            vec![owner, late]
+        );
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs.contains(&(evidence, evidence)));
     }
 
     #[test]
@@ -4625,11 +5718,13 @@ mod tests {
         }
         let revision = measured.revision;
         let slots = measured.slots.len();
-        // Two original slot+watch reads, singleton value copy, Function guard
-        // and completed-key lookup; no context, binding or output replay.
-        let mut duplicate = TypeWorkBudget::with_limit(8);
+        // ASH_INPUT169_BEGIN_COST
+        // Paid input-phase guard and value-port lookup, Function guard and
+        // completed-key lookup; dynamic routes still run without a value copy.
+        let mut duplicate = TypeWorkBudget::with_limit(4);
         measured.evaluate(evidence, &mut duplicate).unwrap();
-        assert_eq!(duplicate.used(), 8);
+        assert_eq!(duplicate.used(), 4);
+        // ASH_INPUT169_END_COST
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slots);
         assert_eq!(measured.edge_pairs, edges);
@@ -4693,6 +5788,19 @@ mod tests {
         assert_ne!(first_argument, second_argument);
         assert!(analysis.slots[first_argument].readers.contains(&calls[0]));
         assert!(!analysis.slots[first_argument].readers.contains(&calls[1]));
+        let first_invoked = analysis
+            .context(first, Transition::Invoke(6, 5), &mut work)
+            .unwrap();
+        for expression in [2, 3] {
+            let installed = analysis.indices[&(expression, first_invoked)];
+            assert!(!analysis.watched_pairs.contains(&(installed, calls[0])));
+        }
+        let original_capture = analysis.indices[&(3, creation)];
+        assert!(
+            !analysis
+                .watched_pairs
+                .contains(&(original_capture, calls[0]))
+        );
         let argument_owner = Atom::Resource(9, first);
         analysis
             .atom(first_argument, argument_owner, &mut work)
@@ -4789,11 +5897,11 @@ mod tests {
         let slot_count = measured.slots.len();
         let edges = measured.edge_pairs.clone();
         let watches = measured.watched_pairs.clone();
-        // Two existing slots+watches, one argument visit, a singleton atom copy,
+        // Two existing slots+watches, one argument visit, a paid atom visit,
         // and one completed-transfer lookup: no context or edge reconstruction.
-        let mut duplicate = TypeWorkBudget::with_limit(8);
+        let mut duplicate = TypeWorkBudget::with_limit(7);
         measured.evaluate(call, &mut duplicate).unwrap();
-        assert_eq!(duplicate.used(), 8);
+        assert_eq!(duplicate.used(), 7);
         assert_eq!(measured.revision, revision);
         assert_eq!(measured.slots.len(), slot_count);
         assert_eq!(measured.edge_pairs, edges);
@@ -5153,9 +6261,9 @@ mod tests {
             assert_eq!(analysis.edge_pairs.get(&(target, source)), Some(&3));
             Ok::<(), Failure>(())
         };
-        // enqueue + pop + one ordered edge copy + cursor lookup/update +
-        // three-atom suffix copy + three original atom publications.
-        const EXACT: usize = 1 + 1 + 2 + 1 + 2 + 4 + 3 * 3;
+        // enqueue + pop + one original edge visit + cursor write under its loan +
+        // three original ordered atom publications; no retained snapshots.
+        const EXACT: usize = 1 + 1 + 1 + 1 + 3 * 3;
         for prefix in [0, 9] {
             for allowance in 0..EXACT {
                 let mut short = TypeWorkBudget::with_limit(prefix + allowance);
@@ -5173,13 +6281,13 @@ mod tests {
         let mut work = TypeWorkBudget::unbounded();
         analysis.enqueue(target, &mut work).unwrap();
         analysis.close(&mut work).unwrap();
-        let mut caught_up = TypeWorkBudget::with_limit(5);
+        let mut caught_up = TypeWorkBudget::with_limit(3);
         analysis.enqueue(target, &mut caught_up).unwrap();
         analysis.close(&mut caught_up).unwrap();
         assert_eq!(
             caught_up.used(),
-            5,
-            "caught-up replay pays enqueue/pop/ordered edge/cursor, no old atoms"
+            3,
+            "caught-up replay pays enqueue/pop/edge cursor, no old atoms"
         );
         let other_creation = analysis.context(0, Transition::Root(2), &mut work).unwrap();
         for atom in [
@@ -5211,6 +6319,15 @@ mod tests {
         assert_eq!(analysis.slots[target].atoms, analysis.slots[source].atoms);
         assert_eq!(analysis.slots[other].atoms, analysis.slots[source].atoms);
         assert!(analysis.slots[observer].atoms.is_empty());
+        assert_eq!(analysis.slots[target].edges, vec![source, target]);
+        assert_eq!(
+            analysis.edge_pairs[&(target, target)],
+            analysis.slots[target].atoms.len()
+        );
+        assert_eq!(
+            analysis.edge_pairs[&(source, target)],
+            analysis.slots[target].atoms.len()
+        );
         for malformed in [None, Some(4)] {
             let (mut rejected, source, target, _) = setup();
             if let Some(cursor) = malformed {
@@ -5464,6 +6581,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+        assert_eq!(
+            analysis.capture_topologies[first].dictionary,
+            PreparedDictionaryRoutes::Complete
+        );
         let other = analysis.prepare_capture_topology(7, 9, &mut work).unwrap();
         assert_ne!(first, other);
         assert_eq!(analysis.capture_topologies[other].bindings, vec![0, 0]);
@@ -5531,8 +6652,10 @@ mod tests {
             let exact = measured.used();
             // C=3 roots, P=12 pops, U=7 unique visits, J=2 port keys,
             // K=4 ordered routes, I=9 inert pushes. A cold binding index
-            // contributes 2 + 3*B + Q = 9 (B=2, Q=1).
-            assert_eq!(exact, 62 + if prefilled { 0 } else { 9 });
+            // contributes 2 + 3*B + Q = 9 (B=2, Q=1). The one
+            // constructor-local bound-port set entry costs 2. The complete
+            // dictionary projection adds B + 2*P + phase = 2 + 8 + 1 = 11.
+            assert_eq!(exact, 75 + if prefilled { 0 } else { 9 });
             for prefix in [0, 11] {
                 for available in 0..exact {
                     let mut refused = setup(&mut TypeWorkBudget::unbounded());
@@ -6038,6 +7161,285 @@ mod tests {
     }
 
     #[test]
+    fn completed_bound_ports_keep_duplicate_keys_extra_ports_and_late_owner_routes() {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let source = crate::source::SourceFile::new("completed-bound-ports.ash", "x").unwrap();
+        let interface = InterfaceId::new(crate::module::ModuleId::from(source.id()), 0);
+        let method = MethodId::new(interface, 0);
+        let key = |ordinal| {
+            RequirementId::new(RequirementOwner::Global(BinderId::generated(960)), ordinal)
+        };
+        let mut original = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 4,
+                captures: vec![0],
+            },
+            Expr::Evidence {
+                value: 5,
+                bindings: vec![
+                    (key(0), method, 2),
+                    (key(0), method, 2),
+                    (key(1), method, 3),
+                    (key(2), method, 2),
+                ],
+            },
+        ]);
+        let span = original.sources[0];
+        original.expressions.push(Expr::Resource {
+            success: None,
+            failure: None,
+            handle: 2,
+            identity: 3,
+            initializer: 4,
+            body: 4,
+            source: span,
+        });
+        original.sources.push(span);
+        original.positions.insert(88, 7);
+        // Two identical records and a different canonical key share one port;
+        // the uncaptured port1 still needs the original dictionary transfer.
+        original.evidence = vec![
+            ((key(0), method), 0),
+            ((key(0), method), 0),
+            ((key(1), method), 0),
+            ((key(0), method), 1),
+        ];
+        let ordered = original.evidence.clone();
+        // No caller supplies a slot/kind association to the phase constructor.
+        // Ordinary non-Evidence slots never create transfer stages, and a live
+        // wrong-kind Closure in the actual Evidence input still fails closed.
+        let mut invalid = Analysis::new(&original, &mut TypeWorkBudget::unbounded()).unwrap();
+        let evidence_input = invalid
+            .slot(6, 0, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        let wrong_slot = invalid
+            .slot(0, 0, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        invalid.current = Some(wrong_slot);
+        invalid
+            .evaluate(wrong_slot, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        assert!(invalid.callable_transfers.is_empty());
+        assert!(invalid.specialization_transfers.is_empty());
+        let value_input = invalid
+            .slot(5, 0, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        invalid
+            .atom(
+                value_input,
+                Atom::Closure(0, 0),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        invalid.current = Some(evidence_input);
+        assert!(matches!(
+            invalid.evaluate(evidence_input, &mut TypeWorkBudget::unbounded()),
+            Err(Failure::Invalid)
+        ));
+        assert!(invalid.callable_transfers.is_empty());
+        assert!(invalid.specialization_transfers.is_empty());
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&original, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
+        let plan = analysis.capture_topology_indices[&(5, 6)];
+        assert_eq!(
+            analysis.capture_topologies[plan].dictionary,
+            PreparedDictionaryRoutes::Pending(vec![
+                DictionaryObligation {
+                    binding: 0,
+                    evidence: 3
+                },
+                DictionaryObligation {
+                    binding: 1,
+                    evidence: 3
+                },
+            ])
+        );
+        assert_eq!(
+            analysis.capture_topologies[plan].bindings,
+            vec![0, 1, 0, 1, 2]
+        );
+        let covered = analysis.indices[&(0, specialized)];
+        let extra = analysis.indices[&(1, specialized)];
+        let a = analysis.indices[&(2, 0)];
+        let b = analysis.indices[&(3, 0)];
+        assert_eq!(analysis.slots[covered].edges, vec![a, b]);
+        assert_eq!(analysis.slots[extra].edges, vec![a]);
+        assert!(analysis.slots[covered].atoms.is_empty());
+        assert!(analysis.slots[extra].atoms.is_empty());
+        for source in [a, b] {
+            assert!(analysis.slots[source].readers.contains(&evidence));
+        }
+        analysis.slot(7, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let owner = Atom::Resource(7, 0);
+        assert_eq!(analysis.slots[covered].atoms, vec![owner]);
+        assert_eq!(analysis.slots[extra].atoms, vec![owner]);
+        assert_eq!(
+            analysis.dependencies(evidence, &mut work).unwrap(),
+            vec![owner]
+        );
+
+        let reader_context = analysis
+            .context(0, Transition::Root(96), &mut work)
+            .unwrap();
+        let reader = analysis.slot(4, reader_context, &mut work).unwrap();
+        analysis.current = Some(reader);
+        analysis.evaluate(evidence, &mut work).unwrap();
+        for dependency in [covered, extra, a, b] {
+            assert!(analysis.slots[dependency].readers.contains(&reader));
+        }
+        analysis.current = None;
+        analysis.evaluate(evidence, &mut work).unwrap();
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(None, evidence, 5, 0))
+        );
+        assert_eq!(analysis.slots[covered].edges, vec![a, b]);
+        assert_eq!(analysis.slots[extra].edges, vec![a]);
+
+        // A new exact creation still completes its own specialization before
+        // using bound-port membership; neither that creation nor a fresh
+        // Evidence context may borrow another transfer's successful stamp.
+        let creation = analysis
+            .context(0, Transition::Root(97), &mut work)
+            .unwrap();
+        let value = analysis.indices[&(5, 0)];
+        analysis
+            .atom(value, Atom::Closure(5, creation), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.specialization_transfers.contains(&(
+            Some(evidence),
+            5,
+            creation,
+            specialized,
+            6,
+            0
+        )));
+        let fresh_context = analysis
+            .context(0, Transition::Root(98), &mut work)
+            .unwrap();
+        let fresh = analysis.slot(6, fresh_context, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let fresh_specialized = analysis
+            .context(fresh_context, Transition::Call(6), &mut work)
+            .unwrap();
+        let fresh_covered = analysis.indices[&(0, fresh_specialized)];
+        let fresh_extra = analysis.indices[&(1, fresh_specialized)];
+        assert_ne!(fresh_covered, covered);
+        assert_ne!(fresh_extra, extra);
+        assert!(analysis.slots[fresh_covered].atoms.is_empty());
+        assert!(analysis.slots[fresh_extra].atoms.is_empty());
+        let fresh_a = analysis.indices[&(2, fresh_context)];
+        analysis.atom(fresh_a, Atom::Unknown, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(analysis.slots[fresh_extra].atoms, vec![Atom::Unknown]);
+        assert_eq!(analysis.slots[covered].atoms, vec![owner]);
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(fresh), fresh, 5, fresh_context))
+        );
+        // A single visit must recover the same loan after completed and new
+        // Closure transfers and continue the original Unknown/nonclosure path.
+        let third_creation = analysis
+            .context(0, Transition::Root(99), &mut work)
+            .unwrap();
+        analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+        analysis.atom(value, Atom::Free, &mut work).unwrap();
+        analysis
+            .atom(value, Atom::Closure(5, third_creation), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.callable_transfers.contains(&(
+            Some(evidence),
+            evidence,
+            5,
+            third_creation
+        )));
+        let unknown = analysis.slots[evidence]
+            .atoms
+            .iter()
+            .position(|atom| *atom == Atom::Unknown)
+            .unwrap();
+        let free = analysis.slots[evidence]
+            .atoms
+            .iter()
+            .position(|atom| *atom == Atom::Free)
+            .unwrap();
+        assert!(unknown < free);
+        assert!(analysis.slots[evidence].atoms.contains(&owner));
+        assert_eq!(original.evidence, ordered);
+        let (focused, _) = analysis.focused(88, 0, &mut work).unwrap();
+        assert!(focused.capture_topologies.is_empty());
+        assert!(focused.capture_topology_indices.is_empty());
+        assert!(focused.specialization_transfers.is_empty());
+        assert!(focused.callable_transfers.is_empty());
+
+        // Exercise the entire consumer transition, including residual routes
+        // and output publication, at every charged refusal boundary. Original
+        // partial setup is query-local; only a fresh query is retried.
+        fn setup(graph: &Graph) -> (Analysis<'_>, usize) {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(graph, &mut work).unwrap();
+            let evidence = analysis.slot(6, 0, &mut work).unwrap();
+            let value = analysis.slot(5, 0, &mut work).unwrap();
+            analysis
+                .atom(value, Atom::Closure(5, 0), &mut work)
+                .unwrap();
+            analysis.current = Some(evidence);
+            (analysis, evidence)
+        }
+        let (mut measured, source) = setup(&original);
+        let mut measure = TypeWorkBudget::unbounded();
+        measured.evaluate(source, &mut measure).unwrap();
+        let exact = measure.used();
+        assert!(
+            measured
+                .callable_transfers
+                .contains(&(Some(source), source, 5, 0))
+        );
+        for prefix in [0, 9] {
+            for available in 0..exact {
+                let (mut refused, source) = setup(&original);
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    refused.evaluate(source, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(
+                    refused.callable_transfers.is_empty(),
+                    "no ready closure stamp before complete output publication"
+                );
+            }
+            let (mut retried, source) = setup(&original);
+            let mut retry = TypeWorkBudget::with_limit(prefix + exact);
+            retry.charge(prefix).unwrap();
+            retried.evaluate(source, &mut retry).unwrap();
+            assert_eq!(retry.used(), prefix + exact);
+            assert_eq!(retried.callable_transfers, measured.callable_transfers);
+            assert_eq!(
+                retried.specialization_transfers,
+                measured.specialization_transfers
+            );
+            assert_eq!(retried.edge_pairs, measured.edge_pairs);
+            assert_eq!(retried.watched_pairs, measured.watched_pairs);
+            assert_eq!(retried.slots[source].atoms, measured.slots[source].atoms);
+        }
+    }
+
+    #[test]
     fn indexed_bindings_keep_late_notifications_and_distinct_argument_contexts() {
         use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
         let source = crate::source::SourceFile::new("binding-notifications.ash", "x").unwrap();
@@ -6389,6 +7791,43 @@ mod tests {
             vec![Atom::Unknown],
             "the same method under another requirement retains its lexical value"
         );
+        drop(analysis);
+        // No captures establish no installed dictionary routes. Both required
+        // global ports still receive their original argument in a fresh query.
+        let Expr::Function { captures, .. } = &mut graph.expressions[4] else {
+            unreachable!()
+        };
+        captures.clear();
+        let mut empty = Analysis::new(&graph, &mut work).unwrap();
+        let result = empty.slot(5, 0, &mut work).unwrap();
+        empty.close(&mut work).unwrap();
+        let specialized = empty.slots[result]
+            .atoms
+            .iter()
+            .find_map(|atom| match atom {
+                Atom::Closure(4, context) => Some(*context),
+                _ => None,
+            })
+            .unwrap();
+        let plan = empty.capture_topology_indices[&(4, 5)];
+        assert!(empty.capture_topologies[plan].visits.is_empty());
+        assert_eq!(
+            empty.capture_topologies[plan].dictionary,
+            PreparedDictionaryRoutes::Pending(vec![
+                DictionaryObligation {
+                    binding: 0,
+                    evidence: 0
+                },
+                DictionaryObligation {
+                    binding: 0,
+                    evidence: 1
+                },
+            ])
+        );
+        for port in [0, 1] {
+            let target = empty.indices[&(port, specialized)];
+            assert_eq!(empty.slots[target].atoms, vec![Atom::Free]);
+        }
     }
 
     #[test]
@@ -6591,8 +8030,8 @@ mod tests {
                     analysis.dependencies(result, budget).map(|_| ())
                 }
             };
-            // Two singleton copy_slice owners cost two each, plus pop and atom visits.
-            let prefix = if shape == 0 { 0 } else { 6 };
+            // The singleton root costs two; its pop and borrowed atom visit cost one each.
+            let prefix = if shape == 0 { 0 } else { 4 };
             for limit in [0, prefix + WIDTH - 1] {
                 let mut budget = TypeWorkBudget::with_limit(limit);
                 assert!(matches!(run(&mut budget), Err(Failure::Resource)));
@@ -6853,7 +8292,10 @@ mod tests {
                 },
                 &methods,
                 &[],
-                &mut NodeMetadataHeaders::default(),
+                &mut FunctionMetadataPreparation::new(&nodes, |kind| match kind {
+                    EffectExprKind::Operation(operation) => Some(operation),
+                    _ => None,
+                }),
                 budget,
             );
             if early {
@@ -6878,8 +8320,73 @@ mod tests {
     }
 
     #[test]
+    fn completed_match_setup_keeps_late_constructor_payload_ownership() {
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let first = ConstructorId::new(family, 0);
+        let second = ConstructorId::new(family, 1);
+        let graph = graph(vec![
+            Expr::Slot,
+            Expr::Slot,
+            Expr::Project {
+                value: 0,
+                field: 0,
+                constructor: Some(second),
+            },
+            Expr::Match {
+                scrutinee: 0,
+                arms: vec![(Vec::new(), 4), (vec![(5, 2)], 6)],
+            },
+            Expr::Scalar,
+            Expr::Slot,
+            Expr::Alias(5),
+            Expr::Constructor(second),
+            Expr::Call {
+                function: 7,
+                arguments: vec![1],
+                scalar: false,
+                type_application: false,
+            },
+        ]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let scrutinee = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(scrutinee, Atom::Constructor(first), &mut work)
+            .unwrap();
+        let result = analysis.slot(3, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[result].preparation.is_edges_installed());
+        assert_eq!(analysis.slots[result].atoms, vec![Atom::Free]);
+        let edges = analysis.slots[result].edges.clone();
+        let payload = analysis.slot(1, 0, &mut work).unwrap();
+        let owner = Atom::Resource(99, 0);
+        analysis.atom(payload, owner, &mut work).unwrap();
+        let constructor_application = analysis.slot(8, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(
+            analysis.slots[constructor_application]
+                .atoms
+                .contains(&Atom::Aggregate(8, 0))
+        );
+        analysis
+            .atom(scrutinee, Atom::Constructor(second), &mut work)
+            .unwrap();
+        analysis
+            .atom(scrutinee, Atom::Aggregate(8, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[result].preparation.is_edges_installed());
+        assert_eq!(analysis.slots[result].edges, edges);
+        assert_eq!(analysis.slots[result].atoms, vec![Atom::Free, owner]);
+        assert_eq!(
+            analysis.dependencies(result, &mut work).unwrap(),
+            vec![owner]
+        );
+    }
+
+    #[test]
     fn strict_results_wait_for_bottom_inputs_and_wake_on_late_values() {
-        for shape in 0..5 {
+        for shape in 0..7 {
             let mut graph = graph(vec![
                 Expr::Slot,
                 Expr::Slot,
@@ -6926,6 +8433,12 @@ mod tests {
                     body: 3,
                     source: graph.sources[6],
                 },
+                5 => Expr::Cleanup { body: 3, action: 0 },
+                6 => Expr::Bind {
+                    binder: 7,
+                    initializer: 0,
+                    body: 3,
+                },
                 _ => unreachable!(),
             };
             let run = |budget: &mut TypeWorkBudget| {
@@ -6939,6 +8452,7 @@ mod tests {
                     analysis.slots[result].atoms.is_empty(),
                     "shape={shape} must not manufacture a result"
                 );
+                assert!(!analysis.slots[result].preparation.is_edges_installed());
                 if shape == 4 {
                     assert!(
                         analysis
@@ -6954,6 +8468,19 @@ mod tests {
                     analysis.dependencies(result, budget)?.contains(&marker),
                     "shape={shape} must wake after resume"
                 );
+                assert_eq!(
+                    analysis.slots[result].preparation.is_edges_installed(),
+                    shape != 2
+                );
+                // Setup readiness never freezes the result or its lexical fields.
+                // A later owner still reaches the same returned closure dependency.
+                let later = Atom::Resource(100, 0);
+                analysis.atom(capture, later, budget)?;
+                analysis.close(budget)?;
+                let dependencies = analysis.dependencies(result, budget)?;
+                assert!(dependencies.contains(&marker), "shape={shape}");
+                assert!(dependencies.contains(&later), "shape={shape}");
+                assert!(!analysis.slots[result].terminal);
                 Ok::<(), Failure>(())
             };
             let mut measured = TypeWorkBudget::unbounded();
@@ -7522,4 +9049,575 @@ mod tests {
             "frozen pre-entry ports cannot be mutated"
         );
     }
+
+    fn structural_transfer_chain_graph() -> Graph {
+        let mut graph = evidence_completion_graph();
+        graph.expressions.extend([
+            Expr::Merge(vec![2, 3]),
+            Expr::Function {
+                parameters: Vec::new(),
+                body: 9,
+                captures: vec![2, 3],
+            },
+            Expr::Call {
+                function: 6,
+                arguments: Vec::new(),
+                scalar: false,
+                type_application: false,
+            },
+            Expr::Slot,
+        ]);
+        graph.sources.extend([graph.sources[0]; 4]);
+        let Expr::Function { body, .. } = &mut graph.expressions[5] else {
+            unreachable!()
+        };
+        *body = 9;
+        graph
+    }
+
+    #[test]
+    fn structural_transfer_chain_keeps_late_identity_unknown_and_real_consumers() {
+        let graph = structural_transfer_chain_graph();
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let value = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(value, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        let lexical = analysis.slot(3, 0, &mut work).unwrap();
+        let call = analysis.slot(11, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let evidence = analysis.indices[&(6, 0)];
+        let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
+        let invoked = analysis
+            .context(0, Transition::Invoke(11, 5), &mut work)
+            .unwrap();
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(evidence), evidence, 5, 0))
+        );
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(call), call, 5, specialized))
+        );
+        for expression in [2, 3] {
+            let capture = analysis.indices[&(expression, specialized)];
+            let destination = analysis.indices[&(expression, invoked)];
+            assert!(analysis.edge_pairs.contains_key(&(destination, capture)));
+            assert!(!analysis.watched_pairs.contains(&(capture, evidence)));
+            assert!(!analysis.watched_pairs.contains(&(capture, call)));
+            assert!(!analysis.watched_pairs.contains(&(destination, call)));
+        }
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        assert!(analysis.watched_pairs.contains(&(evidence, call)));
+        let body = analysis.indices[&(9, invoked)];
+        assert!(analysis.watched_pairs.contains(&(body, call)));
+        let consumer = analysis.slot(12, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.current = Some(consumer);
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .is_empty()
+        );
+        let captured = analysis.indices[&(3, specialized)];
+        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        analysis.current = None;
+        let owner = Atom::Resource(8, 0);
+        analysis.atom(lexical, owner, &mut work).unwrap();
+        assert!(analysis.slots[captured].queued);
+        assert!(!analysis.slots[evidence].queued);
+        assert!(!analysis.slots[call].queued);
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[call].atoms.contains(&owner));
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .contains(&owner)
+        );
+
+        // A later actual Closure identity installs its own complete transfer.
+        let other_creation = analysis
+            .context(0, Transition::Root(216), &mut work)
+            .unwrap();
+        let other_capture = analysis.slot(3, other_creation, &mut work).unwrap();
+        let other_owner = Atom::Resource(8, other_creation);
+        analysis
+            .atom(other_capture, other_owner, &mut work)
+            .unwrap();
+        analysis
+            .atom(value, Atom::Closure(10, other_creation), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.callable_transfers.contains(&(
+            Some(evidence),
+            evidence,
+            10,
+            other_creation
+        )));
+        assert!(
+            analysis
+                .callable_transfers
+                .contains(&(Some(call), call, 10, specialized))
+        );
+        assert!(analysis.slots[call].atoms.contains(&other_owner));
+        let stamps = analysis.callable_transfers.clone();
+        let specialization_stamps = analysis.specialization_transfers.clone();
+        analysis
+            .atom(argument, Atom::Aggregate(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[evidence].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&owner));
+        assert!(analysis.slots[call].atoms.contains(&other_owner));
+        assert!(analysis.watched_pairs.contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs.contains(&(captured, call)));
+        assert_eq!(analysis.callable_transfers, stamps);
+        assert_eq!(analysis.specialization_transfers, specialization_stamps);
+    }
+
+    #[test]
+    fn structural_transfer_chain_refusal_keeps_independent_publication_and_fresh_retry() {
+        fn setup(graph: &Graph) -> (Analysis<'_>, usize, usize) {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(graph, &mut work).unwrap();
+            let value = analysis.slot(0, 0, &mut work).unwrap();
+            analysis
+                .atom(value, Atom::Closure(5, 0), &mut work)
+                .unwrap();
+            let argument = analysis.slot(1, 0, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            let lexical = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.atom(lexical, Atom::Free, &mut work).unwrap();
+            let evidence = analysis.slot(6, 0, &mut work).unwrap();
+            let call = analysis.slot(11, 0, &mut work).unwrap();
+            (analysis, evidence, call)
+        }
+        fn install(
+            analysis: &mut Analysis<'_>,
+            evidence: usize,
+            call: usize,
+            work: &mut TypeWorkBudget,
+        ) -> Result<(), Failure> {
+            analysis.current = Some(evidence);
+            analysis.evaluate(evidence, work)?;
+            analysis.current = Some(call);
+            analysis.evaluate(call, work)?;
+            Ok(())
+        }
+        let graph = structural_transfer_chain_graph();
+        let (mut measured, evidence, call) = setup(&graph);
+        let mut exact = TypeWorkBudget::unbounded();
+        install(&mut measured, evidence, call, &mut exact).unwrap();
+        let required = exact.used();
+        let transfers = measured.callable_transfers.clone();
+        let specialization_stamps = measured.specialization_transfers.clone();
+        let edges = measured.edge_pairs.clone();
+        let watches = measured.watched_pairs.clone();
+        measured.current = None;
+        measured.close(&mut TypeWorkBudget::unbounded()).unwrap();
+        let result = measured.slots[call].atoms.clone();
+        let mut saw_completed_evidence_before_call_refusal = false;
+        for prefix in [0, 11] {
+            for available in 0..required {
+                let (mut refused, evidence, call) = setup(&graph);
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    install(&mut refused, evidence, call, &mut short),
+                    Err(Failure::Resource)
+                ));
+                assert!(
+                    !refused
+                        .callable_transfers
+                        .iter()
+                        .any(|(_, reader, _, _)| *reader == call)
+                );
+                if refused
+                    .callable_transfers
+                    .contains(&(Some(evidence), evidence, 5, 0))
+                {
+                    saw_completed_evidence_before_call_refusal = true;
+                    assert_eq!(
+                        refused.slots[evidence].preparation,
+                        SlotPreparation::EvidenceInputsInstalled
+                    );
+                }
+            }
+            let (mut retried, evidence, call) = setup(&graph);
+            let mut retry = TypeWorkBudget::with_limit(prefix + required);
+            retry.charge(prefix).unwrap();
+            install(&mut retried, evidence, call, &mut retry).unwrap();
+            assert_eq!(retry.used(), prefix + required);
+            assert_eq!(retried.callable_transfers, transfers);
+            assert_eq!(retried.specialization_transfers, specialization_stamps);
+            assert_eq!(retried.edge_pairs, edges);
+            assert_eq!(retried.watched_pairs, watches);
+            retried.current = None;
+            retried.close(&mut TypeWorkBudget::unbounded()).unwrap();
+            assert_eq!(retried.slots[call].atoms, result);
+        }
+        assert!(saw_completed_evidence_before_call_refusal);
+    }
+
+    // ASH_INPUT169_BEGIN_TESTS
+    #[test]
+    fn structural_specialization_keeps_late_capture_and_unknown_consumers_live() {
+        let mut graph = evidence_completion_graph();
+        graph.expressions.push(Expr::Slot);
+        graph.sources.push(graph.sources[0]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let value = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(value, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        let lexical = analysis.slot(3, 0, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let specialized = analysis.context(0, Transition::Call(6), &mut work).unwrap();
+        let bound = analysis.indices[&(2, specialized)];
+        let captured = analysis.indices[&(3, specialized)];
+        assert!(analysis.edge_pairs.contains_key(&(bound, argument)));
+        assert!(analysis.edge_pairs.contains_key(&(captured, lexical)));
+        assert!(!analysis.watched_pairs.contains(&(bound, evidence)));
+        assert!(!analysis.watched_pairs.contains(&(captured, evidence)));
+        assert!(!analysis.watched_pairs.contains(&(lexical, evidence)));
+        assert!(analysis.watched_pairs.contains(&(argument, evidence)));
+        let consumer = analysis.slot(9, 0, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.current = Some(consumer);
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(analysis.watched_pairs.contains(&(captured, consumer)));
+        analysis.current = None;
+        let owner = Atom::Resource(8, 0);
+        analysis.atom(lexical, owner, &mut work).unwrap();
+        assert!(analysis.slots[captured].queued);
+        assert!(!analysis.slots[evidence].queued);
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[captured].atoms.contains(&owner));
+        assert_eq!(
+            analysis.dependencies(evidence, &mut work).unwrap(),
+            vec![owner]
+        );
+        let stamps = analysis.specialization_transfers.clone();
+        analysis
+            .atom(argument, Atom::Aggregate(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[evidence].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[evidence].atoms.contains(&owner));
+        assert_eq!(analysis.specialization_transfers, stamps);
+    }
+
+    #[test]
+    fn evidence_input_phase_keeps_late_live_atoms_and_other_direct_readers() {
+        let graph = evidence_completion_graph();
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let value = analysis.slot(0, 0, &mut work).unwrap();
+        let argument = analysis.slot(1, 0, &mut work).unwrap();
+        analysis.atom(argument, Atom::Free, &mut work).unwrap();
+        let lexical = analysis.slot(3, 0, &mut work).unwrap();
+        analysis.atom(lexical, Atom::Free, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.current = Some(evidence);
+        assert!(!analysis.evaluate(evidence, &mut work).unwrap());
+        assert_eq!(
+            analysis.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        assert!(analysis.slots[evidence].atoms.is_empty());
+        for source in [value, argument] {
+            assert!(analysis.watched_pairs.contains(&(source, evidence)));
+            assert!(analysis.slots[source].readers.contains(&evidence));
+        }
+        analysis.current = None;
+        analysis
+            .atom(value, Atom::Closure(5, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(!analysis.slots[evidence].atoms.is_empty());
+        assert_eq!(
+            analysis.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+
+        let owner_context = analysis
+            .context(0, Transition::Root(170), &mut work)
+            .unwrap();
+        analysis.slot(8, owner_context, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        let owner = Atom::Resource(8, owner_context);
+        let handle = analysis.indices[&(2, owner_context)];
+        assert!(analysis.slots[handle].atoms.contains(&owner));
+        analysis.atom(argument, owner, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(
+            analysis
+                .dependencies(evidence, &mut work)
+                .unwrap()
+                .contains(&owner)
+        );
+
+        let reader_context = analysis
+            .context(0, Transition::Root(171), &mut work)
+            .unwrap();
+        let reader = analysis.slot(4, reader_context, &mut work).unwrap();
+        analysis.current = Some(reader);
+        analysis.evaluate(evidence, &mut work).unwrap();
+        for source in [value, argument] {
+            assert!(analysis.watched_pairs.contains(&(source, reader)));
+            assert!(analysis.slots[source].readers.contains(&reader));
+        }
+        assert_eq!(
+            analysis.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+
+        // A cold None-reader visit cannot certify the slot's own input watches.
+        let none_context = analysis
+            .context(0, Transition::Root(172), &mut work)
+            .unwrap();
+        analysis.current = None;
+        let none_evidence = analysis.slot(6, none_context, &mut work).unwrap();
+        analysis.evaluate(none_evidence, &mut work).unwrap();
+        assert_eq!(
+            analysis.slots[none_evidence].preparation,
+            SlotPreparation::Pending
+        );
+
+        // A prepared input phase cannot freeze Unknown's deep dependency walk.
+        let unknown_context = analysis
+            .context(0, Transition::Root(173), &mut work)
+            .unwrap();
+        let unknown_value = analysis.slot(0, unknown_context, &mut work).unwrap();
+        analysis
+            .atom(unknown_value, Atom::Unknown, &mut work)
+            .unwrap();
+        let unknown_argument = analysis.slot(1, unknown_context, &mut work).unwrap();
+        analysis
+            .atom(
+                unknown_argument,
+                Atom::Aggregate(7, unknown_context),
+                &mut work,
+            )
+            .unwrap();
+        let field = analysis.slot(3, unknown_context, &mut work).unwrap();
+        analysis.atom(field, Atom::Free, &mut work).unwrap();
+        let unknown = analysis.slot(6, unknown_context, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert_eq!(
+            analysis.slots[unknown].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        assert!(analysis.slots[field].readers.contains(&unknown));
+        analysis.atom(field, owner, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[unknown].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[unknown].atoms.contains(&owner));
+    }
+
+    #[test]
+    fn evidence_input_phase_refusal_cuts_distinguish_inputs_from_dynamic_completion() {
+        let graph = evidence_completion_graph();
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            analysis.slot(0, 0, &mut work).unwrap();
+            analysis.slot(1, 0, &mut work).unwrap();
+            let evidence = analysis.slot(6, 0, &mut work).unwrap();
+            analysis.current = Some(evidence);
+            (analysis, evidence)
+        };
+        let setup_with_live_value = || {
+            let (mut analysis, evidence) = setup();
+            let mut work = TypeWorkBudget::unbounded();
+            let value = analysis.indices[&(0, 0)];
+            let argument = analysis.indices[&(1, 0)];
+            analysis.atom(value, Atom::Unknown, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            (analysis, evidence)
+        };
+        let (mut measured, evidence) = setup_with_live_value();
+        let mut exact = TypeWorkBudget::unbounded();
+        measured.evaluate(evidence, &mut exact).unwrap();
+        assert_eq!(
+            measured.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        let mut saw_pending = false;
+        let mut saw_completed_inputs = false;
+        for prefix in [0, 13] {
+            for available in 0..exact.used() {
+                let (mut refused, evidence) = setup_with_live_value();
+                let mut short = TypeWorkBudget::with_limit(prefix + available);
+                short.charge(prefix).unwrap();
+                assert!(matches!(
+                    refused.evaluate(evidence, &mut short),
+                    Err(Failure::Resource)
+                ));
+                match refused.slots[evidence].preparation {
+                    SlotPreparation::Pending => saw_pending = true,
+                    SlotPreparation::EvidenceInputsInstalled => {
+                        saw_completed_inputs = true;
+                        for expression in [0, 1] {
+                            let source = refused.indices[&(expression, 0)];
+                            assert!(refused.watched_pairs.contains(&(source, evidence)));
+                            assert!(refused.slots[source].readers.contains(&evidence));
+                        }
+                    }
+                    SlotPreparation::EdgesInstalled => panic!("Evidence cannot finish fixed setup"),
+                }
+                assert!(refused.callable_transfers.is_empty());
+                assert!(refused.specialization_transfers.is_empty());
+                let mut retry = TypeWorkBudget::unbounded();
+                refused.evaluate(evidence, &mut retry).unwrap();
+                assert_eq!(
+                    refused.slots[evidence].preparation,
+                    SlotPreparation::EvidenceInputsInstalled
+                );
+                assert_eq!(refused.watched_pairs, measured.watched_pairs);
+                assert_eq!(
+                    refused.slots[evidence].atoms,
+                    measured.slots[evidence].atoms
+                );
+            }
+        }
+        assert!(saw_pending && saw_completed_inputs);
+        // Keep the empty-input boundary separate from genuine live routing.
+        let (mut measured, evidence) = setup();
+        measured
+            .evaluate(evidence, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        let mut warm = TypeWorkBudget::unbounded();
+        measured.evaluate(evidence, &mut warm).unwrap();
+        // Empty live input pays only the phase guard and exact value port.
+        assert_eq!(warm.used(), 2);
+        for available in 0..warm.used() {
+            let mut short = TypeWorkBudget::with_limit(available);
+            assert!(matches!(
+                measured.evaluate(evidence, &mut short),
+                Err(Failure::Resource)
+            ));
+            assert_eq!(
+                measured.slots[evidence].preparation,
+                SlotPreparation::EvidenceInputsInstalled
+            );
+        }
+        measured.indices.remove(&(0, 0));
+        assert!(matches!(
+            measured.evaluate(evidence, &mut TypeWorkBudget::unbounded()),
+            Err(Failure::Invalid)
+        ));
+        assert!(measured.callable_transfers.is_empty());
+
+        // Input preparation may survive later malformed live Closure routing;
+        // no successful callable/output phase can be inferred from it.
+        let (mut malformed, evidence) = setup();
+        let value = malformed.indices[&(0, 0)];
+        malformed.slots[value].atoms = vec![Atom::Closure(7, 0)];
+        assert!(matches!(
+            malformed.evaluate(evidence, &mut TypeWorkBudget::unbounded()),
+            Err(Failure::Invalid)
+        ));
+        assert_eq!(
+            malformed.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        assert!(malformed.callable_transfers.is_empty());
+        assert!(malformed.slots[evidence].atoms.is_empty());
+    }
+
+    #[test]
+    fn evidence_input_phase_duplicate_inputs_and_focused_contexts_keep_exact_relations() {
+        let mut graph = evidence_completion_graph();
+        graph.positions.insert(174, 8);
+        let Expr::Evidence { bindings, .. } = &mut graph.expressions[6] else {
+            unreachable!()
+        };
+        let key = (bindings[0].0, bindings[0].1);
+        bindings.push((key.0, key.1, 1));
+        bindings.push((key.0, key.1, 6)); // The original Evidence is also an input.
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+        let evidence = analysis.slot(6, 0, &mut work).unwrap();
+        analysis.current = Some(evidence);
+        analysis.evaluate(evidence, &mut work).unwrap();
+        for expression in [0, 1, 6] {
+            let source = analysis.indices[&(expression, 0)];
+            assert_eq!(
+                analysis.slots[source]
+                    .readers
+                    .iter()
+                    .filter(|&&reader| reader == evidence)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            analysis.slots[evidence].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        let other_context = analysis
+            .context(0, Transition::Root(175), &mut work)
+            .unwrap();
+        analysis.current = None;
+        let other = analysis.slot(6, other_context, &mut work).unwrap();
+        assert_eq!(analysis.slots[other].preparation, SlotPreparation::Pending);
+        analysis.current = Some(other);
+        analysis.evaluate(other, &mut work).unwrap();
+        assert_eq!(
+            analysis.slots[other].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        let other_source = analysis.indices[&(1, other_context)];
+        assert_ne!(other_source, analysis.indices[&(1, 0)]);
+        assert!(analysis.watched_pairs.contains(&(other_source, other)));
+        assert!(!analysis.watched_pairs.contains(&(other_source, evidence)));
+
+        let (mut focused, context) = analysis.focused(174, 0, &mut work).unwrap();
+        for original in 0..analysis.slots.len() {
+            assert!(focused.slots[original].terminal);
+            assert_eq!(
+                focused.slots[original].preparation,
+                SlotPreparation::Pending
+            );
+        }
+        focused.current = None;
+        let fresh = focused.slot(6, context, &mut work).unwrap();
+        assert_eq!(focused.slots[fresh].preparation, SlotPreparation::Pending);
+        focused.current = Some(fresh);
+        focused.evaluate(fresh, &mut work).unwrap();
+        assert_eq!(
+            focused.slots[fresh].preparation,
+            SlotPreparation::EvidenceInputsInstalled
+        );
+        let source = focused.indices[&(1, context)];
+        assert!(focused.watched_pairs.contains(&(source, fresh)));
+        assert!(!focused.watched_pairs.contains(&(source, evidence)));
+        assert!(
+            Analysis::new(&graph, &mut work)
+                .unwrap()
+                .watched_pairs
+                .is_empty()
+        );
+    }
+    // ASH_INPUT169_END_TESTS
 }

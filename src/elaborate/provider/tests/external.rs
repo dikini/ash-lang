@@ -3694,7 +3694,16 @@ fn local_original_completion_requires_exact_ordered_allocations_and_budget() {
     let pending = || PreparedLocalProviderCode {
         module: fixture.resolved.module(),
         code: None,
-        originals: originals.clone(),
+        originals: originals
+            .iter()
+            .map(|original| {
+                ProviderOriginalPreparation::new(
+                    Arc::clone(original),
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .unwrap()
+            })
+            .collect(),
     };
     let rebuilt = build();
     for mutation in 0..6 {
@@ -3888,5 +3897,272 @@ fn retained_state_associations_are_checked_at_the_original_template_view() {
                 .is_err(),
             "retained association mutation {mutation}"
         );
+        assert!(
+            PreparedOriginalTemplate::prepare(
+                &group.declarations[1],
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .is_err(),
+            "cold prepared association mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn prepared_original_views_preserve_publication_routes_and_budget_boundaries() {
+    let source = constrained_source()
+        .replace("import helper as Helper\n", "")
+        .replace("import helper (impl Pass, impl Stamp)\n", "")
+        .replace("Helper.normalize", "normalize");
+    let source = format!(
+        "{source}\n{}\nmain : Unit -> Int\nmain () = 42\n",
+        CONSTRAINED_HELPER.replace("import @foreign.sqlite as Native\n", "")
+    );
+    let fixture = Fixture::new(&source);
+    let slots = normal_pending_slots(&fixture.resolved);
+    assert!(slots.iter().any(|slot| slot.selection().is_none()));
+    let checked = check_module(fixture.resolved).unwrap();
+    assert!(slots.iter().all(|slot| slot.selection().is_some()));
+    let raw = Arc::clone(checked.provider_code().unwrap());
+    let mut entry = Some(checked);
+    let mut modules = Vec::<CheckedModule>::new();
+    for loaded in fixture.graph.modules() {
+        if loaded.id() == fixture.graph.entry() {
+            modules.push(entry.take().unwrap());
+            continue;
+        }
+        let dependencies = loaded
+            .dependencies()
+            .iter()
+            .map(|edge| {
+                DependencyExports::new(
+                    edge,
+                    modules
+                        .iter()
+                        .find(|module| module.module() == edge.target())
+                        .unwrap()
+                        .exports(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        modules.push(check_module(resolve_module(loaded, &dependencies).unwrap()).unwrap());
+    }
+    let linked = crate::elaborate::link_modules(modules, fixture.graph.entry()).unwrap();
+    let definition = raw.declarations[0].fact.id;
+    let family = raw.declarations[0].fact.family;
+    let owner = || {
+        ProviderGroupPreparation::new(Arc::clone(&raw), &mut TypeWorkBudget::unbounded()).unwrap()
+    };
+    let prepared = owner();
+    let mut cold = TypeWorkBudget::unbounded();
+    let view = prepared
+        .imported_template_source(definition, family, raw.contracts(), &mut cold)
+        .unwrap();
+    assert!(Arc::ptr_eq(view.fact, &raw.declarations[0].fact));
+    let cost = cold.used();
+    let mut warm = TypeWorkBudget::unbounded();
+    prepared
+        .imported_template_source(definition, family, raw.contracts(), &mut warm)
+        .unwrap();
+    assert_eq!(warm.used(), raw.declarations.len() + 3);
+    assert!(warm.used() < cost);
+    assert!(
+        prepared
+            .imported_template_source(
+                definition,
+                NominalTypeId::new(family.module(), u32::MAX),
+                raw.contracts(),
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .is_err()
+    );
+    let reentered = owner();
+    {
+        let _phase = reentered.phase.try_lock().unwrap();
+        assert!(matches!(
+            reentered.imported_template_source(
+                definition,
+                family,
+                raw.contracts(),
+                &mut TypeWorkBudget::unbounded(),
+            ),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        ));
+        assert!(reentered.templates.try_lock().unwrap().is_empty());
+    }
+    {
+        let _templates = reentered.templates.try_lock().unwrap();
+        assert!(matches!(
+            reentered
+                .pending_template_source(definition, family, &mut TypeWorkBudget::unbounded(),),
+            Err(TypeError::Internal(ElaborationFailure::InvalidState))
+        ));
+    }
+    // Linked routing is independently checked even after source preparation.
+    prepared
+        .template_source(
+            definition,
+            family,
+            linked.registry(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+    let missing = Fixture::new(&source);
+    assert!(!missing.resolved.registry().has_provider_contracts());
+    assert!(matches!(
+        prepared.template_source(
+            definition,
+            family,
+            missing.resolved.registry(),
+            &mut TypeWorkBudget::unbounded(),
+        ),
+        Err(TypeError::Internal(ElaborationFailure::InvalidState))
+    ));
+    let substituted = Arc::new(CheckedProviderContracts {
+        module: raw.contracts.module,
+        declarations: raw.contracts.declarations.clone(),
+        sources: raw.contracts.sources.clone(),
+    });
+    assert!(
+        prepared
+            .imported_template_source(
+                definition,
+                family,
+                &substituted,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .is_err()
+    );
+    assert!(
+        owner()
+            .imported_template_source(
+                definition,
+                family,
+                &substituted,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .is_err()
+    );
+    for prefix in [0, 9] {
+        let refused = owner();
+        let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        short.charge(prefix).unwrap();
+        assert!(matches!(
+            refused.imported_template_source(definition, family, raw.contracts(), &mut short,),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        assert!(refused.templates.try_lock().unwrap().is_empty());
+        assert!(matches!(
+            *refused.phase.try_lock().unwrap(),
+            GroupPreparationPhase::Committed(_)
+        ));
+        let mut remaining = TypeWorkBudget::unbounded();
+        refused
+            .imported_template_source(definition, family, raw.contracts(), &mut remaining)
+            .unwrap();
+        let remaining_cost = remaining.used();
+        assert!(remaining_cost < cost);
+        let retry = owner();
+        let mut retry_short = TypeWorkBudget::with_limit(prefix + cost - 1);
+        retry_short.charge(prefix).unwrap();
+        assert!(matches!(
+            retry.imported_template_source(definition, family, raw.contracts(), &mut retry_short,),
+            Err(TypeError::Internal(
+                ElaborationFailure::TypeResourceExhausted
+            ))
+        ));
+        let mut exact_remaining = TypeWorkBudget::with_limit(prefix + remaining_cost);
+        exact_remaining.charge(prefix).unwrap();
+        retry
+            .imported_template_source(definition, family, raw.contracts(), &mut exact_remaining)
+            .unwrap();
+        assert_eq!(exact_remaining.used(), prefix + remaining_cost);
+        let mut retry_warm = TypeWorkBudget::unbounded();
+        retry
+            .imported_template_source(definition, family, raw.contracts(), &mut retry_warm)
+            .unwrap();
+        assert_eq!(retry_warm.used(), warm.used());
+        // Completed immutable group proof may survive a later template refusal;
+        // fresh exact retry still pays every original cold preparation step.
+        for _ in 0..2 {
+            let exact = owner();
+            let mut work = TypeWorkBudget::with_limit(prefix + cost);
+            work.charge(prefix).unwrap();
+            exact
+                .imported_template_source(definition, family, raw.contracts(), &mut work)
+                .unwrap();
+            assert_eq!(work.used(), prefix + cost);
+        }
+    }
+    // A private original needs no completed group availability at promotion.
+    let original = Arc::new(PreparedProviderOriginal {
+        declaration: Arc::clone(&raw.declarations[0]),
+        contract: Arc::clone(&raw.contracts.declarations[0]),
+    });
+    let component =
+        ProviderOriginalPreparation::new(original, &mut TypeWorkBudget::unbounded()).unwrap();
+    component
+        .source(definition, family, &mut TypeWorkBudget::unbounded())
+        .unwrap();
+    assert!(matches!(
+        *component.phase.try_lock().unwrap(),
+        ComponentPreparationPhase::Pending
+    ));
+    component
+        .template_source(
+            definition,
+            family,
+            linked.registry(),
+            &mut TypeWorkBudget::unbounded(),
+        )
+        .unwrap();
+    assert!(matches!(
+        *component.phase.try_lock().unwrap(),
+        ComponentPreparationPhase::Committed(_)
+    ));
+    // Preparing an empty-slot original view cannot authorize committed use.
+    let pending_fixture = HelperFixture::new(&constrained_source(), CONSTRAINED_HELPER);
+    let pending = check_module_provider_group(
+        &pending_fixture.fixture.resolved,
+        None,
+        &mut PendingEvidencePublication::default(),
+        &mut TypeWorkBudget::unbounded(),
+        &mut UsefulnessBudget::default(),
+        &mut InterfaceConstraintBudget::default(),
+    );
+    if let Ok(Some(pending)) = pending {
+        let pending_owner =
+            ProviderGroupPreparation::new(Arc::clone(&pending), &mut TypeWorkBudget::unbounded())
+                .unwrap();
+        pending_owner
+            .pending_template_source(
+                pending.declarations[0].fact.id,
+                pending.declarations[0].fact.family,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .unwrap();
+        assert!(matches!(
+            *pending_owner.phase.try_lock().unwrap(),
+            GroupPreparationPhase::Available
+        ));
+        assert!(
+            pending_owner
+                .imported_template_source(
+                    pending.declarations[0].fact.id,
+                    pending.declarations[0].fact.family,
+                    pending.contracts(),
+                    &mut TypeWorkBudget::unbounded(),
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            *pending_owner.phase.try_lock().unwrap(),
+            GroupPreparationPhase::Available
+        ));
+    } else {
+        panic!("the pending original fixture must reach preparation");
     }
 }

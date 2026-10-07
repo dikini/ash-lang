@@ -522,13 +522,333 @@ pub(crate) struct CheckedProviderGroup {
     declarations: Vec<Arc<CheckedProviderDeclaration>>,
 }
 
+/// Plain owned code before committed publication authentication.
+struct AvailableProviderGroup {
+    code: Arc<CheckedProviderGroup>,
+}
+struct CommittedOriginalGroup {
+    code: Arc<CheckedProviderGroup>,
+    certificate: Arc<CheckedProviderContracts>,
+}
+enum GroupPreparationPhase {
+    Available,
+    Committed(CommittedOriginalGroup),
+}
+struct AvailableProviderComponent {
+    original: Arc<PreparedProviderOriginal>,
+}
+struct CommittedOriginalComponent {
+    original: Arc<PreparedProviderOriginal>,
+    certificate: Arc<CheckedProviderContracts>,
+}
+enum ComponentPreparationPhase {
+    Pending,
+    Committed(CommittedOriginalComponent),
+}
+
+/// This token covers only immutable selected-template state associations.
+/// Publication and source/linked routing have their own distinct transitions.
+struct PreparedOriginalTemplate {
+    declaration: Arc<CheckedProviderDeclaration>,
+}
+impl PreparedOriginalTemplate {
+    fn prepare(
+        declaration: &Arc<CheckedProviderDeclaration>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, TypeError> {
+        declaration_template_source(declaration, work)?;
+        work.charge(1).map_err(|()| type_resource())?;
+        Ok(Self {
+            declaration: Arc::clone(declaration),
+        })
+    }
+    fn source<'a>(
+        &self,
+        declaration: &'a CheckedProviderDeclaration,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'a>, TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        if !std::ptr::eq(self.declaration.as_ref(), declaration) {
+            return Err(invalid_state());
+        }
+        prepared_declaration_template_source(declaration)
+    }
+}
+
+/// One compiler preparation owner's exact original group. The immutable code
+/// never contains the mutable phase or a prepared answer/capture cache.
+pub(crate) struct ProviderGroupPreparation {
+    code: Arc<CheckedProviderGroup>,
+    phase: std::sync::Mutex<GroupPreparationPhase>,
+    templates:
+        std::sync::Mutex<HashMap<crate::resolved::ResourceDefinitionId, PreparedOriginalTemplate>>,
+}
+impl std::fmt::Debug for ProviderGroupPreparation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderGroupPreparation")
+            .field("module", &self.code.module)
+            .finish_non_exhaustive()
+    }
+}
+impl std::ops::Deref for ProviderGroupPreparation {
+    type Target = CheckedProviderGroup;
+    fn deref(&self) -> &Self::Target {
+        &self.code
+    }
+}
+impl AvailableProviderGroup {
+    fn commit(
+        self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CommittedOriginalGroup, TypeError> {
+        self.code
+            .authenticate_code(certificate, work)
+            .map_err(super::resolved_build_error)?;
+        work.charge(1).map_err(|()| type_resource())?;
+        Ok(CommittedOriginalGroup {
+            code: self.code,
+            certificate: Arc::clone(certificate),
+        })
+    }
+}
+impl ProviderGroupPreparation {
+    pub(crate) fn new(
+        code: Arc<CheckedProviderGroup>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<Self>, TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        Ok(Arc::new(Self {
+            code,
+            phase: std::sync::Mutex::new(GroupPreparationPhase::Available),
+            templates: std::sync::Mutex::new(HashMap::new()),
+        }))
+    }
+    pub(crate) fn matches_code(&self, code: &Arc<CheckedProviderGroup>) -> bool {
+        Arc::ptr_eq(&self.code, code)
+    }
+    fn prepare_committed(
+        &self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        let mut phase = self.phase.try_lock().map_err(|_| invalid_state())?;
+        match &*phase {
+            GroupPreparationPhase::Committed(prepared) => {
+                if !Arc::ptr_eq(&prepared.code, &self.code)
+                    || !Arc::ptr_eq(&prepared.certificate, certificate)
+                {
+                    return Err(invalid_state());
+                }
+                return Ok(());
+            }
+            GroupPreparationPhase::Available => {}
+        }
+        work.charge(1).map_err(|()| type_resource())?;
+        let available = AvailableProviderGroup {
+            code: Arc::clone(&self.code),
+        };
+        let prepared = available.commit(certificate, work)?;
+        *phase = GroupPreparationPhase::Committed(prepared);
+        Ok(())
+    }
+    fn prepared_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        work.charge(self.code.declarations.len())
+            .map_err(|()| type_resource())?;
+        let declaration = self
+            .code
+            .declarations
+            .iter()
+            .find(|entry| entry.fact.id == definition)
+            .ok_or_else(invalid_state)?;
+        if declaration.fact.family != family || definition.module() != self.code.module {
+            return Err(invalid_state());
+        }
+        work.charge(1).map_err(|()| type_resource())?;
+        let mut templates = self.templates.try_lock().map_err(|_| invalid_state())?;
+        if let Some(prepared) = templates.get(&definition) {
+            return prepared.source(declaration, work);
+        }
+        let prepared = PreparedOriginalTemplate::prepare(declaration, work)?;
+        work.charge(1).map_err(|()| type_resource())?;
+        templates.try_reserve(1).map_err(|_| type_resource())?;
+        // The view is staged before the infallible entry publication.
+        let source = prepared.source(declaration, work)?;
+        templates.insert(definition, prepared);
+        Ok(source)
+    }
+    fn pending_template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        self.prepared_source(definition, family, work)
+    }
+    fn imported_template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        self.prepare_committed(certificate, work)?;
+        self.prepared_source(definition, family, work)
+    }
+    fn template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        registry: &crate::resolved::ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        let certificate = linked_provider_certificate(registry, self.code.module, work)?;
+        self.prepare_committed(certificate, work)?;
+        self.prepared_source(definition, family, work)
+    }
+}
+
+/// A component can be promoted using its exact published certificate without
+/// requiring complete group code availability in the final prepass.
+pub(crate) struct ProviderOriginalPreparation {
+    original: Arc<PreparedProviderOriginal>,
+    phase: std::sync::Mutex<ComponentPreparationPhase>,
+    template: std::sync::Mutex<Option<PreparedOriginalTemplate>>,
+}
+impl std::ops::Deref for ProviderOriginalPreparation {
+    type Target = PreparedProviderOriginal;
+    fn deref(&self) -> &Self::Target {
+        &self.original
+    }
+}
+impl AvailableProviderComponent {
+    fn commit(
+        self,
+        certificate: &Arc<CheckedProviderContracts>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<CommittedOriginalComponent, TypeError> {
+        certificate
+            .authenticate(true, work)
+            .map_err(super::resolved_build_error)?;
+        work.charge(certificate.declarations.len())
+            .map_err(|()| type_resource())?;
+        if !certificate
+            .declarations
+            .iter()
+            .any(|contract| Arc::ptr_eq(contract, &self.original.contract))
+        {
+            return Err(invalid_state());
+        }
+        authenticate_original_relation(&self.original.declaration, &self.original.contract, work)
+            .map_err(super::resolved_build_error)?;
+        work.charge(1).map_err(|()| type_resource())?;
+        Ok(CommittedOriginalComponent {
+            original: self.original,
+            certificate: Arc::clone(certificate),
+        })
+    }
+}
+impl ProviderOriginalPreparation {
+    fn new(
+        original: Arc<PreparedProviderOriginal>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Arc<Self>, TypeError> {
+        work.charge(1).map_err(|()| type_resource())?;
+        Ok(Arc::new(Self {
+            original,
+            phase: std::sync::Mutex::new(ComponentPreparationPhase::Pending),
+            template: std::sync::Mutex::new(None),
+        }))
+    }
+    fn source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        self.prepared_source(definition, family, work)
+    }
+    fn prepared_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        if self.original.declaration.fact.id != definition
+            || self.original.declaration.fact.family != family
+        {
+            return Err(invalid_state());
+        }
+        work.charge(1).map_err(|()| type_resource())?;
+        let mut template = self.template.try_lock().map_err(|_| invalid_state())?;
+        if let Some(prepared) = &*template {
+            return prepared.source(&self.original.declaration, work);
+        }
+        let prepared = PreparedOriginalTemplate::prepare(&self.original.declaration, work)?;
+        let source = prepared.source(&self.original.declaration, work)?;
+        *template = Some(prepared);
+        Ok(source)
+    }
+    fn template_source(
+        &self,
+        definition: crate::resolved::ResourceDefinitionId,
+        family: NominalTypeId,
+        registry: &crate::resolved::ResolvedRegistry,
+        work: &mut TypeWorkBudget,
+    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
+        let certificate = linked_provider_certificate(registry, definition.module(), work)?;
+        work.charge(1).map_err(|()| type_resource())?;
+        let mut phase = self.phase.try_lock().map_err(|_| invalid_state())?;
+        match &*phase {
+            ComponentPreparationPhase::Committed(prepared) => {
+                if !Arc::ptr_eq(&prepared.original, &self.original)
+                    || !Arc::ptr_eq(&prepared.certificate, certificate)
+                {
+                    return Err(invalid_state());
+                }
+            }
+            ComponentPreparationPhase::Pending => {
+                work.charge(1).map_err(|()| type_resource())?;
+                let available = AvailableProviderComponent {
+                    original: Arc::clone(&self.original),
+                };
+                let prepared = available.commit(certificate, work)?;
+                *phase = ComponentPreparationPhase::Committed(prepared);
+            }
+        }
+        self.prepared_source(definition, family, work)
+    }
+}
+
+fn linked_provider_certificate<'a>(
+    registry: &'a crate::resolved::ResolvedRegistry,
+    module: crate::module::ModuleId,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a Arc<CheckedProviderContracts>, TypeError> {
+    let mut certificate = None;
+    for (owner, candidate) in registry.provider_contracts() {
+        work.charge(1).map_err(|()| type_resource())?;
+        if *owner == module && certificate.replace(candidate).is_some() {
+            return Err(invalid_state());
+        }
+    }
+    certificate.ok_or_else(invalid_state)
+}
+
 /// One compiler transaction's checked local originals. Construction validates
 /// their exact pending selections and defining captures; this preparation can
 /// supply source copies but cannot supply final Core execution authority.
 pub(super) struct PreparedLocalProviderCode {
     module: crate::module::ModuleId,
-    code: Option<Arc<CheckedProviderGroup>>,
-    originals: Vec<Arc<PreparedProviderOriginal>>,
+    code: Option<Arc<ProviderGroupPreparation>>,
+    originals: Vec<Arc<ProviderOriginalPreparation>>,
 }
 impl std::fmt::Debug for PreparedLocalProviderCode {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -549,7 +869,7 @@ impl PreparedLocalProviderCode {
         work.charge(2).map_err(|()| type_resource())?;
         Ok(Arc::new(Self {
             module: code.module,
-            code: Some(Arc::clone(code)),
+            code: Some(ProviderGroupPreparation::new(Arc::clone(code), work)?),
             originals: Vec::new(),
         }))
     }
@@ -574,7 +894,10 @@ impl PreparedLocalProviderCode {
         self.module
     }
     pub(super) fn code(&self) -> Result<&Arc<CheckedProviderGroup>, TypeError> {
-        self.code.as_ref().ok_or_else(invalid_state)
+        self.code
+            .as_ref()
+            .map(|code| &code.code)
+            .ok_or_else(invalid_state)
     }
     pub(super) fn contains(&self, definition: crate::resolved::ResourceDefinitionId) -> bool {
         self.code.as_ref().is_some_and(|code| {
@@ -605,6 +928,7 @@ impl PreparedLocalProviderCode {
             return Err(invalid_state());
         }
         self.originals.try_reserve(1).map_err(|_| type_resource())?;
+        let original = ProviderOriginalPreparation::new(original, work)?;
         self.originals.push(original);
         Ok(())
     }
@@ -635,7 +959,7 @@ impl PreparedLocalProviderCode {
                 .iter()
                 .find(|original| original.declaration.fact.id == definition.id)
                 .ok_or_else(invalid_state)?;
-            originals.push(Arc::clone(original));
+            originals.push(Arc::clone(&original.original));
         }
         Ok(originals)
     }
@@ -684,7 +1008,7 @@ impl PreparedLocalProviderCode {
                 return Err(invalid_state());
             }
         }
-        self.code = Some(code);
+        self.code = Some(ProviderGroupPreparation::new(code, work)?);
         Ok(())
     }
     pub(super) fn original_code(
@@ -730,7 +1054,7 @@ impl PreparedLocalProviderCode {
                     .as_ref()
                     .is_some_and(|original| Arc::ptr_eq(original, code)) =>
             {
-                code.template_source_from_original(definition, family, work)
+                code.pending_template_source(definition, family, work)
             }
             PreparedProviderCode::Original(code)
                 if self
@@ -748,8 +1072,8 @@ impl PreparedLocalProviderCode {
 /// Instance preparation retains immutable original allocations. A private
 /// original remains distinct from the completed group exported by a module.
 pub(crate) enum PreparedProviderCode {
-    Group(Arc<CheckedProviderGroup>),
-    Original(Arc<PreparedProviderOriginal>),
+    Group(Arc<ProviderGroupPreparation>),
+    Original(Arc<ProviderOriginalPreparation>),
 }
 impl PreparedProviderCode {
     pub(super) fn imported_template_source(
@@ -776,29 +1100,7 @@ impl PreparedProviderCode {
         match self {
             Self::Group(code) => code.template_source(definition, family, registry, work),
             Self::Original(original) => {
-                let mut certificate = None;
-                for (module, candidate) in registry.provider_contracts() {
-                    work.charge(1).map_err(|()| type_resource())?;
-                    if *module == definition.module() && certificate.replace(candidate).is_some() {
-                        return Err(invalid_state());
-                    }
-                }
-                let certificate = certificate.ok_or_else(invalid_state)?;
-                certificate
-                    .authenticate(true, work)
-                    .map_err(super::resolved_build_error)?;
-                work.charge(certificate.declarations.len())
-                    .map_err(|()| type_resource())?;
-                if !certificate
-                    .declarations
-                    .iter()
-                    .any(|contract| Arc::ptr_eq(contract, &original.contract))
-                {
-                    return Err(invalid_state());
-                }
-                authenticate_original_relation(&original.declaration, &original.contract, work)
-                    .map_err(super::resolved_build_error)?;
-                original.source(definition, family, work)
+                original.template_source(definition, family, registry, work)
             }
         }
     }
@@ -1460,59 +1762,6 @@ impl CheckedProviderGroup {
         Ok(())
     }
 
-    pub(super) fn template_source(
-        &self,
-        definition: crate::resolved::ResourceDefinitionId,
-        family: NominalTypeId,
-        linked: &crate::resolved::ResolvedRegistry,
-        work: &mut TypeWorkBudget,
-    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
-        let mut certificate = None;
-        for (module, original) in linked.provider_contracts() {
-            work.charge(1).map_err(|()| type_resource())?;
-            if *module == self.module && certificate.replace(original).is_some() {
-                return Err(invalid_state());
-            }
-        }
-        self.authenticate_code(certificate.ok_or_else(invalid_state)?, work)
-            .map_err(super::resolved_build_error)?;
-        self.template_source_from_original(definition, family, work)
-    }
-
-    /// Authenticates original code against the source import's exact body-free
-    /// certificate. Source checking does not materialize the complete linked
-    /// Core registry or gain executable permission from this view.
-    pub(super) fn imported_template_source(
-        &self,
-        definition: crate::resolved::ResourceDefinitionId,
-        family: NominalTypeId,
-        certificate: &Arc<CheckedProviderContracts>,
-        work: &mut TypeWorkBudget,
-    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
-        self.authenticate_code(certificate, work)
-            .map_err(super::resolved_build_error)?;
-        self.template_source_from_original(definition, family, work)
-    }
-
-    fn template_source_from_original(
-        &self,
-        definition: crate::resolved::ResourceDefinitionId,
-        family: NominalTypeId,
-        work: &mut TypeWorkBudget,
-    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
-        work.charge(self.declarations.len())
-            .map_err(|()| type_resource())?;
-        let declaration = self
-            .declarations
-            .iter()
-            .find(|entry| entry.fact.id == definition)
-            .ok_or_else(invalid_state)?;
-        if declaration.fact.family != family || definition.module() != self.module {
-            return Err(invalid_state());
-        }
-        declaration_template_source(declaration, work)
-    }
-
     /// Authenticates the separately supplied immutable code against the
     /// canonical certificate, then checks its actual entry and graph relations.
     pub(crate) fn authenticate_code(
@@ -1587,6 +1836,34 @@ fn declaration_template_source<'a>(
         fact: &declaration.fact,
         acquire: lifecycle(&declaration.acquire, work)?,
         finish: lifecycle(&declaration.finish, work)?,
+        handler: &declaration.handlers.template,
+        handler_occurrences: &declaration.handlers.staged_externals.occurrences,
+        methods: &declaration.methods,
+    })
+}
+
+fn prepared_declaration_template_source(
+    declaration: &CheckedProviderDeclaration,
+) -> Result<ProviderTemplateSource<'_>, TypeError> {
+    fn lifecycle(
+        entry: &CheckedLifecycleTemplate,
+    ) -> Result<LifecycleTemplateSource<'_>, TypeError> {
+        Ok(LifecycleTemplateSource {
+            original: entry.original_authority(),
+            program: &entry.draft.core,
+            body: entry.draft.body,
+            occurrences: &entry
+                .draft
+                .staged_externals
+                .as_ref()
+                .ok_or_else(invalid_state)?
+                .occurrences,
+        })
+    }
+    Ok(ProviderTemplateSource {
+        fact: &declaration.fact,
+        acquire: lifecycle(&declaration.acquire)?,
+        finish: lifecycle(&declaration.finish)?,
         handler: &declaration.handlers.template,
         handler_occurrences: &declaration.handlers.staged_externals.occurrences,
         methods: &declaration.methods,
@@ -1671,17 +1948,6 @@ fn authenticate_original_relation(
 }
 
 impl PreparedProviderOriginal {
-    fn source(
-        &self,
-        definition: crate::resolved::ResourceDefinitionId,
-        family: NominalTypeId,
-        work: &mut TypeWorkBudget,
-    ) -> Result<ProviderTemplateSource<'_>, TypeError> {
-        if self.declaration.fact.id != definition || self.declaration.fact.family != family {
-            return Err(invalid_state());
-        }
-        declaration_template_source(&self.declaration, work)
-    }
     pub(super) fn authenticate_pending(
         &self,
         facts: crate::resolved::ProviderExternalFacts<'_>,

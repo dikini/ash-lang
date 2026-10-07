@@ -2327,6 +2327,13 @@ fn test_owner_type(argument: &crate::types::KindedArgument) -> &Type {
     ty
 }
 
+/// A transient source payload for one checked, owned replacement insertion.
+/// It carries the original slot tag without creating an intermediate clone.
+enum BorrowedOwnerArgument<'a> {
+    TypeArg(&'a Type),
+    RowArg(&'a EffectRow),
+}
+
 struct OwnerReplacementBuffer {
     types: TypeReplacementBuffer,
     rows: HashMap<TypeVariableId, EffectRow>,
@@ -2381,12 +2388,25 @@ impl OwnerReplacementBuffer {
         argument: &crate::types::KindedArgument,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), TypeError> {
+        let argument = match argument {
+            crate::types::KindedArgument::TypeArg(ty) => BorrowedOwnerArgument::TypeArg(ty),
+            crate::types::KindedArgument::RowArg(row) => BorrowedOwnerArgument::RowArg(row),
+        };
+        self.insert_borrowed(parameter, argument, budget)
+    }
+
+    fn insert_borrowed(
+        &mut self,
+        parameter: TypeVariableId,
+        argument: BorrowedOwnerArgument<'_>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
         budget.charge(1).map_err(|()| type_resource())?;
         if self.types.as_map().contains_key(&parameter) || self.rows.contains_key(&parameter) {
             return Err(invalid_state());
         }
         match argument {
-            crate::types::KindedArgument::TypeArg(ty) => {
+            BorrowedOwnerArgument::TypeArg(ty) => {
                 self.types.try_reserve(1).map_err(|_| type_resource())?;
                 self.types
                     .try_insert_unique(
@@ -2395,7 +2415,7 @@ impl OwnerReplacementBuffer {
                     )
                     .map_err(|()| invalid_state())?;
             }
-            crate::types::KindedArgument::RowArg(row) => {
+            BorrowedOwnerArgument::RowArg(row) => {
                 self.rows.try_reserve(1).map_err(|_| type_resource())?;
                 self.rows.insert(
                     parameter,
@@ -40306,5 +40326,189 @@ mod tests {
                 assert_eq!(retry.expected_scheme_rows, measured.expected_scheme_rows);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod borrowed_owner_argument_tests {
+    use super::*;
+    use crate::module::ModuleId;
+    use crate::types::{EffectId, EffectInstance, EffectRowVariable, KindedArgument};
+
+    fn variable(index: u32) -> TypeVariableId {
+        TypeVariableId::new(index)
+    }
+
+    fn payloads() -> (crate::types::IterativeArgumentOwner, EffectRow) {
+        let row = EffectRow::with_tail(
+            vec![EffectInstance::new_kinded(
+                EffectId::new(ModuleId::new(31), 0),
+                vec![KindedArgument::TypeArg(Type::Variable(variable(3)))].into_boxed_slice(),
+            )]
+            .into_boxed_slice(),
+            EffectRowVariable::rigid(variable(4)),
+            vec![EffectInstance::new_kinded(
+                EffectId::new(ModuleId::new(31), 1),
+                vec![KindedArgument::TypeArg(Type::Variable(variable(5)))].into_boxed_slice(),
+            )]
+            .into_boxed_slice(),
+        );
+        let mut work = TypeWorkBudget::unbounded();
+        let ty = Type::Forall(
+            vec![(
+                variable(0),
+                Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::EffectRow)),
+            )]
+            .into_boxed_slice(),
+            Box::new(Type::EffectfulFunction(
+                Box::new(Type::Application(
+                    Box::new(Type::Variable(variable(1))),
+                    Box::new(Type::Variable(variable(2))),
+                )),
+                Box::new(ComputationType::new(
+                    Type::Unit,
+                    clone_effect_row_with_budget(&row, &mut work).unwrap(),
+                )),
+            )),
+        );
+        (
+            crate::types::IterativeArgumentOwner::new(KindedArgument::TypeArg(ty)),
+            row,
+        )
+    }
+
+    fn reference_insert(
+        target: &mut OwnerReplacementBuffer,
+        parameter: TypeVariableId,
+        argument: &crate::types::KindedArgument,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), TypeError> {
+        budget.charge(1).map_err(|()| type_resource())?;
+        if target.types.as_map().contains_key(&parameter) || target.rows.contains_key(&parameter) {
+            return Err(invalid_state());
+        }
+        match argument {
+            crate::types::KindedArgument::TypeArg(ty) => {
+                target.types.try_reserve(1).map_err(|_| type_resource())?;
+                target
+                    .types
+                    .try_insert_unique(
+                        parameter,
+                        clone_type_with_budget(ty, budget).map_err(|()| type_resource())?,
+                    )
+                    .map_err(|()| invalid_state())?;
+            }
+            crate::types::KindedArgument::RowArg(row) => {
+                target.rows.try_reserve(1).map_err(|_| type_resource())?;
+                target.rows.insert(
+                    parameter,
+                    clone_effect_row_with_budget(row, budget).map_err(|()| type_resource())?,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_same(left: &OwnerReplacementBuffer, right: &OwnerReplacementBuffer) {
+        assert_eq!(left.types.as_map(), right.types.as_map());
+        assert_eq!(left.rows, right.rows);
+    }
+
+    #[test]
+    fn borrowed_owner_input_preserves_both_cross_kind_duplicate_guards() {
+        let (argument, row) = payloads();
+        let KindedArgument::TypeArg(ty) = argument.as_ref() else {
+            unreachable!()
+        };
+        for row_first in [false, true] {
+            let mut target = OwnerReplacementBuffer::new();
+            let mut work = TypeWorkBudget::unbounded();
+            let key = variable(100);
+            if row_first {
+                target
+                    .insert_borrowed(key, BorrowedOwnerArgument::RowArg(&row), &mut work)
+                    .unwrap();
+            } else {
+                target
+                    .insert_borrowed(key, BorrowedOwnerArgument::TypeArg(ty), &mut work)
+                    .unwrap();
+            }
+            let before = work.used();
+            let result = if row_first {
+                target.insert_borrowed(key, BorrowedOwnerArgument::TypeArg(ty), &mut work)
+            } else {
+                target.insert_borrowed(key, BorrowedOwnerArgument::RowArg(&row), &mut work)
+            };
+            assert_eq!(result, Err(invalid_state()));
+            assert_eq!(work.used(), before + 1);
+            assert_eq!(target.types.as_map().len(), usize::from(!row_first));
+            assert_eq!(target.rows.len(), usize::from(row_first));
+            if row_first {
+                assert_eq!(target.rows.get(&key), Some(&row));
+            } else {
+                assert_eq!(target.types.as_map().get(&key), Some(ty));
+            }
+        }
+    }
+
+    #[test]
+    fn borrowed_owner_input_matches_original_insertion_at_every_work_cut() {
+        let (argument, row) = payloads();
+        let row_argument = crate::types::IterativeArgumentOwner::new(KindedArgument::RowArg(
+            clone_effect_row_with_budget(&row, &mut TypeWorkBudget::unbounded()).unwrap(),
+        ));
+        let mut measured = TypeWorkBudget::unbounded();
+        let mut complete = OwnerReplacementBuffer::new();
+        reference_insert(&mut complete, variable(100), &argument, &mut measured).unwrap();
+        reference_insert(&mut complete, variable(101), &row_argument, &mut measured).unwrap();
+        for cut in 0..=measured.used() {
+            let mut old = OwnerReplacementBuffer::new();
+            let mut new = OwnerReplacementBuffer::new();
+            let mut old_work = TypeWorkBudget::with_limit(cut);
+            let mut new_work = TypeWorkBudget::with_limit(cut);
+            let old_result = reference_insert(&mut old, variable(100), &argument, &mut old_work)
+                .and_then(|()| {
+                    reference_insert(&mut old, variable(101), &row_argument, &mut old_work)
+                });
+            let new_result = new
+                .insert_cloned(variable(100), &argument, &mut new_work)
+                .and_then(|()| new.insert_cloned(variable(101), &row_argument, &mut new_work));
+            assert_eq!(old_result, new_result);
+            assert_eq!(old_work.used(), new_work.used());
+            assert_same(&old, &new);
+        }
+    }
+
+    #[test]
+    fn borrowed_hidden_inputs_keep_three_owned_maps_without_temporary_clones() {
+        let (argument, row) = payloads();
+        let KindedArgument::TypeArg(ty) = argument.as_ref() else {
+            unreachable!()
+        };
+        let mut old_work = TypeWorkBudget::unbounded();
+        let mut new_work = TypeWorkBudget::unbounded();
+        for ordinal in 0..3 {
+            let mut old = OwnerReplacementBuffer::new();
+            let mut new = OwnerReplacementBuffer::new();
+            let type_key = variable(100 + ordinal * 2);
+            let row_key = variable(101 + ordinal * 2);
+            let copied = crate::types::IterativeArgumentOwner::new(KindedArgument::TypeArg(
+                clone_type_with_budget(ty, &mut old_work).unwrap(),
+            ));
+            reference_insert(&mut old, type_key, &copied, &mut old_work).unwrap();
+            let copied = crate::types::IterativeArgumentOwner::new(KindedArgument::RowArg(
+                clone_effect_row_with_budget(&row, &mut old_work).unwrap(),
+            ));
+            reference_insert(&mut old, row_key, &copied, &mut old_work).unwrap();
+            new.insert_borrowed(type_key, BorrowedOwnerArgument::TypeArg(ty), &mut new_work)
+                .unwrap();
+            new.insert_borrowed(row_key, BorrowedOwnerArgument::RowArg(&row), &mut new_work)
+                .unwrap();
+            assert_same(&old, &new);
+        }
+        let mut removed = TypeWorkBudget::unbounded();
+        crate::types::discard_type_iteratively(clone_type_with_budget(ty, &mut removed).unwrap());
+        drop(clone_effect_row_with_budget(&row, &mut removed).unwrap());
+        assert_eq!(old_work.used() - new_work.used(), 3 * removed.used());
     }
 }
