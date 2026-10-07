@@ -25,26 +25,25 @@ generic helper, closes, and reopens through a fresh connection. These are
 ordinary SQL statements; no transaction resource or query shortcut is added.
 Execution status belongs to [execution](execution.md).
 
-The [SQLite control test](../../../tests/provider_sqlite_control.rs) supplies two
-additional source drafts, also copied into the reusable package. Resume must
-continue the copied query with the original live owners. Owned discard must
-run source cleanup using the outer connection, then finalize the statement and
-close the connection, without publishing the abandoned body or scope result.
-Both SQLite programs pass in common's fourteen-operation candidate receipt 136,
-with exact copied results, source cleanup and binding finish observations. The
-same public run recovers the original reset/clear program and retains three
-typing failures: copying, its NUL-input alternative and persistence. The candidate
-remains uncommitted and unmerged. Its evidence does not replace the required
-final combined program run; the
-[execution record](execution.md#typed-original-preparation-and-recovered-reset-program)
-records this checkpoint.
+The [SQLite control test](../../../tests/provider_sqlite_control.rs) supplies
+capture/resume and owned-discard programs, also copied into the reusable package.
+Resume continues the copied query with the original live owners. Owned discard
+runs source cleanup using the outer connection, then finalizes the statement and
+closes the connection without publishing the abandoned body or scope result.
+Recorded normal-limit public-driver and host runs verify both programs after
+the shared control import. The
+[current SQLite checkpoint](execution.md#current-sqlite-checkpoint) identifies
+the checked commits, fresh program runs and remaining delivery requirements.
 
-Receipt 150 retains the same fourteen passes and three typing failures after
-further shared compiler changes. Receipt 154 separates the fresh failure
-boundaries: copying completes universe construction and exhausts during value
-propagation, while persistence exhausts during callable type admission.
-The [current compiler evidence](execution.md#explicit-callable-metadata-presence)
-records the measurements and their limits; combined verification remains pending.
+Receipts 136 and 150 record earlier fourteen-operation candidates with fourteen
+passes and three typing failures. Receipt 154 traces those earlier inputs:
+copying exhausts during value propagation and persistence during callable type
+admission. These are historical boundaries, not fresh traces of the later
+committed shared repairs. The
+[earlier compiler evidence](execution.md#explicit-callable-metadata-presence)
+retains their measurements. The shared repairs are committed and integrated;
+the complete SQLite delivery still requires normal-limit acceptance of copying,
+its NUL-input alternative and persistence.
 
 The host authors two manifests with distinct registration identities:
 `provider_manifest` for `@foreign.provider` and `sqlite_manifest` for
@@ -79,7 +78,7 @@ runs it from an owned temporary directory. The larger copying and
 file-session examples remain pending while common resolves the measured compiler
 work refusal. The [measurement account](execution.md#sqlite-compiler-work-measurement-receipt-109)
 records earlier compiled inputs and exact refused charges. Use the current
-compiler evidence above for the latest boundaries.
+SQLite checkpoint above for the latest verified inputs and outcomes.
 
 Imports are passive. Importing the source SQLite module, `@foreign.sqlite`, or
 `@builtin.bytes`/`@builtin.string` does not open a database or initialize SQLite.

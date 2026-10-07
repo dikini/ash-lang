@@ -236,7 +236,7 @@ checks pass all sixty adapter tests and fourteen of seventeen public SQLite
 cases. Copying, the NUL-input alternative and file-session persistence still
 stop with TypeResourceExhausted before native observations; further shared
 compiler repair remains required. The
-[current execution record](../docs/design/provider-experiments/execution.md#current-checkpoint)
+[current execution record](../docs/design/provider-experiments/execution.md#current-sqlite-checkpoint)
 records the checked import and remaining failures. Earlier receipts 136 and
 150 retain their own source evidence. This does not establish a completed
 SQLite delivery or current Ash language semantics.

@@ -1,5 +1,5 @@
-//! Conditional DN-0036 SQLite control drafts, pending verified common control integration.
-//! These cases assert candidate outcomes; they are not evidence of a passing run.
+//! DN-0036 SQLite capture/resume and owned-discard regression programs.
+//! These assert candidate outcomes; the execution record identifies tested checkpoints.
 
 #[path = "support/sqlite_copying.rs"]
 mod sqlite_copying_support;

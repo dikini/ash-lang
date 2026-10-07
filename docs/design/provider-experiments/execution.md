@@ -6,7 +6,26 @@
 > This record assigns work and evidence. It has no independent semantic or
 > architectural authority and leaves the current tree when this work finishes.
 
-## Current SQLite checkpoint (2026-10-06)
+## Current SQLite checkpoint
+
+Resumed review on 2026-10-07 retains the verified shared import described below.
+Common's subsequent cursor and binary method-accounting commit
+`50dee826de0192c9f1fe88fb816bc6def4ed8e01` is merged into the integration
+branch by `fc7d2b9446d1b413ff4fe3faa7d370822e812862`, but its full gate
+fails an existing exact-formula source-text mirror after the library and
+architecture suites pass. Common owns that repair and the required rerun.
+SQLite has not imported this unverified delivery. Its original programs,
+assertions and normal limits remain unchanged; the normal-program results
+below are the last completed SQLite runs.
+
+Independent static reviews on resumption find no actionable native adapter,
+source library or fixture contract defect. They examine copied payloads,
+checked conversion, statement and connection ownership, completion outcomes,
+ordinary transactions and generic row collection. These reviews add no
+execution evidence for the three failing larger programs. The blueprint,
+SQLite example instructions and control-test header now distinguish historical
+candidate receipts from current verified imports. This record remains
+experimental tracking, with no authority over current Ash semantics.
 
 The selected shared compiler repair is isolated in unsigned common commit
 `e59d231679cfa98759deed3a0574c2458a22cefc` and integrated by unsigned merge
