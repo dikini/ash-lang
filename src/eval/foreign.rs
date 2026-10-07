@@ -441,9 +441,23 @@ use super::{
 };
 use crate::foreign::{
     ForeignResultFact,
-    runtime::{ForeignAcquisition, ForeignCompletion},
+    runtime::{ForeignAcquisition, ForeignCompletion, ForeignInvocation, ForeignRuntime},
 };
 use crate::types::{ConstructorId, EffectInstance, OperationId, Type};
+
+fn provider_owner<'a>(
+    runtime: Option<&'a ForeignRuntime>,
+    boundary: &'a ProviderBoundary,
+    finish_only: bool,
+) -> Option<&'a crate::foreign::runtime::NativeOwnerGuard> {
+    boundary.owner.as_ref().or_else(|| {
+        if finish_only && boundary.phase == ProviderPhase::Finish && boundary.finished.is_none() {
+            runtime?.quarantined_owner(boundary.quarantined_owner?)
+        } else {
+            None
+        }
+    })
+}
 
 impl<'runtime> Machine<'runtime> {
     fn charge_quarantine_lookup(&mut self) -> Result<(), RuntimeFailure> {
@@ -588,16 +602,7 @@ impl<'runtime> Machine<'runtime> {
         boundary: &'a ProviderBoundary,
         finish_only: bool,
     ) -> Option<&'a crate::foreign::runtime::NativeOwnerGuard> {
-        boundary.owner.as_ref().or_else(|| {
-            if finish_only && boundary.phase == ProviderPhase::Finish && boundary.finished.is_none()
-            {
-                self.foreign_runtime
-                    .as_ref()?
-                    .quarantined_owner(boundary.quarantined_owner?)
-            } else {
-                None
-            }
-        })
+        provider_owner(self.foreign_runtime.as_deref(), boundary, finish_only)
     }
     fn foreign_constructor(
         &mut self,
@@ -1290,32 +1295,45 @@ impl<'runtime> Machine<'runtime> {
                 views.try_reserve_exact(indices.len()).map_err(|_| {
                     foreign_failure(ForeignExecutionError::STORAGE_REFUSED, codec_phase)
                 })?;
+                // Borrow only the owner forest/runtime, so the same views stay
+                // live while the disjoint heap and work ledger admit the reply.
+                let runtime = self
+                    .foreign_runtime
+                    .as_deref()
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
                 for index in &indices {
                     let candidate =
                         provider_at(&self.frames, index).ok_or(RuntimeFailure::ForeignBinding)?;
-                    let owner = self
-                        .provider_owner(
-                            candidate,
-                            index == &boundary && phase == ProviderPhase::Finish,
-                        )
-                        .ok_or(RuntimeFailure::ForeignBinding)?;
+                    let owner = provider_owner(
+                        Some(runtime),
+                        candidate,
+                        index == &boundary && phase == ProviderPhase::Finish,
+                    )
+                    .ok_or(RuntimeFailure::ForeignBinding)?;
                     views.push(owner.payload.as_ref());
                 }
-                let runtime = self
-                    .foreign_runtime
-                    .as_ref()
-                    .ok_or(RuntimeFailure::ForeignBinding)?;
                 let binding = runtime
                     .binding(native)
                     .map_err(|_| RuntimeFailure::ForeignBinding)?;
                 let operation_key = binding
                     .operation_key(native, operation)
                     .map_err(|_| RuntimeFailure::ForeignBinding)?;
-                let output = binding
+                let invocation = binding
                     .executable()
-                    .invoke(operation_key, native, &input, &views)
+                    .prepare_invoke(operation_key, native, &input, &views)
                     .map_err(|error| foreign_failure(error, RuntimePhase::Access))?;
-                drop(views);
+                let (output, pending) = match invocation {
+                    ForeignInvocation::Immediate(output) => (output, None),
+                    ForeignInvocation::Prepared { output, commit } => {
+                        charge_effect_work(&mut self.instantiation_work, 1, RuntimePhase::Access)?;
+                        charge_effect_work(
+                            &mut self.instantiation_work,
+                            views.len(),
+                            RuntimePhase::Access,
+                        )?;
+                        (output, Some(commit))
+                    }
+                };
                 validate_codec(
                     &output,
                     codomain,
@@ -1330,6 +1348,15 @@ impl<'runtime> Machine<'runtime> {
                     &mut self.instantiation_work,
                     RuntimePhase::Access,
                 )?;
+                if let Some(commit) = pending {
+                    // All evaluator admission and association work is paid.
+                    // The original key/module and the same live views remain
+                    // borrowed; successful commit is followed only by return.
+                    commit
+                        .commit(operation_key, native, &views)
+                        .map_err(|error| foreign_failure(error, RuntimePhase::Access))?;
+                }
+                drop(views);
                 self.control = Some(Control::Return(value));
             }
             ForeignOperationRole::Finish => {
