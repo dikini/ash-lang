@@ -3658,8 +3658,8 @@ This informative DN-0033 experiment leaves ordinary constructor coverage at
 14/16 and whole acceptance at C1 5/5, C2 0/4, C3 0/5, C4 2/3 and C5 0/4.
 Completed M0–M4 remain unchanged; deriving full M4 validity for translated Core
 states remains open. General cleanup completion and Core/Rust correspondence
-also remain open. The separate original-result interface, producer and finish
-modules remain uncompiled and outside this integration. Ash semantics, Core
+also remain open. At that phase-only checkpoint, the separate original-result interface,
+producer and finish modules were uncompiled and outside its integration. Ash semantics, Core
 grammar and whole-fragment acceptance counts do not change.
 
 Evidence: [phase source](../design/direct-effects/one-shot/CoreCallableRichNormalCleanupPhases.lean),
@@ -3669,3 +3669,50 @@ Evidence: [phase source](../design/direct-effects/one-shot/CoreCallableRichNorma
 [ROOT actual review](../../target/core-cleanup-phase-integration-20261007-v1/root-actual-gate-review-v1.json),
 [independent actual review](../../target/core-cleanup-phase-integration-actual-independent-review-20261007/receipt.json)
 and [resource return](../../target/core-cleanup-phase-integration-20261007-v1/root-resource-return-20261007-a1.json).
+
+### Bounded original-result cleanup composition
+
+The original-result composition keeps the same original Program, authority,
+normal start and actual current endpoint. The
+[start producer](../design/direct-effects/one-shot/CoreCallableRichOriginalResultComposition.lean#L69),
+[beta consumer](../design/direct-effects/one-shot/CoreCallableRichOriginalResultComposition.lean#L84) and
+[Boolean consumer](../design/direct-effects/one-shot/CoreCallableRichOriginalResultComposition.lean#L101)
+carry the paired phase and original-result current evidence. Beta and Boolean
+transport retain the same heap and original runtime suffix.
+
+The [finish consumer](../design/direct-effects/one-shot/CoreCallableRichOriginalResultComposition.lean#L118)
+uses observed current Unit and EmptyFocus facts. It restores the original full
+saved contract, typed source and tail, and exports the same original-input Core
+prefix, RawTrace and ledger. The
+[endpoint accounting](../design/direct-effects/one-shot/CoreCallableRichOriginalResultFinish.lean#L286)
+records the single cleanup discharge and inherited lifetime accounting.
+
+Allocation, changed-prefix or moved-suffix transport, and general callbacks
+remain outside this bounded composition. General validity and availability
+correspondence for rich translated Core states, including deriving full M4
+validity for those states, remains open. Rust capacity correspondence is also
+open. Completed M0–M4 and the whole C1–C5 and 14/16 results are unchanged.
+
+The [actual stock gate](../../target/core-original-result-composition-integration-20261007-v3/root-original4-gate-v3-evidence.json)
+validated all four modules and their 18 ordered standard-axiom reports. It
+reused three validated foundation receipts and compiled the composition leaf
+once, bringing the observed inventory to 1073 modules and 13629 reports while
+preserving all 1069 parent artifact/log pairs.
+
+The [affected-module metadata review](../../target/core-original4-metadata-20261007-v3/root-metadata-v3/review.json)
+and [acceptance evidence](../../target/core-original4-metadata-20261007-v3/root-metadata-v3/acceptance.json)
+record four new dependency queries, 623 current dependency records with 619
+ancestors, and all 625 retained archive records. The 28 canonical public checks,
+historical published negative witnesses, two generic negative witnesses and
+the separate phase's 47 reports and 58 checks remain preserved. The observed
+stock and metadata runs used 13 dependency queries and one version query.
+
+[ROOT's actual review](../../target/core-original4-launch-20261007-v2/root-actual-stock-metadata-review-v1.json)
+records these results. Resources were
+[returned before diagnosis](../../target/core-original4-launch-20261007-v2/root-return-a1/resource-return.json).
+The [distinct actual review](../../target/core-original4-actual-independent-review-20261007-v2/receipt.json)
+and [ROOT verification](../../target/core-original4-actual-independent-review-20261007-v2/root-peer-verification-v1.json)
+confirm the stock and metadata results. These observations do not include the final
+frozen V7 audit, lint across all five documentation scopes, exact application,
+staged-byte review or unsigned commit verification; those require separate
+actual receipts. The whole-fragment acceptance counts above do not change.

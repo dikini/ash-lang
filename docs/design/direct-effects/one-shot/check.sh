@@ -1074,3 +1074,7 @@ lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichCaptureCurrentEv
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichResumeTicketOrigins.olean" CoreCallableRichResumeTicketOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichDecisionTicketOrigins.olean" CoreCallableRichDecisionTicketOrigins.lean
 lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichNormalCleanupPhases.olean" CoreCallableRichNormalCleanupPhases.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichOriginalResultAuthorityInterface.olean" CoreCallableRichOriginalResultAuthorityInterface.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichOriginalResultAuthority.olean" CoreCallableRichOriginalResultAuthority.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichOriginalResultFinish.olean" CoreCallableRichOriginalResultFinish.lean
+lean -DwarningAsError=true -o "$proof_build_dir/CoreCallableRichOriginalResultComposition.olean" CoreCallableRichOriginalResultComposition.lean
