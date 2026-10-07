@@ -4505,3 +4505,37 @@ reported as a passing suite. Final independent source, accounting, ownership,
 measured-result and connected-quality reviews pass. The verified source and
 this record are prepared for an unsigned common commit and preserving merge;
 the integration hash and complete original-worktree gate are recorded next.
+
+
+### Exact method-probe mirror repair (2026-10-07, receipt 246)
+
+The full original-worktree gate at unsigned merge
+`fc7d2b9446d1b413ff4fe3faa7d370822e812862` returns exit one after 1,633 library
+and 43 architecture passes. The failing integration assertion is the source-text
+mirror in `method_parameter_resources`: it still expects the old concrete
+validator equation, before the named binary-lookup delta. The failed gate and
+raw log remain preserved under `cursor-method-delivery-241/`; raw SHA-256 is
+`23bfddd9716e1e31aec687b80f4ba9a6635a0f94a043506f57387a267e760310`.
+It is not a completed delivery or a passing whole-suite result.
+
+This correction changes only the existing mirror test and tracking. The concrete
+mirror includes the original named lookup delta, four minus one, and its exact
+total becomes 711. The wide-prerequisite mirror now reproduces the complete
+owning equation and total 1,215. Its older 1,185 arithmetic was a subtotal that
+also omitted the existing owner unit and 26 metadata units. The owning validator
+assertions, one-short refusals, fresh retries, the other 833/2,518 equations and
+all production source and limits remain unchanged. Receipt 239 already measures
+one width-one occurrence getter in each affected owning law; no unexplained
+numerical adjustment or weaker inequality replaces an assertion.
+
+An initial focused run stops on a whole-worktree guard when SQLite corrects a
+provisional prose checkpoint. Common and original guards remain identical; the
+SQLite delta is its README correction and preserved follow-up history. No restore
+is attempted. The stopped run and provisional receipt remain distinct from the
+final explicit handoff. The fresh v2 run binds SQLite's final clean `d2f14fd8`
+checkpoint and passes all four method integration tests, both owning exact
+validator cases and formatting. It returns at
+`2026-10-07T05:45:00.703210+00:00` after 8.419 seconds with all three guards
+restored, normal policies and no engine. Independent concrete source/formula
+review passes. Full original-worktree verification must still pass after the
+unsigned corrective commit and preserving merge.
