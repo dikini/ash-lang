@@ -183,6 +183,28 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
+Latest integrated common code checkpoint is `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59`,
+merging common commit `cdf44d990a74225fb9d1214a809986809ac32d19` with an unsigned
+merge preserving both histories. Receipt 246 passes the complete unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
+original common deliveries and the subsequent verified shared reductions are
+merged into `codex/provider-experiments`; `main` is unchanged. The latest
+delivery borrows productive edge cursors and corrects binary method-lookup
+charges, with their exact integration-test mirror. Its integration evidence is recorded at the end of this file.
+
+The expanded SQLite manifest, adapter, source library and larger programs remain
+preserved SQLite-owned work outside this delivery. Resume executes under normal
+limits. Copying, bound NUL and persistence complete their original assertions
+under the temporary diagnostic ceiling, but still exceed normal source-checking
+limits. Copying and bound NUL now fit independent Core; persistence retains
+source, elaboration and Core deficits. Exact totals appear in receipt 242 below.
+Production work and depth limits remain unchanged. Further relation
+consolidation is an unverified private candidate, not delivered code or proof
+that a larger typing quota is necessary. SQLite and arena have separately
+resumed; shared-source ownership and serial engine windows remain coordinated.
+
+## Historical SQLite checkpoints before the receipt 246 import
+
 The latest integrated shared code is unsigned real merge
 `2f9cb30d8349ff4db191b7d7670be0fe53651974`, with unsigned documentation
 tracking tip `754a25f54b436711af85bf35257bba3a870377a4`. Receipt 204 passes
@@ -6223,3 +6245,236 @@ fixtures. The agreed order is verified common delivery, unsigned merge preservin
 both histories into `codex/provider-experiments`, integrated verification, then
 SQLite's preserving import. No merge targets `main`. This remains the bounded
 DN-0036 experiment; it creates no current Ash semantics or whole-contract proof.
+
+
+### Integrated prepared lookup and capture checkpoint (2026-10-06, receipt 232)
+
+Unsigned common commit `e59d231679cfa98759deed3a0574c2458a22cefc` is integrated
+by unsigned merge `cfc69030566c6d0a53df0ca8e3ae2f4f0e9e8e52` into
+`codex/provider-experiments`. The merge preserves both parents, original tip
+`754a25f54b436711af85bf35257bba3a870377a4` and the common commit. The merge tree
+matches the common commit tree exactly. The delivery contains only capture control, capture values,
+the precise borrowed-owner architecture census entry and this execution record.
+All broader SQLite library, manifest, native and fixture working changes stay
+outside it. All 26 unrelated original drafts retain their bytes and status.
+
+Receipt 232 executes the unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify`
+in the original worktree at the merge. Formatting, metadata, all-targets build,
+strict all-feature workspace lint, all-targets/all-feature tests and rustdoc
+pass. The outer Ash library reports 1,631 passes; architecture reports 43.
+All 117 reported summary blocks have zero failures and zero ignores; these
+include nested fresh-child reruns and do not count unique tests. This gate
+covers the original SQLite S-01, arena lifecycle, owner rows, callbacks/control,
+retention, independent Core, modules, transforms and deep-input cases. It does
+not include the separate, uncommitted expanded SQLite package.
+
+The explicit return is `2026-10-06T18:41:14.326689+00:00`, after 1,115.645
+seconds. Raw log SHA-256 is
+`6f0e10bbd3b86b795ea526e0b1f4ccca4fd142bd72aa0729dac6a1631036b904`
+in `prepared-type-capture-delivery-232/` under the common evidence directory.
+The common working package and empty index, the complete SQLite worktree and
+the original unrelated working files and empty index remain unchanged, with no
+active verification engine. Commit objects carry no GPG signatures. Independent
+contract, concrete documentation, measured-result and integration reviews pass.
+
+SQLite imports this verified delivery by unsigned merge
+`f13e95060ebe5690288d48374dd4f9fd68e91cae`, preserving both its existing
+history and all 43 other owned files. Its execution record merges additively;
+the refreshed coherent 44-file snapshot records that deliberate tracking change.
+Common retains compiler, Core, capture, provider checking, generic runtime and
+shared merge ownership. SQLite retains library, manifest, native adapters,
+fixtures and its execution evidence. Cargo, LSP, formatter and merge windows
+remain serial. Further common updates arrive through the original branch.
+
+SQLite subsequently attempts all four original programs on its imported branch
+under normal limits, without instrumentation. Resume passes; copying, persistence
+and bound NUL each fail with `Typing(Internal(TypeResourceExhausted))`. All
+three worktrees retain their complete source pins, heads, statuses and indexes,
+with no active engine at the return. Those logs confirm outcomes, not a finer
+failure location. The exact completed owner attribution remains receipt 229.
+
+The three larger normal-budget failures remain unresolved, with the exact
+matched residuals recorded above. This is verified partial compiler progress,
+not complete SQLite library acceptance or an intrinsic lower-bound proof.
+Primitive-input precision, productive cursor borrowing and local method lookup
+accounting remain separately unmeasured candidates. No production work quota,
+depth limit, source assertion, language rule or foreign assumption changes.
+This remains bounded DN-0036 experimental evidence. Later typed arena allocation,
+Layout, references, containment, borrowing, sharing and storage families remain
+separate, as do DN-0037 and DN-0038.
+
+
+### Productive cursor borrowing and binary method charges (2026-10-07)
+
+The productive-cursor change retains one exact mutable edge entry while the
+canonical atom kernel transfers the original ordered suffix. A temporary
+`AtomStore` borrows only slots, atom membership, the pending queue and revision;
+it cannot mutate the edge table. The original fixed source end, full expression
+and creation-context identities, self-edge behavior and success-only cursor
+publication remain. Failed analyses are discarded; retry starts with a fresh
+analysis. No extra persistent Type/Kind carrier is introduced.
+
+Four independent method-catalog getters already use binary search. Their local
+precharge now follows the pinned comparator bound, with three administration
+units and the complete comparison bound prepaid. This corrects accounting; it
+does not introduce a faster search algorithm. Blanket authority admission,
+actual list scans, row and identity checks and final independent validation
+remain. Empty and small catalogs retain their real administration cost.
+
+Receipt 239 preserves the original exact-law assertions and measures their
+getter multiplicities. One width-one occurrence lookup changes its charge from
+one to four in each of two laws, explaining totals 708→711 and 1212→1215.
+The other two full authority totals remain 833 and 2518. Receipt 240 executes
+all 210 independent-validator namespace cases successfully, including the
+revised one-short refusal and fresh-retry checks; its separate nested child is
+not added to that count. The runner stopped on an incorrect expected test
+count after those tests passed and restored all source changes. Receipt 242
+binds that actual passing result and continues with the same source.
+
+Receipt 242 completes all four original larger SQLite programs under the
+reversible diagnostic ceiling. Every original public assertion executes, and
+strict input pairing permits only the recorded fixed-width PID literal change.
+The four other owner totals match receipt 229 exactly. The following numbers
+are combined measured totals, not sums of isolated reductions.
+
+| Program | Source checking: receipt 229 → candidate | Independent Core: receipt 229 → candidate |
+| --- | ---: | ---: |
+| Copying | 1,416,139 → 1,389,791 | 996,928 → 972,808 |
+| Persistence | 640,826 → 634,404 | 1,698,798 → 1,680,526 |
+| Resume | 210,195 → 209,213 | 306,117 → 302,590 |
+| Bound NUL | 1,416,139 → 1,389,791 | 996,923 → 972,803 |
+
+Production limits remain 327,680 per ordinary Type-work owner, 983,040 for
+independent Core and the existing depth limits. Copying and bound NUL now fit
+the independent Core ceiling, but their source checking still exceeds its
+ceiling by 1,062,111. Persistence retains source, elaboration and Core deficits
+of 306,724, 49,298 and 697,486. Diagnostic completion establishes no production
+admission for these three programs. Resume has separate normal-limit evidence.
+The method accounting correction contributes 30, 114, 30 and 30 Core units
+beyond the isolated cursor reduction; no physical timing improvement is claimed.
+
+The empty-substitution observer remains diagnostic-only. Receipt 239's four
+resume baseline/observer repeats match all six owner totals. An earlier
+18-unit final-elaboration difference remains unexplained; capacity-dependent
+hash-table charging is a hypothesis, not an established cause. Primitive-input
+preparation had measured net overhead and is excluded. Watch/edge relation
+consolidation is a separate unverified candidate.
+
+The delivery excludes all expanded SQLite manifest, library, adapter, fixtures,
+observers and raised diagnostic ceilings. Common retains shared-source and
+integration ownership; SQLite and arena remain explicitly user-paused. This is
+bounded DN-0036 evidence, with no change to normative Ash or whole-contract
+proof.
+
+Connected verification passes all 1,633 library cases, 230 distinct cases across
+sixteen affected public binaries, the separate larger normal-limit resume case,
+and 60 native adapter cases. All-targets build, formatting, strict all-feature
+workspace Clippy and warning-denied rustdoc pass. Receipt 242's architecture run
+reported 42 passes and one missing closed-inventory helper name. Receipt 243
+adds only that exact validate.rs helper name and passes the repaired guard plus
+two focused inventory guards. It adds no Type/Kind carrier profile. A fresh full
+43-case architecture run remains part of the required original-branch gate.
+
+Receipt 243 returns at `2026-10-07T05:15:02.796625+00:00`, after 203.149
+seconds, with all common, SQLite and original source pins, heads, statuses and
+indexes restored, normal policies and no active engine. Earlier receipt 242
+returns equally restored after the architecture failure; no failed gate is
+reported as a passing suite. Final independent source, accounting, ownership,
+measured-result and connected-quality reviews pass. The verified source and
+this record are prepared for an unsigned common commit and preserving merge;
+the integration hash and complete original-worktree gate are recorded next.
+
+
+### Exact method-probe mirror repair (2026-10-07, receipt 246)
+
+The full original-worktree gate at unsigned merge
+`fc7d2b9446d1b413ff4fe3faa7d370822e812862` returns exit one after 1,633 library
+and 43 architecture passes. The failing integration assertion is the source-text
+mirror in `method_parameter_resources`: it still expects the old concrete
+validator equation, before the named binary-lookup delta. The failed gate and
+raw log remain preserved under `cursor-method-delivery-241/`; raw SHA-256 is
+`23bfddd9716e1e31aec687b80f4ba9a6635a0f94a043506f57387a267e760310`.
+It is not a completed delivery or a passing whole-suite result.
+
+This correction changes only the existing mirror test and tracking. The concrete
+mirror includes the original named lookup delta, four minus one, and its exact
+total becomes 711. The wide-prerequisite mirror now reproduces the complete
+owning equation and total 1,215. Its older 1,185 arithmetic was a subtotal that
+also omitted the existing owner unit and 26 metadata units. The owning validator
+assertions, one-short refusals, fresh retries, the other 833/2,518 equations and
+all production source and limits remain unchanged. Receipt 239 already measures
+one width-one occurrence getter in each affected owning law; no unexplained
+numerical adjustment or weaker inequality replaces an assertion.
+
+An initial focused run stops on a whole-worktree guard when SQLite corrects a
+provisional prose checkpoint. Common and original guards remain identical; the
+SQLite delta is its README correction and preserved follow-up history. No restore
+is attempted. The stopped run and provisional receipt remain distinct from the
+final explicit handoff. The fresh v2 run binds SQLite's final clean `d2f14fd8`
+checkpoint and passes all four method integration tests, both owning exact
+validator cases and formatting. It returns at
+`2026-10-07T05:45:00.703210+00:00` after 8.419 seconds with all three guards
+restored, normal policies and no engine. Independent concrete source/formula
+review passes. Full original-worktree verification must still pass after the
+unsigned corrective commit and preserving merge.
+
+
+### Integrated cursor and method delivery (2026-10-07, receipt 246)
+
+Unsigned common commit `cdf44d990a74225fb9d1214a809986809ac32d19` is integrated by
+unsigned merge `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59` into
+`codex/provider-experiments`. The merge preserves both parents, original tip
+`fc7d2b9446d1b413ff4fe3faa7d370822e812862` and the corrective common commit. The merge tree
+matches the corrective common commit tree exactly. This correction changes only
+the existing exact method-probe mirror and tracking. It retains implementation
+commit `50dee826de0192c9f1fe88fb816bc6def4ed8e01`, first merged at `fc7d2b9`,
+whose failed gate is recorded above. The combined delivery contains capture
+values, independent Core method charges, the precise closed-inventory helper
+entry, the exact method mirror and tracking.
+The expanded SQLite package and all 26 unrelated original drafts retain their
+working bytes and status.
+
+The unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` passes in the original
+worktree at this merge: formatting, metadata, all-targets build, strict workspace
+all-feature Clippy, all-targets/all-feature tests and warning-denied rustdoc.
+The outer Ash library reports 1,633 passes and architecture reports 43. All
+117 reported summary blocks have zero failures and zero ignores;
+nested child reruns are included in that block count, not counted as unique
+tests. This gate covers the integrated S-01 SQLite program, arena lifecycle,
+owner rows, capture/resume/discard/completion, independent Core, module,
+transform and deep-input regressions. The separate expanded SQLite package is
+covered by the connected evidence recorded above, not by this original tree.
+
+The explicit return is `2026-10-07T05:58:32.277978+00:00`, after
+669.083 seconds. Raw log SHA-256 is
+`c10402ec1e75a7d1526912e25646693eb905cbee2bec1f82a6d42fa1ca2d652d`
+under `method-probe-repair-246/` in the common evidence directory. Complete
+guards confirm common working bytes and its empty index, the whole SQLite
+worktree, and original unrelated working bytes and its empty index are
+preserved. No verification engine remains. The implementation, correction and both merge objects are unsigned.
+Independent source, accounting, measured-result, documentation and integration
+reviews accompany the delivery.
+
+Common retains shared compiler, Core, capture, provider-checking, generic runtime
+and integration ownership. SQLite retains its library, manifest, native adapter,
+fixtures and execution evidence. SQLite and arena have separately resumed.
+Imports and engine windows require the coordinator's explicit slot handoff;
+future imports use the original integration branch and preserve their histories.
+
+The next agreed windows are SQLite's bounded preserving import, four normal
+programs and owned prose/header corrections, followed by common's paired
+dependency experiment. Arena's reviewed first writer slice, after verified
+import and exact pins, is surface syntax, parser module/grammar/projection and
+resource-provider syntax tests. Resolver, resolved evidence, provider checking,
+capture, Core/validation and runtime remain common-owned. The syntax slice stays
+unintegrated within arena's connected allocation/load delivery until resolution
+consumes families completely or explicitly rejects them; silently ignored
+families cannot merge. Ordinary opaque manifests and staged invocation require
+separate contract handoffs.
+
+The larger copying, bound-NUL and persistence source deficits remain unresolved;
+no production quota or depth limit changes. Diagnostic completion is distinct
+from normal admission. Relation consolidation and borrowed frozen prefixes
+remain private investigation. This delivery supplies experimental DN-0036
+evidence; it changes no normative Ash rule and proves no whole-contract or
+intrinsic resource lower bound. The exclusions recorded above remain.

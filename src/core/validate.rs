@@ -5435,7 +5435,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         owner: &super::dialect::MethodEvidenceLexicalOwner,
         claimed: &mut HashSet<crate::types::TypeVariableId>,
     ) -> Result<bool, ValidationError> {
-        self.charge_type_work(self.program.method_evidence.method_count())?;
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.method_count())?;
         let method = self
             .program
             .method_evidence
@@ -5719,7 +5719,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                 continue;
             };
             if self.method_evidence_subtree_contains(anchor.node, node)? {
-                self.charge_type_work(self.program.method_evidence.implementation_owner_count())?;
+                self.charge_method_catalog_binary_lookup(
+                    self.program.method_evidence.implementation_owner_count(),
+                )?;
                 self.charge_type_work(self.program.method_evidence_anchors.len())?;
                 return self.implementation_replacements(
                     implementation,
@@ -6457,7 +6459,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
         implementation: crate::interface::ImplMethodId,
         source_node: NodeId,
     ) -> Result<bool, ValidationError> {
-        self.charge_type_work(self.program.method_evidence.occurrence_count())?;
+        self.charge_method_catalog_binary_lookup(self.program.method_evidence.occurrence_count())?;
         let occurrence = self
             .program
             .method_evidence
@@ -6630,7 +6632,9 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
                         else {
                             return Ok(false);
                         };
-                        self.charge_type_work(self.program.method_evidence.method_count())?;
+                        self.charge_method_catalog_binary_lookup(
+                            self.program.method_evidence.method_count(),
+                        )?;
                         if self
                             .program
                             .method_evidence
@@ -8646,6 +8650,20 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             return Ok(false);
         };
         self.same_kind_charged(&kind, &Kind::Type)
+    }
+
+    fn charge_method_catalog_binary_lookup(&self, count: usize) -> Result<(), ValidationError> {
+        // Pay the bound calculation and fixed lookup/result access before either
+        // runs. Catalog keys contain fixed scalar identities, not type trees.
+        self.charge_type_work(3)?;
+        // Rust 1.97.1 binary_search_by halves upward until one element remains,
+        // then compares that element. Recheck this bound on toolchain changes.
+        let comparisons = if count == 0 {
+            0
+        } else {
+            (usize::BITS - (count - 1).leading_zeros()) as usize + 1
+        };
+        self.charge_type_work(comparisons)
     }
 
     fn charge_type_work(&self, cells: usize) -> Result<(), ValidationError> {
@@ -21329,10 +21347,15 @@ mod tests {
                         .expect("head equality")
                 );
             }
-            // Existing occurrence/source lookup, pending slot, selected method
-            // and head checks, prerequisite sequence and application edges;
-            // each lexical edge additionally reads L owners and M methods.
-            let exact_work = program.method_evidence.occurrence_count()
+            // The already selected occurrence makes this fixture catalog nonempty.
+            // Binary lookup pays three administration units, ceil(log2 O)
+            // reduction comparisons and one final comparison. Source lookup,
+            // pending slot, selected method/head checks and prerequisite edges
+            // retain their charges; each lexical edge reads L owners and M methods.
+            let occurrences = program.method_evidence.occurrence_count();
+            let occurrence_lookup_work =
+                4 + occurrences.next_power_of_two().trailing_zeros() as usize;
+            let exact_work = occurrence_lookup_work
                 + program.method_evidence.concrete_sources().len()
                 + 1
                 + methods.len()
@@ -21413,6 +21436,9 @@ mod tests {
         const CHECKED_STACK_CAPACITY_WORK: usize = 45;
         // The generic implementation head reads its one admitted parameter.
         const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
+        // The original subtotal includes one width-one occurrence lookup.
+        // Its dedicated binary tariff is four units instead of one.
+        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
         const EXACT_WORK: usize = 632
             + 1
             + 1
@@ -21422,6 +21448,7 @@ mod tests {
             + 1
             + 1
             + SCOPED_OWNER_PARAMETER_WORK
+            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
             + 24; // complete tagged owner scope/substitution and independent metadata work
         assert_eq!(measured.type_work.get(), EXACT_WORK);
 
@@ -21481,11 +21508,15 @@ mod tests {
         // methods of D=1 direct selected prerequisite:
         // 1,175 + Q*W + R + D*W = 1,183.
         const FIXED_AUTHORITY_AND_SOURCE_WORK: usize = 1_175;
+        // The fixed subtotal includes one width-one occurrence lookup;
+        // the dedicated binary tariff replaces its one unit with four.
+        const CONCRETE_OCCURRENCE_LOOKUP_DELTA: usize = 4 - 1;
         const PREREQUISITE_METHOD_LIST_WORK: usize = 2 * 2;
         const EXACT_PREREQUISITE_SEQUENCE_WORK: usize = 2 + 2;
         // The polymorphic Convert head reads its one admitted parameter.
         const SCOPED_OWNER_PARAMETER_WORK: usize = 1;
         const EXACT_WORK: usize = FIXED_AUTHORITY_AND_SOURCE_WORK
+            + CONCRETE_OCCURRENCE_LOOKUP_DELTA
             + PREREQUISITE_METHOD_LIST_WORK
             + EXACT_PREREQUISITE_SEQUENCE_WORK
             + 1
@@ -22657,6 +22688,96 @@ mod tests {
     }
 
     #[test]
+    fn method_catalog_binary_lookup_bound_prepays_actual_key_comparisons() {
+        use crate::interface::{ImplId, ImplMethodId, InterfaceId, MethodId};
+        use crate::module::ModuleId;
+        // These include empty/singleton catalogs, both sides of powers of two,
+        // and a non-power-of-two catalog. Actual std comparisons are the witness.
+        for (count, exact_work) in [
+            (0, 3),
+            (1, 4),
+            (2, 5),
+            (3, 6),
+            (4, 6),
+            (16, 8),
+            (53, 10),
+            (64, 10),
+            (65, 11),
+            (128, 11),
+            (129, 12),
+        ] {
+            let keys = (0..count)
+                .map(|index| {
+                    let id = u32::try_from(index).unwrap();
+                    let method =
+                        MethodId::new(InterfaceId::new(ModuleId::new(id / 4), id % 4), id % 3);
+                    ImplMethodId::new(ImplId::new(ModuleId::new(id / 4), id % 4), method)
+                })
+                .collect::<Vec<_>>();
+            let missing_method = MethodId::new(InterfaceId::new(ModuleId::new(u32::MAX), 0), 0);
+            let missing_impl =
+                ImplMethodId::new(ImplId::new(ModuleId::new(u32::MAX), 0), missing_method);
+            for key in keys
+                .first()
+                .copied()
+                .into_iter()
+                .chain(keys.last().copied())
+                .chain([missing_impl])
+            {
+                let mut comparisons = 0;
+                let _ = keys.binary_search_by(|probe| {
+                    comparisons += 1;
+                    probe.cmp(&key)
+                });
+                assert_eq!(comparisons + 3, exact_work);
+                let mut method_comparisons = 0;
+                let _ = keys.binary_search_by(|probe| {
+                    method_comparisons += 1;
+                    probe.method().cmp(&key.method())
+                });
+                assert_eq!(method_comparisons + 3, exact_work);
+                let mut ordinal_comparisons = 0;
+                let ordinals = (0..count).collect::<Vec<_>>();
+                let _ = ordinals.binary_search_by(|probe| {
+                    ordinal_comparisons += 1;
+                    probe.cmp(&count)
+                });
+                assert_eq!(ordinal_comparisons + 3, exact_work);
+            }
+
+            let file = source();
+            let arena = super::super::dialect::ArenaId::new(118);
+            let program = UnvalidatedProgram {
+                registry: Arc::new(crate::resolved::ResolvedRegistry::default()),
+                method_evidence: Arc::new(super::super::dialect::MethodEvidenceCatalog::default()),
+                method_evidence_anchors: Box::new([]),
+                arena,
+                nodes: vec![StoredNode {
+                    dialect: DialectId::PURE,
+                    effects: (),
+                    ty: Type::Unit,
+                    origin: Some(origin(&file)),
+                    kind: PureExprKind::Value(PureValue::Unit(super::super::literal::UnitNode)),
+                }],
+                root: NodeId::new(arena, 0),
+            };
+            for remaining in 0..=exact_work {
+                let validator = Validator::new(&program, &[&file]);
+                validator
+                    .charge_type_work(CORE_VALIDATION_TYPE_WORK_LIMIT - remaining)
+                    .unwrap();
+                let result = validator.charge_method_catalog_binary_lookup(count);
+                if remaining < exact_work {
+                    assert_eq!(result.unwrap_err().reason(), ValidationReason::Resource);
+                } else {
+                    result.unwrap();
+                    assert_eq!(validator.type_work.get(), CORE_VALIDATION_TYPE_WORK_LIMIT);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn lexical_owner_parameter_authentication_has_an_exact_retry_boundary() {
         let fixture = LinkedCoreValidationFixture::compile("", LEXICAL_AUTHENTICATION_SOURCE, &[]);
         let sources = linked_fixture_sources(&fixture);
@@ -22676,9 +22797,9 @@ mod tests {
                 if source == owner.source && binder == owner.binder)
             })
             .expect("owner anchor");
-        // Three method lookup cells, two retained identities, four spelling
-        // bytes and two kind cells authenticate the complete positional row.
-        const EXACT: usize = 3 + 2 + 4 + 2;
+        // Three bound/access cells and three binary comparisons, two retained
+        // identities, four spelling bytes and two kind cells authenticate the row.
+        const EXACT: usize = 6 + 2 + 4 + 2;
         for remaining in [EXACT - 1, EXACT, EXACT] {
             let validator =
                 Validator::new_modules(&fixture.program, &sources, &fixture.module_sources)

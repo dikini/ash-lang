@@ -7968,6 +7968,8 @@ fn is_allowed_private_core_method_evidence_identifier(path: &str, identifier: &s
                     | "MissingCaptureRequirement"
                     | "MissingTypeRequirementSlot"
                     | "ScopeRequirements"
+                    // Prepaid binary catalog lookup; no selection or runtime dispatch.
+                    | "charge_method_catalog_binary_lookup"
                     | "authenticated_method_evidence"
                     | "enclosing_implementation_replacements"
                     | "implementation_owner_count"
