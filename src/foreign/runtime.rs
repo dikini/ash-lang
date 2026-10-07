@@ -231,6 +231,51 @@ pub struct ForeignOperationKey {
     pub operation: usize,
 }
 
+/// A synchronous native publication prepared by a trusted adapter.
+///
+/// Pending state owns only unpublished scratch and candidate metadata. It must
+/// not own a native resource, retain an owner keepalive, or publish on drop.
+/// The evaluator retains the original live owner views through result admission.
+/// The adapter supplies the box under the existing host-allocation assumption:
+/// its allocation must return for execution to progress. This is not a fallible
+/// wrapper allocation or containment of host allocation aborts. Detectable
+/// payload/scratch reservation and bounded operation work still require checks.
+pub trait NativeInvocationCommit: fmt::Debug {
+    /// Publishes after the complete result has been admitted by the evaluator.
+    ///
+    /// The key, module and ordered owner views are the same authenticated values
+    /// supplied to preparation. The adapter must recheck its candidate against
+    /// those exact owners before mutation. Every error must precede publication;
+    /// success must leave no fallible conversion or publication work outstanding.
+    /// No source code or callback may run between preparation and commit.
+    ///
+    /// # Errors
+    /// Returns a binding, work or storage refusal without publishing anything.
+    /// These mutation and drop obligations are trusted adapter assumptions.
+    fn commit(
+        self: Box<Self>,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<(), ForeignExecutionError>;
+}
+
+/// A borrowed invocation's copied reply and optional deferred publication.
+#[derive(Debug)]
+pub enum ForeignInvocation {
+    /// The existing immediate path. Native effects may already have happened;
+    /// result admission failure does not roll them back.
+    Immediate(ForeignData),
+    /// No native publication has happened. Failure to admit this reply drops
+    /// the pending scratch without invoking its commit.
+    Prepared {
+        /// Independent copied data checked against the operation's codomain.
+        output: ForeignData,
+        /// Unpublished scratch; this contains no native owner or keepalive.
+        commit: Box<dyn NativeInvocationCommit>,
+    },
+}
+
 /// Executable behavior supplied by a trusted Rust library adapter.
 ///
 /// The evaluator authenticates original manifest facts before these calls.
@@ -255,6 +300,27 @@ pub trait ExecutableForeignModule: fmt::Debug {
         input: &ForeignData,
         states: &[&dyn NativeResourceOwner],
     ) -> Result<ForeignData, ForeignExecutionError>;
+    /// Prepares a borrowed reply, optionally deferring native publication.
+    ///
+    /// The default invokes the existing immediate method exactly once and
+    /// preserves its mutation behavior. An override returning `Prepared` must
+    /// perform conversion, fallible scratch reservation and candidate checks
+    /// without publishing. Its commit runs only after codomain validation and
+    /// complete evaluator result admission, against the same live owner views.
+    ///
+    /// # Errors
+    /// Returns the adapter's original refusal classification. A prepared path
+    /// must leave native publication unchanged on error or abandonment.
+    fn prepare_invoke(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        self.invoke(key, module, input, states)
+            .map(ForeignInvocation::Immediate)
+    }
     /// Completes this exact guard. Retention never substitutes another owner.
     /// An outer error is permitted only before the native ownership transition;
     /// after that transition, the disposition must survive conversion failure.

@@ -815,6 +815,45 @@ required interpreter outside the owned capture cannot be skipped. Internal
 teardown uses safe native destruction and never executes source finish code as
 recovery.
 
+### Deferred publication of borrowed native results
+
+The DN-0036 executable binding experiment distinguishes an immediate reply from
+a prepared reply. The additive `prepare_invoke` method defaults to the existing
+`invoke` method exactly once and returns `ForeignInvocation::Immediate`.
+Immediate native effects may precede result admission; an admission failure does
+not imply rollback.
+
+A prepared reply contains independent `ForeignData` and a non-cloneable pending
+commit. Preparation owns only unpublished scratch and candidate metadata. Source
+access, native ownership and keepalives remain with their original scope. The
+evaluator retains the same authenticated operation, defining module and ordered
+live owner views through codomain validation, complete decoding and result
+storage/work admission. It consumes the pending commit only after those checks.
+After successful commit, the evaluator only releases the borrowed-view scratch
+and assigns the already-admitted value to return control. No fallible evaluator
+authentication, allocation, conversion or result-admission work follows it.
+
+Dropping a pending reply or refusing commit publishes no native state. The
+adapter must authenticate its candidate against the original owners and refuse
+stale or foreign candidates before mutation. These are explicit trusted-adapter
+obligations, including no source callback or reentry between preparation and
+commit. The consuming Rust commit type enforces at most one invocation of that
+pending object; it does not prove an arbitrary adapter's mutation or destructor
+behavior.
+
+Prepared dispatch charges its added association/view work. Existing Immediate
+dispatch retains its work charges. Detectable work, payload and storage refusals
+keep their existing internal classifications. The adapter supplies the boxed
+pending object under the existing host-allocation progress assumption; global
+allocator termination is not converted into an Ash refusal. Unreachable decoded
+heap staging after refusal is not native publication.
+
+This internal Rust binding protocol does not add source syntax, change the
+Scope/Completion report algebra, extend native owner access, or establish typed
+arena allocation. Its executable evidence must distinguish staged refusal from
+unchanged legacy immediate behavior. It remains bounded DN-0036 experiment
+evidence rather than current language semantics or a mechanized proof.
+
 ### Core and runtime map
 
 Generalize the existing resource carrier; retain ordinary handler, application,
