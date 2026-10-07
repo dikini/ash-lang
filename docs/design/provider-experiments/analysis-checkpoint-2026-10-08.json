@@ -1,0 +1,2429 @@
+{
+  "status": "paused bounded experiment; isolated preservation checkpoint",
+  "authority": "TASK-0035 under DN-0036; no language or architecture acceptance",
+  "packet": "source-producer-connected-candidate-v3",
+  "pins_sha256": "cc1b9e387ec6925f0b9c6c871ab412c7f43fef83d0a57ad7a97eac3f53f63896",
+  "source": {
+    "src/core/capture/value.rs": "a87ff90da6b9af92f1f2fe440e471ee445251edeea4df47fbe85cfd83b6d48e6",
+    "src/types.rs": "91b058a3e40316a94783ff0fb7c51e488af367aa70ef47bd07cb77bbf7852673",
+    "src/types/owner_arguments.rs": "6321bf4bb30adceb7f4dc8f5fdb00562c540089b33b9d6056c43ba8c8339e336",
+    "src/core/capture/value/deferred_frame.rs": "95e69f2d5d95aefdcfe254c9e59f033f7d35e1793c772762d6867c223e9d5608",
+    "src/core/capture/value/deferred_evidence.rs": "e9ba4c7510c3b27d1eead6f961316e7cc7e04d8593861e2c82a8bd4f13d460ac",
+    "src/core/capture/value/local_recipe.rs": "29e2e457a8a606d9ddcd57e59b25625a807eaaf3d662ad1b5b9111ae751ef81c",
+    "src/core/capture/value/source_visit.rs": "5a239127f50a2da67a192ed3d9c72f481872597f002b48a17663fff20564bc2d",
+    "src/core/capture/value/typed_environment.rs": "47701e5852b5681bfd6e88255429d45fad9a2c9ed4b6e22484ee16c1c3e8e582",
+    "src/core/capture/value/source_consumer.rs": "6b7d0e80ff4ef9941f3ee7d107ae0c28c1258e4b78adee0a24c2943cf3d0dd99",
+    "src/core/capture/value/support_plan.rs": "79c670b5ffe3da84136f9c014d7644ef3fbf1d5227a8af928cbad66f2f08df2e",
+    "src/core/capture/value/source_occurrence.rs": "0689aa747d9b76cf38475c135716342af714639c9315aa292a4b64f7fbd45f95",
+    "src/core/capture/value/producer.rs": "7d2e96dbd8946f880d3603a9d7368efba840e3ec698e4a6df579732ac781be7e",
+    "src/core/capture/value/producer_zero.rs": "ee0b89d8abd2a118ab609a6c9b5cd098f93ee9124b391c39061e1a6d6e1fc2d1",
+    "src/core/capture/value/producer_evidence.rs": "092eddc8e916223173887f1f792717e62fd7472707d288a51d0672bab81cf6c9",
+    "src/core/capture/value/producer_driver.rs": "0d7e735ef742ebb7f01f82c76842416f851f73bc38e8a420dba50dcba4d3d1fb",
+    "src/core/capture/value/source_topology.rs": "94dfc7f051d9f83b3af0d491cac41a7ff2d0354595ffd1bc15af6e043ee9936a",
+    "src/core/capture/value/source_producer.rs": "2f40f694c2a83eca41db7ad0f496d28fdd2311dfb677c7e23dd591cbd2be3d87",
+    "src/core/capture/value/producer_integration_tests.rs": "ab8574fe0ec88f5f3bda3fd38d27e65f301f542c1b7bf9dd34c51f3c0e172b8b",
+    "src/core/capture/value/mixed_origin_tests.rs": "22e9e8b52a927d2bcb4a1efe8d9d896ea3f2cedf0227e91dbfeac1db1a470455"
+  },
+  "normal_value": {
+    "passed": 63,
+    "failed": 0,
+    "log_sha256": "abdcfd4eb67c68e6403ac259fcaa21767b9cccef09a29af41b80e5035b194896"
+  },
+  "normal_native": {
+    "test": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "ash",
+      "--test",
+      "provider_sqlite_copying",
+      "qualified_forwarding_chain_preserves_integer_and_source_completion",
+      "--",
+      "--exact",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit": 101,
+    "failure": "TypeResourceExhausted",
+    "log_sha256": "250c36c08fd91d5d4a71f3716fc91be64b71e52a1cf534263bc655ce584338b0"
+  },
+  "cost_comparison_scope": "full compound candidate against selected Common5a with identical native fixtures; not incremental new-producer-only",
+  "initial_diagnostic_ceiling": 20971520,
+  "copying_completion_diagnostic_ceiling": 268435456,
+  "normal_source_final_limit": 327680,
+  "normal_independent_core_limit": 983040,
+  "cost": [
+    {
+      "lane": "baseline",
+      "case": "copying",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 66.17461545499827,
+      "log_sha256": "8833264807a93716cad24f9ee1400ce3f3ac8385c6c424085c1b04f088fa7b49",
+      "owners": {
+        "resolution": 27413,
+        "source-checking": 1212707,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 903995
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "copying",
+        "pid": 1749354,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          52,
+          57,
+          51,
+          53,
+          52,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "source_byte_length": 4607,
+        "normalized_source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 27413,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 1212707,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4030,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15742,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 165717,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 903995,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 4,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 22,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 22,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "baseline",
+      "case": "persistence",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_sessions",
+        "statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 3.1112509340018732,
+      "log_sha256": "f9d28870185bf1e8f17eab9b87e6808fc4f9fdcfb5f1bbd53a3a9a150d16fd59",
+      "owners": {
+        "resolution": 44240,
+        "source-checking": 597882,
+        "module-linking": 4136,
+        "linked-interface": 48578,
+        "final-elaboration": 376605,
+        "independent-effect-core": 1609101
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "persistence",
+        "pid": 1749632,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          52,
+          57,
+          54,
+          51,
+          50,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "session-entry.ash",
+        "source_sha256": "16b451ef9738d56265e2fced46b9e97374379f6fafd714626c22c84750b432f3",
+        "source_byte_length": 5217,
+        "normalized_source_sha256": "15b67e1c33132778d874875973942e9bbdac3856391072378045faaf77824c55",
+        "persistence_path_byte_lengths": [
+          52,
+          52
+        ],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 44240,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 597882,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4136,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 48578,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 376605,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 1609101,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)",
+            "header_line": 3,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 22,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 22,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "baseline",
+      "case": "resume",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_control",
+        "captured_statement_and_connection_resume_actual_copied_query_without_reacquisition",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 2.010522752003453,
+      "log_sha256": "0cf584a4587c7940d26e463d4ba14f2f8181b334f8d13069ceecd65d7068aaf9",
+      "owners": {
+        "resolution": 25542,
+        "source-checking": 203215,
+        "module-linking": 3950,
+        "linked-interface": 15190,
+        "final-elaboration": 103738,
+        "independent-effect-core": 289063
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "resume",
+        "pid": 1749898,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          52,
+          57,
+          56,
+          57,
+          56,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "control-resume.ash",
+        "source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "source_byte_length": 1595,
+        "normalized_source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 25542,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 203215,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 3950,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15190,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 103738,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 289063,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)",
+            "header_line": 3,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 1,
+              "line": 20,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 1,
+            "line": 20,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "baseline",
+      "case": "bound_nul",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.3071880339994095,
+      "log_sha256": "ae87427086a1b3682e85fe92aec255c89b538302a7540de2e6bbdd548b39649a",
+      "owners": {
+        "resolution": 27413,
+        "source-checking": 1212707,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 903990
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "bound_nul",
+        "pid": 1749918,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          52,
+          57,
+          57,
+          49,
+          56,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "source_byte_length": 4603,
+        "normalized_source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 27413,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 1212707,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4030,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15742,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 165717,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 903990,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 2,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 20,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 20,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "baseline",
+      "case": "forwarding",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "qualified_forwarding_chain_preserves_integer_and_source_completion",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.5065629599994281,
+      "log_sha256": "a41faa98ab6c2be926ef5d653730cab97ddbfff5bef4daf52b21e9bcebbd923c",
+      "owners": {
+        "resolution": 25557,
+        "source-checking": 216584,
+        "module-linking": 3934,
+        "linked-interface": 15098,
+        "final-elaboration": 107066,
+        "independent-effect-core": 315193
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "source_sha256": "5d7405ee44fe147fd138c2b9e5a692c61b0c0746be2ecad49954f513cd4d88b0",
+        "source_byte_length": 1158,
+        "exact_original_fixture_and_counter_zero_verified": true
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 25557,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 216584,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 3934,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15098,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 107066,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 315193,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 2,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 19,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 19,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "candidate",
+      "case": "copying",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 101,
+      "seconds": 71.88052932499704,
+      "log_sha256": "12a212bec49fd8c4d26f7dbc1edd4f7d05b2e39ff3c426662fb57e8268b1e1ec",
+      "owners": {},
+      "connected_hits": [
+        [
+          756,
+          309,
+          0,
+          127,
+          120,
+          127,
+          120,
+          0
+        ],
+        [
+          788,
+          331,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          815,
+          356,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          837,
+          381,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          871,
+          409,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          903,
+          431,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          944,
+          456,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "copying",
+        "pid": 1752194,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          50,
+          49,
+          57,
+          52,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "source_byte_length": 4607,
+        "normalized_source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "failure": "TypeResourceExhausted",
+      "diagnostic_completion": "failed; partial owner totals are not completed cost"
+    },
+    {
+      "lane": "candidate",
+      "case": "persistence",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_sessions",
+        "statement_reuse_transactions_generic_rows_and_reopen_preserve_every_report",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 3.309948517999146,
+      "log_sha256": "f4780e308a12dfbbb12d4edc2670bafea67de084bf91c3832446471d08848fc4",
+      "owners": {
+        "resolution": 44240,
+        "source-checking": 757922,
+        "module-linking": 4136,
+        "linked-interface": 48578,
+        "final-elaboration": 376641,
+        "independent-effect-core": 1733738
+      },
+      "connected_hits": [],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "persistence",
+        "pid": 1752474,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          50,
+          52,
+          55,
+          52,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "session-entry.ash",
+        "source_sha256": "534834a50aa35aa19e388b76626e4521f88f03a613e5f88b62385dae3f895752",
+        "source_byte_length": 5217,
+        "normalized_source_sha256": "15b67e1c33132778d874875973942e9bbdac3856391072378045faaf77824c55",
+        "persistence_path_byte_lengths": [
+          52,
+          52
+        ],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 44240,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 757922,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4136,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 48578,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 376641,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 1733738,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_sessions.rs (target/debug/deps/provider_sqlite_sessions-ead443f8522b4451)",
+            "header_line": 127,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 177,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 177,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "candidate",
+      "case": "resume",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_control",
+        "captured_statement_and_connection_resume_actual_copied_query_without_reacquisition",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 2.2165805639961036,
+      "log_sha256": "9b86520146acd3c9b6e6118ebb5e46725fab1e676ca85296762cf08c0efde813",
+      "owners": {
+        "resolution": 25542,
+        "source-checking": 253310,
+        "module-linking": 3950,
+        "linked-interface": 15190,
+        "final-elaboration": 103738,
+        "independent-effect-core": 310657
+      },
+      "connected_hits": [
+        [
+          496,
+          153,
+          0,
+          3,
+          1,
+          3,
+          1,
+          0
+        ],
+        [
+          525,
+          181,
+          0,
+          3,
+          1,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "resume",
+        "pid": 1752777,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          50,
+          55,
+          55,
+          55,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "control-resume.ash",
+        "source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "source_byte_length": 1595,
+        "normalized_source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 25542,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 253310,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 3950,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15190,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 103738,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 310657,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_control.rs (target/debug/deps/provider_sqlite_control-2fe3c8892667913b)",
+            "header_line": 127,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 1,
+              "line": 174,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 1,
+            "line": 174,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "candidate",
+      "case": "bound_nul",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 101,
+      "seconds": 4.5108675329975085,
+      "log_sha256": "410335066432193d6dcf2d6968ead8a9344a2be48ebaec98ee606d6f7c42f222",
+      "owners": {},
+      "connected_hits": [
+        [
+          756,
+          309,
+          0,
+          127,
+          120,
+          127,
+          120,
+          0
+        ],
+        [
+          788,
+          331,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          815,
+          356,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          837,
+          381,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          871,
+          409,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          903,
+          431,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          944,
+          456,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "case": "bound_nul",
+        "pid": 1752791,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          50,
+          55,
+          57,
+          49,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "source_byte_length": 4603,
+        "normalized_source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "failure": "TypeResourceExhausted",
+      "diagnostic_completion": "failed; partial owner totals are not completed cost"
+    },
+    {
+      "lane": "candidate",
+      "case": "forwarding",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "qualified_forwarding_chain_preserves_integer_and_source_completion",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.6074403089951375,
+      "log_sha256": "457658fedfeb6cebf9fc23622ea762d68deec5586ef81753a6ede000d5436203",
+      "owners": {
+        "resolution": 25557,
+        "source-checking": 401561,
+        "module-linking": 3934,
+        "linked-interface": 15098,
+        "final-elaboration": 107066,
+        "independent-effect-core": 338902
+      },
+      "connected_hits": [
+        [
+          456,
+          158,
+          0,
+          7,
+          4,
+          7,
+          4,
+          0
+        ],
+        [
+          471,
+          189,
+          0,
+          7,
+          4,
+          0,
+          0,
+          1
+        ],
+        [
+          486,
+          220,
+          0,
+          7,
+          4,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "initial",
+      "temporary_diagnostic_ceiling": 20971520,
+      "input": {
+        "source_sha256": "5d7405ee44fe147fd138c2b9e5a692c61b0c0746be2ecad49954f513cd4d88b0",
+        "source_byte_length": 1158,
+        "exact_original_fixture_and_counter_zero_verified": true
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 25557,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 401561,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 3934,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15098,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 107066,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 338902,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 126,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 201,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 201,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "candidate",
+      "case": "copying",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "copied_unicode_blobs_nulls_and_empty_values_survive_both_scopes",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 51.46297599100217,
+      "log_sha256": "57513fdacfe80e2cd89803c8f2654a3d1745f3caf474dd5b28feb8333f8a6932",
+      "owners": {
+        "resolution": 27413,
+        "source-checking": 33595389,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 1034670
+      },
+      "connected_hits": [
+        [
+          756,
+          309,
+          0,
+          127,
+          120,
+          127,
+          120,
+          0
+        ],
+        [
+          788,
+          331,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          815,
+          356,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          837,
+          381,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          871,
+          409,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          903,
+          431,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          944,
+          456,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "completion",
+      "temporary_diagnostic_ceiling": 268435456,
+      "input": {
+        "case": "copying",
+        "pid": 1755893,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          53,
+          56,
+          57,
+          51,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "source_byte_length": 4607,
+        "normalized_source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 27413,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 33595389,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4030,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15742,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 165717,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 1034670,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 128,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 877,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 877,
+            "announced": 1
+          }
+        ]
+      }
+    },
+    {
+      "lane": "candidate",
+      "case": "bound_nul",
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "provider_sqlite_copying",
+        "bound_text_nul_is_an_ordinary_failure_with_both_completion_reports",
+        "--",
+        "--exact",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 8.313907363000908,
+      "log_sha256": "1ed5e1624adf3c74d88c24afa32d1792bb91c16545fc83eb4ed5b03fc933bc02",
+      "owners": {
+        "resolution": 27413,
+        "source-checking": 33595389,
+        "module-linking": 4030,
+        "linked-interface": 15742,
+        "final-elaboration": 165717,
+        "independent-effect-core": 1034665
+      },
+      "connected_hits": [
+        [
+          756,
+          309,
+          0,
+          127,
+          120,
+          127,
+          120,
+          0
+        ],
+        [
+          788,
+          331,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          815,
+          356,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          837,
+          381,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          871,
+          409,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          903,
+          431,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ],
+        [
+          944,
+          456,
+          0,
+          127,
+          120,
+          0,
+          0,
+          1
+        ]
+      ],
+      "stage": "completion",
+      "temporary_diagnostic_ceiling": 268435456,
+      "input": {
+        "case": "bound_nul",
+        "pid": 1756059,
+        "directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          49,
+          55,
+          53,
+          54,
+          48,
+          53,
+          57,
+          45,
+          48
+        ],
+        "normalized_directory_bytes": [
+          47,
+          116,
+          109,
+          112,
+          47,
+          97,
+          115,
+          104,
+          45,
+          115,
+          113,
+          108,
+          105,
+          116,
+          101,
+          45,
+          99,
+          111,
+          112,
+          121,
+          105,
+          110,
+          103,
+          45,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          48,
+          45,
+          48
+        ],
+        "directory_byte_length": 36,
+        "entry": "copying-entry.ash",
+        "source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "source_byte_length": 4603,
+        "normalized_source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "persistence_path_byte_lengths": [],
+        "original_program_and_counter_zero_verified": true,
+        "only_fixture_pid_normalized": true,
+        "identical_literal_contents_claimed": false
+      },
+      "strict_six_owner_endpoints": {
+        "resolution": {
+          "used": 27413,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "source-checking": {
+          "used": 33595389,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "module-linking": {
+          "used": 4030,
+          "normal_limit": 327680,
+          "suffix": " outcome=Ok(())"
+        },
+        "linked-interface": {
+          "used": 15742,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "final-elaboration": {
+          "used": 165717,
+          "normal_limit": 327680,
+          "suffix": ""
+        },
+        "independent-effect-core": {
+          "used": 1034665,
+          "normal_limit": 983040,
+          "suffix": " outcome=Ok(())"
+        }
+      },
+      "harness": {
+        "groups": [
+          {
+            "header": "Running tests/provider_sqlite_copying.rs (target/debug/deps/provider_sqlite_copying-b82a66bcca474e24)",
+            "header_line": 126,
+            "kind": "binary",
+            "parent": {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 7,
+              "line": 875,
+              "announced": 1
+            },
+            "nested": []
+          }
+        ],
+        "raw_summaries": [
+          {
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "measured": 0,
+            "filtered": 7,
+            "line": 875,
+            "announced": 1
+          }
+        ]
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "copying",
+      "baseline_exit": 0,
+      "candidate_exit": 0,
+      "candidate_stage": "completion",
+      "raw_six_owner_delta": {
+        "resolution": 0,
+        "source-checking": 32382682,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 130675
+      },
+      "matched_input": {
+        "matched_case": "copying",
+        "normalized_program_and_lengths_equal": true,
+        "baseline_source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "observed_source_sha256": "4027fbff9846f2910e1d8745edd55bad2f5e859743998e0003a5b39feadb3929",
+        "literal_pid_contents_may_differ": true
+      }
+    },
+    {
+      "case": "persistence",
+      "baseline_exit": 0,
+      "candidate_exit": 0,
+      "candidate_stage": "initial",
+      "raw_six_owner_delta": {
+        "resolution": 0,
+        "source-checking": 160040,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 36,
+        "independent-effect-core": 124637
+      },
+      "matched_input": {
+        "matched_case": "persistence",
+        "normalized_program_and_lengths_equal": true,
+        "baseline_source_sha256": "16b451ef9738d56265e2fced46b9e97374379f6fafd714626c22c84750b432f3",
+        "observed_source_sha256": "534834a50aa35aa19e388b76626e4521f88f03a613e5f88b62385dae3f895752",
+        "literal_pid_contents_may_differ": true
+      }
+    },
+    {
+      "case": "resume",
+      "baseline_exit": 0,
+      "candidate_exit": 0,
+      "candidate_stage": "initial",
+      "raw_six_owner_delta": {
+        "resolution": 0,
+        "source-checking": 50095,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 21594
+      },
+      "matched_input": {
+        "matched_case": "resume",
+        "normalized_program_and_lengths_equal": true,
+        "baseline_source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "observed_source_sha256": "f76cd0a5c6cb9b6ec14193cc2d9b9d411b86faae8ef3067d2cff33b3e8fdff62",
+        "literal_pid_contents_may_differ": true
+      }
+    },
+    {
+      "case": "bound_nul",
+      "baseline_exit": 0,
+      "candidate_exit": 0,
+      "candidate_stage": "completion",
+      "raw_six_owner_delta": {
+        "resolution": 0,
+        "source-checking": 32382682,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 130675
+      },
+      "matched_input": {
+        "matched_case": "bound_nul",
+        "normalized_program_and_lengths_equal": true,
+        "baseline_source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "observed_source_sha256": "6abfc854685cda49fee5bb79f5ba3a56b73eb98324c2f49bc7b20ca37dc167c6",
+        "literal_pid_contents_may_differ": true
+      }
+    },
+    {
+      "case": "forwarding",
+      "baseline_exit": 0,
+      "candidate_exit": 0,
+      "candidate_stage": "initial",
+      "raw_six_owner_delta": {
+        "resolution": 0,
+        "source-checking": 184977,
+        "module-linking": 0,
+        "linked-interface": 0,
+        "final-elaboration": 0,
+        "independent-effect-core": 23709
+      }
+    }
+  ],
+  "raw_owner_totals_not_normalized": true,
+  "outcome": "cost regression in all five Source totals; no optimization accepted",
+  "normal_acceptance": false,
+  "full_repository_gate": false,
+  "shared_source_integration": false,
+  "restore_receipt_sha256": "e2f226aa65874ca4a4b25ba2be00d2079678b29f282e248b434c46c9ae4b3982",
+  "completion_restore_receipt_sha256": "e98b64a89a0991bf9112cd3fd208361d72d55ea1eb251e221eaaf8b31938ca47",
+  "initial_refusal_evidence_not_replaced_by_continuation": true,
+  "resume_findings": [
+    "Investigate unread producer local_memo and separate journal; retain sole complete memo without losing ordered saved alternatives or duplicate-publication guards.",
+    "Scope.actuals repeats immutable normalized binding routes.",
+    "Post-seal live environment reachability traversal repeats across entries.",
+    "Non-E original constructors retain their metadata boundary."
+  ],
+  "scope_key_collapse": "No broad collapse justified: Raw/E keys already omit parent IDs; route/frame/gate ancestry carries readiness and capture meaning."
+}

@@ -17,6 +17,10 @@ pub(super) struct OriginalPort {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct RouteId(usize);
 
+// Demand identity is separate from original ports, frame IDs and input keys.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct ActivationId(usize);
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct FrameId(usize);
 
@@ -70,6 +74,66 @@ enum Route {
     // families have an independently established observation projection:
     // metadata membership or one callable target code, preserving environments.
     Join { class: ProjectionClass, sources: Vec<RouteId> },
+    // Only an authenticated single-variable metadata Merge uses this view.
+    // Its seed remains opaque, including an outer multi-input Merge.
+    MetadataView { seed: RouteId },
+    // Append-only boolean demand. This route can produce only Free or Empty.
+    Activation(ActivationId),
+}
+
+// Borrowed complete structural keys avoid allocating children before lookup.
+// Only the scalar digest enters HashMap; full hashing and collision equality
+// are paid explicitly. These keys never contain an observed atom answer.
+#[derive(Eq, Hash, PartialEq)]
+enum EquationKey<'a> {
+    Original(OriginalPort),
+    Head(OriginalPort),
+    Empty,
+    Free,
+    Construct { function: usize, frame: CompletedFrame },
+    Ready { inputs: &'a [RouteId], value: RouteId },
+    Join { class: ProjectionClass, sources: &'a [RouteId] },
+    MetadataView { seed: RouteId },
+    Activation(ActivationId),
+}
+
+impl<'a> EquationKey<'a> {
+    fn of(route: &'a Route) -> Self {
+        match route {
+            Route::Original(port) => Self::Original(*port),
+            Route::Head(port) => Self::Head(*port),
+            Route::Empty => Self::Empty,
+            Route::Free => Self::Free,
+            Route::Construct { function, frame } => Self::Construct { function: *function, frame: *frame },
+            Route::Ready { inputs, value } => Self::Ready { inputs, value: *value },
+            Route::Join { class, sources } => Self::Join { class: *class, sources },
+            Route::MetadataView { seed } => Self::MetadataView { seed: *seed },
+            Route::Activation(id) => Self::Activation(*id),
+        }
+    }
+
+    fn work(&self) -> Result<usize, Failure> {
+        let children = match self {
+            Self::Ready { inputs, .. } => inputs.len(),
+            Self::Join { sources, .. } => sources.len(),
+            _ => 0,
+        };
+        children.checked_add(6).ok_or(Failure::Resource)
+    }
+
+    fn owned(&self, budget: &mut TypeWorkBudget) -> Result<Route, Failure> {
+        Ok(match self {
+            Self::Original(port) => Route::Original(*port),
+            Self::Head(port) => Route::Head(*port),
+            Self::Empty => Route::Empty,
+            Self::Free => Route::Free,
+            Self::Construct { function, frame } => Route::Construct { function: *function, frame: *frame },
+            Self::Ready { inputs, value } => Route::Ready { inputs: copy_slice(inputs, budget)?, value: *value },
+            Self::Join { class, sources } => Route::Join { class: *class, sources: copy_slice(sources, budget)? },
+            Self::MetadataView { seed } => Route::MetadataView { seed: *seed },
+            Self::Activation(id) => Route::Activation(*id),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +150,11 @@ enum Environment {
 struct Frame {
     function: usize,
     environment: Environment,
+    // Exact ORIGINAL expression projections in this creation environment.
+    // Separate from declared captures: provider/callable capture checks must
+    // not treat these topology inputs as additional stored captures. Choice
+    // frames keep this empty; each Bindings alternative owns its own support.
+    supports: Vec<(usize, RouteId)>,
     original_creation: Option<usize>,
     classes: Vec<ProjectionClass>,
     type_origin: Option<TypeOrigin>,
@@ -93,6 +162,8 @@ struct Frame {
 
 pub(super) struct Arena {
     routes: Vec<Route>,
+    equations: HashMap<u64, Vec<RouteId>>,
+    activations: Vec<Vec<RouteId>>,
     frames: Vec<Frame>,
     heads: HashMap<OriginalPort, RouteId>,
     capture_routes: HashMap<(CompletedFrame, usize, ProjectionClass), RouteId>,
@@ -104,7 +175,7 @@ pub(super) struct Arena {
 impl Arena {
     pub(super) fn new() -> Self {
         Self {
-            routes: Vec::new(), frames: Vec::new(), heads: HashMap::new(),
+            routes: Vec::new(), equations: HashMap::new(), activations: Vec::new(), frames: Vec::new(), heads: HashMap::new(),
             capture_routes: HashMap::new(),
             choices: HashMap::new(),
             originals: HashMap::new(),
@@ -112,28 +183,94 @@ impl Arena {
         }
     }
 
-    fn route(&mut self, route: Route, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
+    fn equation(
+        &mut self, key: EquationKey<'_>, budget: &mut TypeWorkBudget,
+    ) -> Result<RouteId, Failure> {
+        charge(budget, key.work()?)?;
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let digest = hasher.finish();
         charge(budget, 1)?;
+        if let Some(candidates) = self.equations.get(&digest) {
+            charge(budget, candidates.len())?;
+            for candidate in candidates {
+                let original = EquationKey::of(self.routes.get(candidate.0).ok_or(Failure::Invalid)?);
+                charge(budget, key.work()?.checked_add(original.work()?).ok_or(Failure::Resource)?)?;
+                if key == original { return Ok(*candidate); }
+            }
+        }
+        let route = key.owned(budget)?;
+        charge(budget, 3)?;
         self.routes.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.equations.try_reserve(1).map_err(|_| Failure::Resource)?;
+        // Both route storage and its index entry have capacity before either
+        // publishes the new identity. A failed reserve cannot leave even an
+        // empty digest bucket. Only immutable equations are interned.
         let result = RouteId(self.routes.len());
-        self.routes.push(route);
+        match self.equations.entry(digest) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().try_reserve(1).map_err(|_| Failure::Resource)?;
+                self.routes.push(route);
+                entry.get_mut().push(result);
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let mut candidates = Vec::new();
+                candidates.try_reserve(1).map_err(|_| Failure::Resource)?;
+                self.routes.push(route);
+                candidates.push(result);
+                entry.insert(candidates);
+            }
+        }
         Ok(result)
     }
 
     pub(super) fn original(&mut self, port: OriginalPort, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
-        self.route(Route::Original(port), budget)
+        self.equation(EquationKey::Original(port), budget)
     }
 
     pub(super) fn head(&mut self, port: OriginalPort, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
-        self.route(Route::Head(port), budget)
+        self.equation(EquationKey::Head(port), budget)
     }
 
     pub(super) fn empty(&mut self, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
-        self.route(Route::Empty, budget)
+        self.equation(EquationKey::Empty, budget)
     }
 
     pub(super) fn free(&mut self, budget: &mut TypeWorkBudget) -> Result<RouteId, Failure> {
-        self.route(Route::Free, budget)
+        self.equation(EquationKey::Free, budget)
+    }
+
+    // One fresh private staging identity per interned normalized scope. The
+    // producer interns that scope before expanding its child descriptors.
+    pub(super) fn activation(
+        &mut self, budget: &mut TypeWorkBudget,
+    ) -> Result<(ActivationId, RouteId), Failure> {
+        charge(budget, 1)?;
+        self.activations.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let id = ActivationId(self.activations.len());
+        let route = self.equation(EquationKey::Activation(id), budget)?;
+        // Equation publication has completed; the reserved condition record
+        // can now be installed without another fallible operation.
+        self.activations.push(Vec::new());
+        Ok((id, route))
+    }
+
+    // Root-owned publication MUST reserve its notification/watch storage
+    // before calling this method, then notify existing activation readers on
+    // true. Conditions are immutable Ready equations from an authenticated
+    // finite factory DAG; this API grants no input, frame or head admission.
+    pub(super) fn activate(
+        &mut self, id: ActivationId, condition: RouteId, budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        charge(budget, 2)?;
+        self.check_route(condition)?;
+        let conditions = self.activations.get_mut(id.0).ok_or(Failure::Invalid)?;
+        charge(budget, conditions.len())?;
+        if conditions.contains(&condition) { return Ok(false); }
+        charge(budget, 1)?;
+        conditions.try_reserve(1).map_err(|_| Failure::Resource)?;
+        conditions.push(condition);
+        Ok(true)
     }
 
     fn check_route(&self, route: RouteId) -> Result<(), Failure> {
@@ -144,18 +281,41 @@ impl Arena {
         &mut self, function: usize, original_captures: &[usize],
         captures: &[(usize, RouteId)], classes: &[ProjectionClass], type_origin: TypeOrigin, budget: &mut TypeWorkBudget,
     ) -> Result<PendingFrame, Failure> {
+        self.bindings_with_support(function, original_captures, captures, classes,
+            type_origin, &[], budget)
+    }
+
+    // Support routes are complete creation-environment projections supplied
+    // by the authenticated producer, not inferred from captured callable
+    // results. This constructor validates storage only; it grants no admission.
+    // Supports must be unique and disjoint from declared capture expressions.
+    // A present Empty route is retained; absence never means Empty.
+    pub(super) fn bindings_with_support(
+        &mut self, function: usize, original_captures: &[usize],
+        captures: &[(usize, RouteId)], classes: &[ProjectionClass], type_origin: TypeOrigin,
+        supports: &[(usize, RouteId)], budget: &mut TypeWorkBudget,
+    ) -> Result<PendingFrame, Failure> {
         charge(budget, original_captures.len() + captures.len())?;
         if original_captures.len() != captures.len() || classes.len() != captures.len() { return Err(Failure::Invalid); }
         for (&original, &(capture, route)) in original_captures.iter().zip(captures) {
             if original != capture { return Err(Failure::Invalid); }
             self.check_route(route)?;
         }
+        charge(budget, supports.len())?;
+        for (position, &(expression, route)) in supports.iter().enumerate() {
+            self.check_route(route)?;
+            charge(budget, captures.len().checked_add(position).ok_or(Failure::Resource)?)?;
+            if captures.iter().any(|(capture, _)| *capture == expression)
+                || supports[..position].iter().any(|(support, _)| *support == expression)
+            { return Err(Failure::Invalid); }
+        }
         let captures = copy_slice(captures, budget)?;
         let classes = copy_slice(classes, budget)?;
+        let supports = copy_slice(supports, budget)?;
         charge(budget, 1)?;
         self.frames.try_reserve(1).map_err(|_| Failure::Resource)?;
         let result = FrameId(self.frames.len());
-        self.frames.push(Frame { function, environment: Environment::Bindings(captures), original_creation: None, classes, type_origin: Some(type_origin) });
+        self.frames.push(Frame { function, environment: Environment::Bindings(captures), supports, original_creation: None, classes, type_origin: Some(type_origin) });
         Ok(PendingFrame(result))
     }
 
@@ -185,6 +345,40 @@ impl Arena {
     pub(super) fn original_creation(&self, frame: CompletedFrame, budget: &mut TypeWorkBudget) -> Result<Option<usize>, Failure> {
         charge(budget, 1)?;
         self.frames.get(frame.0.0).map(|record| record.original_creation).ok_or(Failure::Invalid)
+    }
+
+    // The actual original Evidence publisher supplies a complete static class
+    // proof and exact live E projections, after its capture/dictionary transfer.
+    // Speculative saved-E descriptors must never call this constructor.
+    pub(super) fn original_evidence_frame(
+        &mut self, function: usize, creation: usize, captures: &[usize],
+        bindings: &[(usize, RouteId)], classes: &[ProjectionClass],
+        supports: &[(usize, RouteId)], admitted: &super::AdmittedFrame,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<CompletedFrame, Failure> {
+        charge(budget, 1)?;
+        if let Some(&existing) = self.originals.get(&(function, creation)) {
+            let record = self.frames.get(existing.0.0).ok_or(Failure::Invalid)?;
+            let Environment::Bindings(old) = &record.environment else { return Err(Failure::Invalid); };
+            charge(budget, bindings.len().checked_add(classes.len())
+                .and_then(|n| n.checked_add(supports.len())).and_then(|n| n.checked_add(3))
+                .ok_or(Failure::Resource)?)?;
+            if record.function != function || record.original_creation != Some(creation)
+                || record.type_origin != Some(TypeOrigin::OriginalContext(creation))
+                || old.as_slice() != bindings || record.classes != classes || record.supports != supports
+            { return Err(Failure::Invalid); }
+            return Ok(existing);
+        }
+        charge(budget, 1)?;
+        self.originals.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let pending = self.bindings_with_support(function, captures, bindings, classes,
+            TypeOrigin::OriginalContext(creation), supports, budget)?;
+        self.frames[pending.0.0].original_creation = Some(creation);
+        charge(budget, 2)?;
+        let complete = self.complete_under(pending, admitted)?;
+        // Every fallible validation/reservation precedes canonical authority.
+        self.originals.insert((function, creation), complete);
+        Ok(complete)
     }
 
     // Private completion: the connected definition producer calls this only
@@ -232,7 +426,7 @@ impl Arena {
         let candidates = self.choices.entry(key).or_default();
         candidates.try_reserve(1).map_err(|_| Failure::Resource)?;
         let result = CompletedFrame(FrameId(self.frames.len()));
-        self.frames.push(Frame { function, environment: Environment::Choice(frames), original_creation: None, classes: Vec::new(), type_origin: None });
+        self.frames.push(Frame { function, environment: Environment::Choice(frames), supports: Vec::new(), original_creation: None, classes: Vec::new(), type_origin: None });
         candidates.push(result);
         Ok(result)
     }
@@ -285,11 +479,17 @@ impl Arena {
     pub(super) fn construct(
         &mut self, function: usize, frame: CompletedFrame, budget: &mut TypeWorkBudget,
     ) -> Result<RouteId, Failure> {
+        self.equation_construct(function, frame, budget)
+    }
+
+    pub(super) fn equation_construct(
+        &mut self, function: usize, frame: CompletedFrame, budget: &mut TypeWorkBudget,
+    ) -> Result<RouteId, Failure> {
         charge(budget, 1)?;
         if self.frames.get(frame.0.0).is_none_or(|frame| frame.function != function) {
             return Err(Failure::Invalid);
         }
-        self.route(Route::Construct { function, frame }, budget)
+        self.equation(EquationKey::Construct { function, frame }, budget)
     }
 
     pub(super) fn function(&self, frame: CompletedFrame) -> Result<usize, Failure> {
@@ -299,20 +499,42 @@ impl Arena {
     pub(super) fn ready(
         &mut self, inputs: &[RouteId], value: RouteId, budget: &mut TypeWorkBudget,
     ) -> Result<RouteId, Failure> {
-        charge(budget, inputs.len() + 1)?;
+        self.equation_ready(inputs, value, budget)
+    }
+
+    pub(super) fn equation_ready(
+        &mut self, inputs: &[RouteId], value: RouteId, budget: &mut TypeWorkBudget,
+    ) -> Result<RouteId, Failure> {
+        charge(budget, inputs.len().checked_add(1).ok_or(Failure::Resource)?)?;
         self.check_route(value)?;
         for input in inputs { self.check_route(*input)?; }
-        let inputs = copy_slice(inputs, budget)?;
-        self.route(Route::Ready { inputs, value }, budget)
+        self.equation(EquationKey::Ready { inputs, value }, budget)
     }
 
     pub(super) fn join(
         &mut self, class: ProjectionClass, sources: &[RouteId], budget: &mut TypeWorkBudget,
     ) -> Result<RouteId, Failure> {
+        self.equation_join(class, sources, budget)
+    }
+
+    pub(super) fn equation_join(
+        &mut self, class: ProjectionClass, sources: &[RouteId], budget: &mut TypeWorkBudget,
+    ) -> Result<RouteId, Failure> {
+        // Class admission belongs to the authenticated producer. Preserve the
+        // entire ordered source key, including duplicates and nested Joins.
         charge(budget, sources.len())?;
         for source in sources { self.check_route(*source)?; }
-        let sources = copy_slice(sources, budget)?;
-        self.route(Route::Join { class, sources }, budget)
+        self.equation(EquationKey::Join { class, sources }, budget)
+    }
+
+    pub(super) fn metadata_view(
+        &mut self, seed: RouteId, budget: &mut TypeWorkBudget,
+    ) -> Result<RouteId, Failure> {
+        charge(budget, 1)?;
+        let original = self.routes.get(seed.0).ok_or(Failure::Invalid)?;
+        // V(V(seed)) = V(seed). No other equation shape is flattened.
+        if let Route::MetadataView { .. } = original { return Ok(seed); }
+        self.equation(EquationKey::MetadataView { seed }, budget)
     }
 
     pub(super) fn publish_head(
@@ -417,8 +639,9 @@ impl Arena {
         Ok(result)
     }
 
-    // Focus receives independent route/frame/head storage. It may append its
-    // own immutable projections, but can never follow a later normal head.
+    // Focus receives independent route/frame/head and activation storage. It
+    // may append query-local equations or conditions, but never follows later
+    // normal heads or condition appends. Copied IDs keep their exact identity.
     pub(super) fn snapshot(&self, frozen_contexts: usize, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
         charge(budget, self.routes.len() + self.frames.len() + self.heads.len())?;
         let mut result = Self::new();
@@ -435,7 +658,20 @@ impl Arena {
                 Route::Construct { function, frame } => Route::Construct { function: *function, frame: *frame },
                 Route::Ready { inputs, value } => Route::Ready { inputs: copy_slice(inputs, budget)?, value: *value },
                 Route::Join { class, sources } => Route::Join { class: *class, sources: copy_slice(sources, budget)? },
+                Route::MetadataView { seed } => Route::MetadataView { seed: *seed },
+                Route::Activation(id) => Route::Activation(*id),
             });
+        }
+        charge(budget, self.activations.len())?;
+        result.activations.try_reserve_exact(self.activations.len()).map_err(|_| Failure::Resource)?;
+        for conditions in &self.activations {
+            result.activations.push(copy_slice(conditions, budget)?);
+        }
+        charge(budget, self.equations.len())?;
+        result.equations.try_reserve(self.equations.len()).map_err(|_| Failure::Resource)?;
+        for (digest, candidates) in &self.equations {
+            let candidates = copy_slice(candidates, budget)?;
+            result.equations.insert(*digest, candidates);
         }
         for (id, frame) in self.frames.iter().enumerate() {
             let environment = match &frame.environment {
@@ -456,7 +692,8 @@ impl Arena {
                 result.originals.insert((frame.function, creation), CompletedFrame(FrameId(id)));
             }
             let classes = copy_slice(&frame.classes, budget)?;
-            result.frames.push(Frame { function: frame.function, environment, original_creation: frame.original_creation, classes, type_origin: frame.type_origin });
+            let supports = copy_slice(&frame.supports, budget)?;
+            result.frames.push(Frame { function: frame.function, environment, supports, original_creation: frame.original_creation, classes, type_origin: frame.type_origin });
         }
         result.heads.extend(self.heads.iter().map(|(key, value)| (*key, *value)));
         // Rebuild this optional structural index only on demand in the query.
@@ -487,9 +724,10 @@ impl Arena {
             match &original.environment {
                 Environment::Bindings(captures) => {
                     let captures = copy_slice(captures, budget)?;
+                    let supports = copy_slice(&original.supports, budget)?;
                     charge(budget, 1)?;
                     result.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    result.push(CaptureAlternative { function: original.function, captures, type_origin: original.type_origin.ok_or(Failure::Invalid)? });
+                    result.push(CaptureAlternative { function: original.function, captures, supports, type_origin: original.type_origin.ok_or(Failure::Invalid)? });
                 }
                 Environment::Choice(children) => {
                     charge(budget, children.len())?;
@@ -554,6 +792,7 @@ impl Arena {
         let mut active = HashSet::new();
         let mut observed_leaves = ObservedPorts::new();
         let mut observed_heads = ObservedPorts::new();
+        let mut observed_activations = ObservedActivations::new();
         let mut pending = Vec::new();
         pending.try_reserve(1).map_err(|_| Failure::Resource)?;
         pending.push((head, false));
@@ -570,6 +809,11 @@ impl Arena {
                 let children: &[RouteId] = match original {
                     Route::Ready { inputs, .. } => inputs,
                     Route::Join { sources, .. } => sources,
+                    Route::MetadataView { seed } => std::slice::from_ref(seed),
+                    Route::Activation(id) => {
+                        observed_activations.observe(*id, budget)?;
+                        self.activations.get(id.0).ok_or(Failure::Invalid)?
+                    }
                     _ => &[],
                 };
                 charge(budget, children.len() + 2)?;
@@ -622,6 +866,41 @@ impl Arena {
                     for input in inputs { ready &= !values.get(input).ok_or(Failure::Invalid)?.is_empty(); }
                     if ready {
                         result = copy_slice(values.get(value).ok_or(Failure::Invalid)?, budget)?;
+                    }
+                }
+                Route::Activation(id) => {
+                    let conditions = self.activations.get(id.0).ok_or(Failure::Invalid)?;
+                    charge(budget, conditions.len())?;
+                    let mut ready = false;
+                    // Every condition has already been traversed, including
+                    // unready ones after a ready condition. Do not drop watches
+                    // on late leaves or newly appended activation conditions.
+                    for condition in conditions {
+                        let atoms = values.get(condition).ok_or(Failure::Invalid)?;
+                        charge(budget, atoms.len())?;
+                        for atom in atoms {
+                            if *atom != ProjectedAtom::Original(Atom::Free) {
+                                return Err(Failure::Invalid);
+                            }
+                            ready = true;
+                        }
+                    }
+                    if ready {
+                        Self::append_unique(&mut result, &mut seen, ProjectedAtom::Original(Atom::Free), budget)?;
+                    }
+                }
+                Route::MetadataView { seed } => {
+                    Self::append_unique(&mut result, &mut seen, ProjectedAtom::Original(Atom::Free), budget)?;
+                    let atoms = values.get(seed).ok_or(Failure::Invalid)?;
+                    charge(budget, atoms.len())?;
+                    for atom in atoms {
+                        match atom {
+                            ProjectedAtom::Original(Atom::Free) => {}
+                            ProjectedAtom::Original(Atom::Unknown | Atom::Resource(..)) => {
+                                Self::append_unique(&mut result, &mut seen, *atom, budget)?;
+                            }
+                            _ => return Err(Failure::Invalid),
+                        }
                     }
                 }
                 Route::Join { class, sources } => {
@@ -680,6 +959,7 @@ impl Arena {
             atoms: values.remove(&head).ok_or(Failure::Invalid)?,
             leaves: observed_leaves.ordered,
             heads: observed_heads.ordered,
+            activations: observed_activations.ordered,
         })
     }
 }
@@ -690,12 +970,32 @@ pub(super) struct Resolved {
     // before publishing dependent answers. Frozen consumers need no watches.
     pub(super) leaves: Vec<OriginalPort>,
     pub(super) heads: Vec<OriginalPort>,
+    // Root registers these even when the current boolean answer is already
+    // Free: adding a condition can introduce another live dependency.
+    pub(super) activations: Vec<ActivationId>,
 }
 
 pub(super) struct CaptureAlternative {
     pub(super) function: usize,
     pub(super) captures: Vec<(usize, RouteId)>,
+    pub(super) supports: Vec<(usize, RouteId)>,
     pub(super) type_origin: TypeOrigin,
+}
+
+impl CaptureAlternative {
+    // Exact lookup only. A captured returned Function's environment cannot
+    // supply the enclosing creation environment's deeper lexical terminals.
+    pub(super) fn creation_route(
+        &self, expression: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<Option<RouteId>, Failure> {
+        charge(budget, self.captures.len())?;
+        if let Some((_, route)) = self.captures.iter().find(|(capture, _)| *capture == expression) {
+            return Ok(Some(*route));
+        }
+        charge(budget, self.supports.len())?;
+        Ok(self.supports.iter().find(|(support, _)| *support == expression)
+            .map(|(_, route)| *route))
+    }
 }
 
 struct ObservedPorts {
@@ -714,6 +1014,26 @@ impl ObservedPorts {
         self.members.try_reserve(1).map_err(|_| Failure::Resource)?;
         self.members.insert(port);
         self.ordered.push(port);
+        Ok(())
+    }
+}
+
+struct ObservedActivations {
+    ordered: Vec<ActivationId>,
+    members: HashSet<ActivationId>,
+}
+
+impl ObservedActivations {
+    fn new() -> Self { Self { ordered: Vec::new(), members: HashSet::new() } }
+
+    fn observe(&mut self, id: ActivationId, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if self.members.contains(&id) { return Ok(()); }
+        charge(budget, 2)?;
+        self.ordered.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.members.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.members.insert(id);
+        self.ordered.push(id);
         Ok(())
     }
 }

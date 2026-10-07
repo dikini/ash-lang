@@ -3,75 +3,59 @@
 //! One arena belongs to one immutable Graph and one paired deferred_frame::Arena.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
-use super::{Atom, Expr, Failure, Graph, ProducerWitness, TypeWorkBudget, charge};
-use super::deferred_frame::{Arena as RouteArena, OriginalPort, ProjectionClass, RouteId};
+use super::{Expr, Failure, Graph, ProducerWitness, TypeWorkBudget, charge};
+use super::deferred_frame::RouteId;
 use crate::types::{self, EffectRow, IterativeArgumentOwner, Kind, KindedArgument, Type,
     TypeVariableId};
 
+// Pure normalized input equations, never an original context or occurrence ID.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) struct TypeEnvironmentId(usize);
+pub(super) struct NormalizedEnvironmentId(usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct ConditionalOriginId(usize);
 
 // OriginalContext is unresolved provenance, never permission to guess a type
 // environment from the current owner atoms or from equal static Types.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum TypeOrigin {
-    Environment(TypeEnvironmentId),
+    Normalized(NormalizedEnvironmentId),
+    Conditional(ConditionalOriginId),
     OriginalContext(usize),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) struct Occurrence {
-    pub(super) application: OriginalPort,
-    pub(super) factory: usize,
-    pub(super) creation: usize,
-    pub(super) invocation: usize,
-}
-
-pub(super) struct Binding {
-    // Definition-side binder is the substitution key in the original body.
-    // Use-side binder is retained even when the checked relation pairs alpha
-    // variants positionally. Neither is a graph expression coordinate.
+pub(super) struct NormalizedBinding {
     definition_binder: TypeVariableId,
     use_binder: TypeVariableId,
-    formal: OriginalPort,
-    actual: OriginalPort,
-    // Complete original argument occurrence head. This preserves its source
-    // identity even when two full normalized arguments are equal.
+    formal: usize,
+    actual: usize,
     route: RouteId,
-    // Free plus ordered original metadata input heads, only the Merge's LOCAL
-    // recipe. The consumer must retain every other original incoming feed.
-    local_merge: RouteId,
     normalized: IterativeArgumentOwner,
 }
 
-impl Binding {
-    pub(super) fn definition_binder(&self) -> TypeVariableId { self.definition_binder }
-    pub(super) fn use_binder(&self) -> TypeVariableId { self.use_binder }
-    pub(super) fn formal(&self) -> OriginalPort { self.formal }
-    pub(super) fn actual(&self) -> OriginalPort { self.actual }
+impl NormalizedBinding {
     pub(super) fn route(&self) -> RouteId { self.route }
-    pub(super) fn local_merge(&self) -> RouteId { self.local_merge }
     pub(super) fn argument(&self) -> &KindedArgument { self.normalized.as_ref() }
 }
 
-pub(super) struct FrameEnvironment {
-    occurrence: Occurrence,
-    parent: Option<TypeEnvironmentId>,
-    // Ordered, full original definition-side Forall header. Kind owns an
-    // iterative destructor; arguments below use IterativeArgumentOwner.
-    header: Vec<(TypeVariableId, Kind)>,
-    bindings: Vec<Binding>,
+// Original definition/use witnesses remain addressed by factory/application
+// graph coordinates. Headers are retained in full for canonical comparison.
+// Bindings describe the CLOSED global factory's definition scope only; they
+// do not import a dynamic caller's unrelated binders into that factory.
+pub(super) struct NormalizedEnvironment {
+    application: usize,
+    factory: usize,
+    definition_header: Vec<(TypeVariableId, Kind)>,
+    use_header: Vec<(TypeVariableId, Kind)>,
+    bindings: Vec<NormalizedBinding>,
 }
 
-impl FrameEnvironment {
-    pub(super) fn occurrence(&self) -> Occurrence { self.occurrence }
-    pub(super) fn parent(&self) -> Option<TypeEnvironmentId> { self.parent }
-    pub(super) fn header(&self) -> &[(TypeVariableId, Kind)] { &self.header }
-    pub(super) fn bindings(&self) -> &[Binding] { &self.bindings }
+impl NormalizedEnvironment {
+    pub(super) fn factory(&self) -> usize { self.factory }
+    pub(super) fn bindings(&self) -> &[NormalizedBinding] { &self.bindings }
 }
-
-pub(super) struct PendingTypeEnvironment(FrameEnvironment);
 
 // Private fields prevent callers forging positional alpha pairing from kinds
 // alone. The token borrows the exact immutable graph/witness records checked
@@ -80,11 +64,14 @@ pub(super) struct CheckedFactoryUse<'g> {
     graph: &'g Graph,
     application: usize,
     factory: usize,
-    creation: usize,
     use_header: &'g [(TypeVariableId, Kind)],
     definition_header: &'g [(TypeVariableId, Kind)],
     formals: &'g [usize],
     arguments: &'g [super::ProducerArgument],
+}
+
+impl CheckedFactoryUse<'_> {
+    pub(super) fn factory(&self) -> usize { self.factory }
 }
 
 fn producer(graph: &Graph, expression: usize) -> Option<&ProducerWitness> {
@@ -116,18 +103,12 @@ fn same_kind(left: &Kind, right: &Kind, budget: &mut TypeWorkBudget) -> Result<b
     Ok(true)
 }
 
-// This restricted checker needs BOTH independently produced typed witnesses
-// AND the unchanged direct Alias -> unique global -> exact factory relation.
-// It does not discover factories from equal free-variable/kind lists.
-// `callee` must be the actual original Call reader's observed closure. The
-// eventual source qualifier must separately prove its lifetime stream/role,
-// focus/freeze/recurrence guards and all original creation feeds.
-pub(super) fn check_global_factory_use<'g>(
-    graph: &'g Graph, application: usize, callee: Atom, budget: &mut TypeWorkBudget,
+// Immutable witness/shape relation only. This does not establish a current or
+// lifetime callee stream, closed lexical scope, activation, or source admission.
+pub(super) fn check_global_factory_shape<'g>(
+    graph: &'g Graph, application: usize, budget: &mut TypeWorkBudget,
 ) -> Result<Option<CheckedFactoryUse<'g>>, Failure> {
     charge(budget, 1)?;
-    let Atom::Closure(factory, creation) = callee else { return Ok(None); };
-    if creation != 0 { return Ok(None); }
     let Some(ProducerWitness::Application { function, binders: use_header, arguments }) =
         producer(graph, application) else { return Ok(None); };
     let Some(Expr::Call { function: original_function, arguments: original_arguments,
@@ -140,7 +121,8 @@ pub(super) fn check_global_factory_use<'g>(
     let Some(Expr::Alias(global)) = graph.expressions.get(*function) else { return Ok(None); };
     charge(budget, graph.globals.len())?;
     let mut sources = graph.globals.iter().filter(|(slot, _)| slot == global);
-    if sources.next() != Some(&(*global, factory)) || sources.next().is_some() { return Ok(None); }
+    let Some(&(_, factory)) = sources.next() else { return Ok(None); };
+    if sources.next().is_some() { return Ok(None); }
     let Some(ProducerWitness::Abstraction { binders: definition_header, formals }) =
         producer(graph, factory) else { return Ok(None); };
     let Some(Expr::Function { parameters, body, .. }) = graph.expressions.get(factory)
@@ -182,283 +164,383 @@ pub(super) fn check_global_factory_use<'g>(
             || !matches!(graph.expressions.get(*input), Some(Expr::Slot)))
         { return Ok(None); }
     }
-    Ok(Some(CheckedFactoryUse { graph, application, factory, creation,
+    Ok(Some(CheckedFactoryUse { graph, application, factory,
         use_header, definition_header, formals, arguments }))
 }
 
-pub(super) struct Arena {
-    environments: Vec<FrameEnvironment>,
-    // Original occurrence plus inherited occurrence identity, never Type Eq.
-    by_occurrence: HashMap<(Occurrence, Option<TypeEnvironmentId>), TypeEnvironmentId>,
-    // One original Invoke can union several creation environments. Never
-    // overwrite an earlier alternative with the last environment seen.
-    contexts: HashMap<usize, Vec<TypeEnvironmentId>>,
-    frozen_contexts: Option<usize>,
-}
-
-impl Arena {
-    pub(super) fn new() -> Self {
-        Self { environments: Vec::new(), by_occurrence: HashMap::new(),
-            contexts: HashMap::new(), frozen_contexts: None }
+// Full Type hashing is the shared paid/fallible iterative operation. The row
+// root traversal below likewise retains only borrowed flat work; it includes
+// exact known instances, nested kinded arguments, tail identity and lacks.
+fn hash_argument(argument: &KindedArgument, state: &mut impl Hasher,
+    budget: &mut TypeWorkBudget) -> Result<(), Failure>
+{
+    enum Work<'a> {
+        Argument(&'a KindedArgument),
+        Row(&'a EffectRow),
+        Arguments(std::slice::Iter<'a, KindedArgument>),
+        Instances(std::slice::Iter<'a, types::EffectInstance>),
     }
-
-    pub(super) fn get(&self, id: TypeEnvironmentId) -> Result<&FrameEnvironment, Failure> {
-        self.environments.get(id.0).ok_or(Failure::Invalid)
-    }
-
-    // Flat parent IDs must refer strictly backwards. There is no recursive
-    // environment ownership or destructor, and traversal cannot form a cycle.
-    fn parent_of(&self, id: TypeEnvironmentId) -> Result<Option<TypeEnvironmentId>, Failure> {
-        let parent = self.get(id)?.parent;
-        if parent.is_some_and(|parent| parent.0 >= id.0) { return Err(Failure::Invalid); }
-        Ok(parent)
-    }
-
-    // Collect nearest lexical binder first. Parent values have already been
-    // composed; shared substitution performs one simultaneous replacement and
-    // shields nested Forall binders. Do not recursively resubstitute payloads.
-    fn substitutions(&self, parent: Option<TypeEnvironmentId>, budget: &mut TypeWorkBudget)
-        -> Result<(HashMap<TypeVariableId, &Type>, HashMap<TypeVariableId, EffectRow>), Failure>
-    {
-        let mut replacements = HashMap::new();
-        let mut rows = HashMap::new();
-        let mut seen = HashSet::new();
-        let mut cursor = parent;
-        while let Some(id) = cursor {
+    let mut pending = Vec::new();
+    macro_rules! push {
+        ($work:expr) => {{
             charge(budget, 1)?;
-            let environment = self.get(id)?;
-            // One visit plus at most one seen entry and one replacement entry.
-            charge(budget, environment.bindings.len().checked_mul(3).ok_or(Failure::Resource)?)?;
-            for binding in &environment.bindings {
-                let binder = binding.definition_binder;
-                if seen.contains(&binder) { continue; }
-                seen.try_reserve(1).map_err(|_| Failure::Resource)?;
-                seen.insert(binder);
-                match binding.argument() {
-                    KindedArgument::TypeArg(ty) => {
-                        replacements.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        replacements.insert(binder, ty);
-                    }
-                    KindedArgument::RowArg(row) => {
-                        let row = types::clone_effect_row_with_budget(row, budget)
-                            .map_err(|()| Failure::Resource)?;
-                        rows.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        rows.insert(binder, row);
-                    }
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push($work);
+        }};
+    }
+    push!(Work::Argument(argument));
+    while let Some(work) = pending.pop() {
+        match work {
+            Work::Argument(KindedArgument::TypeArg(ty)) => {
+                0_u8.hash(state);
+                types::hash_type_with_budget(ty, state, budget).map_err(|()| Failure::Resource)?;
+            }
+            Work::Argument(KindedArgument::RowArg(row)) => {
+                1_u8.hash(state);
+                push!(Work::Row(row));
+            }
+            Work::Arguments(mut arguments) => {
+                if let Some(argument) = arguments.next() {
+                    push!(Work::Arguments(arguments));
+                    push!(Work::Argument(argument));
                 }
             }
-            cursor = self.parent_of(id)?;
-        }
-        Ok((replacements, rows))
-    }
-
-    // Build before capture materialization. No index lookup, slot acquisition,
-    // local recipe execution, route-head publication, or owner-atom read here.
-    // caller_context and invocation are ORIGINAL occurrence contexts; the
-    // source qualifier must authenticate their Call/Invoke correspondence.
-    pub(super) fn compose(
-        &self, relation: &CheckedFactoryUse<'_>, caller_context: usize, invocation: usize,
-        parent: Option<TypeEnvironmentId>, routes: &mut RouteArena,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Option<PendingTypeEnvironment>, Failure> {
-        if self.frozen_contexts.is_some() { return Err(Failure::Invalid); }
-        if let Some(parent) = parent { self.get(parent)?; }
-        let (replacements, rows) = self.substitutions(parent, budget)?;
-        let header = types::clone_kinded_type_parameters_fallibly_with_budget(
-            relation.definition_header, budget,
-        ).map_err(|()| Failure::Resource)?;
-        charge(budget, relation.arguments.len())?;
-        let mut bindings = Vec::new();
-        bindings.try_reserve_exact(relation.arguments.len()).map_err(|_| Failure::Resource)?;
-        for (((definition, _), (use_binder, _)), (formal, argument)) in relation.definition_header
-            .iter().zip(relation.use_header).zip(relation.formals.iter().zip(relation.arguments))
-        {
-            let normalized = match types::substitute_kinded_argument_borrowed_with(
-                argument.value.as_ref(), &replacements, &rows, |cells| budget.charge(cells),
-            ).map_err(|()| Failure::Resource)? {
-                Ok(value) => IterativeArgumentOwner::new(value),
-                Err(_) => return Ok(None),
-            };
-            let Some(Expr::Merge(inputs)) = relation.graph.expressions.get(argument.port)
-                else { return Err(Failure::Invalid); };
-            let count = inputs.len().checked_add(1).ok_or(Failure::Resource)?;
-            charge(budget, count)?;
-            let mut sources = Vec::new();
-            sources.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
-            // Original Merge contributes Free even when every metadata input
-            // is absent/empty. This preserves its exact local readiness fact.
-            sources.push(routes.free(budget)?);
-            for input in inputs {
-                let original = OriginalPort { expression: *input, context: caller_context };
-                // Even an exact matching inherited formal may have several
-                // original writers. Read its COMPLETE occurrence head; never
-                // replace it with one Binding's argument-contribution route.
-                sources.push(routes.head(original, budget)?);
+            Work::Instances(mut instances) => {
+                if let Some(instance) = instances.next() {
+                    instance.effect().hash(state);
+                    instance.arguments().len().hash(state);
+                    push!(Work::Instances(instances));
+                    push!(Work::Arguments(instance.arguments().iter()));
+                }
             }
-            let local_merge = routes.join(ProjectionClass::Metadata, &sources, budget)?;
-            let actual = OriginalPort { expression: argument.port, context: caller_context };
-            let route = routes.head(actual, budget)?;
-            bindings.push(Binding {
-                definition_binder: *definition, use_binder: *use_binder,
-                formal: OriginalPort { expression: *formal, context: invocation },
-                actual, route, local_merge, normalized,
-            });
+            Work::Row(row) => {
+                10_u8.hash(state);
+                row.known().len().hash(state);
+                match row.tail() {
+                    None => 0_u8.hash(state),
+                    Some(tail) => {
+                        1_u8.hash(state);
+                        tail.variable().hash(state);
+                        tail.lacks().len().hash(state);
+                        push!(Work::Instances(tail.lacks().iter()));
+                    }
+                }
+                push!(Work::Instances(row.known().iter()));
+            }
         }
-        Ok(Some(PendingTypeEnvironment(FrameEnvironment {
-            occurrence: Occurrence {
-                application: OriginalPort { expression: relation.application, context: caller_context },
-                factory: relation.factory, creation: relation.creation, invocation,
-            },
-            parent, header, bindings,
-        })))
+    }
+    Ok(())
+}
+
+fn hash_header(header: &[(TypeVariableId, Kind)], state: &mut impl Hasher,
+    budget: &mut TypeWorkBudget) -> Result<(), Failure>
+{
+    charge(budget, header.len().checked_add(1).ok_or(Failure::Resource)?)?;
+    header.len().hash(state);
+    for (binder, kind) in header {
+        binder.hash(state);
+        types::hash_kind_with_budget(kind, state, budget).map_err(|()| Failure::Resource)?;
+    }
+    Ok(())
+}
+
+impl NormalizedEnvironment {
+    fn key_hash(&self, budget: &mut TypeWorkBudget) -> Result<u64, Failure> {
+        let mut state = DefaultHasher::new();
+        charge(budget, self.bindings.len().checked_add(3).ok_or(Failure::Resource)?)?;
+        self.application.hash(&mut state);
+        self.factory.hash(&mut state);
+        hash_header(&self.definition_header, &mut state, budget)?;
+        hash_header(&self.use_header, &mut state, budget)?;
+        self.bindings.len().hash(&mut state);
+        for binding in &self.bindings {
+            binding.definition_binder.hash(&mut state);
+            binding.use_binder.hash(&mut state);
+            binding.formal.hash(&mut state);
+            binding.actual.hash(&mut state);
+            binding.route.hash(&mut state);
+            hash_argument(binding.argument(), &mut state, budget)?;
+        }
+        Ok(state.finish())
     }
 
-    // Original reader replay reuses this exact occurrence and parent identity.
-    // Full argument Types are not the key, and live route heads are not cached
-    // value answers. The caller still needs original source/frame admission.
-    pub(super) fn build(
-        &mut self, relation: &CheckedFactoryUse<'_>, caller_context: usize, invocation: usize,
-        parent: Option<TypeEnvironmentId>, routes: &mut RouteArena,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Option<TypeEnvironmentId>, Failure> {
-        if self.frozen_contexts.is_some() { return Err(Failure::Invalid); }
-        let occurrence = Occurrence {
-            application: OriginalPort { expression: relation.application, context: caller_context },
-            factory: relation.factory, creation: relation.creation, invocation,
-        };
-        charge(budget, 1)?;
-        if let Some(id) = self.by_occurrence.get(&(occurrence, parent)) { return Ok(Some(*id)); }
-        let Some(pending) = self.compose(relation, caller_context, invocation, parent, routes, budget)?
-            else { return Ok(None); };
-        self.append(pending, budget).map(Some)
-    }
-
-    // Allocation IDs are fresh per DISTINCT original occurrence/parent, even
-    // for equal full terms. Exact replay can reuse the same ID. No Type-based
-    // hash-consing, source admission, or dynamic activation merging occurs.
-    pub(super) fn append(&mut self, pending: PendingTypeEnvironment, budget: &mut TypeWorkBudget)
-        -> Result<TypeEnvironmentId, Failure>
-    {
-        if self.frozen_contexts.is_some() { return Err(Failure::Invalid); }
-        if let Some(parent) = pending.0.parent { self.get(parent)?; }
-        let key = (pending.0.occurrence, pending.0.parent);
-        charge(budget, 2)?;
-        if let Some(id) = self.by_occurrence.get(&key) { return Ok(*id); }
-        self.by_occurrence.try_reserve(1).map_err(|_| Failure::Resource)?;
-        self.environments.try_reserve(1).map_err(|_| Failure::Resource)?;
-        let id = TypeEnvironmentId(self.environments.len());
-        self.environments.push(pending.0);
-        self.by_occurrence.insert(key, id);
-        Ok(id)
-    }
-
-    // Bind ONLY after authenticating the original Invoke/creation-to-frame
-    // association. An environment record alone is not that authentication.
-    // Reserve all caller notification/revision storage before this mutation.
-    pub(super) fn bind_context(&mut self, context: usize, environment: TypeEnvironmentId,
-        budget: &mut TypeWorkBudget) -> Result<bool, Failure>
-    {
-        if self.frozen_contexts.is_some() { return Err(Failure::Invalid); }
-        self.get(environment)?;
-        charge(budget, 2)?;
-        if let Some(existing) = self.contexts.get_mut(&context) {
-            charge(budget, existing.len())?;
-            if existing.contains(&environment) { return Ok(false); }
-            existing.try_reserve(1).map_err(|_| Failure::Resource)?;
-            existing.push(environment);
-        } else {
-            let mut alternatives = Vec::new();
-            alternatives.try_reserve(1).map_err(|_| Failure::Resource)?;
-            alternatives.push(environment);
-            self.contexts.try_reserve(1).map_err(|_| Failure::Resource)?;
-            self.contexts.insert(context, alternatives);
+    fn same_key(&self, other: &Self, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        charge(budget, 3)?;
+        if self.application != other.application || self.factory != other.factory
+            || self.bindings.len() != other.bindings.len()
+        { return Ok(false); }
+        for (left, right) in [(&self.definition_header, &other.definition_header),
+            (&self.use_header, &other.use_header)]
+        {
+            charge(budget, left.len().checked_add(1).ok_or(Failure::Resource)?)?;
+            if left.len() != right.len() { return Ok(false); }
+            for ((lb, lk), (rb, rk)) in left.iter().zip(right) {
+                if lb != rb || !same_kind(lk, rk, budget)? { return Ok(false); }
+            }
+        }
+        charge(budget, self.bindings.len())?;
+        for (left, right) in self.bindings.iter().zip(&other.bindings) {
+            if left.definition_binder != right.definition_binder || left.use_binder != right.use_binder
+                || left.formal != right.formal || left.actual != right.actual || left.route != right.route
+                || !types::same_kinded_argument_with_budget(left.argument(), right.argument(), budget)
+                    .map_err(|()| Failure::Resource)?
+            { return Ok(false); }
         }
         Ok(true)
     }
 
-    pub(super) fn context_alternatives(&self, context: usize) -> &[TypeEnvironmentId] {
-        self.contexts.get(&context).map(Vec::as_slice).unwrap_or(&[])
-    }
-
-    pub(super) fn unique_context(&self, context: usize) -> Option<TypeEnvironmentId> {
-        match self.context_alternatives(context) { [id] => Some(*id), _ => None }
-    }
-
-    // Preserve IDs/parent links/RouteIds exactly; never relocate them with
-    // graph, code or target offsets. Pair with the SAME frame arena's terminal
-    // snapshot, whose route IDs are likewise preserved. No query acquisition.
-    // A snapshot rejects compose/append/bind, so query use cannot grow it.
-    pub(super) fn snapshot(&self, frozen_contexts: usize, budget: &mut TypeWorkBudget)
-        -> Result<Self, Failure>
-    {
-        let frozen_contexts = self.frozen_contexts.map_or(frozen_contexts,
-            |existing| existing.min(frozen_contexts));
-        let mut result = Self::new();
-        result.frozen_contexts = Some(frozen_contexts);
-        charge(budget, self.environments.len())?;
-        result.environments.try_reserve_exact(self.environments.len()).map_err(|_| Failure::Resource)?;
-        charge(budget, self.by_occurrence.len())?;
-        result.by_occurrence.try_reserve(self.by_occurrence.len()).map_err(|_| Failure::Resource)?;
-        for environment in &self.environments {
-            let header = types::clone_kinded_type_parameters_fallibly_with_budget(
-                &environment.header, budget,
-            ).map_err(|()| Failure::Resource)?;
-            charge(budget, environment.bindings.len())?;
-            let mut bindings = Vec::new();
-            bindings.try_reserve_exact(environment.bindings.len()).map_err(|_| Failure::Resource)?;
-            for binding in &environment.bindings {
-                let normalized = IterativeArgumentOwner::new(
-                    types::clone_kinded_argument_with_budget(binding.argument(), budget)
-                        .map_err(|()| Failure::Resource)?,
-                );
-                bindings.push(Binding { definition_binder: binding.definition_binder,
-                    use_binder: binding.use_binder, formal: binding.formal, actual: binding.actual,
-                    route: binding.route, local_merge: binding.local_merge, normalized });
-            }
-            let id = TypeEnvironmentId(result.environments.len());
-            result.by_occurrence.insert((environment.occurrence, environment.parent), id);
-            result.environments.push(FrameEnvironment { occurrence: environment.occurrence,
-                parent: environment.parent, header, bindings });
+    fn copy(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        let definition_header = types::clone_kinded_type_parameters_fallibly_with_budget(
+            &self.definition_header, budget).map_err(|()| Failure::Resource)?;
+        let use_header = types::clone_kinded_type_parameters_fallibly_with_budget(
+            &self.use_header, budget).map_err(|()| Failure::Resource)?;
+        charge(budget, self.bindings.len())?;
+        let mut bindings = Vec::new();
+        bindings.try_reserve_exact(self.bindings.len()).map_err(|_| Failure::Resource)?;
+        for binding in &self.bindings {
+            let normalized = IterativeArgumentOwner::new(
+                types::clone_kinded_argument_with_budget(binding.argument(), budget)
+                    .map_err(|()| Failure::Resource)?);
+            bindings.push(NormalizedBinding { definition_binder: binding.definition_binder,
+                use_binder: binding.use_binder, formal: binding.formal, actual: binding.actual,
+                route: binding.route, normalized });
         }
-        charge(budget, self.contexts.len())?;
-        result.contexts.try_reserve(self.contexts.len()).map_err(|_| Failure::Resource)?;
-        for (&context, alternatives) in &self.contexts {
-            if context >= frozen_contexts { continue; }
-            charge(budget, alternatives.len())?;
-            let mut copied = Vec::new();
-            copied.try_reserve_exact(alternatives.len()).map_err(|_| Failure::Resource)?;
-            copied.extend_from_slice(alternatives);
-            result.contexts.insert(context, copied);
+        Ok(Self { application: self.application, factory: self.factory,
+            definition_header, use_header, bindings })
+    }
+}
+
+pub(super) struct Arena {
+    normalized: Vec<NormalizedEnvironment>,
+    normalized_by_hash: HashMap<u64, Vec<NormalizedEnvironmentId>>,
+    normalized_graph: Option<usize>,
+    conditional: Vec<Vec<(TypeOrigin, RouteId)>>,
+    conditional_by_hash: HashMap<u64, Vec<ConditionalOriginId>>,
+}
+
+impl Arena {
+    pub(super) fn new() -> Self {
+        Self { normalized: Vec::new(), normalized_by_hash: HashMap::new(), normalized_graph: None,
+            conditional: Vec::new(), conditional_by_hash: HashMap::new() }
+    }
+
+    pub(super) fn normalized(&self, id: NormalizedEnvironmentId)
+        -> Result<&NormalizedEnvironment, Failure>
+    {
+        self.normalized.get(id.0).ok_or(Failure::Invalid)
+    }
+
+    pub(super) fn conditional_origins(&self, id: ConditionalOriginId)
+        -> Result<&[(TypeOrigin, RouteId)], Failure>
+    {
+        self.conditional.get(id.0).map(Vec::as_slice).ok_or(Failure::Invalid)
+    }
+
+    // Preserve every ordered origin/gate pair, including repeated alternatives.
+    // Gates are exact equations in the paired route arena, never observed here.
+    // A conditional may refer only to already published origin records; owned
+    // storage is flat and no recursive origin/drop ownership can arise.
+    pub(super) fn conditional(&mut self, origins: &[(TypeOrigin, RouteId)],
+        budget: &mut TypeWorkBudget) -> Result<ConditionalOriginId, Failure>
+    {
+        charge(budget, origins.len().checked_add(1).ok_or(Failure::Resource)?)?;
+        let mut state = DefaultHasher::new();
+        origins.len().hash(&mut state);
+        for (origin, gate) in origins {
+            match origin {
+                TypeOrigin::Normalized(id) => { self.normalized(*id)?; }
+                TypeOrigin::Conditional(id) => { self.conditional_origins(*id)?; }
+                TypeOrigin::OriginalContext(_) => {}
+            }
+            origin.hash(&mut state);
+            gate.hash(&mut state);
+        }
+        let hash = state.finish();
+        charge(budget, 1)?;
+        if let Some(ids) = self.conditional_by_hash.get(&hash) {
+            charge(budget, ids.len())?;
+            for id in ids {
+                let existing = self.conditional_origins(*id)?;
+                charge(budget, origins.len().checked_add(1).ok_or(Failure::Resource)?)?;
+                if existing == origins { return Ok(*id); }
+            }
+        }
+        let origins = super::copy_slice(origins, budget)?;
+        charge(budget, 3)?;
+        self.conditional.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.conditional_by_hash.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let id = ConditionalOriginId(self.conditional.len());
+        if let Some(ids) = self.conditional_by_hash.get_mut(&hash) {
+            ids.try_reserve(1).map_err(|_| Failure::Resource)?;
+            self.conditional.push(origins);
+            ids.push(id);
+        } else {
+            let mut ids = Vec::new();
+            ids.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+            ids.push(id);
+            self.conditional.push(origins);
+            self.conditional_by_hash.insert(hash, ids);
+        }
+        Ok(id)
+    }
+
+    // This operation is input normalization only. Before using its result as
+    // a virtual factory scope, the source owner must prove closed-global free
+    // binder coverage, original lexical provenance (including imports), and
+    // the exact metadata-route equations in the paired route arena. The shape
+    // token and Type equality cannot supply those proofs. Symbolic free Types
+    // and row tails remain exact terms; they are not guessed to be closed.
+    // Child substitution scope retains ONLY this factory's definition bindings.
+    pub(super) fn normalize(
+        &mut self, relation: &CheckedFactoryUse<'_>, parent: TypeOrigin,
+        actual_routes: &[RouteId], budget: &mut TypeWorkBudget,
+    ) -> Result<Option<NormalizedEnvironmentId>, Failure> {
+        charge(budget, 1)?;
+        let candidate = {
+            let (replacements, rows) = match parent {
+                TypeOrigin::OriginalContext(_) | TypeOrigin::Conditional(_) => return Ok(None),
+                TypeOrigin::Normalized(id) => {
+                    let environment = self.normalized(id)?;
+                    let mut replacements = HashMap::new();
+                    let mut rows = HashMap::new();
+                    charge(budget, environment.bindings.len().checked_mul(2).ok_or(Failure::Resource)?)?;
+                    for binding in &environment.bindings {
+                        match binding.argument() {
+                            KindedArgument::TypeArg(ty) => {
+                                replacements.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                replacements.insert(binding.definition_binder, ty);
+                            }
+                            KindedArgument::RowArg(row) => {
+                                let row = types::clone_effect_row_with_budget(row, budget)
+                                    .map_err(|()| Failure::Resource)?;
+                                rows.try_reserve(1).map_err(|_| Failure::Resource)?;
+                                rows.insert(binding.definition_binder, row);
+                            }
+                        }
+                    }
+                    (replacements, rows)
+                }
+            };
+            Self::normalize_candidate(relation, actual_routes, &replacements, &rows, budget)?
+        };
+        let Some(candidate) = candidate else { return Ok(None); };
+        self.intern_normalized(relation.graph, candidate, budget).map(Some)
+    }
+
+    // Explicit ORIGINAL symbolic seed, with identity substitution. The caller
+    // must separately authenticate context 0 or its exact canonical Root(owner)
+    // seed, unique original body/root and closed-global scope. This is not a
+    // recovery path for an unresolved ordinary Invoke/OriginalContext origin.
+    pub(super) fn normalize_closed_symbolic(
+        &mut self, relation: &CheckedFactoryUse<'_>, actual_routes: &[RouteId],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<NormalizedEnvironmentId>, Failure> {
+        charge(budget, 1)?;
+        let Some(candidate) = Self::normalize_candidate(relation, actual_routes,
+            &HashMap::new(), &HashMap::new(), budget)? else { return Ok(None); };
+        self.intern_normalized(relation.graph, candidate, budget).map(Some)
+    }
+
+    fn normalize_candidate(
+        relation: &CheckedFactoryUse<'_>, actual_routes: &[RouteId],
+        replacements: &HashMap<TypeVariableId, &Type>, rows: &HashMap<TypeVariableId, EffectRow>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<NormalizedEnvironment>, Failure> {
+        charge(budget, relation.arguments.len().checked_add(1).ok_or(Failure::Resource)?)?;
+        if actual_routes.len() != relation.arguments.len() { return Err(Failure::Invalid); }
+        let definition_header = types::clone_kinded_type_parameters_fallibly_with_budget(
+            relation.definition_header, budget).map_err(|()| Failure::Resource)?;
+        let use_header = types::clone_kinded_type_parameters_fallibly_with_budget(
+            relation.use_header, budget).map_err(|()| Failure::Resource)?;
+        let mut bindings = Vec::new();
+        bindings.try_reserve_exact(relation.arguments.len()).map_err(|_| Failure::Resource)?;
+        for ((((definition, _), (use_binder, _)), (formal, argument)), route) in relation.definition_header
+            .iter().zip(relation.use_header).zip(relation.formals.iter().zip(relation.arguments))
+            .zip(actual_routes)
+        {
+            // One simultaneous substitution; shared traversal shields nested
+            // Forall binders and validates complete row/lacks constraints.
+            let normalized = match types::substitute_kinded_argument_borrowed_with(
+                argument.value.as_ref(), replacements, rows, |cells| budget.charge(cells),
+            ).map_err(|()| Failure::Resource)? {
+                Ok(value) => IterativeArgumentOwner::new(value),
+                Err(_) => return Ok(None),
+            };
+            bindings.push(NormalizedBinding { definition_binder: *definition,
+                use_binder: *use_binder, formal: *formal, actual: argument.port,
+                route: *route, normalized });
+        }
+        Ok(Some(NormalizedEnvironment { application: relation.application,
+            factory: relation.factory, definition_header, use_header, bindings }))
+    }
+
+    fn intern_normalized(&mut self, graph: &Graph, candidate: NormalizedEnvironment,
+        budget: &mut TypeWorkBudget) -> Result<NormalizedEnvironmentId, Failure>
+    {
+        // Exact immutable Graph namespace, not a Type or activation identity.
+        // No raw pointer is retained or dereferenced; the existing graph loan
+        // owns the arena for this whole analysis and each independent snapshot.
+        let graph_identity = std::ptr::from_ref(graph) as usize;
+        charge(budget, 1)?;
+        if self.normalized_graph.is_some_and(|original| original != graph_identity) {
+            return Err(Failure::Invalid);
+        }
+        let hash = candidate.key_hash(budget)?;
+        charge(budget, 1)?;
+        if let Some(ids) = self.normalized_by_hash.get(&hash) {
+            charge(budget, ids.len())?;
+            for id in ids {
+                if self.normalized(*id)?.same_key(&candidate, budget)? { return Ok(*id); }
+            }
+        }
+        // Reserve every retained record/index entry before either is published.
+        charge(budget, 3)?;
+        self.normalized.try_reserve(1).map_err(|_| Failure::Resource)?;
+        self.normalized_by_hash.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let mut new_ids = None;
+        if let Some(ids) = self.normalized_by_hash.get_mut(&hash) {
+            ids.try_reserve(1).map_err(|_| Failure::Resource)?;
+        } else {
+            let mut ids = Vec::new();
+            ids.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+            new_ids = Some(ids);
+        }
+        let id = NormalizedEnvironmentId(self.normalized.len());
+        if let Some(mut ids) = new_ids {
+            ids.push(id);
+            self.normalized.push(candidate);
+            self.normalized_by_hash.insert(hash, ids);
+        } else {
+            let ids = self.normalized_by_hash.get_mut(&hash).ok_or(Failure::Invalid)?;
+            self.normalized.push(candidate);
+            ids.push(id);
+        }
+        self.normalized_graph = Some(graph_identity);
+        Ok(id)
+    }
+
+    // Preserve normalized/conditional IDs and RouteIds exactly. Pair this
+    // independent query copy with the SAME frame arena's terminal snapshot.
+    // Query-local normalized additions never mutate the normal owner's arena.
+    pub(super) fn snapshot(&self, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        let mut result = Self::new();
+        charge(budget, self.normalized.len().checked_add(self.normalized_by_hash.len())
+            .ok_or(Failure::Resource)?)?;
+        result.normalized.try_reserve_exact(self.normalized.len()).map_err(|_| Failure::Resource)?;
+        result.normalized_by_hash.try_reserve(self.normalized_by_hash.len()).map_err(|_| Failure::Resource)?;
+        for environment in &self.normalized { result.normalized.push(environment.copy(budget)?); }
+        for (&hash, ids) in &self.normalized_by_hash {
+            result.normalized_by_hash.insert(hash, super::copy_slice(ids, budget)?);
+        }
+        result.normalized_graph = self.normalized_graph;
+        charge(budget, self.conditional.len().checked_add(self.conditional_by_hash.len())
+            .ok_or(Failure::Resource)?)?;
+        result.conditional.try_reserve_exact(self.conditional.len()).map_err(|_| Failure::Resource)?;
+        result.conditional_by_hash.try_reserve(self.conditional_by_hash.len()).map_err(|_| Failure::Resource)?;
+        for origins in &self.conditional { result.conditional.push(super::copy_slice(origins, budget)?); }
+        for (&hash, ids) in &self.conditional_by_hash {
+            result.conditional_by_hash.insert(hash, super::copy_slice(ids, budget)?);
         }
         Ok(result)
     }
-}
-
-// Selected evidence is NOT a typed binder substitution. Keep every original
-// ordered Requirement/Method/source occurrence, including repeated keys.
-// The consumer chooses generic K vs selected T; this helper never unifies them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct DictionaryInput {
-    pub(super) requirement: crate::interface::RequirementId,
-    pub(super) method: crate::interface::MethodId,
-    pub(super) ordinal: usize,
-    pub(super) source: OriginalPort,
-    pub(super) route: RouteId,
-}
-
-pub(super) fn evidence_inputs(graph: &Graph, evidence: usize, context: usize,
-    routes: &mut RouteArena, budget: &mut TypeWorkBudget)
-    -> Result<Option<Vec<DictionaryInput>>, Failure>
-{
-    let Some(Expr::Evidence { bindings, .. }) = graph.expressions.get(evidence) else { return Ok(None); };
-    charge(budget, bindings.len())?;
-    let mut result = Vec::new();
-    result.try_reserve_exact(bindings.len()).map_err(|_| Failure::Resource)?;
-    for (ordinal, &(requirement, method, expression)) in bindings.iter().enumerate() {
-        if graph.expressions.get(expression).is_none() { return Err(Failure::Invalid); }
-        let source = OriginalPort { expression, context };
-        result.push(DictionaryInput { requirement, method, ordinal, source,
-            route: routes.head(source, budget)? });
-    }
-    Ok(Some(result))
 }

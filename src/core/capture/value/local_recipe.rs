@@ -9,25 +9,28 @@
 use std::collections::HashSet;
 
 use super::{Analysis, Expr, Failure, Graph, ProducerWitness, TypeWorkBudget, charge};
-use super::deferred_evidence::LocalRecipe;
-use super::deferred_frame::{Arena as FrameArena, OriginalPort, ProjectionClass};
+use super::deferred_frame::ProjectionClass;
 use crate::types::{Kind, KindedArgument};
 
-const ASSIGNED: u8 = 1;
-const RESOURCE: u8 = 2;
-const DICTIONARY: u8 = 4;
-const GLOBAL: u8 = 8;
-const AMBIGUOUS_GLOBAL: u8 = 16;
-const OPAQUE_PROVIDER: u8 = 32;
-const LEXICAL: u8 = 64;
-const AMBIGUOUS_LEXICAL: u8 = 128;
+const ASSIGNED: u16 = 1;
+const RESOURCE: u16 = 2;
+const DICTIONARY: u16 = 4;
+const GLOBAL: u16 = 8;
+const AMBIGUOUS_GLOBAL: u16 = 16;
+const OPAQUE_PROVIDER: u16 = 32;
+const LEXICAL: u16 = 64;
+const AMBIGUOUS_LEXICAL: u16 = 128;
+const CAPTURED: u16 = 256;
 
 #[derive(Clone, Copy)]
 struct Ownership {
-    flags: u8,
+    flags: u16,
     global: usize,
     dictionary_start: usize,
     dictionary_len: usize,
+    body_owner: usize,
+    body_owners: usize,
+    handler_capture: bool,
 }
 
 // These coordinates retain an ORIGINAL ordered source occurrence. They do not
@@ -81,6 +84,18 @@ pub(super) enum RecipeTag {
     Evidence,
 }
 
+// Static original producer coordinates, not an occurrence/admission token.
+// q and literal G have no indexed direct writer/capture roles. Transparent
+// Evidence topology can still install q, and can write G at Call contexts.
+// The consuming owner needs context separation, complete capture classes,
+// actual inputs and the immutable source-family/consumer publication policy.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DirectPayload {
+    pub(super) payload: usize,
+    pub(super) factory: usize,
+    pub(super) body: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Decline {
     Unsupported,
@@ -95,6 +110,9 @@ pub(super) enum Decline {
 struct Prepared {
     tag: RecipeTag,
     shape: LocalShape,
+    // Separate from local shape. Some(true) requires the complete static
+    // all-writer closure proof below; Some(false) is a permanent decline.
+    writer_class: Option<bool>,
 }
 
 #[derive(Clone, Copy)]
@@ -102,7 +120,7 @@ enum Cell {
     Unseen,
     Visiting,
     Accepted(Prepared),
-    Declined(Decline),
+    Declined,
 }
 
 // Borrowed original operands and their weaker fixed shape. Dictionary Slot
@@ -112,11 +130,9 @@ enum Cell {
 // complete classes, lexical Type/Row scope, creation/root feeds, phases and
 // frozen boundaries. Shape preparation alone cannot admit a source visit.
 pub(super) struct PreparedSource<'g> {
-    pub(super) expression: usize,
     pub(super) tag: RecipeTag,
     pub(super) shape: LocalShape,
     pub(super) source: &'g Expr,
-    pub(super) witness: Option<&'g ProducerWitness>,
 }
 
 #[derive(Clone, Copy)]
@@ -136,7 +152,7 @@ pub(super) struct Compiler<'g> {
     cells: Vec<Cell>,
 }
 
-fn flag(ownership: &mut [Ownership], port: usize, bits: u8,
+fn flag(ownership: &mut [Ownership], port: usize, bits: u16,
     budget: &mut TypeWorkBudget) -> Result<(), Failure>
 {
     charge(budget, 1)?;
@@ -204,7 +220,8 @@ impl<'g> Compiler<'g> {
         let mut ownership = Vec::new();
         ownership.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
         ownership.resize(count, Ownership { flags: 0, global: 0,
-            dictionary_start: 0, dictionary_len: 0 });
+            dictionary_start: 0, dictionary_len: 0, body_owner: 0,
+            body_owners: 0, handler_capture: false });
         let mut cells = Vec::new();
         cells.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
         cells.resize(count, Cell::Unseen);
@@ -236,11 +253,23 @@ impl<'g> Compiler<'g> {
                 }
                 Expr::Handler { clauses, .. } => {
                     for clause in clauses {
+                        for capture in &clause.captures {
+                            flag(&mut ownership, *capture, CAPTURED, budget)?;
+                            charge(budget, 1)?;
+                            ownership.get_mut(*capture).ok_or(Failure::Invalid)?.handler_capture = true;
+                        }
                         flag(&mut ownership, clause.input, ASSIGNED, budget)?;
                         for (binder, _) in &clause.bindings { flag(&mut ownership, *binder, ASSIGNED, budget)?; }
                     }
                 }
-                Expr::Function { parameters, .. } => {
+                Expr::Function { parameters, captures, body } => {
+                    charge(budget, 2)?;
+                    let role = ownership.get_mut(*body).ok_or(Failure::Invalid)?;
+                    if role.body_owners == 0 { role.body_owner = owner; }
+                    role.body_owners = role.body_owners.checked_add(1).ok_or(Failure::Resource)?;
+                    for capture in captures {
+                        flag(&mut ownership, *capture, CAPTURED, budget)?;
+                    }
                     for parameter in parameters {
                         charge(budget, 1)?;
                         if !graph.metadata.contains_key(parameter) {
@@ -389,7 +418,7 @@ impl<'g> Compiler<'g> {
             if !definitions.insert(*def) || !uses.insert(*use_binder) || !slots.insert(*formal)
                 || self.graph.metadata.get(formal) != Some(def)
                 || !matches!(self.graph.expressions.get(*formal), Some(Expr::Slot))
-                || self.ownership.get(*formal).ok_or(Failure::Invalid)?.flags != 0
+                || self.ownership.get(*formal).ok_or(Failure::Invalid)?.flags & !CAPTURED != 0
                 || !same_kind(dk, uk, budget)?
             { return Ok(None); }
             match (dk, argument.value.as_ref()) {
@@ -552,7 +581,7 @@ impl<'g> Compiler<'g> {
                 *self.cells.get_mut(expression).ok_or(Failure::Invalid)? = Cell::Visiting;
                 pending.push(Work { expression, tag, next: 0 });
             }
-            Err(reason) => *self.cells.get_mut(expression).ok_or(Failure::Invalid)? = Cell::Declined(reason),
+            Err(_) => *self.cells.get_mut(expression).ok_or(Failure::Invalid)? = Cell::Declined,
         }
         Ok(())
     }
@@ -561,7 +590,7 @@ impl<'g> Compiler<'g> {
         charge(budget, 1)?;
         match self.cells.get(root).copied().ok_or(Failure::Invalid)? {
             Cell::Accepted(_) => return Ok(true),
-            Cell::Declined(_) => return Ok(false),
+            Cell::Declined => return Ok(false),
             Cell::Visiting => return Err(Failure::Invalid),
             Cell::Unseen => {}
         }
@@ -570,25 +599,25 @@ impl<'g> Compiler<'g> {
             self.enter(root, &mut pending, budget)?;
             while let Some(work) = pending.last().copied() {
                 charge(budget, 1)?;
-                if matches!(self.cells[work.expression], Cell::Declined(_)) { pending.pop(); continue; }
+                if matches!(self.cells[work.expression], Cell::Declined) { pending.pop(); continue; }
                 let count = self.child_count(work.expression, work.tag)?;
                 if work.next < count {
                     let child = self.child(work.expression, work.tag, work.next)?;
                     pending.last_mut().ok_or(Failure::Invalid)?.next += 1;
                     match self.cells.get(child).copied().ok_or(Failure::Invalid)? {
                         Cell::Accepted(_) => {}
-                        Cell::Declined(_) => self.cells[work.expression] = Cell::Declined(Decline::Dependency),
+                        Cell::Declined => self.cells[work.expression] = Cell::Declined,
                         Cell::Visiting => {
-                            self.cells[child] = Cell::Declined(Decline::Cyclic);
-                            self.cells[work.expression] = Cell::Declined(Decline::Cyclic);
+                            self.cells[child] = Cell::Declined;
+                            self.cells[work.expression] = Cell::Declined;
                         }
                         Cell::Unseen => self.enter(child, &mut pending, budget)?,
                     }
                     continue;
                 }
                 self.cells[work.expression] = match self.finish(work.expression, work.tag, budget)? {
-                    Ok(shape) => Cell::Accepted(Prepared { tag: work.tag, shape }),
-                    Err(reason) => Cell::Declined(reason),
+                    Ok(shape) => Cell::Accepted(Prepared { tag: work.tag, shape, writer_class: None }),
+                    Err(_) => Cell::Declined,
                 };
                 pending.pop();
             }
@@ -614,13 +643,10 @@ impl<'g> Compiler<'g> {
 
     pub(super) fn prepared(&self, expression: usize) -> Option<PreparedSource<'g>> {
         let Cell::Accepted(prepared) = *self.cells.get(expression)? else { return None; };
-        Some(PreparedSource { expression, tag: prepared.tag, shape: prepared.shape,
-            source: self.graph.expressions.get(expression)?, witness: self.witness(expression) })
+        Some(PreparedSource { tag: prepared.tag, shape: prepared.shape,
+            source: self.graph.expressions.get(expression)? })
     }
 
-    pub(super) fn decline(&self, expression: usize) -> Option<Decline> {
-        match self.cells.get(expression)? { Cell::Declined(reason) => Some(*reason), _ => None }
-    }
 
     // Indexed source ownership only, independent of the shape cache. A
     // dictionary Slot whose inputs decline/cycle still has its original role.
@@ -640,10 +666,192 @@ impl<'g> Compiler<'g> {
         })
     }
 
-    pub(super) fn dictionary_sources(&self, expression: usize) -> Option<&[DictionarySource]> {
-        let role = self.ownership.get(expression)?;
-        if role.flags & DICTIONARY == 0 { return None; }
-        self.dictionary.get(role.dictionary_start..role.dictionary_start.checked_add(role.dictionary_len)?)
+    // Indexed over ALL present Graph functions, including relocated imports.
+    // None includes both a missing owner and a shared/overwritten root body.
+    pub(super) fn unique_body_owner(&self, body: usize, budget: &mut TypeWorkBudget)
+        -> Result<Option<usize>, Failure>
+    {
+        charge(budget, 1)?;
+        let role = self.ownership.get(body).ok_or(Failure::Invalid)?;
+        Ok((role.body_owners == 1).then_some(role.body_owner))
+    }
+
+    // Complete zero-writer exclusion, separate from a slot's value shape.
+    // Graph.start seeds only indexed globals at zero. Bind/assignment/resource
+    // and opaque provider writers are excluded here. Remaining dictionary
+    // writes target Call contexts; formal/capture/handler transport targets
+    // nonzero Root/Invoke/Dispatch contexts. Context interning can fold only to
+    // an existing Step, never to the zero path. Thus these original Slots have
+    // no writer at zero for the lifetime of this immutable Graph.
+    pub(super) fn prove_zero_empty_slot(&self, expression: usize,
+        budget: &mut TypeWorkBudget) -> Result<bool, Failure>
+    {
+        charge(budget, 1)?;
+        if !matches!(self.graph.expressions.get(expression), Some(Expr::Slot)) {
+            return Ok(false);
+        }
+        let ownership = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        if ownership.handler_capture || ownership.flags & !(CAPTURED | DICTIONARY) != 0 {
+            return Ok(false);
+        }
+        Ok(matches!(self.source_slot_role(expression, budget)?,
+            Some(SlotRole::Metadata | SlotRole::Dictionary { .. } | SlotRole::Unbound)))
+    }
+
+    // No assignment, provider, handler, resource, lexical or keyed dictionary
+    // writer may target this non-Slot local recipe. Ordinary same-expression
+    // capture/root transport is allowed and must remain a separate live feed.
+    pub(super) fn raw_local_recipe(&self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<bool, Failure>
+    {
+        charge(budget, 1)?;
+        let role = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        Ok(!matches!(self.graph.expressions.get(expression), Some(Expr::Slot))
+            && !self.graph.metadata.contains_key(&expression)
+            && !role.handler_capture && role.flags & !CAPTURED == 0)
+    }
+
+    // Direct Function capture/writer exclusion. Transparent Evidence can
+    // still visit this body at a Call context; actual fresh-Invoke separation
+    // is an additional owner check, not a consequence of this role lookup.
+    pub(super) fn raw_returned_body(&self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<bool, Failure>
+    {
+        charge(budget, 1)?;
+        let role = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        Ok(matches!(self.graph.expressions.get(expression), Some(Expr::Function { .. }))
+            && !self.graph.metadata.contains_key(&expression)
+            && !role.handler_capture && role.flags == 0)
+    }
+
+    // This is a coordinate/role certificate for a FRESH nonzero raw Invoke.
+    // It is not a complete class and does not certify context freshness.
+    // Global initialization occurs only at zero; a noncaptured global Slot at
+    // the fresh Invoke has no copied global source. Dictionary writes occur
+    // at Call destinations. Neither may be silently redirected to zero.
+    pub(super) fn fresh_raw_slot_role(&self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<Option<SlotRole>, Failure>
+    {
+        charge(budget, 1)?;
+        let role = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        if role.handler_capture
+            || role.flags & (ASSIGNED | RESOURCE | OPAQUE_PROVIDER | LEXICAL
+                | AMBIGUOUS_LEXICAL | AMBIGUOUS_GLOBAL) != 0
+        { return Ok(None); }
+        Ok(match self.source_slot_role(expression, budget)? {
+            Some(role @ (SlotRole::Unbound | SlotRole::Metadata | SlotRole::Global { .. }
+                | SlotRole::Dictionary { .. })) => Some(role),
+            Some(SlotRole::Resource | SlotRole::Lexical { .. }) | None => None,
+        })
+    }
+
+    fn class_writers_allowed(&self, expression: usize, prepared: Prepared,
+        budget: &mut TypeWorkBudget) -> Result<bool, Failure>
+    {
+        charge(budget, 1)?;
+        let role = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        if role.handler_capture { return Ok(false); }
+        let allowed = match prepared.tag {
+            RecipeTag::Slot(SlotRole::Metadata | SlotRole::Unbound) => CAPTURED,
+            // Exact owner-bearing actual metadata may remain an opaque seed.
+            // This class proof never admits it as a normalized support Slot;
+            // fresh_raw_slot_role separately rejects RESOURCE.
+            RecipeTag::Slot(SlotRole::Resource) => CAPTURED | RESOURCE,
+            RecipeTag::Slot(SlotRole::Global { .. }) => CAPTURED | GLOBAL,
+            RecipeTag::Slot(SlotRole::Dictionary { .. }) => CAPTURED | DICTIONARY,
+            // tag() authenticated one Bind with a literal Function initializer.
+            // Its full initializer dependency is still checked below. An
+            // unentered binder may be empty, and same-expression capture/root
+            // feeds may change creation, but neither introduces another code.
+            // This opaque source class grants no raw-Invoke Slot baseline or
+            // capture/frame validity; those boundaries still reject LEXICAL.
+            RecipeTag::Slot(SlotRole::Lexical { .. }) => CAPTURED | LEXICAL,
+            RecipeTag::Scalar | RecipeTag::Alias | RecipeTag::Merge | RecipeTag::Function
+                | RecipeTag::TypedCall { .. } | RecipeTag::Evidence => CAPTURED,
+        };
+        Ok(role.flags & !allowed == 0)
+    }
+
+    // Prove a homogeneous upper class of ALL normal-analysis writers. This
+    // does not prove readiness/nonemptiness or authorize a frame. LocalShape
+    // alone is insufficient: each output dependency must also have only the
+    // enumerated local writer and same-expression capture/root transport.
+    // Metadata parameters produce metadata; global Slots have one indexed
+    // source; unique lexical Function initializers retain their full source
+    // dependency; dictionary Slots include EVERY ordered original binding input.
+    // The accepted value-dependency graph is finite; Function capture/frame
+    // dependencies deliberately require the separate whole-family qualifier.
+    pub(super) fn prove_source_class(&mut self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<Option<ProjectionClass>, Failure>
+    {
+        if !self.compile_one(expression, budget)? { return Ok(None); }
+        let mut pending = Vec::new();
+        charge(budget, 1)?;
+        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        pending.push((expression, false));
+        while let Some((current, finish)) = pending.pop() {
+            charge(budget, 1)?;
+            let Cell::Accepted(prepared) = *self.cells.get(current).ok_or(Failure::Invalid)?
+                else { return Err(Failure::Invalid); };
+            if prepared.writer_class.is_some() { continue; }
+            let count = self.child_count(current, prepared.tag)?;
+            let proved = if !self.class_writers_allowed(current, prepared, budget)? {
+                false
+            } else if !finish {
+                let storage = count.checked_add(1).ok_or(Failure::Resource)?;
+                charge(budget, storage)?;
+                pending.try_reserve(storage).map_err(|_| Failure::Resource)?;
+                pending.push((current, true));
+                for position in (0..count).rev() {
+                    pending.push((self.child(current, prepared.tag, position)?, false));
+                }
+                continue;
+            } else {
+                charge(budget, count)?;
+                let mut proved = true;
+                for position in 0..count {
+                    let child = self.child(current, prepared.tag, position)?;
+                    let Cell::Accepted(child) = *self.cells.get(child).ok_or(Failure::Invalid)?
+                        else { return Err(Failure::Invalid); };
+                    proved &= child.writer_class == Some(true);
+                }
+                proved
+            };
+            charge(budget, 1)?;
+            self.cells[current] = Cell::Accepted(Prepared { writer_class: Some(proved), ..prepared });
+        }
+        let Cell::Accepted(prepared) = self.cells[expression] else { return Err(Failure::Invalid); };
+        Ok((prepared.writer_class == Some(true)).then_some(match prepared.shape {
+            LocalShape::Empty => ProjectionClass::Empty,
+            LocalShape::Metadata => ProjectionClass::Metadata,
+            LocalShape::Callable(code) => ProjectionClass::Callable(code),
+        }))
+    }
+
+    // The immutable final Graph includes imported producers and every source
+    // writer/capture role. The payload permits same-expression capture feeds;
+    // the complete owner must retain them independently from its LOCAL recipe.
+    // Assignment, handler/provider, dictionary and other direct writers decline.
+    // This does not exclude indirect topology installation or G writes at Call
+    // contexts, and supplies no no-materialization/admission certificate.
+    // Evidence topology descends through a typed Call with lexical=false; any
+    // dictionary replacement of q would be indexed as DICTIONARY and decline.
+    // Literal G remains uncaptured; the complete family qualifier separately
+    // proves its unique body association.
+    pub(super) fn direct_evidence_payload(
+        &mut self, evidence: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<Option<DirectPayload>, Failure> {
+        charge(budget, 1)?;
+        let Some(Expr::Evidence { value: payload, .. }) = self.graph.expressions.get(evidence)
+            else { return Ok(None); };
+        let payload = *payload;
+        if !self.compile_one(payload, budget)? { return Ok(None); }
+        let prepared = self.prepared(payload).ok_or(Failure::Invalid)?;
+        let RecipeTag::TypedCall { factory, body } = prepared.tag else { return Ok(None); };
+        if !self.raw_local_recipe(payload, budget)? || !self.raw_returned_body(body, budget)? {
+            return Ok(None);
+        }
+        Ok(Some(DirectPayload { payload, factory, body }))
     }
 
     pub(super) fn dictionary_binding(&self, source: DictionarySource)
@@ -651,67 +859,5 @@ impl<'g> Compiler<'g> {
     {
         let Expr::Evidence { bindings, .. } = self.graph.expressions.get(source.evidence_expression)? else { return None; };
         bindings.get(source.binding_ordinal)
-    }
-
-    // Preflight ALL requested local equations before allocating ANY routes.
-    // The requested expressions must be distinct; each supplied class must be
-    // proved for the COMPLETE occurrence by the owner. LocalShape provides no
-    // class authority or conversion. Duplicate CHILD operands remain in
-    // original order. This operation grants no complete-port/head publication.
-    // Alias/Merge child Heads do not instantiate their children's local recipe:
-    // the owner-held visit must separately supply/authenticate those equations
-    // or exact original concrete leaves. No missing child is assumed empty.
-    pub(super) fn instantiate_primitives(
-        &mut self, requested: &[(usize, ProjectionClass)], context: usize, routes: &mut FrameArena,
-        budget: &mut TypeWorkBudget,
-    ) -> Result<Option<Vec<LocalRecipe>>, Failure> {
-        charge(budget, requested.len())?;
-        let mut seen = HashSet::new();
-        seen.try_reserve(requested.len()).map_err(|_| Failure::Resource)?;
-        for (expression, _) in requested {
-            charge(budget, 1)?;
-            if !seen.insert(*expression) { return Ok(None); }
-            if !self.compile_one(*expression, budget)? { return Ok(None); }
-            let prepared = self.prepared(*expression).ok_or(Failure::Invalid)?;
-            match (prepared.tag, prepared.source) {
-                (RecipeTag::Scalar, Expr::Scalar) | (RecipeTag::Slot(_), Expr::Slot) => {}
-                (RecipeTag::Alias, Expr::Alias(child)) if child != expression => {}
-                (RecipeTag::Merge, Expr::Merge(children)) => {
-                    charge(budget, children.len())?;
-                    if children.contains(expression) { return Ok(None); }
-                }
-                // These source tags are prepared and shared, but no owner-held
-                // Function/typed Call/Evidence materializer exists in this file.
-                // In particular, do NOT return Free/Empty/Head(self) as a stand-in.
-                (RecipeTag::Function | RecipeTag::TypedCall { .. } | RecipeTag::Evidence, _) => return Ok(None),
-                _ => return Err(Failure::Invalid),
-            }
-        }
-        charge(budget, requested.len())?;
-        let mut result = Vec::new();
-        result.try_reserve_exact(requested.len()).map_err(|_| Failure::Resource)?;
-        for (expression, class) in requested {
-            charge(budget, 1)?;
-            let prepared = self.prepared(*expression).ok_or(Failure::Invalid)?;
-            let route = match prepared.source {
-                Expr::Scalar => routes.free(budget)?,
-                // Local Slot is EMPTY regardless of the owner-supplied
-                // complete occurrence class or the prepared weaker shape.
-                Expr::Slot => routes.empty(budget)?,
-                Expr::Alias(child) => routes.head(OriginalPort { expression: *child, context }, budget)?,
-                Expr::Merge(children) => {
-                    let count = children.len().checked_add(1).ok_or(Failure::Resource)?;
-                    charge(budget, count)?;
-                    let mut sources = Vec::new();
-                    sources.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
-                    sources.push(routes.free(budget)?);
-                    for child in children { sources.push(routes.head(OriginalPort { expression: *child, context }, budget)?); }
-                    routes.join(ProjectionClass::Metadata, &sources, budget)?
-                }
-                _ => return Err(Failure::Invalid), // Fully preflighted above.
-            };
-            result.push(LocalRecipe { expression: *expression, class: *class, route });
-        }
-        Ok(Some(result))
     }
 }

@@ -7,7 +7,17 @@ mod deferred_frame;
 mod typed_environment;
 mod local_recipe;
 mod source_visit;
+#[cfg(test)]
 mod deferred_evidence;
+mod source_consumer;
+mod support_plan;
+mod source_occurrence;
+mod producer;
+mod producer_zero;
+mod producer_evidence;
+mod producer_driver;
+mod source_topology;
+mod source_producer;
 
 use super::{Failure, FunctionMetadataPreparation, MetadataVariables, charge, copy_slice, index};
 use crate::{
@@ -2848,6 +2858,9 @@ struct CheckedEvidenceVisit<'s, 'g> {
     analysis: &'s mut Analysis<'g>,
     reader: EvidenceReader,
     slot: usize,
+    // Exact installed original value input; authenticates a framed operand
+    // before the new original materializer consumes owner-local frame IDs.
+    value: usize,
     evidence: usize,
     arguments_context: usize,
     bindings: &'g [(
@@ -2928,6 +2941,7 @@ impl<'s, 'g> EvidenceInputVisit<'s, 'g> {
                     EvidenceReader::Other
                 },
                 slot,
+                value,
                 evidence,
                 arguments_context: context,
                 bindings,
@@ -3133,7 +3147,11 @@ impl<'s, 'g> CheckedEvidenceVisit<'s, 'g> {
     fn route_atom(self, atom: Atom, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
         match atom {
             Atom::Closure(function, creation) => match self.reserve(function, creation, budget)? {
-                EvidenceTransferStage::Complete(visit) => Ok(visit),
+                EvidenceTransferStage::Complete(visit) => {
+                    source_producer::record_completed_evidence(visit.analysis, visit.evidence,
+                        function, visit.arguments_context, budget)?;
+                    Ok(visit)
+                },
                 EvidenceTransferStage::Reserved(pending) => pending
                     .install_captures(budget)?
                     .route_dictionary(budget)?
@@ -3149,7 +3167,7 @@ impl<'s, 'g> CheckedEvidenceVisit<'s, 'g> {
                 if let Some(creation) = creation {
                     self.route_atom(Atom::Closure(function, creation), budget)
                 } else {
-                    self.route_framed_evidence(function, frame, budget)
+                    source_consumer::materialize(self, function, frame, budget)
                 }
             },
             other => {
@@ -3272,6 +3290,10 @@ impl<'s, 'g> InstalledCaptureBindings<'s, 'g> {
 
 impl<'s, 'g> ReadyClosure<'s, 'g> {
     fn publish(self, budget: &mut TypeWorkBudget) -> Result<CheckedEvidenceVisit<'s, 'g>, Failure> {
+        // Original transfer completion, before output, owns canonical E
+        // metadata; speculative saved descriptors cannot register it.
+        source_producer::record_actual_evidence(self.visit.analysis, self.visit.evidence,
+            self.function, self.specialized, budget)?;
         self.visit.analysis.atom(
             self.visit.slot,
             Atom::Closure(self.function, self.specialized),
@@ -3584,11 +3606,19 @@ impl AtomStore<'_> {
     }
 }
 
-// Constructed only during the installed, exclusive definition Function visit
-// or the existing cfg(test) coalescence witness. General Call/Evidence family
-// admission remains disabled until its complete occurrence plan is proved.
+// Constructed only by the exclusive source Function visit, complete
+// qualified producer occurrence, actual original Evidence publisher, or
+// cfg(test) correspondence witness. The token admits only this Function code.
 struct AdmittedFrame {
     function: usize,
+}
+
+// One target's original insertion order once concrete and projected feeds mix.
+// Indices refer to its existing edges/incoming vectors, never ContextIds.
+#[derive(Clone, Copy)]
+enum CaptureFeed {
+    Concrete(usize),
+    Projected(usize),
 }
 
 struct FrameState {
@@ -3597,11 +3627,11 @@ struct FrameState {
     type_origins: HashMap<usize, Vec<typed_environment::TypeOrigin>>,
     type_readers: HashMap<usize, Vec<usize>>,
     readers: HashMap<deferred_frame::OriginalPort, Vec<usize>>,
+    activation_readers: HashMap<deferred_frame::ActivationId, Vec<usize>>,
     capture_classes: HashMap<(usize, usize, usize), deferred_frame::ProjectionClass>,
     incoming: HashMap<usize, Vec<deferred_frame::RouteId>>,
+    feed_order: HashMap<usize, Vec<CaptureFeed>>,
     transfers: HashSet<(Option<usize>, usize, usize, deferred_frame::CompletedFrame)>,
-    evidence_preparations: HashMap<EvidencePreparationKey, EvidencePreparation>,
-    evidence_coalescer: Option<deferred_evidence::Coalescer>,
 }
 
 struct FrameLeaves<'a> {
@@ -3638,22 +3668,6 @@ enum FramePortWork {
     Closure(deferred_frame::CompletedFrame),
 }
 
-// Include in capture::value after `mod deferred_evidence;`. This fragment
-// assumes the existing parent AdmittedFrame { function: usize } and FrameState.
-// Required FrameState fields (add to its existing declaration):
-//   evidence_preparations: HashMap<EvidencePreparationKey, EvidencePreparation>,
-//   evidence_coalescer: Option<deferred_evidence::Coalescer>,
-// Normal initialization: HashMap::new(), Some(Coalescer::new()).
-// Focus snapshot initialization: HashMap::new(), None. Copy existing arena/
-// TypeOrigins as before; never copy admission or grow coalesced state in focus.
-
-type EvidencePreparationKey = (usize, usize, usize, usize);
-
-struct EvidencePreparation {
-    family: deferred_evidence::FamilyPlan,
-    admitted: AdmittedFrame,
-}
-
 impl FrameState {
     // Storage initialization only; no source admission or frame is produced.
     fn new_deferred() -> Self {
@@ -3661,27 +3675,20 @@ impl FrameState {
             arena: deferred_frame::Arena::new(),
             types: typed_environment::Arena::new(),
             type_origins: HashMap::new(), type_readers: HashMap::new(),
-            readers: HashMap::new(), capture_classes: HashMap::new(),
-            incoming: HashMap::new(), transfers: HashSet::new(),
-            evidence_preparations: HashMap::new(),
-            evidence_coalescer: Some(deferred_evidence::Coalescer::new()),
+            readers: HashMap::new(), activation_readers: HashMap::new(),
+            capture_classes: HashMap::new(),
+            incoming: HashMap::new(), feed_order: HashMap::new(), transfers: HashSet::new(),
         }
     }
 }
 
-// This is the sole Local(q,E) compiler/qualifier seam: a future checked source
-// preparation calls deferred_evidence::prepare_family with ORIGINAL complete
-// CaptureTopology and exact local recipes, obtains its borrowed capability,
-// reserves this map and inserts (G,e,args_context,E) -> EvidencePreparation.
-// There is deliberately NO production Evidence insertion/constructor here;
-// the separate definition Function visit retains original Evidence transport.
-// Missing preparation is Invalid for an already framed operand; no fallback.
-
+#[cfg(test)]
 struct EvidenceVisitTransport<'s, 'g> {
     analysis: &'s mut Analysis<'g>,
     output: usize,
 }
 
+#[cfg(test)]
 impl deferred_evidence::Transport for EvidenceVisitTransport<'_, '_> {
     fn arena(&mut self) -> Result<&mut deferred_frame::Arena, Failure> {
         Ok(&mut self.analysis.frames.first_mut().ok_or(Failure::Invalid)?.arena)
@@ -3709,64 +3716,6 @@ impl deferred_evidence::Transport for EvidenceVisitTransport<'_, '_> {
     }
 }
 
-impl Analysis<'_> {
-    fn transfer_framed_evidence(
-        &mut self, output: usize, function: usize, frame: deferred_frame::CompletedFrame,
-        evidence: usize, arguments_context: usize, budget: &mut TypeWorkBudget,
-    ) -> Result<(), Failure> {
-        if self.focus.is_some() || self.frozen_contexts != 0 { return Err(Failure::Invalid); }
-        // Original Evidence construction, not a new route-key context.
-        let specialized = self.context(arguments_context, Transition::Call(evidence), budget)?;
-        let key = (function, evidence, arguments_context, specialized);
-        charge(budget, 4)?; // remove/take and guaranteed restoration below.
-        let (preparation, mut coalescer) = {
-            let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
-            let preparation = frames.evidence_preparations.remove(&key).ok_or(Failure::Invalid)?;
-            let Some(coalescer) = frames.evidence_coalescer.take() else {
-                frames.evidence_preparations.insert(key, preparation);
-                return Err(Failure::Invalid);
-            };
-            (preparation, coalescer)
-        };
-        // The exclusively borrowed original visit admits no nested Evidence
-        // execution; publication only queues readers. Every Result restores
-        // the removed preparation and coalescer; their map capacity remains.
-        let result = (|| {
-            if !preparation.family.matches(function, evidence, arguments_context, specialized) {
-                return Err(Failure::Invalid);
-            }
-            let alternatives = self.frame_alternatives(frame, budget)?;
-            let mut transport = EvidenceVisitTransport { analysis: self, output };
-            for (alternative, captures) in alternatives.iter().enumerate() {
-                coalescer.transfer(&preparation.family, &preparation.admitted,
-                    deferred_evidence::InputKey { frame, alternative }, captures,
-                    &mut transport, budget)?;
-            }
-            Ok(())
-        })();
-        // No method above removes FrameState; this is the same owned carrier.
-        let Some(frames) = self.frames.first_mut() else { return Err(Failure::Invalid); };
-        frames.evidence_preparations.insert(key, preparation);
-        frames.evidence_coalescer = Some(coalescer);
-        result
-    }
-}
-
-impl CheckedEvidenceVisit<'_, '_> {
-    fn route_framed_evidence(self, function: usize, frame: deferred_frame::CompletedFrame,
-        budget: &mut TypeWorkBudget) -> Result<Self, Failure>
-    {
-        self.analysis.transfer_framed_evidence(self.slot, function, frame,
-            self.evidence, self.arguments_context, budget)?;
-        Ok(self)
-    }
-}
-
-// Add this arm to CheckedEvidenceVisit::route_atom before `other =>`:
-// Atom::FramedClosure(function, frame) => self.route_framed_evidence(function, frame, budget),
-// Keep the original Closure/Unknown/other arms and original Evidence input
-// installation/readiness unchanged. There is no generic permission to coalesce
-// different E values or the raw original G,I results outside this Evidence.
 pub(super) struct Analysis<'a> {
     graph: &'a Graph,
     evidence_ports: HashMap<usize, Vec<usize>>,
@@ -3806,6 +3755,12 @@ pub(super) struct Analysis<'a> {
     frames: Vec<FrameState>,
     // Once per normal Graph loan; focused snapshots never prepare/admit source.
     source_recipes: Vec<local_recipe::Compiler<'a>>,
+    // Canonical immutable per-Evidence publication decisions. Focus resets
+    // mutable preparations, but preserves this exact policy and graph loan.
+    source_policy: Option<source_consumer::PublicationPolicy<'a>>,
+    // Normal-only pure producer owner. Focus retains completed frame/type
+    // namespaces, but never this mutable admission/staging state.
+    source_producers: Vec<source_producer::State<'a>>,
 }
 
 impl<'a> Analysis<'a> {
@@ -3833,6 +3788,45 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn watch_frame_activation(
+        &mut self, activation: deferred_frame::ActivationId, reader: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        frames.activation_readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let readers = frames.activation_readers.entry(activation).or_default();
+        charge(budget, readers.len())?;
+        if !readers.contains(&reader) {
+            charge(budget, 1)?;
+            readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+            readers.push(reader);
+        }
+        Ok(())
+    }
+
+    fn publish_frame_activation(
+        &mut self, activation: deferred_frame::ActivationId,
+        condition: deferred_frame::RouteId, budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // Demand may grow in normal analysis or in an independent query copy.
+        // Reserve notifications before publishing a new activation condition.
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        let readers = frames.activation_readers.get(&activation).map(Vec::as_slice).unwrap_or(&[]);
+        charge(budget, readers.len().checked_add(1).ok_or(Failure::Resource)?)?;
+        self.pending.try_reserve(readers.len()).map_err(|_| Failure::Resource)?;
+        if frames.arena.activate(activation, condition, budget)? {
+            self.revision += 1;
+            for &reader in readers {
+                if !self.slots[reader].queued {
+                    self.slots[reader].queued = true;
+                    self.pending.push_back(reader);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn frame_atoms(
         &mut self, route: deferred_frame::RouteId, reader: Option<usize>,
         budget: &mut TypeWorkBudget,
@@ -3847,6 +3841,9 @@ impl<'a> Analysis<'a> {
                 self.watch(slot, reader, budget)?;
             }
             for port in result.heads { self.watch_frame_head(port, reader, budget)?; }
+            for activation in result.activations {
+                self.watch_frame_activation(activation, reader, budget)?;
+            }
         }
         charge(budget, result.atoms.len())?;
         let mut atoms = Vec::new();
@@ -3855,10 +3852,12 @@ impl<'a> Analysis<'a> {
         Ok(atoms)
     }
 
+    #[cfg(test)]
     fn publish_frame_head(
         &mut self, original: deferred_frame::OriginalPort, complete: deferred_frame::RouteId,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        source_consumer::authorize_head(self, original, budget)?;
         if original.context < self.frozen_contexts { return Err(Failure::Invalid); }
         let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
         let readers = frames.readers.get(&original).map_or(&[][..], |readers| &readers[..]);
@@ -4053,9 +4052,38 @@ impl<'a> Analysis<'a> {
         if routes.contains(&source) { return Ok(()); }
         charge(budget, 1)?;
         routes.try_reserve(1).map_err(|_| Failure::Resource)?;
-        // Reserve initial delivery before publishing the retained live link.
+        // A first projected feed adopts all earlier concrete feeds in their
+        // original insertion order. Later edge()/route insertions append to
+        // the same order. Neither vector is copied during delivery.
+        charge(budget, 1)?;
+        let mut new_order = if frames.feed_order.contains_key(&target) {
+            charge(budget, 2)?;
+            frames.feed_order.get_mut(&target).ok_or(Failure::Invalid)?
+                .try_reserve(1).map_err(|_| Failure::Resource)?;
+            None
+        } else {
+            let count = self.slots[target].edges.len();
+            charge(budget, count.checked_add(5).ok_or(Failure::Resource)?)?;
+            frames.feed_order.try_reserve(1).map_err(|_| Failure::Resource)?;
+            let mut order = Vec::new();
+            order.try_reserve_exact(count.checked_add(1).ok_or(Failure::Resource)?)
+                .map_err(|_| Failure::Resource)?;
+            order.extend((0..count).map(CaptureFeed::Concrete));
+            Some(order)
+        };
+        // Reserve every retained event and initial delivery before publishing
+        // either the projected route or its ordered feed event.
         self.pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        charge(budget, 2)?;
+        let position = routes.len();
         routes.push(source);
+        if let Some(mut order) = new_order.take() {
+            order.push(CaptureFeed::Projected(position));
+            frames.feed_order.insert(target, order);
+        } else {
+            frames.feed_order.get_mut(&target).ok_or(Failure::Invalid)?
+                .push(CaptureFeed::Projected(position));
+        }
         self.revision += 1;
         if !self.slots[target].queued {
             self.slots[target].queued = true;
@@ -4064,19 +4092,18 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
-    fn deliver_frame_links(&mut self, target: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+    fn deliver_frame_link(
+        &mut self, target: usize, position: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
         if self.slots[target].terminal { return Ok(()); }
-        let Some(frames) = self.frames.first() else { return Ok(()); };
         charge(budget, 1)?;
-        let Some(routes) = frames.incoming.get(&target) else { return Ok(()); };
-        let routes = copy_slice(routes, budget)?;
-        for route in routes {
-            // Every live leaf/head wakes THIS destination, including after its
-            // local Alias/Merge setup is complete. Answers themselves are never
-            // cached across a normal source revision.
-            for atom in self.frame_atoms(route, Some(target), budget)? {
-                self.atom(target, atom, budget)?;
-            }
+        let route = *self.frames.first().ok_or(Failure::Invalid)?.incoming
+            .get(&target).and_then(|routes| routes.get(position)).ok_or(Failure::Invalid)?;
+        // Every live leaf/head wakes this destination. Current atoms are not
+        // retained answers. Delivery cannot append edges or incoming routes;
+        // the close visit owns one stable prefix of the feed-event vector.
+        for atom in self.frame_atoms(route, Some(target), budget)? {
+            self.atom(target, atom, budget)?;
         }
         Ok(())
     }
@@ -4152,18 +4179,15 @@ impl<'a> Analysis<'a> {
         frames.type_origins.try_reserve(1).map_err(|_| Failure::Resource)?;
         let origins = frames.type_origins.entry(context).or_default();
         origins.try_reserve(1).map_err(|_| Failure::Resource)?;
-        // A full Environment ID can be bound to the original context; an
-        // unresolved context edge remains explicit and is never ignored when
-        // another known environment happens to exist at the same invocation.
-        if let typed_environment::TypeOrigin::Environment(id) = origin {
-            frames.types.get(id)?;
-            if self.frozen_contexts == 0 {
-                frames.types.bind_context(context, id, budget)?;
-            }
-            // In a focused query the Type arena is immutable. New query-local
-            // context associations live only in type_origins below; they never
-            // grow the frozen Type/Row environment arena or normal analysis.
+        // Unresolved context edges remain explicit beside every full
+        // normalized Type/Row alternative at this invocation.
+        match origin {
+            typed_environment::TypeOrigin::Normalized(id) => { frames.types.normalized(id)?; }
+            typed_environment::TypeOrigin::Conditional(id) => { frames.types.conditional_origins(id)?; }
+            typed_environment::TypeOrigin::OriginalContext(_) => {}
         }
+        // Focus grows only its copied normalized namespace and query-local
+        // context associations; original contexts remain frozen.
         origins.push(origin);
         self.revision += 1;
         for &reader in readers {
@@ -4175,53 +4199,88 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn resolved_type_origins(&mut self, context: usize, reader: Option<usize>,
         budget: &mut TypeWorkBudget)
-        -> Result<(Vec<typed_environment::TypeEnvironmentId>, bool), Failure>
+        -> Result<(Vec<typed_environment::TypeOrigin>, bool), Failure>
     {
-        let mut pending = copy_slice(&[(context, false)], budget)?;
+        use typed_environment::TypeOrigin;
+        #[derive(Clone, Copy)]
+        enum Work {
+            Context(usize, bool),
+            Origin(TypeOrigin),
+        }
+        let mut pending = copy_slice(&[Work::Context(context, false)], budget)?;
         let mut active = HashSet::new();
         let mut visited = HashSet::new();
         let mut environments = Vec::new();
+        let mut conditional_seen = HashSet::new();
         let mut unresolved = false;
-        while let Some((context, finish)) = pending.pop() {
+        while let Some(work) = pending.pop() {
             charge(budget, 1)?;
-            if visited.contains(&context) { continue; }
-            if finish {
-                active.remove(&context);
-                visited.try_reserve(1).map_err(|_| Failure::Resource)?;
-                visited.insert(context);
-                continue;
-            }
-            if active.contains(&context) {
-                // Ordinary analysis may fold recurrent contexts. That is an
-                // unresolved typing origin, not a newly invalid Ash program.
-                // A future source admission must decline this family first.
-                unresolved = true;
-                continue;
-            }
-            active.try_reserve(1).map_err(|_| Failure::Resource)?;
-            active.insert(context);
-            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
-            pending.push((context, true));
-            if let Some(reader) = reader { self.watch_type_origins(context, reader, budget)?; }
-            let frames = self.frames.first().ok_or(Failure::Invalid)?;
-            let origins = frames.type_origins.get(&context).map(Vec::as_slice).unwrap_or(&[]);
-            if origins.is_empty() { unresolved = true; }
-            charge(budget, origins.len())?;
-            for origin in origins {
-                match *origin {
-                    typed_environment::TypeOrigin::Environment(id) => {
-                        charge(budget, environments.len())?;
-                        if !environments.contains(&id) {
-                            environments.try_reserve(1).map_err(|_| Failure::Resource)?;
-                            environments.push(id);
+            match work {
+                Work::Origin(TypeOrigin::Normalized(id)) => {
+                    self.frames.first().ok_or(Failure::Invalid)?.types.normalized(id)?;
+                    let origin = TypeOrigin::Normalized(id);
+                    charge(budget, environments.len())?;
+                    if !environments.contains(&origin) {
+                        environments.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        environments.push(origin);
+                    }
+                }
+                Work::Origin(TypeOrigin::OriginalContext(source)) => {
+                    pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    pending.push(Work::Context(source, false));
+                }
+                Work::Origin(TypeOrigin::Conditional(id)) => {
+                    // Shared conditional DAGs expand once per live query.
+                    // Every incoming gate was observed before this work item;
+                    // deduplication drops no later-input watch.
+                    charge(budget, 2)?;
+                    if conditional_seen.contains(&id) { continue; }
+                    conditional_seen.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    conditional_seen.insert(id);
+                    // Conditional records retain full origins and live gates.
+                    // They are not a choice of the first currently known Type.
+                    let origins = copy_slice(self.frames.first().ok_or(Failure::Invalid)?
+                        .types.conditional_origins(id)?, budget)?;
+                    charge(budget, origins.len())?;
+                    pending.try_reserve(origins.len()).map_err(|_| Failure::Resource)?;
+                    // Preserve the original ordered alternatives through the
+                    // explicit LIFO worklist. Gate reads install live watches.
+                    for (origin, gate) in origins.into_iter().rev() {
+                        if !self.frame_atoms(gate, reader, budget)?.is_empty() {
+                            pending.push(Work::Origin(origin));
                         }
                     }
-                    typed_environment::TypeOrigin::OriginalContext(source) => {
-                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
-                        pending.push((source, false));
+                }
+                Work::Context(context, finish) => {
+                    if visited.contains(&context) { continue; }
+                    if finish {
+                        active.remove(&context);
+                        visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        visited.insert(context);
+                        continue;
                     }
+                    if active.contains(&context) {
+                        // Original recurrence is unresolved provenance, not a
+                        // newly invalid Ash program or a guessed substitution.
+                        unresolved = true;
+                        continue;
+                    }
+                    active.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    active.insert(context);
+                    if let Some(reader) = reader {
+                        self.watch_type_origins(context, reader, budget)?;
+                    }
+                    let origins = self.frames.first().ok_or(Failure::Invalid)?
+                        .type_origins.get(&context).map(Vec::as_slice).unwrap_or(&[]);
+                    if origins.is_empty() { unresolved = true; }
+                    charge(budget, origins.len().checked_add(1).ok_or(Failure::Resource)?)?;
+                    pending.try_reserve(origins.len().checked_add(1).ok_or(Failure::Resource)?)
+                        .map_err(|_| Failure::Resource)?;
+                    pending.push(Work::Context(context, true));
+                    pending.extend(origins.iter().rev().copied().map(Work::Origin));
                 }
             }
         }
@@ -4375,6 +4434,8 @@ impl<'a> Analysis<'a> {
         charge(budget, self.slots.len())?;
         query.contexts = self.contexts.copy(budget)?;
         query.frozen_contexts = query.contexts.len();
+        query.source_policy = self.source_policy.as_ref()
+            .map(|policy| policy.copy(budget)).transpose()?;
         if let Some(frames) = self.frames.first() {
             let arena = frames.arena.snapshot(query.frozen_contexts, budget)?;
             charge(budget, 1)?;
@@ -4383,7 +4444,7 @@ impl<'a> Analysis<'a> {
             let mut capture_classes = HashMap::new();
             capture_classes.try_reserve(frames.capture_classes.len()).map_err(|_| Failure::Resource)?;
             capture_classes.extend(frames.capture_classes.iter().map(|(key, class)| (*key, *class)));
-            let types = frames.types.snapshot(query.frozen_contexts, budget)?;
+            let types = frames.types.snapshot(budget)?;
             charge(budget, frames.type_origins.len())?;
             let mut type_origins = HashMap::new();
             type_origins.try_reserve(frames.type_origins.len()).map_err(|_| Failure::Resource)?;
@@ -4391,9 +4452,8 @@ impl<'a> Analysis<'a> {
                 if context < query.frozen_contexts { type_origins.insert(context, copy_slice(origins, budget)?); }
             }
             query.frames.push(FrameState { arena, types, type_origins, type_readers: HashMap::new(),
-                readers: HashMap::new(), capture_classes,
-                incoming: HashMap::new(), transfers: HashSet::new(),
-                evidence_preparations: HashMap::new(), evidence_coalescer: None });
+                readers: HashMap::new(), activation_readers: HashMap::new(), capture_classes,
+                incoming: HashMap::new(), feed_order: HashMap::new(), transfers: HashSet::new() });
         }
         query
             .slots
@@ -5053,6 +5113,8 @@ impl<'a> Analysis<'a> {
             provider_closed_data: false,
             frames: Vec::new(),
             source_recipes: Vec::new(),
+            source_policy: None,
+            source_producers: Vec::new(),
         })
     }
 
@@ -5204,10 +5266,18 @@ impl<'a> Analysis<'a> {
         if enqueue {
             self.pending.try_reserve(1).map_err(|_| Failure::Resource)?;
         }
-        // All table/vector/queue storage is admitted. Neither a work nor
+        if !self.frames.is_empty() { charge(budget, 1)?; }
+        let mut order = self.frames.first_mut().and_then(|frames| frames.feed_order.get_mut(&target));
+        if let Some(order) = order.as_deref_mut() {
+            charge(budget, 2)?;
+            order.try_reserve(1).map_err(|_| Failure::Resource)?;
+        }
+        let edge_position = self.slots[target].edges.len();
+        // All table/vector/queue/event storage is admitted. Neither a work nor
         // allocation refusal can publish a link without its ordered reader.
         installation.publish();
         self.slots[target].edges.push(source);
+        if let Some(order) = order { order.push(CaptureFeed::Concrete(edge_position)); }
         self.revision += 1;
         if new_reader {
             self.slots[source].readers.push(target);
@@ -5230,6 +5300,43 @@ impl<'a> Analysis<'a> {
         self.edge(target, source, budget)
     }
 
+    fn deliver_concrete_link(
+        &mut self, slot: usize, edge_index: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        let source = self.slots[slot].edges[edge_index];
+        let pair = (slot, source);
+        let cursor = self
+            .dependencies
+            .pending_cursor(pair)?
+            .prepare(&self.slots[source].atoms)?;
+        let delivered = cursor.delivered;
+        let end = cursor.end;
+        if delivered == end {
+            return Ok(());
+        }
+        // The retained exact entry loan removes the second table lookup.
+        // Prepay its scalar write, then advance only after every original
+        // atom transfer succeeds; refusal retains the old cursor.
+        charge(budget, 1)?;
+        // A distinct source cannot change during atom(target). For a
+        // self-edge each source atom already belongs to that same target,
+        // so atom() only tests existing membership. Keep the original end
+        // and finish the complete ordered suffix before committing it.
+        let mut atoms = AtomStore {
+            slots: &mut self.slots,
+            atom_pairs: &mut self.atom_pairs,
+            pending: &mut self.pending,
+            revision: &mut self.revision,
+        };
+        for atom_index in delivered..end {
+            let atom = atoms.slots[source].atoms[atom_index];
+            atoms.atom(slot, atom, budget)?;
+        }
+        cursor.publish();
+        Ok(())
+    }
+
     pub(super) fn close(&mut self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
         while let Some(slot) = self.pending.pop_front() {
             charge(budget, 1)?;
@@ -5249,45 +5356,27 @@ impl<'a> Analysis<'a> {
                 }
                 .evaluate(budget)?
             };
-            self.deliver_frame_links(slot, budget)?;
-            // Live ordered edges are processed on every visit, including after
-            // setup completion. A later owner/Unknown is never a cached answer.
-            // Evaluate has finished installing this visit's edges. atom() below
-            // changes atoms and queued readers, never edges, so scalar indexing
-            // preserves the original ordered snapshot without retaining a Vec.
-            let edge_count = self.slots[slot].edges.len();
-            for edge_index in 0..edge_count {
-                charge(budget, 1)?;
-                let source = self.slots[slot].edges[edge_index];
-                let pair = (slot, source);
-                let cursor = self
-                    .dependencies
-                    .pending_cursor(pair)?
-                    .prepare(&self.slots[source].atoms)?;
-                let delivered = cursor.delivered;
-                let end = cursor.end;
-                if delivered == end {
-                    continue;
+            // Setup completed all this visit's insertions. Each atom delivery
+            // only appends atoms/reader notifications, never new feed events.
+            // Mixed targets consume the original insertion order; all-concrete
+            // targets retain their original edge loop and cursor behavior.
+            if !self.frames.is_empty() { charge(budget, 1)?; }
+            let ordered = self.frames.first().and_then(|frames| frames.feed_order.get(&slot))
+                .map(Vec::len);
+            if let Some(count) = ordered {
+                for position in 0..count {
+                    charge(budget, 1)?;
+                    let feed = self.frames.first().ok_or(Failure::Invalid)?.feed_order
+                        .get(&slot).and_then(|feeds| feeds.get(position)).copied().ok_or(Failure::Invalid)?;
+                    match feed {
+                        CaptureFeed::Concrete(index) => self.deliver_concrete_link(slot, index, budget)?,
+                        CaptureFeed::Projected(index) => self.deliver_frame_link(slot, index, budget)?,
+                    }
                 }
-                // The retained exact entry loan removes the second table lookup.
-                // Prepay its scalar write, then advance only after every original
-                // atom transfer succeeds; refusal retains the old cursor.
-                charge(budget, 1)?;
-                // A distinct source cannot change during atom(target). For a
-                // self-edge each source atom already belongs to that same target,
-                // so atom() only tests existing membership. Keep the original end
-                // and finish the complete ordered suffix before committing it.
-                let mut atoms = AtomStore {
-                    slots: &mut self.slots,
-                    atom_pairs: &mut self.atom_pairs,
-                    pending: &mut self.pending,
-                    revision: &mut self.revision,
-                };
-                for atom_index in delivered..end {
-                    let atom = atoms.slots[source].atoms[atom_index];
-                    atoms.atom(slot, atom, budget)?;
+            } else {
+                for edge_index in 0..self.slots[slot].edges.len() {
+                    self.deliver_concrete_link(slot, edge_index, budget)?;
                 }
-                cursor.publish();
             }
             if matches!(setup, SetupOutcome::FixedSetupReady) {
                 // The existing Slot admission already reserves this scalar
@@ -5399,6 +5488,11 @@ impl<'a> Analysis<'a> {
                 scalar,
                 type_application,
             } => {
+                if *type_application
+                    && source_producer::visit(self, slot, expression, context, budget)?
+                {
+                    return Ok(SetupOutcome::NeedsInputsOrDynamic);
+                }
                 let function = self.slot(*function, context, budget)?;
                 charge(budget, arguments.len())?;
                 let mut actual = Vec::new();
@@ -5419,7 +5513,8 @@ impl<'a> Analysis<'a> {
                 charge(budget, atom_count)?;
                 for atom_index in 0..atom_count {
                     let atom = self.slots[function].atoms[atom_index];
-                    charge(budget, 1)?; // added provenance adapter dispatch
+                    // Provenance dispatch belongs to the paid atom visit;
+                    // a framed atom still pays its actual arena lookup below.
                     let atom = match atom {
                         Atom::FramedClosure(target, frame) => {
                             match self.frames.first().ok_or(Failure::Invalid)?.arena.original_creation(frame, budget)? {
@@ -11440,6 +11535,17 @@ fn evidence_union_input(
     analysis: &mut Analysis<'_>, creation: usize, admitted: &AdmittedFrame,
     work: &mut TypeWorkBudget,
 ) -> deferred_frame::CompletedFrame {
+    if analysis.source_policy.is_none() {
+        let mut sites = Vec::new();
+        for (expression, source) in analysis.graph.expressions.iter().enumerate() {
+            if matches!(source, Expr::Evidence { .. }) {
+                sites.push(source_consumer::synthetic_site(analysis.graph, expression, 3,
+                    &[(0, deferred_frame::ProjectionClass::Metadata),
+                      (1, deferred_frame::ProjectionClass::Metadata)], work).unwrap());
+            }
+        }
+        source_consumer::PublicationPolicy::seal_into(analysis, &sites, work).unwrap();
+    }
     let arena = &mut analysis.frames[0].arena;
     let q0 = arena.head(deferred_frame::OriginalPort { expression: 0, context: creation }, work).unwrap();
     let q1 = arena.head(deferred_frame::OriginalPort { expression: 1, context: creation }, work).unwrap();
@@ -11637,4 +11743,6 @@ fn evidence_coalesces_complementary_empty_capture_ports_before_provider_validity
     }
 }
 
+    include!("value/producer_integration_tests.rs");
+    include!("value/mixed_origin_tests.rs");
 }

@@ -40,12 +40,6 @@ fn prepare_classes(
     analysis: &mut Analysis<'_>, expression: usize, creation: usize,
     captures: &[usize], budget: &mut TypeWorkBudget,
 ) -> Result<Option<ConstructorClasses>, Failure> {
-    charge(budget, 1)?;
-    if analysis.focus.is_some() || analysis.frozen_contexts != 0
-        || analysis.graph.producers.len() != 1
-    {
-        return Ok(None);
-    }
     let origin = if creation == 0 {
         ConstructorOrigin::Definition
     } else {
@@ -137,16 +131,12 @@ fn prepare_classes(
 pub(super) fn install_function(
     original: FunctionCaptureInstallation<'_, '_>, budget: &mut TypeWorkBudget,
 ) -> Result<(), Failure> {
-    let graph = original.analysis.graph;
-    charge(budget, original.captures.len().checked_add(1).ok_or(Failure::Resource)?)?;
-    let Expr::Function { captures, body, .. } = graph.expressions.get(original.expression).ok_or(Failure::Invalid)?
-        else { return Err(Failure::Invalid); };
-    if captures != original.captures || *body != original.body
-        || original.analysis.slots.get(original.slot).ok_or(Failure::Invalid)?.key
-            != (original.expression, original.creation)
-    {
-        return Err(Failure::Invalid);
-    }
+    // The original matched Function arm owns this exclusive token and its
+    // borrowed captures/body/slot association. Consume that proof directly;
+    // source-inactive graphs require no preparation or repeated Graph scan.
+    if original.analysis.focus.is_some() || original.analysis.frozen_contexts != 0
+        || original.analysis.graph.producers.len() != 1
+    { return original.install_original(budget); }
     let classes = prepare_classes(original.analysis, original.expression,
         original.creation, original.captures, budget)?;
     let Some(classes) = classes else { return original.install_original(budget); };
@@ -178,7 +168,10 @@ impl<'s, 'g> SourceFunctionVisit<'s, 'g, Prepared> {
 
 // Keep one-time FrameState construction off the per-visit phase frame. Never
 // take/move an existing FrameState out of Analysis during a source visit.
-fn ensure_frames(analysis: &mut Analysis<'_>, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+pub(super) fn ensure_frames(analysis: &mut Analysis<'_>, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+    if analysis.source_policy.is_none() {
+        super::source_consumer::PublicationPolicy::seal_into(analysis, &[], budget)?;
+    }
     if analysis.frames.is_empty() {
         charge(budget, 1)?;
         analysis.frames.try_reserve_exact(1).map_err(|_| Failure::Resource)?;

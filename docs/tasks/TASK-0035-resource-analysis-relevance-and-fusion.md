@@ -1,7 +1,7 @@
 # TASK-0035: Resource analysis relevance and algebraic fusion
 
 - ID: `TASK-0035`
-- Status: active
+- Status: paused
 - Related: [DN-0036](../design/DN-0036-foreign-library-and-memory-provider-experiments.md), [AD-0007](../decisions/AD-0007-typed-core-dialects.md), [AD-0008](../decisions/AD-0008-explicit-evaluator-machine.md)
 
 > This task organizes a bounded DN-0036 experiment. It defines no Ash semantics
@@ -135,6 +135,24 @@ does not count as successful merely because it has a plausible law.
   specialization in frozen queries remain implementation obligations before
   enabling source families. The static recipe inventory grants no publication
   authority. No asymptotic improvement is claimed from this source handoff.
+
+- The connected exact-zero producer now passes all 63 Value regressions,
+  including growing nonleaf Raw/Evidence, original transport and mixed Int/Bool
+  origin checks. The native forwarding case reaches Raw7/E4 and later reuse,
+  but exceeds the ordinary work limit. This is a preserved experiment.
+- The current cost round compares the full compound candidate with selected
+  Common5a using five unchanged native programs and separate six-owner totals.
+  Copying and bound-NUL fail at the temporary 20,971,520 ceiling. A separate
+  bounded continuation at 268,435,456 completes both native programs and records
+  Source work of 33,595,389 each, against baseline 1,212,707. All five Source
+  totals regress. Ordinary Source/final and independent Core limits remain
+  327,680 and 983,040; this candidate is not an accepted optimization.
+  Exact source hashes, test results, complete costs or failures and restoration
+  evidence are retained in the [checkpoint receipt](../design/provider-experiments/analysis-checkpoint-2026-10-08.json).
+- The user requested a pause after this cost round and an unsigned GitHub
+  checkpoint. Source is preserved on the isolated recovery branch without
+  shared implementation integration or a new full repository acceptance gate.
+  Resume with measured cost causes; no further repair was started.
 
 ## Verification
 
