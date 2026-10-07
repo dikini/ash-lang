@@ -1,4 +1,9 @@
 //! Minimal real native arena lifecycle through the generic Ash runtime.
+// Prepared codec remains test-only until the authenticated storage bridge lands.
+#[cfg(test)]
+#[path = "arena_codec.rs"]
+mod codec;
+
 use crate::arena::{Arena, ArenaInitError, Usage};
 use ash::foreign::{
     ForeignManifest, ForeignModuleFact, arena_manifest,
@@ -63,7 +68,7 @@ impl ArenaObservations {
         state
             .events
             .try_reserve(needed)
-            .map_err(|_| ForeignExecutionError("arena observation allocation failed"))
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)
     }
     fn record(&self, event: ArenaEvent) {
         self.0.borrow_mut().events.push(event)
@@ -155,7 +160,7 @@ fn error(module: &ForeignModuleFact, name: &str) -> Result<ForeignData, ForeignE
     let mut nodes = Vec::new();
     nodes
         .try_reserve_exact(1)
-        .map_err(|_| ForeignExecutionError("arena codec allocation failed"))?;
+        .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
     nodes.push(ForeignDataNode::Constructor(id, None));
     ForeignData::new(nodes, 0)
 }
@@ -211,9 +216,9 @@ impl ExecutableForeignModule for ArenaBinding {
             return Err(ForeignExecutionError("arena configuration arity mismatch"));
         }
         let integer = |index| match input.node(index) {
-            Some(ForeignDataNode::Integer(value)) => value.to_i64().ok_or(ForeignExecutionError(
-                "arena configuration integer outside native range",
-            )),
+            Some(ForeignDataNode::Integer(value)) => {
+                Ok(value.to_i64().and_then(|value| usize::try_from(value).ok()))
+            }
             _ => Err(ForeignExecutionError(
                 "arena configuration integer mismatch",
             )),
@@ -222,7 +227,7 @@ impl ExecutableForeignModule for ArenaBinding {
         let slots = integer(fields[1])?;
         // Reserve both acquisition and later destruction observations first.
         self.observations.reserve_acquisition()?;
-        let (Ok(bytes), Ok(slots)) = (usize::try_from(bytes), usize::try_from(slots)) else {
+        let (Some(bytes), Some(slots)) = (bytes, slots) else {
             self.observations.record(ArenaEvent::Refused);
             return Ok(ForeignAcquisition::Refused(error(
                 module,
@@ -284,7 +289,7 @@ impl ExecutableForeignModule for ArenaBinding {
         let mut nodes = Vec::new();
         nodes
             .try_reserve_exact(5)
-            .map_err(|_| ForeignExecutionError("arena usage codec allocation failed"))?;
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
         for value in [
             usage.used_payload_bytes,
             usage.payload_capacity,
@@ -299,7 +304,7 @@ impl ExecutableForeignModule for ArenaBinding {
         let mut fields = Vec::new();
         fields
             .try_reserve_exact(4)
-            .map_err(|_| ForeignExecutionError("arena usage tuple allocation failed"))?;
+            .map_err(|_| ForeignExecutionError::STORAGE_REFUSED)?;
         fields.extend([0, 1, 2, 3]);
         nodes.push(ForeignDataNode::Tuple(fields.into_boxed_slice()));
         ForeignData::new(nodes, 4)
@@ -331,5 +336,22 @@ impl ExecutableForeignModule for ArenaBinding {
         drop(arena);
         owner.observations.release(owner.activation, false);
         Ok(ForeignCompletion::Closed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArenaObservations;
+    use ash::foreign::runtime::ForeignExecutionReason;
+
+    #[test]
+    fn observation_capacity_refusal_preserves_storage_reason() {
+        let observations = ArenaObservations::default();
+        // This exceeds Vec's pointer-offset bound without allocating or relying
+        // on host memory pressure. Exercise the real fallible reserve producer.
+        let failure = observations.reserve(usize::MAX).unwrap_err();
+        assert_eq!(failure.reason(), ForeignExecutionReason::StorageRefused);
+        assert!(observations.events().is_empty());
+        assert_eq!(observations.0.borrow().outstanding, 0);
     }
 }
