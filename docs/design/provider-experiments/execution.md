@@ -4803,8 +4803,8 @@ resource proof, a foreign ABI change or accepted production architecture.
 Unsigned Common commit `4a6c50cdb769043a93a934cca3d6ebfd7c1fe368` is integrated by
 unsigned merge `a4b557bf76fef1a274ca5474941e7d4c4ea701f7` into
 `codex/provider-experiments`. The merge parents are original tip
-`43248835a99b2d6061fafd41742778b62085eac0` and the Common commit; their
-resulting trees match. This delivery changes only `src/core/capture/value.rs`
+`43248835a99b2d6061fafd41742778b62085eac0` and the Common commit. The merge tree
+matches the Common tree. This delivery changes only `src/core/capture/value.rs`
 and this execution record. SQLite-owned files and unrelated Original drafts
 retain their working bytes, status and unstaged state.
 
