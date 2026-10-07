@@ -4424,3 +4424,84 @@ depth limit, source assertion, language rule or foreign assumption changes.
 This remains bounded DN-0036 experimental evidence. Later typed arena allocation,
 Layout, references, containment, borrowing, sharing and storage families remain
 separate, as do DN-0037 and DN-0038.
+
+
+### Productive cursor borrowing and binary method charges (2026-10-07)
+
+The productive-cursor change retains one exact mutable edge entry while the
+canonical atom kernel transfers the original ordered suffix. A temporary
+`AtomStore` borrows only slots, atom membership, the pending queue and revision;
+it cannot mutate the edge table. The original fixed source end, full expression
+and creation-context identities, self-edge behavior and success-only cursor
+publication remain. Failed analyses are discarded; retry starts with a fresh
+analysis. No extra persistent Type/Kind carrier is introduced.
+
+Four independent method-catalog getters already use binary search. Their local
+precharge now follows the pinned comparator bound, with three administration
+units and the complete comparison bound prepaid. This corrects accounting; it
+does not introduce a faster search algorithm. Blanket authority admission,
+actual list scans, row and identity checks and final independent validation
+remain. Empty and small catalogs retain their real administration cost.
+
+Receipt 239 preserves the original exact-law assertions and measures their
+getter multiplicities. One width-one occurrence lookup changes its charge from
+one to four in each of two laws, explaining totals 708→711 and 1212→1215.
+The other two full authority totals remain 833 and 2518. Receipt 240 executes
+all 210 independent-validator namespace cases successfully, including the
+revised one-short refusal and fresh-retry checks; its separate nested child is
+not added to that count. The runner stopped on an incorrect expected test
+count after those tests passed and restored all source changes. Receipt 242
+binds that actual passing result and continues with the same source.
+
+Receipt 242 completes all four original larger SQLite programs under the
+reversible diagnostic ceiling. Every original public assertion executes, and
+strict input pairing permits only the recorded fixed-width PID literal change.
+The four other owner totals match receipt 229 exactly. The following numbers
+are combined measured totals, not sums of isolated reductions.
+
+| Program | Source checking: receipt 229 → candidate | Independent Core: receipt 229 → candidate |
+| --- | ---: | ---: |
+| Copying | 1,416,139 → 1,389,791 | 996,928 → 972,808 |
+| Persistence | 640,826 → 634,404 | 1,698,798 → 1,680,526 |
+| Resume | 210,195 → 209,213 | 306,117 → 302,590 |
+| Bound NUL | 1,416,139 → 1,389,791 | 996,923 → 972,803 |
+
+Production limits remain 327,680 per ordinary Type-work owner, 983,040 for
+independent Core and the existing depth limits. Copying and bound NUL now fit
+the independent Core ceiling, but their source checking still exceeds its
+ceiling by 1,062,111. Persistence retains source, elaboration and Core deficits
+of 306,724, 49,298 and 697,486. Diagnostic completion establishes no production
+admission for these three programs. Resume has separate normal-limit evidence.
+The method accounting correction contributes 30, 114, 30 and 30 Core units
+beyond the isolated cursor reduction; no physical timing improvement is claimed.
+
+The empty-substitution observer remains diagnostic-only. Receipt 239's four
+resume baseline/observer repeats match all six owner totals. An earlier
+18-unit final-elaboration difference remains unexplained; capacity-dependent
+hash-table charging is a hypothesis, not an established cause. Primitive-input
+preparation had measured net overhead and is excluded. Watch/edge relation
+consolidation is a separate unverified candidate.
+
+The delivery excludes all expanded SQLite manifest, library, adapter, fixtures,
+observers and raised diagnostic ceilings. Common retains shared-source and
+integration ownership; SQLite and arena remain explicitly user-paused. This is
+bounded DN-0036 evidence, with no change to normative Ash or whole-contract
+proof.
+
+Connected verification passes all 1,633 library cases, 230 distinct cases across
+sixteen affected public binaries, the separate larger normal-limit resume case,
+and 60 native adapter cases. All-targets build, formatting, strict all-feature
+workspace Clippy and warning-denied rustdoc pass. Receipt 242's architecture run
+reported 42 passes and one missing closed-inventory helper name. Receipt 243
+adds only that exact validate.rs helper name and passes the repaired guard plus
+two focused inventory guards. It adds no Type/Kind carrier profile. A fresh full
+43-case architecture run remains part of the required original-branch gate.
+
+Receipt 243 returns at `2026-10-07T05:15:02.796625+00:00`, after 203.149
+seconds, with all common, SQLite and original source pins, heads, statuses and
+indexes restored, normal policies and no active engine. Earlier receipt 242
+returns equally restored after the architecture failure; no failed gate is
+reported as a passing suite. Final independent source, accounting, ownership,
+measured-result and connected-quality reviews pass. The verified source and
+this record are prepared for an unsigned common commit and preserving merge;
+the integration hash and complete original-worktree gate are recorded next.
