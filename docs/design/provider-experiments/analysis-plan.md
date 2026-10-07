@@ -90,6 +90,13 @@ explicit unknowns and a coordinated next implementation slice. Documentation
 checks require no Cargo build. Integrate the reviewed plan and findings through
 an unsigned real merge preserving unrelated original drafts.
 
+After the first F-2 result, prioritize a derivation that removes an increasing
+factor. Use the algebra study's constructor equations, strengthened inductive
+results and cost obligations. The next candidate must name its growing input
+family and before/after recurrence, including local summary/output costs.
+A second constant-factor pass fusion can be useful, but does not by itself
+establish the larger objective.
+
 ## Batch 2: establish relevance before expansion
 
 Primary read/write boundary, subject to Common handoff:
@@ -129,9 +136,12 @@ Primary candidate boundaries, owned by Common unless transferred:
 2. Express the current two transports as typed operators on immutable routing
    recipes and live original ports. Derive a composed recipe for the common
    structural work. Do not compose or cache current atom answers.
-3. Preserve exact Invoke/Call identities, Closure creation, symbolic root feeds,
-   original queried ports and focused cuts. Determine which intermediate ports
-   are observable before considering their removal.
+3. Establish a representation correspondence for symbolic roots, required
+   queries and focused cuts. Preserve source/owner identities, actual lexical
+   creation/control environments and complete Type/Row/evidence inputs.
+   Internal Invoke/Call/Closure allocation ordinals may change only when the
+   correspondence preserves required observations and all live updates.
+   Determine which intermediate ports are observable before removing them.
 4. Preserve readiness and first-publication ordering. Finish all fallible
    preparation before publishing a completed recipe; a refusal must not turn
    a partial mapping into authority. Unknown dependencies remain live.

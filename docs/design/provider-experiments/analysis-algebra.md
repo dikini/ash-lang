@@ -138,6 +138,149 @@ solver stages or adopting a dependency-driven schedule.
 
 ## Source-grounded opportunities and contrary evidence
 
+### Derivation method for the next batch
+
+The user selected equational reasoning and inductive decomposition as the next
+priority. F-2 establishes a constant-factor reduction. The larger objective is
+to remove repeated work whose frequency grows with program structure, demanded
+contexts or solver rounds.
+
+Gibbons's [Fission for Program Comprehension, sections 2.5–2.6](https://www.cs.ox.ac.uk/jeremy.gibbons/publications/fission.pdf)
+describes recovering recursive structure, fold fusion and eliminating an
+unfold/fold intermediary. The following is this study's derivation framework
+for Ash, not a claim that its effectful graph solver is already a tree fold.
+
+Start with a finite, well-founded ordered structural model. Let `F` describe one
+layer, `Tree` its recursive carrier, and `in : F Tree -> Tree` its constructor.
+For total functions and a lawful `fmap`, use these types and obligation:
+
+```text
+a : F A -> A
+b : F B -> B
+h : A -> B
+
+h . a = b . fmap h
+```
+
+The obligation permits an induction over the input constructor:
+
+```text
+h (fold a (in children))
+  = h (a (fmap (fold a) children))
+  = b (fmap h (fmap (fold a) children))
+  = b (fmap (fold b) children)
+  = fold b (in children)
+```
+
+The second equality uses the algebra obligation; the third uses map composition
+and the inductive hypotheses for the children. Check each constructor, including
+binding and nullary cases. Where inherited scope matters, the carrier can be
+`Environment -> Summary`; the environment includes exact Type/Row substitutions,
+term ownership, selected evidence and concern demand. Original node identities
+remain labels. Equal current results do not identify environments.
+
+If the obligation fails because the parent lacks a child fact, strengthen the
+inductive result to a product of primary and auxiliary facts. Derive one algebra
+over that product and project the requested result afterward. The auxiliary
+component is justified by a specific repeated subcomputation, rather than a
+general cache. Include its construction, merge and storage costs. A growing
+descendant set copied at every parent can retain quadratic work even when the
+driver visits each node once.
+
+For producer/consumer elimination, let `u : Seed -> F Seed` and `a : F A -> A`.
+When the generated structure is finite and total, the fused equation is:
+
+```text
+solve seed = a (fmap solve (u seed))
+solve = fold a . unfold u
+```
+
+Removing the intermediate structure alone need not change the asymptotic bound.
+An Ash candidate must name the repeated producer or consumer work it removes.
+For graph inputs, preserve sharing by original identities and the exact inherited
+state. Treating a shared DAG as a tree can itself create exponential work;
+combining summaries with different inherited environments is unsound. Cycles
+require a fixed-point argument, not structural induction alone.
+
+Fallible preparation and live installation are separate obligations. Equality of
+completed results must also preserve required validation, diagnostic order,
+symbolic roots, live dependencies and observable publication. A pure routing
+equation does not by itself authorize deleting an intermediate queried port.
+The first F-2 experiment retains its phase barrier for precisely this reason.
+
+### Cost obligations and candidate ranking
+
+Use explicit independent parameters: original nodes `n`, structural edges `e`,
+requested roots `q`, exact demanded contexts `c`, solver rounds `r`, and produced
+facts or live updates `p`. Do not hide an increasing environment or summary size
+inside a constant local step.
+
+| Candidate family | Existing cost skeleton | Desired elimination and proof gap |
+| --- | --- | --- |
+| Contextful wrapper/evidence transport | Shared static preparation plus routing/install work for each exact context | Compose inherited routing equations and demand before materialization; prove which intermediate work is unobserved without merging distinct required environments or losing live edges |
+| Nested root/body analysis | Sum of visited body sizes; nested chain can give `T(n) = T(n-1) + Theta(n)` | Strengthened child results could give a constant local step, but prove scope/DAG/order laws and account for summary merges and output size |
+| Whole-graph finite-value rounds | `Theta(r*n)` node-scan skeleton plus value copying, joins and instantiation | Derive dependencies and update consumers incrementally; prove fixed-point equality, dynamic target discovery and ordered diagnostics |
+
+The first row has measured contextual volume, but the existing immutable
+capture topology is already shared. A second topology cache cannot eliminate
+that contextual factor. The second row is a source-grounded candidate family,
+not a measured explanation of the remaining SQLite cost. A linear-time target
+is conditional on bounded local combination and output; explicit output may
+itself be quadratic. The third row describes the actual scan in
+`solve_capture_values`, not proof that its current round count dominates.
+
+For a fixed-point projection, first identify complete ordered domains and the
+equation systems. One possible semantic proof uses strict continuous projection
+`p` and continuous operators `Phi` and `Psi` with `p . Phi = Psi . p`; preservation
+of the bottom and directed limits then transports the least fixed point.
+Ash's current ordered values and diagnostics still need their own preservation
+argument. Monotonicity, projection closure and scheduling independence are
+obligations to establish, not assumptions imported from mathematical sets.
+
+Before selecting the next Rust slice, provide a typed decomposition, failed
+fusion obligation, strengthened accumulator or demanded projection, constructor
+or fixed-point proof, and before/after recurrence. Name a growing input family
+that could falsify the claimed bound and reuse completed original-program
+evidence to rank its practical importance. Keep Common's existing wrapper and
+queue studies coordinated; introduce no competing traversal or observer.
+
+### Observed wrapper recurrence
+
+Common's Bounds study reconstructs the copying source context parents in
+receipt 274's historical observed lane. Independent rechecking of its raw rows
+confirms eight wrapper counts across seven successive links:
+
+```text
+2 -> 8 -> 20 -> 44 -> 92 -> 188 -> 380 -> 764
+N(d+1) = 2*N(d) + 4
+```
+
+At each measured link, every previous type Invoke has a sibling Evidence Call
+with the same parent. Both channels parent one next-wrapper Invoke each. The
+four additional parents are context zero, two symbolic Function roots and one
+ordinary term Invoke. This is a causal account of published context counts;
+it does not establish equivalent environments, removable live dependencies or
+current candidate counts.
+
+If an inductive source argument extends this recurrence to a family of depth
+`d`, its solution is `N(d) = (N(0)+4)*2^d - 4`. The finite receipt alone is not
+that proof, nor a theorem about total checker cost. It gives the next derivation
+a concrete target: explain whether already-bound lexical captures are being
+expanded again as deferred type/dictionary recipes. An ordinary-term-only
+shortcut cannot remove the observed pair of multiplying channels.
+
+For a qualifying wrapper family, test whether the derived representation can
+instead establish `M(d+1) <= M(d)+k`, with bounded local work and fixed `k`.
+That would give linear context growth in depth. The proof must account for
+growing capture/input sets, live updates and required output: sharing a recipe
+while replaying it along every old path does not establish this bound. No such
+improved recurrence is established yet.
+
+The study input is `bounds/wrapper-channel-cause-study-6a9/parent-bijection.json`
+under the external evidence root below. Its raw source is
+`author/context-prefix-measurement-runner-274/observed-copying-combined271.json`,
+SHA-256 `ffb3168e786e81e6a77c811d56bed9764916f48dc2bdaf77c8a1595dc2243af6`.
+
 ### F-1: wrapper and evidence transport composition
 
 The dominant measured class is a type-wrapper Function returning another
@@ -150,14 +293,36 @@ exact Call context and installs capture/dictionary routes.
 Study composing their immutable routing equations while retaining every live
 environment edge. Required inputs include both original Function IDs, ordered
 formal/captured metadata ports, the exact Type/Row substitution, original
-evidence selection and the target creation context. Output remains a recipe
-for the original contextual ports, not a cached Closure or atom set.
+evidence selection and lexical creation environment. A candidate must first
+distinguish these proposed roles within the current mixed capture list:
+
+| Candidate role | Inductive obligation |
+| --- | --- |
+| Already-bound lexical value | Prove independence from the new type/dictionary inputs; retain the saved lexical environment and all live incoming updates |
+| Type/Row-dependent metadata | Retain the complete free-input support and apply the exact substitution |
+| Deferred method or dictionary recipe | Retain the selected evidence and formal inputs; specialize in the required environment |
+
+These roles are a proof question, not a new annotation or an implemented
+classification. Equal current values, same-shaped types or a different internal
+closure number prove neither input independence nor dependence. TypeAbstraction,
+formal-dependent and dictionary-dependent recipes remain specialization cases.
+
+The next law may relate different internal graph representations. Define a
+relation between old and candidate states, including correspondence of required
+query paths. Show that processing each required input/update preserves that
+relation and agrees on body validation, owner escape, inferred control and
+diagnostics at their observation boundaries. Preserve original source/owner
+identities, actual lexical control environments and complete Type/Row/evidence
+inputs. Internal Invoke/Call/Closure allocation ordinals need not be identical
+if that correspondence proves the required observations and live edges agree.
+This refinement relaxes an implementation proof criterion, not Ash semantics.
 
 The main open condition is whether any intermediate coordinate/publication is
-observable to control discovery or a focused cut. Keep those coordinates until
-a preservation argument proves their removal. Common already owns a private
-study of this class; this task supplies the typed composition and law review
-rather than starting a second implementation.
+required by control discovery or a focused cut, and how a changed representation
+serves that query. Keep the existing route until the correspondence is proved;
+there is no authorization to merge environments or suppress symbolic roots.
+Common owns the role/phase study and any implementation handoff. This task
+supplies the inductive law and review rather than a competing implementation.
 
 ### F-2: lexical and evidence capture product
 

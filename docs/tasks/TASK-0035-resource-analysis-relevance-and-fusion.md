@@ -75,6 +75,17 @@ does not count as successful merely because it has a plausible law.
 - Retention is conditional on Common's full integrated repository gate.
   The three larger normal-program acceptance cases remain open. This task has
   run no separate compiler engine; Common owns the shared verification window.
+- Following the user's assessment of the modest first result, the next batch
+  prioritizes equational derivation and inductive decomposition that can remove
+  a growing work factor. The algebra study names typed proof obligations,
+  strengthened accumulators, candidate cost recurrences and remaining evidence
+  gaps. It grants no additional Rust writer slice or engine window.
+- Independent raw-row review confirms Common's historical wrapper recurrence
+  `N(d+1) = 2*N(d)+4` across seven links. Extending it to a source family and
+  removing a multiplying channel require the role/free-input proof. F-1 now
+  allows a proved correspondence of internal representations rather than
+  requiring unchanged allocation ordinals; semantic identity and live queries
+  remain obligations. Common owns the coordinated source study.
 
 ## Verification
 
