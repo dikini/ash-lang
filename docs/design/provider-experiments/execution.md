@@ -105,21 +105,25 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `5991e3d882b4a161c137fb826e73e79c149d550a`,
-merging common commit `183e9d506f0e3a41833f29b3e614616345169074` with an unsigned
-merge preserving both histories. Receipt 186 passes the complete unfiltered
-`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. All four
-original common deliveries and this separate preparation-cost delivery are
-complete. The ten shared source/regression files and tracking are merged into
-`codex/provider-experiments`; `main` is unchanged.
+Latest integrated common code checkpoint is `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59`,
+merging common commit `cdf44d990a74225fb9d1214a809986809ac32d19` with an unsigned
+merge preserving both histories. Receipt 246 passes the complete unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
+original common deliveries and the subsequent verified shared reductions are
+merged into `codex/provider-experiments`; `main` is unchanged. The latest
+delivery borrows productive edge cursors and corrects binary method-lookup
+charges, with their exact integration-test mirror. Its integration evidence is recorded at the end of this file.
 
-The pending String/TEXT manifest, adapter, source library and larger programs
-remain preserved SQLite-owned work. Their seventeen-case evidence remains
-fourteen passes and three typing-resource refusals in copied Unicode/BLOB/null
-results, bound NUL input and transaction/reopen persistence. Partial work
-reductions establish no full-program fit. Work and depth limits remain unchanged.
-The next canonical-preparation measurement is a proposal, not delivered code or
-proof that a larger typing quota is necessary.
+The expanded SQLite manifest, adapter, source library and larger programs remain
+preserved SQLite-owned work outside this delivery. Resume executes under normal
+limits. Copying, bound NUL and persistence complete their original assertions
+under the temporary diagnostic ceiling, but still exceed normal source-checking
+limits. Copying and bound NUL now fit independent Core; persistence retains
+source, elaboration and Core deficits. Exact totals appear in receipt 242 below.
+Production work and depth limits remain unchanged. Further relation
+consolidation is an unverified private candidate, not delivered code or proof
+that a larger typing quota is necessary. SQLite and arena have separately
+resumed; shared-source ownership and serial engine windows remain coordinated.
 The following Batch 0–2 and dated intermediate Batch 3 entries retain historical
 evidence; later delivery records supersede their earlier control-failure summaries.
 
@@ -4539,3 +4543,64 @@ validator cases and formatting. It returns at
 restored, normal policies and no engine. Independent concrete source/formula
 review passes. Full original-worktree verification must still pass after the
 unsigned corrective commit and preserving merge.
+
+
+### Integrated cursor and method delivery (2026-10-07, receipt 246)
+
+Unsigned common commit `cdf44d990a74225fb9d1214a809986809ac32d19` is integrated by
+unsigned merge `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59` into
+`codex/provider-experiments`. The merge preserves both parents, original tip
+`fc7d2b9446d1b413ff4fe3faa7d370822e812862` and the corrective common commit. The merge tree
+matches the corrective common commit tree exactly. This correction changes only
+the existing exact method-probe mirror and tracking. It retains implementation
+commit `50dee826de0192c9f1fe88fb816bc6def4ed8e01`, first merged at `fc7d2b9`,
+whose failed gate is recorded above. The combined delivery contains capture
+values, independent Core method charges, the precise closed-inventory helper
+entry, the exact method mirror and tracking.
+The expanded SQLite package and all 26 unrelated original drafts retain their
+working bytes and status.
+
+The unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` passes in the original
+worktree at this merge: formatting, metadata, all-targets build, strict workspace
+all-feature Clippy, all-targets/all-feature tests and warning-denied rustdoc.
+The outer Ash library reports 1,633 passes and architecture reports 43. All
+117 reported summary blocks have zero failures and zero ignores;
+nested child reruns are included in that block count, not counted as unique
+tests. This gate covers the integrated S-01 SQLite program, arena lifecycle,
+owner rows, capture/resume/discard/completion, independent Core, module,
+transform and deep-input regressions. The separate expanded SQLite package is
+covered by the connected evidence recorded above, not by this original tree.
+
+The explicit return is `2026-10-07T05:58:32.277978+00:00`, after
+669.083 seconds. Raw log SHA-256 is
+`c10402ec1e75a7d1526912e25646693eb905cbee2bec1f82a6d42fa1ca2d652d`
+under `method-probe-repair-246/` in the common evidence directory. Complete
+guards confirm common working bytes and its empty index, the whole SQLite
+worktree, and original unrelated working bytes and its empty index are
+preserved. No verification engine remains. The implementation, correction and both merge objects are unsigned.
+Independent source, accounting, measured-result, documentation and integration
+reviews accompany the delivery.
+
+Common retains shared compiler, Core, capture, provider-checking, generic runtime
+and integration ownership. SQLite retains its library, manifest, native adapter,
+fixtures and execution evidence. SQLite and arena have separately resumed.
+Imports and engine windows require the coordinator's explicit slot handoff;
+future imports use the original integration branch and preserve their histories.
+
+The next agreed windows are SQLite's bounded preserving import, four normal
+programs and owned prose/header corrections, followed by common's paired
+dependency experiment. Arena's reviewed first writer slice, after verified
+import and exact pins, is surface syntax, parser module/grammar/projection and
+resource-provider syntax tests. Resolver, resolved evidence, provider checking,
+capture, Core/validation and runtime remain common-owned. The syntax slice stays
+unintegrated within arena's connected allocation/load delivery until resolution
+consumes families completely or explicitly rejects them; silently ignored
+families cannot merge. Ordinary opaque manifests and staged invocation require
+separate contract handoffs.
+
+The larger copying, bound-NUL and persistence source deficits remain unresolved;
+no production quota or depth limit changes. Diagnostic completion is distinct
+from normal admission. Relation consolidation and borrowed frozen prefixes
+remain private investigation. This delivery supplies experimental DN-0036
+evidence; it changes no normative Ash rule and proves no whole-contract or
+intrinsic resource lower bound. The exclusions recorded above remain.
