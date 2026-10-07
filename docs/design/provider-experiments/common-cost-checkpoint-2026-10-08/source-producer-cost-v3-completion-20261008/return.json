@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-07T22:08:29.909215+00:00",
+  "seconds": 60.66097584799718,
+  "failure": null,
+  "restoration_error": null,
+  "all_three_guards_restored": true,
+  "normal_limits_restored": true,
+  "engines": [],
+  "completed_cases": 2,
+  "required_cases": 2,
+  "all_diagnostic_programs_passed": true,
+  "acceptance": false,
+  "explicit_return": true
+}

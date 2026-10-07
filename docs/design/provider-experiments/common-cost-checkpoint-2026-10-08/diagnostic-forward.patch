@@ -1,0 +1,108 @@
+--- a/src/core/validate.rs
++++ b/src/core/validate.rs
+@@ -3559,7 +3559,9 @@
+             return Err(error);
+         }
+     };
+-    if let Err(error) = validator.run_effect() {
++    let diagnostic_result214 = validator.run_effect();
++    eprintln!("DEFICIT214 owner=independent-effect-core total={} normal_limit=983040 outcome={:?}", validator.type_work.get(), diagnostic_result214);
++    if let Err(error) = diagnostic_result214 {
+         program.discard_iteratively();
+         return Err(error);
+     }
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -28,7 +28,7 @@
+ /// Most compiler phases use this capacity directly. Independent Core
+ /// validation has an accepted validator-local multiplier because it
+ /// reauthenticates the complete Core program across several cumulative passes.
+-pub const TYPE_WORK_LIMIT: usize = 327_680;
++pub const TYPE_WORK_LIMIT: usize = 20_971_520; // temporary diagnostic ceiling214
+ 
+ /// Cumulative accounting for compiler-owned Type, Kind, and binder-kind work.
+ #[derive(Clone, Debug, Eq, PartialEq)]
+--- a/src/driver.rs
++++ b/src/driver.rs
+@@ -844,6 +844,7 @@
+         }
+         checked_by_module.insert(module.id(), checked.len());
+         checked.push(checked_module);
++        eprintln!("DEFICIT214 module={:?} resolution={} checking={}", module.id(), resolution_type_work.used(), checking_type_work.used());
+     }
+ 
+     let entry = checked
+@@ -903,6 +904,8 @@
+     if !main.scheme.requirements.is_empty() {
+         return Err(entry_failure(EntryReason::MainConstrained, main_span));
+     }
++    eprintln!("DEFICIT214 owner=resolution total={} normal_limit=327680", resolution_type_work.used());
++    eprintln!("DEFICIT214 owner=source-checking total={} normal_limit=327680", checking_type_work.used());
+     let linked = link_modules_with_budget(checked, graph.entry(), constraint_work)
+         .map_err(PipelineFailure::Typing)
+         .map_err(FileFailure::from)?;
+@@ -928,6 +931,7 @@
+                 .map_err(PipelineFailure::Typing)
+                 .map_err(FileFailure::from)?
+         {
++            eprintln!("DEFICIT214 owner=linked-interface total={} normal_limit=327680", linked_type_work.used());
+             return finish_effect_observation(
+                 &validated_interfaces,
+                 &sources,
+--- a/src/elaborate.rs
++++ b/src/elaborate.rs
+@@ -5312,6 +5312,7 @@
+             return Err(ElaborationFailure::InvalidState);
+         }
+         self.zonk_builder_types()?;
++        eprintln!("DEFICIT214 owner=final-elaboration total={} normal_limit=327680", self.type_work.used());
+         self.builder.finish(root).map_err(Into::into)
+     }
+ 
+@@ -21640,12 +21641,15 @@
+     entry: crate::module::ModuleId,
+     constraint_work: &mut InterfaceConstraintBudget,
+ ) -> Result<ResolvedModuleProgram, TypeError> {
+-    link_modules_with_budgets(
++    let mut diagnostic_link_work214 = TypeWorkBudget::default();
++    let diagnostic_result214 = link_modules_with_budgets(
+         modules,
+         entry,
+         constraint_work,
+-        &mut TypeWorkBudget::default(),
+-    )
++        &mut diagnostic_link_work214,
++    );
++    eprintln!("DEFICIT214 owner=module-linking total={} normal_limit=327680 outcome={:?}", diagnostic_link_work214.used(), diagnostic_result214.as_ref().map(|_| ()));
++    diagnostic_result214
+ }
+ 
+ pub(crate) fn link_modules_with_budgets(
+--- a/tests/support/sqlite_copying.rs
++++ b/tests/support/sqlite_copying.rs
+@@ -27,7 +27,7 @@
+     }
+     pub fn new() -> Self {
+         let directory = std::env::temp_dir().join(format!(
+-            "ash-sqlite-copying-{}-{}",
++            "ash-sqlite-copying-{:010}-{}",
+             std::process::id(),
+             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+         ));
+@@ -43,6 +43,16 @@
+         Self(directory)
+     }
+     pub fn run(&self, name: &str) -> (String, Observations) {
++        // Private diagnostic input observation; removed with this overlay.
++        let source = fs::read(self.0.join(name)).unwrap();
++        eprintln!(
++            "ASH_SQLITE_INPUT227 {{\"pid\":{},\"directory_bytes\":{:?},\"entry_bytes\":{:?},\"source_bytes\":{:?}}}",
++            std::process::id(),
++            self.0.as_os_str().as_encoded_bytes(),
++            name.as_bytes(),
++            source
++        );
++        drop(source);
+         let registrations = ForeignRegistrations::new([
+             provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+             sqlite_manifest(ForeignRegistrationId::new(2)).unwrap(),
