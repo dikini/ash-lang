@@ -82,6 +82,16 @@ measured work and were exactly reversed. The larger three SQLite cases still exc
 normal limits; the next private fusion study targets contextual child expansion.
 No work or depth limit changes are selected.
 
+The follow-on context-extension lookup reuses an exact completed `(parent,
+Transition)` witness before the unchanged recurrence walk. It preserves context
+identities and adds no carrier. All 60 normal Value tests, 320 public cases,
+normal native resume, build, formatting and strict Clippy pass. Four completed
+SQLite cost runs show small Source/Core reductions, with all other owner totals
+unchanged and the real recurrence-miss tax included. The larger three normal
+refusals remain open. Common commit `478e043` is integrated through unsigned
+Original merge `5001156`; the complete Original gate passes. See
+[execution](execution.md#value-context-extension-integration-2026-10-07).
+
 The String/TEXT manifest, executable adapter, source library and larger programs
 remain preserved SQLite-owned work. Their passing cases and three default-budget
 typing refusals stay separate from this generic delivery and from the verified
