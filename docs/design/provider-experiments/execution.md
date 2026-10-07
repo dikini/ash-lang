@@ -5089,3 +5089,54 @@ independent normal typing limits. Their measured completed-native observations
 do not constitute normal-limit acceptance. Fusion remains an unverified
 follow-on. Experimental DN-0036 evidence does not establish current Ash
 semantics, production architecture, or an intrinsic lower bound.
+
+### Shared staged borrowed-result admission — 2026-10-07
+
+The common executable binding now distinguishes Immediate from Prepared replies.
+Existing adapters call their original immediate method exactly once. A prepared
+reply retains unpublished scratch through codomain checking and complete
+decoding/work/storage admission, then consumes one commit against the same
+authenticated operation, defining module and live ordered owner views. No native
+owner or keepalive transfers to the pending object. The API documentation and
+[experimental
+semantics](semantics.md#deferred-publication-of-borrowed-native-results)
+distinguish the consuming Rust ownership property from trusted adapter
+publication/drop behavior and host allocation assumptions. This adds no source
+syntax or typed arena allocation.
+
+The first behavioral baseline observed native publication before a malformed
+result was rejected, while the valid control passed. The staged implementation
+passes six boundary cases across a checked Ash fixture and the direct host API:
+malformed result, valid commit, unchanged legacy immediate behavior,
+dropped/stale/foreign pending commits, exact final decode-work refusal, and the
+existing acquisition publication refusal. The work cutoff authenticates the
+unique original operation and node adjacency and checks prefills zero and seven;
+refusal leaves the pending commit abandoned, preserves the owner for host
+teardown and starts no child acquisition.
+
+The separate Arena candidate passed 6 private cases, 68 public cases, 43
+architecture cases, all-target compilation, scoped formatting and diff checks.
+Its 26 unrelated drafts were preserved and restored exactly. Common received
+only the three reviewed runtime/evaluator/test files; the Arena native
+preparation checkpoint and future parser/Layout/Ref work remain on their own
+branch. Common then passed the six boundary cases and 27 public SQLite, arena,
+retention and codec cases on its committed base. Both Cargo commands exited
+zero. The private verification wrapper had an incorrect public count of 25; an
+independent source-name and raw-output audit establishes all 27 without
+rerunning them. The original erroneous receipt is retained.
+
+Reproduce the focused boundary gate with `CARGO_BUILD_JOBS=1 cargo test --locked
+-p ash --lib provider_publication_tests -- --nocapture`; reproduce public
+compatibility with `CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test
+provider_sqlite_source --test provider_arena_source --test
+provider_retention_source --test foreign_codec_failures`. Evidence is retained
+under `context-extension-delivery-20261007/staged-borrow-preparation/`,
+including the original and corrected Common audit, and under the Arena evidence
+root as `staged-borrow-green-*`. Original-branch integration and its final
+workspace gate are recorded separately after they occur.
+
+The larger SQLite copying and persistence programs still exceed normal typing
+limits. Fusion's private definition-source checkpoint passed one reduced native
+forwarding case with four nonempty-capture source constructor hits; it does not
+eliminate nested producers or establish a cost win. Neither that checkpoint nor
+Arena's separate native preparation is included in this shared delivery.

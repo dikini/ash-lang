@@ -9,8 +9,9 @@ use crate::{
         ForeignRegistrations, ForeignResultRelation, ForeignTypeDeclaration, provider_manifest,
         runtime::{
             ExecutableForeignModule, ForeignAcquisition, ForeignCompletion, ForeignData,
-            ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignOperationKey,
-            ForeignRuntime, ForeignRuntimeBinding, NativeResourceOwner,
+            ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignInvocation,
+            ForeignOperationKey, ForeignRuntime, ForeignRuntimeBinding, NativeInvocationCommit,
+            NativeResourceOwner,
         },
     },
     module::{ForeignOperationRole, ForeignRegistrationId, ModuleRoots, load_module_graph},
@@ -408,6 +409,12 @@ fn checked_fixture(roots: &ModuleRoots) -> crate::core::ValidatedEffectProgram {
     crate::core::validate_effect_modules(unchecked, &sources, &relation).unwrap()
 }
 fn runtime(registrations: &ForeignRegistrations) -> (ForeignRuntime, Observations) {
+    runtime_with_binding(registrations, |binding| Box::new(binding))
+}
+fn runtime_with_binding(
+    registrations: &ForeignRegistrations,
+    executable: impl FnOnce(Binding) -> Box<dyn ExecutableForeignModule>,
+) -> (ForeignRuntime, Observations) {
     let trace = Rc::new(RefCell::new(Trace {
         events: Vec::with_capacity(8),
         live: [false; 2],
@@ -415,7 +422,7 @@ fn runtime(registrations: &ForeignRegistrations) -> (ForeignRuntime, Observation
     let original = Arc::clone(registrations.get("@foreign.retention").unwrap());
     let runtime = ForeignRuntime::new(vec![ForeignRuntimeBinding::new(
         Arc::clone(&original),
-        Box::new(Binding {
+        executable(Binding {
             manifest: original,
             trace: Rc::clone(&trace),
         }),
@@ -423,6 +430,558 @@ fn runtime(registrations: &ForeignRegistrations) -> (ForeignRuntime, Observation
     .unwrap();
     (runtime, trace)
 }
+
+#[derive(Debug)]
+struct PublicationBinding {
+    inner: Binding,
+    publications: Rc<RefCell<[usize; 2]>>,
+    pending: Rc<RefCell<PendingTrace>>,
+    invalid_result: bool,
+}
+#[derive(Debug, Default)]
+struct PendingTrace {
+    prepared: usize,
+    committed: usize,
+    abandoned: usize,
+}
+#[derive(Debug)]
+struct PendingPublication {
+    manifest: Arc<ForeignManifest>,
+    key: ForeignOperationKey,
+    // Nonowning identity only; neither this address nor the trace retains an owner.
+    owner_address: usize,
+    owner_trace: Observations,
+    publications: Rc<RefCell<[usize; 2]>>,
+    candidate: usize,
+    pending: Rc<RefCell<PendingTrace>>,
+    published: bool,
+}
+impl Drop for PendingPublication {
+    fn drop(&mut self) {
+        if !self.published {
+            self.pending.borrow_mut().abandoned += 1;
+        }
+    }
+}
+impl NativeInvocationCommit for PendingPublication {
+    fn commit(
+        mut self: Box<Self>,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<(), ForeignExecutionError> {
+        if key != self.key || !Arc::ptr_eq(module.manifest(), &self.manifest) {
+            return Err(ForeignExecutionError("wrong original staged invocation"));
+        }
+        let [state] = states else {
+            return Err(ForeignExecutionError("wrong staged owner count"));
+        };
+        let owner = state
+            .as_any()
+            .downcast_ref::<Owner>()
+            .ok_or(ForeignExecutionError("wrong staged owner type"))?;
+        if owner as *const Owner as usize != self.owner_address
+            || owner.family != key.effect
+            || !Rc::ptr_eq(&owner.trace, &self.owner_trace)
+            || owner.storage.is_none()
+            || !owner.trace.borrow().live[key.effect]
+        {
+            return Err(ForeignExecutionError("wrong or inactive staged owner"));
+        }
+        let mut publications = self.publications.borrow_mut();
+        let current = publications
+            .get_mut(key.effect)
+            .ok_or(ForeignExecutionError("wrong staged publication family"))?;
+        if *current != self.candidate {
+            return Err(ForeignExecutionError("stale staged publication candidate"));
+        }
+        let next = current
+            .checked_add(1)
+            .ok_or(ForeignExecutionError("staged publication count exhausted"))?;
+        let mut pending = self.pending.borrow_mut();
+        let committed = pending
+            .committed
+            .checked_add(1)
+            .ok_or(ForeignExecutionError("staged commit count exhausted"))?;
+        *current = next;
+        self.published = true;
+        pending.committed = committed;
+        Ok(())
+    }
+}
+impl ExecutableForeignModule for PublicationBinding {
+    fn preflight(&self, module: &ForeignModuleFact) -> Result<(), ForeignExecutionError> {
+        self.inner.preflight(module)
+    }
+    fn acquire(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignAcquisition, ForeignExecutionError> {
+        self.inner.acquire(key, module, input, states)
+    }
+    fn invoke(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignData, ForeignExecutionError> {
+        let output = self.inner.invoke(key, module, input, states)?;
+        // The current immediate API publishes before evaluator result admission.
+        self.publications.borrow_mut()[key.effect] += 1;
+        if self.invalid_result {
+            ForeignData::new(vec![ForeignDataNode::Boolean(false)], 0)
+        } else {
+            Ok(output)
+        }
+    }
+    fn prepare_invoke(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        let original_output = self.inner.invoke(key, module, input, states)?;
+        let owner = self.inner.owner(states, key.effect);
+        let output = if self.invalid_result {
+            ForeignData::new(vec![ForeignDataNode::Boolean(false)], 0)?
+        } else {
+            original_output
+        };
+        self.pending.borrow_mut().prepared += 1;
+        Ok(ForeignInvocation::Prepared {
+            output,
+            commit: Box::new(PendingPublication {
+                manifest: Arc::clone(&self.inner.manifest),
+                key,
+                owner_address: owner as *const Owner as usize,
+                owner_trace: Rc::clone(&owner.trace),
+                publications: Rc::clone(&self.publications),
+                candidate: self.publications.borrow()[key.effect],
+                pending: Rc::clone(&self.pending),
+                published: false,
+            }),
+        })
+    }
+    fn finish(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        owner: &mut dyn NativeResourceOwner,
+        context: ForeignFinishContext,
+    ) -> Result<ForeignCompletion, ForeignExecutionError> {
+        self.inner.finish(key, module, owner, context)
+    }
+}
+
+// Intentionally omits prepare_invoke so the real default preserves old effects.
+#[derive(Debug)]
+struct LegacyPublicationBinding(PublicationBinding);
+impl ExecutableForeignModule for LegacyPublicationBinding {
+    fn preflight(&self, module: &ForeignModuleFact) -> Result<(), ForeignExecutionError> {
+        self.0.preflight(module)
+    }
+    fn acquire(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignAcquisition, ForeignExecutionError> {
+        self.0.acquire(key, module, input, states)
+    }
+    fn invoke(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignData, ForeignExecutionError> {
+        self.0.invoke(key, module, input, states)
+    }
+    fn finish(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        owner: &mut dyn NativeResourceOwner,
+        context: ForeignFinishContext,
+    ) -> Result<ForeignCompletion, ForeignExecutionError> {
+        self.0.finish(key, module, owner, context)
+    }
+}
+
+#[test]
+fn staged_borrow_result_type_refusal_precedes_native_publication() {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+        Box::new(PublicationBinding {
+            inner,
+            publications: Rc::clone(&publications),
+            pending: Rc::clone(&pending),
+            invalid_result: true,
+        })
+    });
+    let mut machine = Machine::new_effect(&program);
+    machine.foreign_runtime = Some(&mut host);
+    assert!(matches!(machine.run(), Err(RuntimeFailure::ForeignBinding)));
+    assert_eq!(
+        native.borrow().events,
+        vec![Event::Acquired(0), Event::Borrowed(0)],
+        "the checked source reaches the native read before result type rejection"
+    );
+    assert_eq!(
+        *publications.borrow(),
+        [0, 0],
+        "rejecting Bool for the registered Int result must not publish native state"
+    );
+    assert_eq!(pending.borrow().prepared, 1);
+    assert_eq!(pending.borrow().committed, 0);
+    assert_eq!(pending.borrow().abandoned, 1);
+}
+
+#[test]
+fn staged_borrow_valid_results_publish_once_per_native_call() {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+        Box::new(PublicationBinding {
+            inner,
+            publications: Rc::clone(&publications),
+            pending: Rc::clone(&pending),
+            invalid_result: false,
+        })
+    });
+    let mut machine = Machine::new_effect(&program);
+    machine.foreign_runtime = Some(&mut host);
+    let completed = machine.run().unwrap();
+    assert_eq!(
+        completed.value.to_string(),
+        "Completed(Completed(42, Closed), Closed)"
+    );
+    assert_eq!(*publications.borrow(), [1, 1]);
+    assert_eq!(host.retained_owner_count(), 0);
+    assert_eq!(native.borrow().live, [false; 2]);
+    assert_eq!(pending.borrow().prepared, 2);
+    assert_eq!(pending.borrow().committed, 2);
+    assert_eq!(pending.borrow().abandoned, 0);
+}
+
+#[test]
+fn staged_borrow_legacy_immediate_result_refusal_preserves_existing_publication() {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+        Box::new(LegacyPublicationBinding(PublicationBinding {
+            inner,
+            publications: Rc::clone(&publications),
+            pending: Rc::clone(&pending),
+            invalid_result: true,
+        }))
+    });
+    let mut machine = Machine::new_effect(&program);
+    machine.foreign_runtime = Some(&mut host);
+    assert!(matches!(machine.run(), Err(RuntimeFailure::ForeignBinding)));
+    assert_eq!(
+        native.borrow().events,
+        vec![Event::Acquired(0), Event::Borrowed(0)]
+    );
+    assert_eq!(*publications.borrow(), [1, 0]);
+    assert_eq!(pending.borrow().prepared, 0);
+    assert_eq!(pending.borrow().committed, 0);
+    assert_eq!(pending.borrow().abandoned, 0);
+}
+
+#[test]
+fn staged_borrow_pending_drop_and_foreign_or_stale_commit_do_not_publish() {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    let original = Arc::clone(registrations.get("@foreign.retention").unwrap());
+    let module = program
+        .registry()
+        .foreign_modules()
+        .find(|module| Arc::ptr_eq(module.manifest(), &original))
+        .unwrap();
+    let foreign_module = program
+        .registry()
+        .foreign_modules()
+        .find(|module| !Arc::ptr_eq(module.manifest(), &original))
+        .unwrap();
+    let (_, native) = runtime(&registrations);
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let binding = PublicationBinding {
+        inner: Binding {
+            manifest: Arc::clone(&original),
+            trace: Rc::clone(&native),
+        },
+        publications: Rc::clone(&publications),
+        pending: Rc::clone(&pending),
+        invalid_result: false,
+    };
+    let acquisition_key = ForeignOperationKey {
+        effect: 0,
+        operation: 0,
+    };
+    let read_key = ForeignOperationKey {
+        effect: 0,
+        operation: 1,
+    };
+    let input = ForeignData::new(
+        vec![ForeignDataNode::Integer(crate::integer::Integer::from_i64(
+            20,
+        ))],
+        0,
+    )
+    .unwrap();
+    let ForeignAcquisition::Acquired(owner) = binding
+        .acquire(acquisition_key, module, &input, &[])
+        .unwrap()
+    else {
+        panic!("the real acquisition supplies the unique owner")
+    };
+    let state_input = ForeignData::new(vec![ForeignDataNode::State(0)], 0).unwrap();
+    let states = [owner.as_ref()];
+    let prepare = || {
+        let ForeignInvocation::Prepared { commit, .. } = binding
+            .prepare_invoke(read_key, module, &state_input, &states)
+            .unwrap()
+        else {
+            panic!("this binding stages each borrowed invocation")
+        };
+        commit
+    };
+    drop(prepare());
+    assert_eq!(*publications.borrow(), [0, 0]);
+    assert_eq!(pending.borrow().abandoned, 1);
+    assert!(prepare().commit(read_key, foreign_module, &states).is_err());
+    assert!(prepare().commit(acquisition_key, module, &states).is_err());
+
+    let (_, foreign_trace) = runtime(&registrations);
+    let foreign_binding = Binding {
+        manifest: original,
+        trace: Rc::clone(&foreign_trace),
+    };
+    let ForeignAcquisition::Acquired(foreign_owner) = foreign_binding
+        .acquire(acquisition_key, module, &input, &[])
+        .unwrap()
+    else {
+        panic!("a separate acquisition supplies a genuinely different unique owner")
+    };
+    assert!(
+        prepare()
+            .commit(read_key, module, &[foreign_owner.as_ref()])
+            .is_err()
+    );
+    assert_eq!(*publications.borrow(), [0, 0]);
+    assert_eq!(pending.borrow().committed, 0);
+    assert_eq!(pending.borrow().abandoned, 4);
+
+    let first = prepare();
+    let stale = prepare();
+    first.commit(read_key, module, &states).unwrap();
+    assert_eq!(*publications.borrow(), [1, 0]);
+    assert!(stale.commit(read_key, module, &states).is_err());
+    assert_eq!(*publications.borrow(), [1, 0]);
+    assert_eq!(pending.borrow().prepared, 6);
+    assert_eq!(pending.borrow().committed, 1);
+    assert_eq!(pending.borrow().abandoned, 5);
+    drop(owner);
+    drop(foreign_owner);
+    assert_eq!(native.borrow().live, [false; 2]);
+    assert_eq!(foreign_trace.borrow().live, [false; 2]);
+}
+
+#[test]
+fn staged_borrow_decode_work_refusal_drops_pending_before_native_publication() {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    let original = registrations.get("@foreign.retention").unwrap();
+    let native = program
+        .registry()
+        .foreign_modules()
+        .find(|module| Arc::ptr_eq(module.manifest(), original))
+        .unwrap();
+    let parent_read = native
+        .operations
+        .iter()
+        .find(|operation| {
+            operation.id.owner() == native.effects[0]
+                && operation.role == ForeignOperationRole::Borrow
+        })
+        .unwrap()
+        .id;
+    let mut pending_nodes = vec![program.root()];
+    let mut seen = std::collections::HashSet::new();
+    let mut parent_operand = None;
+    let mut child_scope = None;
+    while let Some(node) = pending_nodes.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        let expression = program.node(node).unwrap();
+        match &expression.kind {
+            EffectExprKind::Operation(EffectOperation::Request(request))
+                if request.operation() == parent_read =>
+            {
+                let operand = request.operand();
+                assert!(matches!(
+                    &program.node(operand).unwrap().kind,
+                    EffectExprKind::Pure(PureExprKind::Variable(_))
+                ));
+                assert!(parent_operand.replace(operand).is_none());
+            }
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                if scope.descriptor.native_effect().effect() == native.effects[1] =>
+            {
+                assert!(child_scope.replace(node).is_none());
+            }
+            _ => {}
+        }
+        pending_nodes
+            .extend((0..expression.kind.child_count()).filter_map(|i| expression.kind.child_at(i)));
+    }
+    let parent_operand = parent_operand.expect("one authenticated parent native-read operand");
+    let child_scope = child_scope.expect("one checked child provider scope");
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let (mut measured_host, measured_native) = runtime_with_binding(&registrations, |inner| {
+        Box::new(PublicationBinding {
+            inner,
+            publications: Rc::clone(&publications),
+            pending: Rc::clone(&pending),
+            invalid_result: false,
+        })
+    });
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut measured = Machine::new_effect(&program);
+    measured.foreign_runtime = Some(&mut measured_host);
+    measured.work_trace = Some(Arc::clone(&observed));
+    let completed = measured.run().unwrap();
+    assert_eq!(completed.registration_acquisitions, 0);
+    assert_eq!(
+        completed.value.to_string(),
+        "Completed(Completed(42, Closed), Closed)"
+    );
+    assert_eq!(*publications.borrow(), [1, 1]);
+    assert_eq!(measured_native.borrow().live, [false; 2]);
+    let trace = observed.lock().unwrap();
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|(node, _)| *node == parent_operand)
+            .count(),
+        1
+    );
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|(node, _)| *node == child_scope)
+            .count(),
+        1
+    );
+    let operand_index = trace
+        .iter()
+        .position(|(node, _)| *node == parent_operand)
+        .unwrap();
+    assert_eq!(trace[operand_index + 1].0, child_scope);
+    // No registration acquisition or intervening Evaluate node charges this
+    // ordinary return/resume/bind path. The final decode clone of Int20 is the
+    // last charge before the unique child scope's measured entry.
+    let clone_charge =
+        usize::try_from(crate::integer::Integer::from_i64(20).magnitude_byte_length())
+            .unwrap()
+            .max(1);
+    assert_eq!(clone_charge, 1);
+    let cut = trace[operand_index + 1]
+        .1
+        .checked_sub(clone_charge)
+        .unwrap();
+    drop(trace);
+    for prefill in [0, 7] {
+        let publications = Rc::new(RefCell::new([0; 2]));
+        let pending = Rc::new(RefCell::new(PendingTrace::default()));
+        let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+            Box::new(PublicationBinding {
+                inner,
+                publications: Rc::clone(&publications),
+                pending: Rc::clone(&pending),
+                invalid_result: false,
+            })
+        });
+        let rejected_trace = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut rejected = Machine::new_effect(&program);
+        rejected.foreign_runtime = Some(&mut host);
+        rejected.work_trace = Some(Arc::clone(&rejected_trace));
+        rejected.instantiation_work = TypeWorkBudget::with_limit(cut + prefill);
+        rejected.instantiation_work.charge(prefill).unwrap();
+        let RuntimeFailure::Report(report) = rejected.run().unwrap_err() else {
+            panic!("the exact final decode clone must refuse work admission")
+        };
+        let details = report.primary.resource().unwrap();
+        assert_eq!(details.cause, ResourceFailureCause::WorkBudgetExhausted);
+        assert_eq!(details.phase, RuntimePhase::Access);
+        assert_eq!(details.resource, RuntimeResource::WorkUnits);
+        assert_eq!((details.requested, details.available), (Some(1), Some(0)));
+        assert!(report.teardown.is_none());
+        assert_eq!(report.cleanup, CleanupStatus::Complete);
+        assert!(
+            !rejected_trace
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(node, _)| *node == child_scope)
+        );
+        assert_eq!(
+            native.borrow().events,
+            vec![Event::Acquired(0), Event::Borrowed(0)],
+            "the parent native read ran, but the child acquisition never began"
+        );
+        assert_eq!(*publications.borrow(), [0, 0]);
+        assert_eq!(pending.borrow().prepared, 1);
+        assert_eq!(pending.borrow().committed, 0);
+        assert_eq!(pending.borrow().abandoned, 1);
+        assert_eq!(host.retained_owner_count(), 1);
+        drop(host);
+        assert_eq!(native.borrow().live, [false; 2]);
+    }
+}
+
 #[test]
 fn terminal_acquisition_publication_refusal_destroys_unpublished_child_before_outer_host_teardown()
 {
