@@ -2948,6 +2948,59 @@ impl<'s, 'g> QueuedEvaluation<'s, 'g> {
     }
 }
 
+// This short loan contains precisely the mutable fields of original atom().
+// The edge-cursor table is absent, so propagation cannot invalidate its loan.
+struct AtomStore<'s> {
+    slots: &'s mut Vec<Slot>,
+    atom_pairs: &'s mut HashSet<(usize, Atom)>,
+    pending: &'s mut VecDeque<usize>,
+    revision: &'s mut usize,
+}
+
+impl AtomStore<'_> {
+    fn atom(
+        &mut self,
+        slot: usize,
+        atom: Atom,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // Slot identity includes its exact expression/context; Atom retains
+        // its variant and original code/creation coordinates. The ordered Vec
+        // remains the sole propagation source, while this set tests membership.
+        charge(budget, 1)?;
+        let pair = (slot, atom);
+        if self.atom_pairs.contains(&pair) {
+            return Ok(());
+        }
+        charge(budget, 2)?;
+        self.atom_pairs
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.slots[slot]
+            .atoms
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        let reader_count = self.slots[slot].readers.len();
+        // Prepay the actual ordered notification walk and reserve its maximum
+        // possible queue growth. No fallible operation follows publication.
+        charge(budget, reader_count)?;
+        self.pending
+            .try_reserve(reader_count)
+            .map_err(|_| Failure::Resource)?;
+        self.atom_pairs.insert(pair);
+        self.slots[slot].atoms.push(atom);
+        *self.revision += 1;
+        for index in 0..reader_count {
+            let reader = self.slots[slot].readers[index];
+            if !self.slots[reader].queued {
+                self.pending.push_back(reader);
+                self.slots[reader].queued = true;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct Analysis<'a> {
     graph: &'a Graph,
     evidence_ports: HashMap<usize, Vec<usize>>,
@@ -3859,40 +3912,13 @@ impl<'a> Analysis<'a> {
         atom: Atom,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
-        // Slot identity includes its exact expression/context; Atom retains
-        // its variant and original code/creation coordinates. The ordered Vec
-        // remains the sole propagation source, while this set tests membership.
-        charge(budget, 1)?;
-        let pair = (slot, atom);
-        if self.atom_pairs.contains(&pair) {
-            return Ok(());
+        AtomStore {
+            slots: &mut self.slots,
+            atom_pairs: &mut self.atom_pairs,
+            pending: &mut self.pending,
+            revision: &mut self.revision,
         }
-        charge(budget, 2)?;
-        self.atom_pairs
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        self.slots[slot]
-            .atoms
-            .try_reserve(1)
-            .map_err(|_| Failure::Resource)?;
-        let reader_count = self.slots[slot].readers.len();
-        // Prepay the actual ordered notification walk and reserve its maximum
-        // possible queue growth. No fallible operation follows publication.
-        charge(budget, reader_count)?;
-        self.pending
-            .try_reserve(reader_count)
-            .map_err(|_| Failure::Resource)?;
-        self.atom_pairs.insert(pair);
-        self.slots[slot].atoms.push(atom);
-        self.revision += 1;
-        for index in 0..reader_count {
-            let reader = self.slots[slot].readers[index];
-            if !self.slots[reader].queued {
-                self.pending.push_back(reader);
-                self.slots[reader].queued = true;
-            }
-        }
-        Ok(())
+        .atom(slot, atom, budget)
     }
 
     fn edge(
@@ -4016,7 +4042,9 @@ impl<'a> Analysis<'a> {
                 charge(budget, 1)?;
                 let source = self.slots[slot].edges[edge_index];
                 let pair = (slot, source);
-                let delivered = *self.edge_pairs.get(&pair).ok_or(Failure::Invalid)?;
+                // One exact entry loan proves the final publication coordinate.
+                let cursor = self.edge_pairs.get_mut(&pair).ok_or(Failure::Invalid)?;
+                let delivered = *cursor;
                 let end = self.slots[source].atoms.len();
                 let unread = self.slots[source]
                     .atoms
@@ -4025,19 +4053,25 @@ impl<'a> Analysis<'a> {
                 if unread.is_empty() {
                     continue;
                 }
-                // Prepay the existing-entry lookup and scalar cursor update.
-                // Advance only after every original atom transfer succeeds;
-                // a refused query is discarded as before.
-                charge(budget, 2)?;
+                // The retained exact entry loan removes the second table lookup.
+                // Prepay its scalar write, then advance only after every original
+                // atom transfer succeeds; refusal retains the old cursor.
+                charge(budget, 1)?;
                 // A distinct source cannot change during atom(target). For a
                 // self-edge each source atom already belongs to that same target,
                 // so atom() only tests existing membership. Keep the original end
                 // and finish the complete ordered suffix before committing it.
+                let mut atoms = AtomStore {
+                    slots: &mut self.slots,
+                    atom_pairs: &mut self.atom_pairs,
+                    pending: &mut self.pending,
+                    revision: &mut self.revision,
+                };
                 for atom_index in delivered..end {
-                    let atom = self.slots[source].atoms[atom_index];
-                    self.atom(slot, atom, budget)?;
+                    let atom = atoms.slots[source].atoms[atom_index];
+                    atoms.atom(slot, atom, budget)?;
                 }
-                *self.edge_pairs.get_mut(&pair).ok_or(Failure::Invalid)? = end;
+                *cursor = end;
             }
             if complete_setup {
                 // The existing Slot admission already reserves this scalar
@@ -4707,6 +4741,73 @@ mod tests {
             evidence: Vec::new(),
             evidence_index: Vec::new(),
         }
+    }
+
+    #[test]
+    fn productive_cursor_loans_keep_partial_refusal_self_edges_and_late_original_owners() {
+        let original = graph(vec![Expr::Slot, Expr::Slot, Expr::Slot]);
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&original, &mut work).unwrap();
+            for expression in 0..3 {
+                analysis.slot(expression, 0, &mut work).unwrap();
+            }
+            for atom in [Atom::Resource(9, 0), Atom::Resource(10, 0), Atom::Unknown] {
+                analysis.atom(1, atom, &mut work).unwrap();
+            }
+            analysis.atom(2, Atom::Resource(11, 0), &mut work).unwrap();
+            for source in [1, 2, 0] {
+                analysis.edge(0, source, &mut work).unwrap();
+            }
+            analysis
+        };
+        let expected = vec![
+            Atom::Resource(9, 0),
+            Atom::Resource(10, 0),
+            Atom::Unknown,
+            Atom::Resource(11, 0),
+        ];
+        let mut exact = TypeWorkBudget::unbounded();
+        let mut complete = setup();
+        complete.close(&mut exact).unwrap();
+        assert_eq!(complete.slots[0].atoms, expected);
+        assert_eq!(complete.edge_pairs[&(0, 1)], 3);
+        assert_eq!(complete.edge_pairs[&(0, 2)], 1);
+        assert_eq!(complete.edge_pairs[&(0, 0)], 4);
+        for cut in 0..exact.used() {
+            let mut refused = setup();
+            assert!(matches!(
+                refused.close(&mut TypeWorkBudget::with_limit(cut)),
+                Err(Failure::Resource)
+            ));
+            let cursor = refused.edge_pairs[&(0, 1)];
+            assert!(cursor == 0 || cursor == 3, "no partial suffix is complete");
+            if cursor == 3 {
+                assert!(
+                    expected[..3]
+                        .iter()
+                        .all(|atom| refused.slots[0].atoms.contains(atom))
+                );
+            }
+            assert!(refused.edge_pairs[&(0, 2)] <= 1);
+            assert!(refused.edge_pairs[&(0, 0)] <= refused.slots[0].atoms.len());
+            // A refused analysis is discarded; an exact retry starts fresh.
+            // The partial cursor assertions above still cover every failure cut.
+            let mut retry = setup();
+            retry
+                .close(&mut TypeWorkBudget::with_limit(exact.used()))
+                .unwrap();
+            assert_eq!(retry.slots[0].atoms, expected);
+            assert_eq!(retry.edge_pairs, complete.edge_pairs);
+        }
+        let later = Atom::Resource(9, 1);
+        complete
+            .atom(1, later, &mut TypeWorkBudget::unbounded())
+            .unwrap();
+        complete.close(&mut TypeWorkBudget::unbounded()).unwrap();
+        assert_eq!(complete.slots[0].atoms, [expected, vec![later]].concat());
+        assert_eq!(complete.edge_pairs[&(0, 1)], 4);
+        assert_eq!(complete.edge_pairs[&(0, 0)], 5);
     }
 
     fn immutable_setup_graph() -> Graph {
@@ -6160,9 +6261,9 @@ mod tests {
             assert_eq!(analysis.edge_pairs.get(&(target, source)), Some(&3));
             Ok::<(), Failure>(())
         };
-        // enqueue + pop + one original edge visit + cursor lookup/update +
+        // enqueue + pop + one original edge visit + cursor write under its loan +
         // three original ordered atom publications; no retained snapshots.
-        const EXACT: usize = 1 + 1 + 1 + 2 + 3 * 3;
+        const EXACT: usize = 1 + 1 + 1 + 1 + 3 * 3;
         for prefix in [0, 9] {
             for allowance in 0..EXACT {
                 let mut short = TypeWorkBudget::with_limit(prefix + allowance);
