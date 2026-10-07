@@ -256,7 +256,7 @@ CARGO_BUILD_JOBS=1 cargo test --locked -p ash-foreign-adapter --test sqlite_text
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_copying --test provider_sqlite_sessions
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_control
 CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_source
-cargo xtask verify
+CARGO_BUILD_JOBS=1 cargo xtask verify
 ```
 
 The session host test must compare the complete body/completion envelope,
