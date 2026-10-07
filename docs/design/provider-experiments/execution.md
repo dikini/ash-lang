@@ -8,6 +8,66 @@
 
 ## Current SQLite checkpoint
 
+The verified dependency-progress and queued-output delivery is imported through
+unsigned merge `018d1b768d5495e43c26c3ff30572bcfb8369896`. Its parents preserve SQLite checkpoint
+`9af85b1ed381b05c4fa240eca566421f1deb942b` and integration tracking tip
+`43248835a99b2d6061fafd41742778b62085eac0`. Common's full, unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` passes at code merge `7bd1c1cf`,
+including 1,633 parent library cases and all 43 architecture cases. The exact
+capture-value source matches the independently reviewed delivery. The
+execution-journal conflict is reconciled additively, preserving both histories
+and all forty-three other SQLite-owned files.
+
+Four fresh exact original program tests run with one Cargo job, one test thread,
+no diagnostic observers and unchanged normal limits. Captured resume passes.
+Copying, bound-NUL copying and transaction/reopen persistence each fail with
+`Typing(Internal(TypeResourceExhausted))`. Every case is attempted. The
+uninstrumented failures identify the typing boundary; they add no finer trace
+of the exhaustion site. Programs, assertions and validation remain unchanged.
+
+The [paired diagnostic evidence](#dependency-progress-and-queued-output-delivery-2026-10-07)
+completes these original programs under a temporary diagnostic ceiling. The
+combined candidate measures Source/Core totals of 1,328,833/951,107 for copying,
+1,328,833/951,102 for bound NUL and 621,950/1,658,241 for persistence. Captured
+resume fits each normal allowance. Remaining deficits are:
+
+| Program | Source checking | Independent Core | Final elaboration |
+| --- | ---: | ---: | ---: |
+| Copying | 1,001,153 | 0 | 0 |
+| Bound-NUL copying | 1,001,153 | 0 | 0 |
+| Persistence | 294,270 | 675,201 | 49,261–49,298 in traced repeats |
+| Captured resume | 0 | 0 | 0 |
+
+These are separate budget owners. Ordinary Type work remains limited to 327,680,
+independent Core to 983,040 and parser depth to 128. Persistence's repeated
+unchanged-code elaboration totals include 376,978 and 376,941. Their 37-unit
+difference matches the traced binder-map capacity charge exactly; other scan
+work is unchanged. The earlier untraced 40-unit outlier remains unexplained.
+These small variations do not close any remaining deficit.
+
+The fresh normal-program run returns at 2026-10-07T07:50:55.352839+00:00 after 69.293 seconds.
+All Common, integration and SQLite guards, heads, statuses and indexes remain
+unchanged during these runs, and no engine remains. Exact commands and raw
+logs are in `sqlite-2026-10-05/handoff/verified259-import-normal-programs/`
+under the external evidence archive; the import receipt and refreshed coherent
+forty-four-file snapshot are adjacent. A subsequent tracking-only commit records
+this checkpoint.
+
+Independent static reviews find no actionable native adapter, source library or
+fixture contract defect. They add no execution evidence for the three failing
+larger programs. Common owns further shared compiler, Core, capture, provider
+checking and generic runtime changes. SQLite owns the adapter, Ash library,
+fixtures, examples and documentation. Further generic requirements go to Common.
+
+Further verified Common deliveries are merged into SQLite before rerunning the
+original programs. Cargo windows and integration operations remain serial.
+Combined review and an unsigned preserving SQLite merge back into
+`codex/provider-experiments` follow normal acceptance of the larger programs.
+This is DN-0036 experiment tracking with no independent semantic or
+architectural authority.
+
+## Previous SQLite checkpoint before the receipt 259 import
+
 The verified cursor and method-accounting delivery is imported through unsigned
 merge `4c20333dc8d41a378ce701c85b6620524101c97c`. Its parents preserve SQLite
 checkpoint `d2f14fd882774316b76c9d70ed1babf5ffb5f033` and integration tip
