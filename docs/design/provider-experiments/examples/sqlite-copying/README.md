@@ -1,242 +1,108 @@
-# Ash foreign adapter experiment
+# SQLite copying source examples
 
-`ash-foreign-adapter` supplies the native SQLite copying baseline and physical
-arena backing for the bounded
-[provider experiment](../docs/design/provider-experiments/plan.md). It is a
-member of Ash's root Cargo workspace and uses the root lockfile. Its safe Rust
-API and tests describe native behavior, not Ash language semantics or verified
-source contracts.
+These modules are an experimental handoff under
+[DN-0036](../../../DN-0036-foreign-library-and-memory-provider-experiments.md).
+Their candidate types, literals, resources, and foreign operations do not define
+current Ash semantics or a production foreign ABI. Verification and current
+limitations belong to the [execution record](../../execution.md#current-sqlite-checkpoint).
 
-The adapter opens connections, prepares one SQL statement, binds integers,
-copies BLOB and TEXT inputs with `SQLITE_TRANSIENT`, binds null, steps, copies
-admitted columns, resets, clears bindings, finalizes, and closes. Integers cross the
-boundary as `sqlite3_int64`; the evaluator must check Ash integer range before
-calling the adapter. Returned columns distinguish integers, empty/nonempty
-BLOBs, valid UTF-8 TEXT, and SQL null. Floating-point columns remain outside the
-selected profile. SQL, paths, and bound TEXT reject embedded NUL; returned TEXT
-uses its explicit byte length and preserves embedded NUL. Malformed UTF-8 returns
-a conversion error without replacement. Empty TEXT and BLOB remain distinct
-from null. Non-whitespace input after the first SQL statement is rejected, including a
-trailing SQL comment. Empty SQL returns no statement.
+The modules are copied from the
+[public source fixtures](../../../../../tests/fixtures/provider-experiments/sqlite-copying/).
+`session-entry.ash` replaces the host-injected path with `"session.sqlite3"`.
+`text-entry.ash` is the directly verified Unicode TEXT bind/copy example.
+`copying-entry.ash` exercises copied Unicode text, arbitrary blobs, nulls, empty
+values, and text containing NUL. `rows.ash` supplies an ordinary generic row
+collector. `session-entry.ash` uses ordinary SQL for transactions, reuses an
+INSERT statement, and reads the file through a fresh connection. The entries
+preserve source lifecycle reports.
 
-`Connection::diagnostic(&self)` returns a copied `Diagnostic { code, message }`
-for the live connection's current status, including `SQLITE_OK`. This datum
-does not assert that an operation failed; `NativeError` continues to describe
-an actual failed operation. A closed owner returns `Error::Protocol` before
-any native query. Reading the diagnostic neither consumes the connection nor
-changes the statement protocol, and its copied message remains usable after
-later native calls and connection completion.
+`control-resume.ash` captures the live statement and connection, resumes, and
+copies a Unicode TEXT/BLOB row without reacquisition. `control-discard.ash`
+discards that owned continuation: source cleanup queries the outer connection
+before statement finalization and connection close. Both control entries pass
+the public driver and actual host after the verified shared repair import.
+The current seventeen-case public suite passes fourteen cases, including the
+original reset/clear program, and retains three compiler work failures: copying,
+its NUL-input alternative and persistence. The text, resume and discard hosts
+return their required values, authenticated finalize/close reports and zero
+retained owners. The three larger hosts stop before any native observation.
+The manifest and control fixtures are committed in the SQLite worktree; the
+complete SQLite delivery remains pending those larger programs.
+The [current execution record](../../execution.md#current-sqlite-checkpoint)
+records the verified import, passing assertions and remaining requirements.
 
-`open_observed_with_diagnostic_limit` admits an explicit diagnostic payload bound.
-The ordinary native API retains its unlimited policy; the selected Ash binding
-supplies the existing type-work bound. Copying probes at most that payload plus
-one terminator byte, then checks UTF-8 and reserves independent storage. Refusal
-reports a proven minimum length rather than truncating or scanning the complete
-oversized message. `Error::DiagnosticCopyRefused` retains the exact operation,
-native status and separate work/storage/encoding cause. Finalization remains
-consuming and refused close remains retaining even if its report cannot be
-copied. The binding maps known copy work/storage refusal to terminal generic
-failure rather than a source allocation error. Native NOMEM remains a native
-status when the complete source report is admitted; actual NOMEM is not claimed
-observed. Native diagnostic admission precedes the separate cumulative Ash codec
-and envelope checks, which may still refuse publication.
+Earlier receipts 136 and 150 record fourteen passes and the same three failures
+on their own source snapshots. Receipt 154 traces those earlier compiler inputs;
+its internal boundaries are historical evidence, not a fresh trace of the
+imported repair. The [earlier compiler evidence](../../execution.md#explicit-callable-metadata-presence)
+retains that account.
 
-## Native inputs
+The [host example](../../../../../foreign-adapter/examples/sqlite_session.rs)
+registers the authenticated provider and SQLite manifests and executable binding.
+It prints source values and types, native observations, copy sizes, and retained
+owner counts. The commands below are reproduction inputs, not verification
+claims. Required larger programs currently exhaust the compiler work budget
+before native execution. The [measurement account](../../execution.md#sqlite-compiler-work-measurement-receipt-109)
+distinguishes the Rust harness, compiled Ash inputs and charged analysis work.
 
-The experiment currently supports `x86_64-unknown-linux-gnu` only. The build
-requires `cc`, `ar`, and the installed `libsqlite3.so.0` soname. It does not
-require a development package or pkg-config and makes no global setup changes.
-
-The vendored `sqlite3.h` comes from the official
-[SQLite 3.46.1 amalgamation](https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip).
-The archive SHA-256 is
-`77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784`;
-the header SHA-256 is
-`89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515`.
-The included upstream header retains SQLite's public-domain notice.
-
-`build.rs` compiles the small C shim against that header. C assignments check
-the selected function signatures; static assertions check the header version,
-8-bit bytes, 32-bit C `int`, 64-bit `sqlite3_int64`, and 64-bit pointers. The C
-shim supplies the `SQLITE_TRANSIENT` sentinel without manufacturing an invalid
-Rust function pointer. Rust links the shim statically and the installed SQLite
-soname dynamically. No SQLite source implementation is bundled.
-
-[environment.json](../docs/design/provider-experiments/environment.json)
-records the runtime library checksum, reported source identifier, compile
-options, compiler configuration, ABI observations, and checks. The selected
-distribution runtime reports 3.46.1 with an `alt1` source identifier; it is not
-claimed identical to official upstream source. The native smoke test checks
-the actual linked runtime and `SELECT ?1` with integer `42`. The recorded
-inputs establish only this target's tested native baseline.
-
-## Ownership and unsafe audit
-
-Connections and statements are unique public Rust owners. Native pointers are
-private and neither owner is cloneable. Statements keep an internal `Rc`
-connection guard so the evaluator can store owned Rust values without a
-self-referential borrow. That guard permits safe native cleanup when Rust
-owners drop out of order. It does not authorize extending an Ash resource
-scope, escaping a source state token, or transporting an arena owner. Ash
-checking and the evaluator own those obligations. The adapter API is
-single-threaded and exposes no callbacks, native views, retained input, or
-raw-pointer access.
-
-Open guards any returned partial connection before publishing it. Preparation
-guards any returned statement before reporting failure, checking unused SQL,
-or publishing it. Diagnostics are copied while the connection is live. Native
-initialization is host-wide and idempotent; the adapter never shuts down shared
-SQLite state.
-
-The pinned header and [SQLite error API](https://www.sqlite.org/c3ref/errcode.html)
-identify `sqlite3_errcode` and `sqlite3_errmsg` as error-code-preserving queries.
-The adapter validates the live pointer, samples the code, and copies the message
-without an intervening SQLite call. SQLite owns the original message buffer and
-may overwrite or deallocate it on later calls. This uses the existing ABI;
-the single-threaded owners expose no competing native access during the copy.
-
-`Statement::finalize(self)` consumes the statement even when SQLite reports its
-previous execution error. `Connection::close(&mut self)` calls actual
-`sqlite3_close`: a refusal retains the callable connection. It never substitutes
-`sqlite3_close_v2`. Drop finalizes an unfinished statement once; the last
-internal connection guard then attempts close. Explicit completion returns its
-report, while Drop records its native outcome through the observation set.
-`FinishDispatched` separately records admitted executable-binding finish calls;
-native guard destruction emits no such event. Dispatch alone does not prove
-successful native completion or source report publication.
-
-Binding requires a prepared/reset statement. Stepping a completed or failed
-statement requires explicit reset; the wrapper does not rely on SQLite's
-automatic reset behavior. Column access admits row state and C-integer indices
-before native queries. It uses `column_count` to check bounds before column
-type/value access. Integer, TEXT and BLOB extraction checks the requested
-storage kind before conversion, acquiring the column's value pointer/length, or
-copying. Bounded column copying checks the native byte length before fallible
-reservation. A null BLOB pointer is accepted as empty only after checking
-native exhaustion and zero length. Output bytes copy before any invalidating
-operation; the adapter API never exposes a native view.
-
-Fallible output and diagnostic payload reservations do not contain all host
-allocation failures. Input `CString` construction, `Rc` guards, observation
-storage and snapshots, and final shared `Arc` publication retain existing host
-termination assumptions. Copy counters measure independent byte copying; a
-copied invalid UTF-8 payload can still be rejected before source publication.
-
-Every unsafe block identifies its pointer, lifetime, state, or buffer
-invariant. Input lengths and indices use checked C integer conversions. The Ash
-binding preserves arbitrary source integers until this checked boundary. A
-representable positive parameter index outside the prepared statement is an
-actual SQLite `SQLITE_RANGE` failure; it is not rejected by a parameter-count
-shortcut. The pinned header checks the C ABI declarations, but neither
-signatures nor passing tests prove arbitrary foreign implementations obey
-SQLite's documented contract.
-
-## Physical arena backing
-
-The [arena module](src/arena.rs) owns one fixed-capacity, 64-byte-aligned payload
-block and a bounded object-record table. Publication checks size, alignment,
-padding and record capacity before initialization. Failed or panicking Rust
-initialization rolls back the unpublished reservation; existing objects retain
-their bytes and identities. Published objects never move and remain immutable.
-Zero-sized objects still consume distinct record slots.
-
-Allocation keys contain non-owning owner/object identities. Reading checks
-the owner, published object, expected layout tag and record extent before
-returning a Rust slice borrowed from the arena. Keys and layout tags do not
-authenticate an Ash type, resource lifetime or access capability. The initializer
-is a Rust host callback, not a callback into Ash or a foreign callback interface.
-
-Publication commits when the Rust initializer returns success. A later Ash
-bridge must prepare its result and authority before that point; the native API
-offers no post-publication rollback. Checked Ash layouts, encoding, dependencies
-and source completion remain unimplemented. Native identity exhaustion also
-needs the selected terminal bridge treatment rather than a source allocation
-refusal.
-
-Logical counters include padding and published object slots. Physical counters
-report requested backing and table layouts plus inline owner metadata; they do
-not measure allocator overhead, codec scratch space or resident memory. Private
-tests inject partial allocation failures and exhausted identities. Actual host
-allocation exhaustion was not observed.
-
-## Observations and checks
-
-`Observations` records actual status-returning native calls and native data
-queries separately. It also records successful copied TEXT/BLOB input/output bytes.
-Diagnostic reads record `errcode` and `errmsg` as queries, including an OK status.
-It does not measure SQLite's internal allocation events, peak memory, diagnostic
-copies, or Rust metadata costs. Native `NOMEM` and BLOB conversion allocation
-failure were not observed. Private test-only publication and native-result
-injection are labeled separately from actual native failure. Suspect null BLOB
-and zero byte-length results check `sqlite3_errcode` before another SQLite API;
-injected result tests exercise that classification without forcing exhaustion.
-
-Run from the root workspace:
-
-```bash
-CARGO_BUILD_JOBS=1 cargo test --locked -p ash-foreign-adapter
-CARGO_BUILD_JOBS=1 cargo clippy --locked -p ash-foreign-adapter --all-targets --no-deps -- -D warnings
-CARGO_BUILD_JOBS=1 RUSTDOCFLAGS="-D warnings" cargo doc --locked -p ash-foreign-adapter --no-deps
-```
-
-The initial SQLite recheck after shared integration passes 59 tests: forty unit
-cases, nine physical-arena integration cases and ten copying-TEXT cases. Scoped
-Clippy and formatting pass at that checkpoint. The later finish-observer recheck
-passes the short public TEXT program and adapter rustdoc with warnings denied.
-A fresh complete adapter run with the observer passes all sixty cases: forty
-unit cases, nine arena cases, and eleven copying-TEXT cases, with no skips. The observer also passes scoped all-target Clippy
-with warnings denied; inherited dependency warnings remain visible. The
-[native recheck](../docs/design/provider-experiments/execution.md#complete-native-recheck-with-the-finish-observer)
-records this checkpoint; the
-[source-program comparison](../docs/design/provider-experiments/execution.md#sqlite-import-and-diagnostic-source-reductions-2026-10-05)
-records the remaining compiler work failures. The SQLite
-tests cover the native portions of S-01 through S-05: independent
-connections and activations, partial failed open, malformed and empty SQL,
-copying bytes, empty/null distinctions, row protocol checks, integer bounds,
-reset/clear behavior, consumed finalization errors, retained BUSY refusal,
-statement-before-connection cleanup, and temporary-file persistence. Temporary
-fixtures exclusively own their directories. Two publication tests and two
-result-classification tests use explicit injection after actual native success.
-Diagnostic tests cover an actual preparation failure, successful status, copies
-after later native calls and close, preservation of live owners, and closed-owner
-rejection without native queries. Bounded diagnostic tests cover oversized
-report refusal before decoding/reservation, exact Unicode and empty admission,
-partial acquisition cleanup, retained close refusal and consumed finalization.
-The public TEXT tests cover Unicode, embedded NUL output, invalid UTF-8, distinct
-null/empty values, copy limits, checked input/protocol errors and persistence.
-
-The arena tests cover actual backing allocation, alignment and capacity,
-non-owning keys, failed initialization rollback, stable publication and cleanup.
-They include seven private invariant/fault tests and nine
-[public API tests](tests/arena.rs). They do not establish an Ash-source M case.
-
-These tests supplement the required source-to-Core-to-native suites. They do
-not establish source rejection, public provider authenticity, imported helper
-contracts, captured control, arena access, or retained storage behavior. Those
-remain in the existing compiler/runtime and later experiment slices.
-
-## Ordinary Ash host example
-
-The [Ash fixtures](../tests/fixtures/provider-experiments/sqlite-copying/) and
-[public-driver harness](../tests/support/sqlite_copying.rs) supply the source
-library, authenticated manifests and executable binding. SQLite also supplies a
-[blueprint](../docs/design/provider-experiments/blueprint.md) and
-[reusable source package](../docs/design/provider-experiments/examples/sqlite-copying/README.md). The short Unicode
-TEXT entry executes through the host example:
+From the repository root, build with Cargo in the workspace to select its
+pinned Rust toolchain. Then run the binary against a private copy of the package:
 
 ```sh
-CARGO_BUILD_JOBS=1 cargo run --locked -p ash-foreign-adapter --example sqlite_session -- tests/fixtures/provider-experiments/sqlite-copying/text-entry.ash
+(
+    ash_repo=$(pwd -P)
+    CARGO_BUILD_JOBS=1 cargo build --locked -p ash-foreign-adapter --example sqlite_session || exit
+    sqlite_example_dir=$(mktemp -d) || exit
+    cp "$ash_repo"/docs/design/provider-experiments/examples/sqlite-copying/*.ash "$sqlite_example_dir"/ || exit
+    printf 'Example directory: %s\n' "$sqlite_example_dir"
+    cd "$sqlite_example_dir" || exit
+    sqlite_example_status=0
+    for sqlite_entry in text-entry.ash copying-entry.ash session-entry.ash control-resume.ash control-discard.ash
+    do
+        "$ash_repo/target/debug/examples/sqlite_session" "$sqlite_example_dir/$sqlite_entry" || sqlite_example_status=1
+    done
+    exit "$sqlite_example_status"
+)
 ```
 
-It returns complete closed statement/connection reports, observes thirteen
-copied input and output bytes, and leaves no retained native owner. The packaged
-resume and discard entries also pass through the actual host. Shared compiler
-cost support is verified and imported into the SQLite worktree. Its latest
-checks pass all sixty adapter tests and fourteen of seventeen public SQLite
-cases. Copying, the NUL-input alternative and file-session persistence still
-stop with TypeResourceExhausted before native observations; further shared
-compiler repair remains required. The
-[current execution record](../docs/design/provider-experiments/execution.md#current-sqlite-checkpoint)
-records the checked import and remaining failures. Earlier receipts 136 and
-150 retain their own source evidence. This does not establish a completed
-SQLite delivery or current Ash language semantics.
+The recipe runs every entry and returns a failing status if any entry fails.
+The larger copying and session entries currently make that aggregate status fail.
+
+The session database belongs to the printed temporary directory. Use a fresh directory
+for another session run because the entry creates its table. Keep the directory
+while reviewing its source, observations, and database, then remove it when done.
+
+Check the value and observations together. A successful host exit means the
+driver returned a value; that value can still contain a source `Err`,
+`NotAcquired`, or completion error. Each program's required outcome is:
+
+| Entry | Required source result and observations |
+| --- | --- |
+| `text-entry.ash` | Nested closed reports containing `Ok(TextValue("héllo 世界"))`; one open/prepare/finalize/close and 13 copied bytes in each direction. |
+| `copying-entry.ash` | `CopySession` retains both closed reports and all eight copied fields, including empty values, nulls and embedded-NUL output; copied input sizes `[13, 2, 0, 0]` and output sizes `[13, 2, 0, 0, 11]`. |
+| `session-entry.ash` | `SessionReports` retains every statement and connection report; both queries return the same three rows. Two opens/closes and six prepares/finalizes, with the first close before the second open. |
+| `control-resume.ash` | Nested closed reports containing `Ok(CopiedRow(TextValue("héllo 世界"), BlobBytes([0, 255])))`; one open/prepare/finalize/close, two steps and output copy sizes `[13, 2]`. |
+| `control-discard.ash` | `42`, with no abandoned body or scope result; one `errcode` and `errmsg` query before finalization, one finalize before close, no step or row copy. |
+
+`FinishDispatched` must precede each corresponding native finalize/close call.
+It distinguishes admitted binding finish from native guard destruction. The
+native status code and source completion report establish separate outcomes;
+dispatch alone does not establish successful completion. The printed retained
+owner count is sampled before runtime destruction. These entries require zero
+retained owners and no `close_v2` call, but those observations alone do not prove
+that source finishers ran.
+
+The public tests compare the required source results and native observations:
+
+```sh
+CARGO_BUILD_JOBS=1 cargo test --locked -p ash --test provider_sqlite_copying --test provider_sqlite_sessions --test provider_sqlite_control
+```
+
+Run these checks in the SQLite worktree in the agreed Cargo window. Shared
+support is verified and imported, and the String/TEXT manifest, native adapter
+and source fixtures are paired. The latest checks still report fourteen passes
+and three compiler work failures; the full copying, bound-NUL and persistence
+programs must pass before SQLite delivery integrates. Profile 109 and receipt
+154 describe earlier compiler inputs. Keep the remaining failures in the
+execution record until the complete programs pass. The commands and required
+outcomes above do not establish a completed SQLite delivery.
