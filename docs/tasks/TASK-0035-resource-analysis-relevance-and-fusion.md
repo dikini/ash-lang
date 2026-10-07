@@ -24,8 +24,9 @@ structural-product producer in `capture.rs`, abstract-capture replay and the
 collector portions of Function, TypeAbstraction and clause construction in
 `capture/value.rs`. Existing metadata preparation stays unchanged. Contexts,
 slots, queues, runtime transfers, control and validation remain Common-owned.
-The starting checkpoint is historical; rebase on the next verified integration
-checkpoint before compiled comparison.
+The starting checkpoint is historical. Later verified checkpoints were imported
+without rewriting history. Private candidates target Common's selected source;
+Common controls their application, compiled comparison and restoration.
 
 ## Work
 
@@ -99,6 +100,41 @@ does not count as successful merely because it has a plausible law.
   proof must retain both projections or prove redundancy under required queries.
   This is source-only law evidence, not a new executed Ash failure or an
   implementation handoff. Shared Rust and engines remain Common-owned.
+- The retained F-2 and later Common deliveries passed the full integrated gate.
+  The current verified Original tracking tip is `266415c1`; the six stages pass
+  3,364 tests with no failures or ignored cases. The three larger SQLite normal
+  acceptance cases remain open. Repository verification and those acceptance
+  requirements are separate observations.
+- A later call-staging trial preserved native results but increased work in
+  several separate Source/Core ledgers. Common rejected it and restored its
+  selected source exactly. The next experiment therefore targets contextual
+  constructor expansion rather than another fixed-preparation cache.
+- Private source now connects deferred-frame ordinary calls, Evidence,
+  owner queries, provider checks and frozen value views. Original typed
+  producers retain complete ordered Forall kinds and Type/Row arguments;
+  scalar environment IDs preserve those terms separately from owner atoms.
+  The immutable `connected-inactive-candidate-v1` packet under the task's
+  private `f1-root-correspondence` evidence directory preserves Common's selected
+  ContextPaths source and includes exact forward/inverse patches for seven
+  files. Common owns its overlay and coordinated compilation.
+- Evidence source review established a necessary distinction: the original
+  analysis unions all same-function creation feeds at one original specialized
+  context before provider validation. The candidate keeps one stable frame for
+  that context and separate type origins. One synthetic correspondence
+  regression covers complementary empty captures, later reader notification,
+  and rejection controls for another context or a raw creation. It is not an
+  admitted typed Ash witness. Common's coordinated overlay passed
+  `cargo check --locked -p ash --all-targets` and that exact regression
+  (one passed, no failures or ignored cases). Common then restored all seven
+  paths and verified all three worktree guards. This establishes compilation
+  and the synthetic correspondence case, not native or performance acceptance.
+- This packet is inactive preparation. It has no production admission
+  constructor or prepared Evidence insertion. The normalized local recipe
+  compiler, complete occurrence/writer qualification, lexical and imported
+  type-environment association, folded-context handling and new Evidence
+  specialization in frozen queries remain implementation obligations before
+  enabling source families. The static recipe inventory grants no publication
+  authority. No asymptotic improvement is claimed from this source handoff.
 
 ## Verification
 
@@ -107,6 +143,12 @@ provenance. Source-only law checks do not substitute for compiled evidence.
 For implementations, use the plan's original end-to-end programs, connected
 integration and demonstrated-bug regressions. Complete the normal integrated
 repository gate before retaining a shared implementation delivery.
+
+The inactive candidate's compile, regression and restoration receipt is
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/requested-root-metadata-160/author/fusion-inactive-compile-feedback-v2/return.json`.
+The latest integrated gate is recorded under
+`/home/dikini/.codex/ash-provider-evidence/common-resource-support-2026-10-04/context-extension-delivery-20261007/`.
+These local receipts are implementation evidence and grant no semantic authority.
 
 ## Discoveries
 
