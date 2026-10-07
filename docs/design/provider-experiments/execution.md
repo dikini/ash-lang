@@ -8,6 +8,62 @@
 
 ## Current SQLite checkpoint
 
+The verified completed-phase compiler delivery is imported through unsigned merge
+`4bdef441113ed523389471c60df72a134a6844bf`. Its parents preserve SQLite checkpoint
+`e11e71afdd3e547512250bf46c944974ba989a02` and integration tip
+`c0ba1ad7f3be63420da760a6aad9a0b1b8c6cfd7`. Common's full, unfiltered
+`CARGO_BUILD_JOBS=1 cargo xtask verify` passes at code merge `f0a8e59a`,
+including 1,638 Ash library cases and all 43 architecture cases. The incoming
+capture and substitution source matches the independently reviewed delivery.
+The later integration delta contains only three tracking documents. The merged
+execution and authoring journals preserve both histories. All forty-two other
+SQLite-owned files, including the one-job blueprint correction, remain exact.
+
+Four fresh exact original program tests run with one Cargo job, one test thread,
+no diagnostic observers and unchanged normal limits. Captured resume passes.
+Copying, bound-NUL copying and transaction/reopen persistence each fail with
+`Typing(Internal(TypeResourceExhausted))`. Every case is attempted once. The
+uninstrumented failures identify the typing boundary; they add no finer trace
+of the exhaustion site. Programs, assertions and validation remain unchanged.
+
+The [completed-phase diagnostic evidence](#completed-phase-control-preparation-2026-10-07-receipt-284)
+completes the original programs under temporary diagnostic ceilings. Source/Core
+totals are 1,213,365/905,455 for copying, 1,213,365/905,450 for bound NUL and
+598,259/1,610,536 for persistence. Remaining deficits are:
+
+| Program | Source checking | Independent Core | Final elaboration |
+| --- | ---: | ---: | ---: |
+| Copying | 885,685 | 0 | 0 |
+| Bound-NUL copying | 885,685 | 0 | 0 |
+| Persistence | 270,579 | 627,496 | 48,961 |
+| Captured resume | 0 | 0 | 0 |
+
+These are separate budget owners. Ordinary Type work remains limited to 327,680,
+independent Core to 983,040 and parser depth to 128. Final elaboration is
+376,641 in this matched persistence run. Raw endpoints remain unadjusted;
+no capacity debit is discounted. The later private context-reuse candidate is
+outside this imported delivery and requires its own verified integration.
+
+The fresh normal-program run returns at 2026-10-07T15:10:21.777752+00:00 after 68.724 seconds.
+All Common, integration and SQLite guards, heads, statuses and indexes remain
+unchanged during these runs, and no engine remains. Exact commands and raw
+logs are in `sqlite-2026-10-05/handoff/verified284-import-normal-programs/`
+under the external evidence archive; the import receipt and refreshed coherent
+forty-four-file snapshot are adjacent. A subsequent tracking-only commit records
+this checkpoint.
+
+Common owns further shared compiler, Core, capture, provider checking and generic
+runtime changes. SQLite owns the adapter, Ash library, fixtures, examples and
+documentation. Further generic requirements go to Common. Cargo windows and
+integration operations remain serial. Additional verified Common deliveries
+are imported before rerunning the original programs. Combined review and an
+unsigned preserving SQLite merge back into `codex/provider-experiments` follow
+normal acceptance of the larger programs. This is DN-0036 experiment tracking
+with no independent semantic or architectural authority.
+
+
+## Previous SQLite checkpoint before the receipt 284 import
+
 The verified compiler-preparation delivery is imported through unsigned merge
 `db238ab01bc42b6a03e18c9822f29568b971e49b`. Its parents preserve SQLite checkpoint
 `2e59ed54c9521a3ac30b4745ae6aea552067409b` and integration tip
