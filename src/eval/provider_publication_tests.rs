@@ -10,8 +10,8 @@ use crate::{
         runtime::{
             ExecutableForeignModule, ForeignAcquisition, ForeignCompletion, ForeignData,
             ForeignDataNode, ForeignExecutionError, ForeignFinishContext, ForeignInvocation,
-            ForeignOperationKey, ForeignRuntime, ForeignRuntimeBinding, NativeInvocationCommit,
-            NativeResourceOwner,
+            ForeignInvocationWork, ForeignOperationKey, ForeignRuntime, ForeignRuntimeBinding,
+            NativeInvocationCommit, NativeResourceOwner,
         },
     },
     module::{ForeignOperationRole, ForeignRegistrationId, ModuleRoots, load_module_graph},
@@ -617,6 +617,265 @@ impl ExecutableForeignModule for LegacyPublicationBinding {
     ) -> Result<ForeignCompletion, ForeignExecutionError> {
         self.0.finish(key, module, owner, context)
     }
+}
+
+#[derive(Debug)]
+struct MeteredPublicationBinding {
+    inner: PublicationBinding,
+    charges: [usize; 2],
+    swallow_failure: bool,
+    attempts: Rc<RefCell<Vec<usize>>>,
+}
+impl ExecutableForeignModule for MeteredPublicationBinding {
+    fn preflight(&self, module: &ForeignModuleFact) -> Result<(), ForeignExecutionError> {
+        self.inner.preflight(module)
+    }
+    fn acquire(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignAcquisition, ForeignExecutionError> {
+        self.inner.acquire(key, module, input, states)
+    }
+    fn invoke(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignData, ForeignExecutionError> {
+        self.inner.invoke(key, module, input, states)
+    }
+    fn prepare_invoke(
+        &self,
+        _key: ForeignOperationKey,
+        _module: &ForeignModuleFact,
+        _input: &ForeignData,
+        _states: &[&dyn NativeResourceOwner],
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        panic!("the evaluator must use the metered preparation entry")
+    }
+    fn prepare_invoke_with_work(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+        work: &mut ForeignInvocationWork<'_>,
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        for units in self.charges {
+            self.attempts.borrow_mut().push(units);
+            if let Err(error) = work.charge(units) {
+                if !self.swallow_failure {
+                    return Err(error);
+                }
+                // A smaller later debit must not erase the first refusal or
+                // authorize the pending publication returned below.
+                self.attempts.borrow_mut().push(1);
+                assert!(work.charge(1).is_err());
+                break;
+            }
+        }
+        self.inner.prepare_invoke(key, module, input, states)
+    }
+    fn finish(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        owner: &mut dyn NativeResourceOwner,
+        context: ForeignFinishContext,
+    ) -> Result<ForeignCompletion, ForeignExecutionError> {
+        self.inner.finish(key, module, owner, context)
+    }
+}
+
+fn publication_fixture() -> (ForeignRegistrations, crate::core::ValidatedEffectProgram) {
+    let registrations = ForeignRegistrations::new([
+        provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+        manifest(),
+    ])
+    .unwrap();
+    let roots = ModuleRoots::empty().with_foreign_registrations(registrations.clone());
+    let program = checked_fixture(&roots);
+    (registrations, program)
+}
+
+#[test]
+fn staged_borrow_metered_preparation_adds_only_adapter_charges() {
+    let (registrations, program) = publication_fixture();
+    let mut outcomes = Vec::new();
+    for metered in [false, true] {
+        let publications = Rc::new(RefCell::new([0; 2]));
+        let pending = Rc::new(RefCell::new(PendingTrace::default()));
+        let attempts = Rc::new(RefCell::new(Vec::new()));
+        let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+            let binding = PublicationBinding {
+                inner,
+                publications: Rc::clone(&publications),
+                pending: Rc::clone(&pending),
+                invalid_result: false,
+            };
+            if metered {
+                Box::new(MeteredPublicationBinding {
+                    inner: binding,
+                    charges: [3, 5],
+                    swallow_failure: false,
+                    attempts: Rc::clone(&attempts),
+                })
+            } else {
+                // This adapter overrides only the old prepare entry. The new
+                // default must preserve its two calls without a work tariff.
+                Box::new(binding)
+            }
+        });
+        let mut machine = Machine::new_effect(&program);
+        machine.foreign_runtime = Some(&mut host);
+        let completed = machine.run().unwrap();
+        assert_eq!(
+            completed.value.to_string(),
+            "Completed(Completed(42, Closed), Closed)"
+        );
+        assert_eq!(*publications.borrow(), [1, 1]);
+        assert_eq!(pending.borrow().prepared, 2);
+        assert_eq!(pending.borrow().committed, 2);
+        assert_eq!(pending.borrow().abandoned, 0);
+        assert_eq!(host.retained_owner_count(), 0);
+        assert_eq!(native.borrow().live, [false; 2]);
+        if metered {
+            assert_eq!(*attempts.borrow(), vec![3, 5, 3, 5]);
+        } else {
+            assert!(attempts.borrow().is_empty());
+        }
+        outcomes.push((completed.runtime_work, native.borrow().events.clone()));
+    }
+    assert_eq!(outcomes[1].0, outcomes[0].0 + 16);
+    assert_eq!(outcomes[1].1, outcomes[0].1);
+    assert_eq!(
+        outcomes[0]
+            .1
+            .iter()
+            .filter(|event| matches!(event, Event::Borrowed(_)))
+            .count(),
+        2,
+        "the default invokes old preparation exactly once per native read"
+    );
+}
+
+fn assert_metered_preparation_refusal(swallow_failure: bool) {
+    let (registrations, program) = publication_fixture();
+    let (mut measured_host, _) = runtime(&registrations);
+    let mut measured = Machine::new_effect(&program);
+    measured.foreign_runtime = Some(&mut measured_host);
+    let completed = measured.run().unwrap();
+    // Measure the actual preparation entry without reproducing the evaluator's
+    // codec or owner-lookup costs. This budget reaches the first read, where an
+    // intentionally impossible second debit reports the remaining work.
+    let probe_limit = completed.runtime_work.checked_add(64).unwrap();
+    let publications = Rc::new(RefCell::new([0; 2]));
+    let pending = Rc::new(RefCell::new(PendingTrace::default()));
+    let attempts = Rc::new(RefCell::new(Vec::new()));
+    let (mut probe_host, probe_native) = runtime_with_binding(&registrations, |inner| {
+        Box::new(MeteredPublicationBinding {
+            inner: PublicationBinding {
+                inner,
+                publications: Rc::clone(&publications),
+                pending: Rc::clone(&pending),
+                invalid_result: false,
+            },
+            charges: [3, usize::MAX],
+            swallow_failure: false,
+            attempts: Rc::clone(&attempts),
+        })
+    });
+    let mut probe = Machine::new_effect(&program);
+    probe.foreign_runtime = Some(&mut probe_host);
+    probe.instantiation_work = TypeWorkBudget::with_limit(probe_limit);
+    let RuntimeFailure::Report(report) = probe.run().unwrap_err() else {
+        panic!("the measuring debit must retain a resource report")
+    };
+    let details = report.primary.resource().unwrap();
+    assert_eq!(details.cause, ResourceFailureCause::WorkBudgetExhausted);
+    assert_eq!(details.phase, RuntimePhase::Access);
+    assert_eq!(details.resource, RuntimeResource::WorkUnits);
+    assert_eq!(details.requested, Some(usize::MAX));
+    let available = details.available.unwrap();
+    assert!(available > 0);
+    let after_first_charge = probe_limit.checked_sub(available).unwrap();
+    assert_eq!(*attempts.borrow(), vec![3, usize::MAX]);
+    assert_eq!(*publications.borrow(), [0, 0]);
+    assert_eq!(pending.borrow().prepared, 0);
+    assert_eq!(probe_host.retained_owner_count(), 1);
+    drop(probe_host);
+    assert_eq!(probe_native.borrow().live, [false; 2]);
+
+    for prefill in [0, 7] {
+        let publications = Rc::new(RefCell::new([0; 2]));
+        let pending = Rc::new(RefCell::new(PendingTrace::default()));
+        let attempts = Rc::new(RefCell::new(Vec::new()));
+        let (mut host, native) = runtime_with_binding(&registrations, |inner| {
+            Box::new(MeteredPublicationBinding {
+                inner: PublicationBinding {
+                    inner,
+                    publications: Rc::clone(&publications),
+                    pending: Rc::clone(&pending),
+                    invalid_result: false,
+                },
+                charges: [3, 5],
+                swallow_failure,
+                attempts: Rc::clone(&attempts),
+            })
+        });
+        let mut rejected = Machine::new_effect(&program);
+        rejected.foreign_runtime = Some(&mut host);
+        rejected.instantiation_work = TypeWorkBudget::with_limit(after_first_charge + 2 + prefill);
+        rejected.instantiation_work.charge(prefill).unwrap();
+        let RuntimeFailure::Report(report) = rejected.run().unwrap_err() else {
+            panic!("adapter work refusal must retain its measured resource report")
+        };
+        let details = report.primary.resource().unwrap();
+        assert_eq!(details.cause, ResourceFailureCause::WorkBudgetExhausted);
+        assert_eq!(details.phase, RuntimePhase::Access);
+        assert_eq!(details.resource, RuntimeResource::WorkUnits);
+        assert_eq!((details.requested, details.available), (Some(5), Some(2)));
+        assert!(report.teardown.is_none());
+        assert_eq!(report.cleanup, CleanupStatus::Complete);
+        assert_eq!(*publications.borrow(), [0, 0]);
+        let prepared = usize::from(swallow_failure);
+        assert_eq!(pending.borrow().prepared, prepared);
+        assert_eq!(pending.borrow().committed, 0);
+        assert_eq!(pending.borrow().abandoned, prepared);
+        let expected_events = if swallow_failure {
+            assert_eq!(*attempts.borrow(), vec![3, 5, 1]);
+            vec![Event::Acquired(0), Event::Borrowed(0)]
+        } else {
+            assert_eq!(*attempts.borrow(), vec![3, 5]);
+            vec![Event::Acquired(0)]
+        };
+        assert_eq!(native.borrow().events, expected_events);
+        assert_eq!(host.retained_owner_count(), 1);
+        assert_eq!(native.borrow().live, [true, false]);
+        drop(host);
+        assert_eq!(native.borrow().live, [false; 2]);
+        let mut destroyed_events = expected_events;
+        destroyed_events.push(Event::Destroyed(0));
+        assert_eq!(
+            native.borrow().events,
+            destroyed_events,
+            "neither pending preparation nor its drop keeps the native owner alive"
+        );
+    }
+}
+
+#[test]
+fn staged_borrow_preparation_work_refusal_precedes_native_publication() {
+    assert_metered_preparation_refusal(false);
+}
+
+#[test]
+fn staged_borrow_swallowed_work_refusal_abandons_prepared_publication() {
+    assert_metered_preparation_refusal(true);
 }
 
 #[test]
