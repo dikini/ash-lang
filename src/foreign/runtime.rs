@@ -231,6 +231,38 @@ pub struct ForeignOperationKey {
     pub operation: usize,
 }
 
+/// Borrowed work charging for one synchronous foreign invocation.
+///
+/// Adapters must charge before performing the corresponding work and propagate
+/// refusal without native publication. This capability exposes no ledger reads,
+/// reset, storage, or cloning. It cannot escape the synchronous invocation into
+/// a pending commit; all commit work must be charged during preparation.
+pub struct ForeignInvocationWork<'a> {
+    charge: &'a mut dyn FnMut(usize) -> Result<(), ForeignExecutionError>,
+}
+
+impl<'a> ForeignInvocationWork<'a> {
+    pub(crate) fn new(
+        charge: &'a mut dyn FnMut(usize) -> Result<(), ForeignExecutionError>,
+    ) -> Self {
+        Self { charge }
+    }
+
+    /// Charges units before the adapter performs the corresponding work.
+    ///
+    /// # Errors
+    /// Returns the evaluator's refusal without authorizing that work.
+    pub fn charge(&mut self, units: usize) -> Result<(), ForeignExecutionError> {
+        (self.charge)(units)
+    }
+}
+
+impl fmt::Debug for ForeignInvocationWork<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ForeignInvocationWork { .. }")
+    }
+}
+
 /// A synchronous native publication prepared by a trusted adapter.
 ///
 /// Pending state owns only unpublished scratch and candidate metadata. It must
@@ -320,6 +352,27 @@ pub trait ExecutableForeignModule: fmt::Debug {
     ) -> Result<ForeignInvocation, ForeignExecutionError> {
         self.invoke(key, module, input, states)
             .map(ForeignInvocation::Immediate)
+    }
+    /// Prepares a borrowed reply with synchronous evaluator work charging.
+    ///
+    /// An override must charge before conversion, traversal, copying, or other
+    /// bounded work, including work prepaid for its pending commit. The work
+    /// capability must not be retained in scratch or passed to a pending commit.
+    /// The default forwards to `prepare_invoke` exactly once without adding a
+    /// tariff, preserving existing immediate and prepared adapters.
+    ///
+    /// # Errors
+    /// Returns the original preparation or work refusal. A prepared path leaves
+    /// native publication unchanged on error or abandonment.
+    fn prepare_invoke_with_work(
+        &self,
+        key: ForeignOperationKey,
+        module: &ForeignModuleFact,
+        input: &ForeignData,
+        states: &[&dyn NativeResourceOwner],
+        _work: &mut ForeignInvocationWork<'_>,
+    ) -> Result<ForeignInvocation, ForeignExecutionError> {
+        self.prepare_invoke(key, module, input, states)
     }
     /// Completes this exact guard. Retention never substitutes another owner.
     /// An outer error is permitted only before the native ownership transition;

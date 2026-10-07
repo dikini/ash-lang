@@ -1318,10 +1318,39 @@ impl<'runtime> Machine<'runtime> {
                 let operation_key = binding
                     .operation_key(native, operation)
                     .map_err(|_| RuntimeFailure::ForeignBinding)?;
-                let invocation = binding
-                    .executable()
-                    .prepare_invoke(operation_key, native, &input, &views)
-                    .map_err(|error| foreign_failure(error, RuntimePhase::Access))?;
+                // Lend only a debit operation, never the ledger or an owner.
+                // Keep the first measured failure even if a binding ignores
+                // its charge result; a refused preparation cannot publish.
+                let mut preparation_failure = None;
+                let invocation = {
+                    let mut charge = |units| {
+                        if preparation_failure.is_some() {
+                            return Err(ForeignExecutionError::WORK_EXHAUSTED);
+                        }
+                        charge_effect_work(
+                            &mut self.instantiation_work,
+                            units,
+                            RuntimePhase::Access,
+                        )
+                        .map_err(|failure| {
+                            preparation_failure = Some(failure);
+                            ForeignExecutionError::WORK_EXHAUSTED
+                        })
+                    };
+                    let mut work = crate::foreign::runtime::ForeignInvocationWork::new(&mut charge);
+                    binding.executable().prepare_invoke_with_work(
+                        operation_key,
+                        native,
+                        &input,
+                        &views,
+                        &mut work,
+                    )
+                };
+                if let Some(failure) = preparation_failure {
+                    return Err(failure);
+                }
+                let invocation =
+                    invocation.map_err(|error| foreign_failure(error, RuntimePhase::Access))?;
                 let (output, pending) = match invocation {
                     ForeignInvocation::Immediate(output) => (output, None),
                     ForeignInvocation::Prepared { output, commit } => {
