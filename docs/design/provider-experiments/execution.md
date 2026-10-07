@@ -242,16 +242,30 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `6d089399cf3a6c8c7e3eed9cfb06f13cb636ce59`,
-merging common commit `cdf44d990a74225fb9d1214a809986809ac32d19` with an unsigned
-merge preserving both histories. Receipt 246 passes the complete unfiltered
+Latest integrated common code checkpoint is `7bd1c1cfbba01ae2d83a653e44903d745f040997`,
+merging Common commit `7693db41c8e2e9ddf7757f0d54d58578a00296ac` with an unsigned
+merge preserving both histories. Receipt 259 passes the complete unfiltered
 `CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
-original common deliveries and the subsequent verified shared reductions are
-merged into `codex/provider-experiments`; `main` is unchanged. The latest
-delivery borrows productive edge cursors and corrects binary method-lookup
-charges, with their exact integration-test mirror. Its integration evidence is recorded at the end of this file.
+original Common deliveries and subsequent verified shared reductions are merged
+into `codex/provider-experiments`; `main` is unchanged. The latest delivery
+consolidates dependency progress and queue-owned output links. Its evidence is
+recorded at the end of this file.
 
-The expanded SQLite manifest, adapter, source library and larger programs remain
+The expanded SQLite manifest, adapter, Ash library and larger programs remain
+preserved SQLite-owned work outside this delivery. Resume executes under normal
+limits. Copying, bound-NUL and persistence complete their original assertions
+under temporary diagnostic ceilings but still exceed normal source limits.
+Copying and bound-NUL fit independent Core; persistence retains source, final
+elaboration and Core deficits. Exact completed costs and capacity variation
+appear in the dependency-progress entry below. Production work and depth limits
+remain unchanged. Further capture-cost attribution is investigation, not proof
+that larger quotas are necessary. Common coordinates shared ownership and
+serial engine windows with SQLite, arena and the separate proof workstream.
+
+
+## Previous Common checkpoint before the receipt 259 import
+
+The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
 limits. Copying, bound NUL and persistence complete their original assertions
 under the temporary diagnostic ceiling, but still exceed normal source-checking
@@ -6537,3 +6551,138 @@ from normal admission. Relation consolidation and borrowed frozen prefixes
 remain private investigation. This delivery supplies experimental DN-0036
 evidence; it changes no normative Ash rule and proves no whole-contract or
 intrinsic resource lower bound. The exclusions recorded above remain.
+
+
+### Dependency progress and queued output delivery (2026-10-07)
+
+This candidate joins exact dependency watch membership and linked-prefix progress
+in one analysis-local table. Private consuming states distinguish a vacant
+relation, reserved storage, an existing watch and a linked cursor. The original
+source-prefix range check admits the cursor; publication follows all original
+fallible storage and work admission. Exact expression/context identities, source
+atom order, reader order, frozen-target checks and success-only cursor updates
+remain. Focused analyses construct fresh relations. No live value, evidence,
+capture demand or completed source answer is cached.
+
+The existing queue-owned output-link policy also covers eight output edges in
+Project, Bind, Recursive, Match, Resource and Handler evaluation. Their original
+input/readiness observations remain; only the redundant output watch disappears
+where the same edge supplies that notification. Direct evaluation retains its
+observing policy. A Resource success-constructor body without that output edge
+remains observing. No new field, lookup or phase is added by this eight-site
+change. Native dispatch, library definitions and native ownership do not change.
+
+Paired receipts 251 and 255 execute copying, persistence, resume and bound-NUL
+through the public driver, including their actual native assertions. Temporary
+completion ceilings permit measurement of still-failing normal programs; they
+are removed after each run. Relative to the integrated cursor/method baseline,
+the selected source reports these completed costs:
+
+| Program | Source checking | Independent Effect Core |
+|---|---:|---:|
+| Copying | 1,328,833 | 951,107 |
+| Persistence | 621,950 | 1,658,241 |
+| Resume | 207,434 | 298,216 |
+| Bound-NUL | 1,328,833 | 951,102 |
+
+These are separate lexical ledgers, not a pooled allowance. Normal limits remain
+327,680 for the source ledger and 983,040 for independent Core, with unchanged
+depth limits. Copying and bound-NUL still exceed the source limit by 1,001,153;
+persistence exceeds source by 294,270 and Core by 675,201. Persistence's separate
+final-elaboration measurement is also above 327,680. Only resume has a fresh
+normal-limit execution in this comparison. Diagnostic completion is not normal
+admission, and no intrinsic lower bound is established.
+
+The relation-only comparison preserves completed operation counts. Its exact
+tariff delta is linked hits minus twice vacant links: one entry eliminates a
+second table operation on new links while successful occupied classifications
+remain charged. Existing exact laws retain their original growth threshold,
+with only the separately counted new phase-read units removed from that growth
+comparison; the complete measured total is also asserted. The queued output
+extension saves a further 908/1,891/252 source units and 2,678/4,167/582 Core units
+for copying/persistence/resume respectively. Bound-NUL has copying's same delta.
+Collection capacities and scalar layout sizes are metadata proxies, not measured
+allocator or peak-memory savings.
+
+Receipt 255's temporary Call observer preserves all six owner endpoints in all
+four paired cases. In copying's first, source-checking Analysis, it identifies 65,221 units of
+Call-input preparation and 838,859 units of close work outside Calls. These are nested/disjoint portions
+of that observation, not extra costs to add to a whole owner. A retained Call
+input phase is not selected: its storage and cold/access costs need evidence,
+and the measured preparation opportunity cannot cure the main deficit alone.
+
+Receipt 257 repeats unchanged persistence variants eight times each. All sixteen
+public/native executions pass under diagnostic ceilings. Source totals vary
+with the original enclosing-binder scan's capacity debit; the remaining scan
+work is constant. One unchanged output variant reports final elaboration
+376,941 instead of 376,978: its capacity debit is 299 instead of 336 and its scan
+work falls by the same 37 units. This demonstrates capacity-dependent variation
+in unchanged code. The earlier receipt 255 final-elaboration difference of 40
+units has no corresponding capacity trace and remains unproved for that exact
+run. It is preserved rather than silently assigned to the candidate. No capacity
+accounting or TypeContext representation change belongs to this delivery.
+
+This remains the bounded [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md)
+experiment. The changes establish tested
+finite cases and source invariants, not a formal proof of the complete resource
+contract or current Ash semantics. Existing foreign binding assumptions and
+independent Core authority remain; no new foreign ABI, library policy, allocation,
+borrowing or production architecture is accepted here.
+
+Connected normal verification 260 passes: sixteen public integration binaries
+(230 parent cases), the realistic SQLite resume case, 43 architecture cases,
+60 native cases, all-target checking, formatting, strict workspace/all-feature
+Clippy and warning-denied rustdoc. The 1,633 library cases passed on the identical
+candidate in receipt 256; receipt 260 authenticates and carries that raw result.
+Receipt 256 stopped because its harness miscounted nested test summaries, not
+because a library case failed. The corrected parser distinguishes child runs
+from their parent coverage and rejects every failed or ignored summary.
+
+All these checks use normal limits with no measurement observer. Full guards
+preserve unrelated Common, SQLite and Original sources, indexes and histories.
+Independent review authenticates the raw logs and the sole selected compiler
+change. The unsigned Original merge and full `cargo xtask verify` pass, as recorded below.
+
+
+### Integrated dependency progress and output links (2026-10-07, receipt 259)
+
+Unsigned Common commit `7693db41c8e2e9ddf7757f0d54d58578a00296ac` is integrated by
+unsigned merge `7bd1c1cfbba01ae2d83a653e44903d745f040997` into
+`codex/provider-experiments`. Its parents are original tip
+`5ccc2e245e74b074d25a06f4431d00dc971cfed5` and the Common commit; its tree
+matches the Common tree. This delivery changes only capture values and this
+execution record. All SQLite-owned source and unrelated Original drafts retain
+their working bytes, status and unstaged state.
+
+The unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` passes at the merge:
+formatting, metadata, all-target build, strict workspace/all-feature Clippy,
+all-target/all-feature tests and warning-denied rustdoc. The Ash library reports
+1,633 passes and architecture reports 43. All 117 raw summary blocks
+have zero failures and ignores; child reruns are included in that block count,
+not counted as unique tests. This gate covers integrated SQLite S-01, the arena
+lifecycle, owner rows, capture/resume/discard/completion, independent Core,
+modules, transforms and deep-input regressions. Expanded SQLite programs have
+the separate connected and diagnostic evidence above; they are not part of the
+Original tree's full test gate.
+
+Explicit return is `2026-10-07T07:43:40.006103+00:00`, after
+1080.103 seconds. Raw log SHA-256 is
+`47f968841fe3331ea3ba94ff155999c2559922aa35fb159d5dfc4ca049a27d27`
+in `relation-output-delivery-259/` under the Common evidence directory.
+Complete guards confirm preserved Common working bytes and empty index,
+unchanged SQLite worktree, and preserved unrelated Original bytes and empty
+index. No verification engine remains. Independent source, accounting,
+measurement, documentation and raw-log reviews accompany this delivery.
+
+Common retains shared compiler, Core, capture, provider-checking and generic
+runtime ownership and coordinates merges. SQLite retains its manifest, library,
+native adapter and executable evidence. The next agreed order is a separately
+bounded proof cleanup window, SQLite's preserving import and four normal
+programs, then Common's next capture-cost attribution. Arena's five parser and
+surface files remain its source-only writer slice; resolving and checking
+families require a separate complete handoff. No typed allocation, references,
+foreign callback ABI or new resource semantics belong to this delivery.
+
+The normal copying, bound-NUL and persistence deficits remain open. No quota or
+depth limit changes, intrinsic lower bound, full resource proof or production
+architecture acceptance follows from this experimental DN-0036 evidence.
