@@ -4927,3 +4927,31 @@ evidence for
 [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md), not new
 Ash semantics, a complete formal resource proof or accepted production
 architecture.
+
+
+### Integration receipt (2026-10-07)
+
+The pending integration status above is superseded by the actual return.
+Unsigned Common commit `70e97735b888bb1b907bf50307331ad1fce9435a` was integrated by the real unsigned
+Original merge `13d2b89ce97300ed31a3a9b050c6452868937d23`. Original `cargo xtask verify` ran with
+`CARGO_BUILD_JOBS=1` and normal policies and exited zero at 2026-10-07T12:29:36.015710+00:00
+after 1088.202 seconds. All six stages passed: formatting, metadata, build,
+strict Clippy, workspace tests and warning-denied rustdoc. The raw test log
+contains 108 unfiltered parent groups, 3,362 parent test passes and
+9 separately checked nested summaries, with zero failed or ignored tests.
+Ash library passes 1,636 cases and architecture passes 43.
+
+The log SHA-256 is `2675f62e0521968be4cca32bdc2b76b5c3ff357d138a959211f654527f974c2a`.
+The full return and independent raw/guard audit are retained in
+`preparation-delivery-282/` under the Common evidence directory. All three
+worktree guards preserve unrelated bytes, branches and indexes; the explicit
+return records no remaining engines.
+
+The separate unsigned Original merge `3d472b2f9cd34715f418cd26a4be54481a67583a` then integrated
+reviewed fusion documentation head `93b8628ba2424b6982222717623f067eb17dc718`.
+Its exact three-path delta contains no Rust changes, and Cargo was not repeated
+for that documentation-only merge. The guard transformations and unsigned
+parents are retained in `preparation-delivery-282/fusion-docs-integration/`.
+Production work and depth limits remain unchanged. The larger copying,
+persistence and bound-NUL cases still lack normal-budget completion; the
+completed diagnostic measurements above do not establish that completion.
