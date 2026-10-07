@@ -61,6 +61,77 @@ cannot substitute a source-produced permission for that independent derivation.
 
 ## Candidate equivalence laws
 
+### Bottoms, demand and Rust formulation
+
+Algebraic equational reasoning remains the derivation method. Use fission to
+expose typed stages and dependencies, and fusion to eliminate repeated work.
+Types, demand and behavior at bottom supply the laws' premises; then express
+the derived algorithm in Rust. Explicit deferred inputs, continuations or
+worklists can express the required demand in an eager language.
+
+The main semantic distinction is behavior at bottom, `⊥`: a computation
+that is undefined or does not terminate in the chosen semantic model. A rewrite
+can agree on all total results yet change which partial computations it demands.
+
+For example, in a lazy model choose `h`, `a` and `b` as constant-zero functions.
+The algebra equation `h . a = b . fmap h` holds, but a fold that must inspect its
+input satisfies:
+
+```text
+h (fold a ⊥) = 0
+fold b ⊥     = ⊥
+```
+
+The total finite-input induction below intentionally excludes this case. To
+extend a law to partial values, prove definedness as well as value equality and
+state its strictness/continuity conditions. For the usual fold-fusion theorem,
+strictness of `h` means `h ⊥ = ⊥`; Gibbons explicitly notes strictness conditions
+in [sections 2.5–2.6](https://www.cs.ox.ac.uk/jeremy.gibbons/publications/fission.pdf).
+Otherwise justify totality for the admitted inputs or derive a formulation that
+preserves the required demand without imposing that theorem unchanged.
+
+An explicit `Err`, an analysis `Unknown` or a not-yet-populated graph port is
+not automatically semantic bottom. The least fact in a dataflow lattice and
+nontermination are distinct unless a model explicitly relates them. Preserve
+returned errors and relevant panic/unwind observations separately.
+
+The equations below therefore need both a semantic argument and a Rust
+execution/cost argument for their chosen formulation. Rust
+evaluates ordinary call operands before entering the call, in source order;
+see the [Rust Reference](https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands).
+An eager recursive fold computes child results before the parent algebra can
+discard them. To avoid that work, test demand before descending or creating
+the context, using an explicit control path, worklist or deferred computation.
+
+Rust's [iterator adapters are lazy](https://doc.rust-lang.org/std/iter/index.html#laziness).
+`iter.map(g).map(f)` pulls through both adapters when consumed; it does not
+materialize two collections. In contrast, collecting the first map into a
+`Vec` completes that phase before a later consumer starts. Removing that
+collection interleaves producer and consumer actions and changes intermediate
+lifetimes. The fallible-map counterexample below concerns such a phase barrier,
+not a barrier inherent in chained iterator adapters.
+
+A direct Rust accumulator fold evaluates each update eagerly. Deferred fields
+or steps require an explicit representation. A directly recursive unfold that
+builds an owned tree similarly constructs that tree eagerly; streaming requires
+an iterator, worklist or other deferred representation. The finite total
+structural equalities below remain usable, but do not by themselves establish
+productivity, definedness on partial inputs or space behavior.
+
+For each rewrite, name the actual schedule and preserve required error,
+publication and destruction order, including relevant panic/unwind boundaries.
+Product fusion changes two complete concern passes into interleaved updates;
+deferred recipes may be needed to keep the original fallible phase. Account for
+moves, clones, allocations, retained borrows, accumulator/recipe storage and
+stack depth. Lower the mathematical recursion to the compiler's bounded
+iterative machinery where deep inputs require it.
+
+Neither an iterator nor an `Environment -> Summary` closure automatically
+memoizes results. Replaying it for each context can retain the original growing
+factor. Any sharing must be explicit and justified by the exact input-dependence
+proof. Do not count an already-streaming map chain as eliminated traversals or
+claim an asymptotic gain from removing a fixed number of materialized passes.
+
 ### Composing maps
 
 For total pure `g : A -> B` and `f : B -> C` over the same functor:

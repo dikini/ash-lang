@@ -86,6 +86,12 @@ does not count as successful merely because it has a plausible law.
   allows a proved correspondence of internal representations rather than
   requiring unchanged allocation ordinals; semantic identity and live queries
   remain obligations. Common owns the coordinated source study.
+- The user's Rust-eagerness constraint is explicit in the study and plan.
+  Mathematical fusion must also derive the actual demand/evaluation schedule,
+  phase ordering and ownership/storage costs; lazy iterator adapters do not
+  imply Haskell call-by-need sharing. Alternative formulations remain available.
+  The follow-up distinguishes bottom/definedness obligations from operational
+  cost and from explicit errors or incomplete analysis facts.
 
 ## Verification
 

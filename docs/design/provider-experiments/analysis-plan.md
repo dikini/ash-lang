@@ -97,6 +97,15 @@ family and before/after recurrence, including local summary/output costs.
 A second constant-factor pass fusion can be useful, but does not by itself
 establish the larger objective.
 
+Derive the actual Rust execution schedule as well as value equality. Distinguish
+materialized collection phases from lazy iterator adapters; put demand checks
+before eager child/context work. Include strict accumulator evaluation,
+fallible/publication/destruction order, ownership costs and bounded stack use.
+Deferred closures and iterator replay provide no automatic memoization.
+Treat totality and behavior at bottom as semantic obligations, distinct from
+cost and scheduling. Alternative formulations are available; state the law's
+strictness conditions or prove its applicability on the admitted total inputs.
+
 ## Batch 2: establish relevance before expansion
 
 Primary read/write boundary, subject to Common handoff:
