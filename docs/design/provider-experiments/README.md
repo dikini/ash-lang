@@ -28,6 +28,9 @@ type checking, Core execution, and actual native behavior.
   to evaluate during the implementation.
 - [Execution record](execution.md): active checkpoint ownership and verified
   evidence; it has no independent semantic authority.
+- [Analysis plan](analysis-plan.md) and [algebra study](analysis-algebra.md):
+  TASK-0035's early-relevance and typed-fusion investigation, preservation
+  obligations and measured acceptance gates.
 
 The cases are descriptions to implement, not observed results. Record results
 alongside them only after the corresponding checker or native harness runs.
