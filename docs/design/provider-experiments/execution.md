@@ -5140,3 +5140,36 @@ limits. Fusion's private definition-source checkpoint passed one reduced native
 forwarding case with four nonempty-capture source constructor hits; it does not
 eliminate nested producers or establish a cost win. Neither that checkpoint nor
 Arena's separate native preparation is included in this shared delivery.
+
+### Staged borrowed-result integration receipt (2026-10-07)
+
+The shared delivery is integrated through real unsigned Original merge
+`2a0595d13a62a537252771a69cdc9bde9d02ccf6`, preserving Common source commit
+`922ecba1ffe7dd39d5e0912e556a5c2a5ec505e8` and both histories. Original ran
+`CARGO_BUILD_JOBS=1 cargo xtask verify` with normal policies and returned zero
+at 2026-10-07 18:11:50 UTC after 1,015.450 seconds. Formatting, metadata, build,
+strict Clippy, workspace tests and warning-denied rustdoc all pass. The raw
+log contains 108 unfiltered parent groups and 3,369 parent test passes, plus
+nine separately checked nested summaries, with zero failures or ignored tests.
+Ash library passes 1,643 cases, including all six publication boundary cases;
+architecture passes 43. Existing public SQLite and arena lifecycle cases pass.
+
+The return SHA-256 is
+`2429455cfc8ae5c192703017486125372f386cdcc471c38fe260e22284868de7`;
+the raw log SHA-256 is
+`789f1dad84957d2ffa8d3d3d13a22a3fac34585966becb1c1c0494d0176b5763`.
+The return, complete parent inventory and independent audit are retained in
+`context-extension-delivery-20261007/staged-borrow-preparation/` under the Common
+evidence root. All three worktree guards preserve unrelated source, indexes
+and branches; no engines remain at the explicit return. This receipt is a
+documentation-only follow-up to the verified source tree.
+
+Common owns shared compiler, Core, capture, checking and generic runtime changes.
+SQLite and Arena retain their independent library and adapter work and import
+verified updates through Original. Fusion's next TypeCall producer candidate
+remains private and uncompiled at this checkpoint. No work or depth limit
+changed. Larger copying, persistence and bound-NUL typing deficits remain;
+this native publication delivery does not reduce their source-analysis costs.
+Typed arena allocation and its Layout/reference/family foundations remain
+separate work. These are finite DN-0036 experimental results, without new
+normative language authority or a complete formal resource proof.
