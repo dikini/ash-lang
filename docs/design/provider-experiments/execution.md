@@ -106,17 +106,19 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 ## Current checkpoint
 
 Latest completed integrated common code checkpoint is
-`f0a8e59a8ac824af959f72ff19af10a7563d0ba7`, merging Common commit
-`1fa1f4f91d2c29bd8f38d180991336963d9aff75` with an unsigned merge preserving
-both histories. Receipt 284 passes the complete unfiltered original-worktree
-`CARGO_BUILD_JOBS=1 cargo xtask verify` at normal policies on 2026-10-07.
+`50011566356eb130afbfa191aa22f1f05d6aa40f`, merging Common commit
+`478e043dbcfcfbc727b61333cef449d831574b0b` with an unsigned merge preserving
+both histories. The full normal-policy original-worktree gate passes on
+2026-10-07, as recorded in the
+[context-extension integration](#value-context-extension-integration-2026-10-07).
 The four original Common deliveries and subsequent verified shared reductions
 are merged into `codex/provider-experiments`; `main` is unchanged.
 
-The completed-phase delivery and its connected Common and integrated gates
-are complete. The entry at the end records selected changes, rejected trials,
-exact measured costs and verification scope. The next candidates remain private:
-a contextual frame consumer and reuse of completed context-extension checks.
+Completed context-extension hits now reuse the existing immutable checked
+prefix. The separate per-Call actual-sharing trial increased measured work
+and is exactly reversed. A connected inactive frame consumer is a private
+follow-on, with source qualification and executable admission still unfinished.
+No new work or depth limits are selected.
 
 The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
@@ -5064,3 +5066,26 @@ The other four owner totals remain exact, including persistence final elaboratio
 A separate per-Call actual-type sharing trial is rejected and exactly reversed: despite 37 normal Control tests and four native passes, Source/Core work increases 64/210 in copying and bound NUL, 71/396 in persistence and 16/72 in resume. Its intermediate stack failure and borrowed-phase repair remain private evidence, not retained source.
 
 Evidence is under `requested-root-metadata-160/author/` in `context-extension-hit-normal-preparation-v1/`, `context-extension-hit-candidate-only-measurement-runner-v1/` and `context-extension-connected-verification-v1/`. Only the context lookup change is selected. Connected normal verification returned at 15:39:40.643362 UTC after 207.128 seconds: all 320 cases in 18 public suites, normal native resume, all-target compilation, formatting and strict workspace/all-feature Clippy pass. The 60 normal Value tests and four completed-cost cases are carried from the exact selected source. Architecture and rustdoc remain covered by the unchanged-carrier integrated receipt 284, rather than new runs. All three worktree guards are preserved and no engines remain. The connected return SHA-256 is `264eff7f932898a84b54fd4b6c011cedd4736575ee7e2392039faa5f9cf0049b`. Unsigned source integration and full Original verification remain pending at this source checkpoint. This is bounded [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md) implementation evidence, without new normative Ash semantics.
+
+### Value-context extension integration (2026-10-07)
+
+The context-extension delivery is integrated through unsigned source merge
+`50011566356eb130afbfa191aa22f1f05d6aa40f`, preserving Common commit
+`478e043dbcfcfbc727b61333cef449d831574b0b`.
+
+The full `CARGO_BUILD_JOBS=1 cargo xtask verify` on the original worktree
+returned successfully at 2026-10-07T16:05:22.505292+00:00, after 917.227 seconds. All six stages
+pass: formatting, metadata, all-target build, strict Clippy, workspace tests
+and warning-denied rustdoc. The raw gate contains 108 parent groups
+and 3364 parent test passes, with no failures or ignored tests. The return
+SHA-256 is `4100ed42d57b08dee3d98f240aedc80a5c61be9f8bae04bd3196a2c34245dff0` and raw log SHA-256 is `fe1414aef968e4c3b2f06709805d02b244a114e13a3475dc7955d47a8c951e63`.
+All three worktree guards, unrelated work, unsigned histories and `main`
+are preserved.
+
+This delivery retains only the context lookup improvement and its regression
+assertions. The per-Call actual-sharing trial remains rejected and reversed.
+The larger copying, persistence and bound-NUL programs still exceed their
+independent normal typing limits. Their measured completed-native observations
+do not constitute normal-limit acceptance. Fusion remains an unverified
+follow-on. Experimental DN-0036 evidence does not establish current Ash
+semantics, production architecture, or an intrinsic lower bound.

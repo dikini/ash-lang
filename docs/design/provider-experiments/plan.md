@@ -88,8 +88,9 @@ identities and adds no carrier. All 60 normal Value tests, 320 public cases,
 normal native resume, build, formatting and strict Clippy pass. Four completed
 SQLite cost runs show small Source/Core reductions, with all other owner totals
 unchanged and the real recurrence-miss tax included. The larger three normal
-refusals remain open. This source checkpoint awaits unsigned integration and
-the full Original gate; see [execution](execution.md#completed-value-context-extension-hits-2026-10-07-source-checkpoint).
+refusals remain open. Common commit `478e043` is integrated through unsigned
+Original merge `5001156`; the complete Original gate passes. See
+[execution](execution.md#value-context-extension-integration-2026-10-07).
 
 The String/TEXT manifest, executable adapter, source library and larger programs
 remain preserved SQLite-owned work. Their passing cases and three default-budget
