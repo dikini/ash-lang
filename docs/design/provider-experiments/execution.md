@@ -105,25 +105,25 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `7bd1c1cfbba01ae2d83a653e44903d745f040997`,
-merging Common commit `7693db41c8e2e9ddf7757f0d54d58578a00296ac` with an unsigned
-merge preserving both histories. Receipt 259 passes the complete unfiltered
+Latest integrated common code checkpoint is `a4b557bf76fef1a274ca5474941e7d4c4ea701f7`,
+merging Common commit `4a6c50cdb769043a93a934cca3d6ebfd7c1fe368` with an unsigned
+merge preserving both histories. Receipt 278 passes the complete unfiltered
 `CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
 original Common deliveries and subsequent verified shared reductions are merged
 into `codex/provider-experiments`; `main` is unchanged. The latest delivery
-consolidates dependency progress and queue-owned output links. Its evidence is
-recorded at the end of this file.
+shares exact value-context prefixes while preserving original context IDs and
+live propagation. Its evidence is recorded at the end of this file.
 
 The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
 limits. Copying, bound-NUL and persistence complete their original assertions
 under temporary diagnostic ceilings but still exceed normal source limits.
 Copying and bound-NUL fit independent Core; persistence retains source, final
-elaboration and Core deficits. Exact completed costs and capacity variation
-appear in the dependency-progress entry below. Production work and depth limits
-remain unchanged. Further capture-cost attribution is investigation, not proof
-that larger quotas are necessary. Common coordinates shared ownership and
-serial engine windows with SQLite, arena and the separate proof workstream.
+elaboration and Core deficits. The canonical value-context entry below records
+the current completed costs and unchanged owner endpoints. Production work and
+depth limits remain unchanged. The measured remaining deficits are not evidence
+that larger quotas are necessary. Common coordinates shared ownership and serial
+engine windows with SQLite, arena, proof and the algebraic-analysis workstream.
 
 The following Batch 0–2 and dated intermediate Batch 3 entries retain historical
 evidence; later delivery records supersede their earlier control-failure summaries.
@@ -4789,11 +4789,49 @@ all-target checking, formatting, strict workspace/all-feature Clippy and
 warning-denied rustdoc. The already successful 58-law receipt is carried rather
 than rerun as a separate filtered command. Complete guards preserve all other
 Common sources, SQLite and Original worktrees, indexes and histories. Full
-library and native verification remains required in the Original integrated
-`CARGO_BUILD_JOBS=1 cargo xtask verify` gate; no integrated-delivery claim precedes
-that result.
+library and native verification also passes in the Original integrated
+`CARGO_BUILD_JOBS=1 cargo xtask verify` gate, recorded below.
 
 This remains tested finite evidence for the bounded
 [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md)
 experiment. It does not establish current Ash semantics, a complete formal
 resource proof, a foreign ABI change or accepted production architecture.
+
+
+### Integrated value-context prefixes (2026-10-07, receipt 278)
+
+Unsigned Common commit `4a6c50cdb769043a93a934cca3d6ebfd7c1fe368` is integrated by
+unsigned merge `a4b557bf76fef1a274ca5474941e7d4c4ea701f7` into
+`codex/provider-experiments`. The merge parents are original tip
+`43248835a99b2d6061fafd41742778b62085eac0` and the Common commit; their
+resulting trees match. This delivery changes only `src/core/capture/value.rs`
+and this execution record. SQLite-owned files and unrelated Original drafts
+retain their working bytes, status and unstaged state.
+
+The unfiltered `CARGO_BUILD_JOBS=1 cargo xtask verify` passes at that merge:
+formatting, metadata, all-target build, strict workspace/all-feature Clippy,
+all-target/all-feature tests and warning-denied rustdoc. The Ash library reports
+1,634 passes and architecture reports 43. There are 108 unfiltered parent
+harness groups with 3,360 parent passes and nine nested rerun summaries. All 117
+raw summary blocks report zero failures and ignores; nested reruns are not added
+to the parent pass count. This covers the integrated native adapter, arena,
+independent Core, capture/control, modules, transformations and deep-input
+regressions. The separate expanded SQLite programs retain their connected and
+diagnostic evidence above; this Original tree does not contain those larger
+targets.
+
+Explicit return is `2026-10-07T09:16:16.768146+00:00`, after
+1098.645 seconds. Raw log SHA-256 is
+`3f00661a73bb138c7cf6c82450edd433aeaba0179e12fb95d7463c4d45175d6c`
+in `context-prefix-delivery-278/` under the Common evidence directory. Complete
+guards confirm preserved Common working bytes and empty index, unchanged
+SQLite worktree, and preserved unrelated Original bytes and empty index. No
+verification engine remains. Independent raw-log, source and documentation
+reviews accompany this receipt.
+
+The normal copying, bound-NUL and persistence deficits remain open. No
+production work or depth limit changed. This is tested finite evidence under
+[DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md), not new
+Ash semantics, a complete formal resource proof or accepted production
+architecture. The algebraic-analysis workstream has a separately bounded
+lexical/evidence product study; it is not part of this delivered code.
