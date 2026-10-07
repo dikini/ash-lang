@@ -1,0 +1,663 @@
+//! Once-per-Graph source recipe preparation, not source/frame admission.
+//!
+//! Own one Compiler in the normal Analysis for its immutable Graph loan. New
+//! family roots reuse accepted AND declined expression cells. Construction
+//! borrows Analysis's original evidence_keys/evidence_ports only temporarily;
+//! the resulting object borrows Graph, never Analysis or its index storage.
+//! No Type/Row, Expr, capture vector or dictionary tuple is cloned here.
+
+use std::collections::HashSet;
+
+use super::{Analysis, Expr, Failure, Graph, ProducerWitness, TypeWorkBudget, charge};
+use super::deferred_evidence::LocalRecipe;
+use super::deferred_frame::{Arena as FrameArena, OriginalPort, ProjectionClass};
+use crate::types::{Kind, KindedArgument};
+
+const ASSIGNED: u8 = 1;
+const RESOURCE: u8 = 2;
+const DICTIONARY: u8 = 4;
+const GLOBAL: u8 = 8;
+const AMBIGUOUS_GLOBAL: u8 = 16;
+const OPAQUE_PROVIDER: u8 = 32;
+
+#[derive(Clone, Copy)]
+struct Ownership {
+    flags: u8,
+    global: usize,
+    dictionary_start: usize,
+    dictionary_len: usize,
+}
+
+// These coordinates retain an ORIGINAL ordered source occurrence. They do not
+// collapse repeated methods, repeated keys, repeated arguments or shared ports.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DictionarySource {
+    pub(super) evidence_expression: usize,
+    pub(super) binding_ordinal: usize,
+    pub(super) evidence_ordinal: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum SlotRole {
+    Unbound,
+    Metadata,
+    Resource,
+    Global { source: usize },
+    Dictionary { start: usize, len: usize },
+}
+
+// Fixed local value shape, deliberately weaker than a complete occurrence's
+// ProjectionClass. Function shape does not inspect captures; Evidence shape
+// does not inspect dictionary bindings or residual validity. Those dependencies
+// remain live in the owner-held transport. There is no conversion to a complete
+// class and no admission authority in this type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LocalShape {
+    Empty,
+    Metadata,
+    Callable(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RecipeTag {
+    Scalar,
+    Slot(SlotRole),
+    Alias,
+    Merge,
+    Function,
+    TypedCall { factory: usize, body: usize },
+    Evidence,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Decline {
+    Unsupported,
+    ConflictingOwnership,
+    UnsealedTypedCall,
+    MixedProjection,
+    Cyclic,
+    Dependency,
+}
+
+#[derive(Clone, Copy)]
+struct Prepared {
+    tag: RecipeTag,
+    shape: LocalShape,
+}
+
+#[derive(Clone, Copy)]
+enum Cell {
+    Unseen,
+    Visiting,
+    Accepted(Prepared),
+    Declined(Decline),
+}
+
+// Borrowed original operands and their weaker fixed shape. Dictionary Slot
+// shape includes every indexed source binding input; Function/Evidence shape
+// deliberately stops before capture/binding validity and live dependencies.
+// The owner-held source visit must still authenticate occurrence writers,
+// complete classes, lexical Type/Row scope, creation/root feeds, phases and
+// frozen boundaries. Shape preparation alone cannot admit a source visit.
+pub(super) struct PreparedSource<'g> {
+    pub(super) expression: usize,
+    pub(super) tag: RecipeTag,
+    pub(super) shape: LocalShape,
+    pub(super) source: &'g Expr,
+    pub(super) witness: Option<&'g ProducerWitness>,
+}
+
+#[derive(Clone, Copy)]
+struct Work {
+    expression: usize,
+    tag: RecipeTag,
+    next: usize,
+}
+
+pub(super) struct Compiler<'g> {
+    graph: &'g Graph,
+    ownership: Vec<Ownership>,
+    // CSR groups actual source binding matches by original target port. This
+    // is derived provenance, not a duplicate evidence-key/port lookup map.
+    dictionary: Vec<DictionarySource>,
+    cells: Vec<Cell>,
+}
+
+fn flag(ownership: &mut [Ownership], port: usize, bits: u8,
+    budget: &mut TypeWorkBudget) -> Result<(), Failure>
+{
+    charge(budget, 1)?;
+    ownership.get_mut(port).ok_or(Failure::Invalid)?.flags |= bits;
+    Ok(())
+}
+
+fn same_kind(left: &Kind, right: &Kind, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+    charge(budget, 1)?;
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+    pending.push((left, right));
+    while let Some((left, right)) = pending.pop() {
+        charge(budget, 1)?;
+        match (left, right) {
+            (Kind::Type, Kind::Type) | (Kind::EffectRow, Kind::EffectRow) => {}
+            (Kind::Arrow(ld, lc), Kind::Arrow(rd, rc)) => {
+                charge(budget, 2)?;
+                pending.try_reserve(2).map_err(|_| Failure::Resource)?;
+                pending.push((lc.as_ref(), rc.as_ref()));
+                pending.push((ld.as_ref(), rd.as_ref()));
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+fn combine(left: LocalShape, right: LocalShape) -> Option<LocalShape> {
+    match (left, right) {
+        (LocalShape::Empty, other) | (other, LocalShape::Empty) => Some(other),
+        (left, right) if left == right => Some(left),
+        _ => None,
+    }
+}
+
+impl<'g> Compiler<'g> {
+    // Analysis::new built both exact indices from THIS Graph's complete
+    // ordered evidence vector. Borrow them during construction; do not rebuild
+    // ports_by_key or retain a self-reference to Analysis in this compiler.
+    pub(super) fn new(analysis: &Analysis<'g>, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        let graph = analysis.graph;
+        let count = graph.expressions.len();
+        charge(budget, count.checked_mul(2).ok_or(Failure::Resource)?)?;
+        let mut ownership = Vec::new();
+        ownership.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
+        ownership.resize(count, Ownership { flags: 0, global: 0,
+            dictionary_start: 0, dictionary_len: 0 });
+        let mut cells = Vec::new();
+        cells.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
+        cells.resize(count, Cell::Unseen);
+        for &(port, source) in &graph.globals {
+            charge(budget, 1)?;
+            if graph.expressions.get(source).is_none() { return Err(Failure::Invalid); }
+            let role = ownership.get_mut(port).ok_or(Failure::Invalid)?;
+            if role.flags & GLOBAL != 0 { role.flags |= AMBIGUOUS_GLOBAL; }
+            else { role.global = source; }
+            role.flags |= GLOBAL;
+        }
+        for expression in &graph.expressions {
+            charge(budget, 1)?;
+            match expression {
+                Expr::Bind { binder, .. } => flag(&mut ownership, *binder, ASSIGNED, budget)?,
+                Expr::Recursive { bindings, .. } => {
+                    for (binder, _) in bindings { flag(&mut ownership, *binder, ASSIGNED, budget)?; }
+                }
+                Expr::Match { arms, .. } => {
+                    for (bindings, _) in arms {
+                        charge(budget, 1)?;
+                        for (binder, _) in bindings { flag(&mut ownership, *binder, ASSIGNED, budget)?; }
+                    }
+                }
+                Expr::Handler { clauses, .. } => {
+                    for clause in clauses {
+                        flag(&mut ownership, clause.input, ASSIGNED, budget)?;
+                        for (binder, _) in &clause.bindings { flag(&mut ownership, *binder, ASSIGNED, budget)?; }
+                    }
+                }
+                Expr::Function { parameters, .. } => {
+                    for parameter in parameters {
+                        charge(budget, 1)?;
+                        if !graph.metadata.contains_key(parameter) {
+                            flag(&mut ownership, *parameter, ASSIGNED, budget)?;
+                        }
+                    }
+                }
+                Expr::Resource { handle, identity, .. } => {
+                    flag(&mut ownership, *handle, RESOURCE, budget)?;
+                    flag(&mut ownership, *identity, RESOURCE, budget)?;
+                }
+                _ => {}
+            }
+        }
+        for provider in &graph.provider {
+            charge(budget, 1)?;
+            for (port, _) in &provider.lexical { flag(&mut ownership, *port, ASSIGNED, budget)?; }
+            for port in &provider.parameters { flag(&mut ownership, *port, ASSIGNED, budget)?; }
+            for port in &provider.capture_ports { flag(&mut ownership, *port, OPAQUE_PROVIDER, budget)?; }
+        }
+        // Use the existing original port index to mark exact dictionary roles.
+        for (&port, positions) in &analysis.evidence_ports {
+            flag(&mut ownership, port, DICTIONARY, budget)?;
+            for &position in positions {
+                charge(budget, 1)?;
+                if graph.evidence.get(position).is_none_or(|(_, actual)| *actual != port) {
+                    return Err(Failure::Invalid);
+                }
+            }
+        }
+        // Count exact binding/key matches, retaining each original evidence
+        // ordinal, including duplicate keys mapping to the same target port.
+        for expression in &graph.expressions {
+            charge(budget, 1)?;
+            if let Expr::Evidence { bindings, .. } = expression {
+                for &(requirement, method, argument) in bindings {
+                    charge(budget, 1)?;
+                    if graph.expressions.get(argument).is_none() { return Err(Failure::Invalid); }
+                    let key = (requirement, method);
+                    if let Some(positions) = analysis.evidence_keys.get(&key) {
+                        for &position in positions {
+                            charge(budget, 1)?;
+                            let &(actual_key, port) = graph.evidence.get(position).ok_or(Failure::Invalid)?;
+                            if actual_key != key { return Err(Failure::Invalid); }
+                            let role = ownership.get_mut(port).ok_or(Failure::Invalid)?;
+                            role.dictionary_len = role.dictionary_len.checked_add(1).ok_or(Failure::Resource)?;
+                        }
+                    }
+                }
+            }
+        }
+        let mut total = 0usize;
+        charge(budget, count)?;
+        for role in &mut ownership {
+            role.dictionary_start = total;
+            total = total.checked_add(role.dictionary_len).ok_or(Failure::Resource)?;
+        }
+        charge(budget, total.checked_add(count).ok_or(Failure::Resource)?)?;
+        let mut dictionary = Vec::new();
+        dictionary.try_reserve_exact(total).map_err(|_| Failure::Resource)?;
+        dictionary.resize(total, DictionarySource { evidence_expression: 0,
+            binding_ordinal: 0, evidence_ordinal: 0 });
+        let mut cursors = Vec::new();
+        cursors.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
+        cursors.resize(count, 0usize);
+        for (expression, source) in graph.expressions.iter().enumerate() {
+            charge(budget, 1)?;
+            if let Expr::Evidence { bindings, .. } = source {
+                for (binding_ordinal, &(requirement, method, _)) in bindings.iter().enumerate() {
+                    charge(budget, 1)?;
+                    if let Some(positions) = analysis.evidence_keys.get(&(requirement, method)) {
+                        for &evidence_ordinal in positions {
+                            charge(budget, 1)?;
+                            let port = graph.evidence.get(evidence_ordinal).ok_or(Failure::Invalid)?.1;
+                            let role = ownership.get(port).ok_or(Failure::Invalid)?;
+                            let cursor = cursors.get_mut(port).ok_or(Failure::Invalid)?;
+                            if *cursor >= role.dictionary_len { return Err(Failure::Invalid); }
+                            let destination = role.dictionary_start.checked_add(*cursor).ok_or(Failure::Resource)?;
+                            *dictionary.get_mut(destination).ok_or(Failure::Invalid)? = DictionarySource {
+                                evidence_expression: expression, binding_ordinal, evidence_ordinal };
+                            *cursor += 1;
+                        }
+                    }
+                }
+            }
+        }
+        charge(budget, count)?;
+        if ownership.iter().zip(cursors).any(|(role, cursor)| role.dictionary_len != cursor) {
+            return Err(Failure::Invalid);
+        }
+        Ok(Self { graph, ownership, dictionary, cells })
+    }
+
+    fn witness(&self, expression: usize) -> Option<&'g ProducerWitness> {
+        match self.graph.producers.as_slice() { [table] => table.entries.get(&expression), _ => None }
+    }
+
+    // This repeats no all-global scan. Indexed source ownership plus the exact
+    // two original typed witnesses supplies the factory/use input relation.
+    // It does not authenticate a live callee stream or dynamic source visit.
+    fn typed_factory(&self, call: usize, budget: &mut TypeWorkBudget)
+        -> Result<Option<(usize, usize)>, Failure>
+    {
+        let Some(Expr::Call { function, arguments, type_application: true, .. }) = self.graph.expressions.get(call)
+            else { return Ok(None); };
+        let Some(ProducerWitness::Application { function: original, binders: use_header,
+            arguments: actuals }) = self.witness(call) else { return Ok(None); };
+        charge(budget, arguments.len())?;
+        if function != original || arguments.len() != actuals.len()
+            || arguments.iter().zip(actuals).any(|(port, actual)| *port != actual.port)
+        { return Ok(None); }
+        let Some(Expr::Alias(global)) = self.graph.expressions.get(*function) else { return Ok(None); };
+        if self.ownership.get(*function).ok_or(Failure::Invalid)?.flags & OPAQUE_PROVIDER != 0 {
+            return Ok(None);
+        }
+        let role = self.ownership.get(*global).ok_or(Failure::Invalid)?;
+        if role.flags & (GLOBAL | ASSIGNED | AMBIGUOUS_GLOBAL | OPAQUE_PROVIDER | DICTIONARY | RESOURCE) != GLOBAL
+            || !matches!(self.graph.expressions.get(*global), Some(Expr::Slot))
+            || self.graph.metadata.contains_key(global)
+        { return Ok(None); }
+        let factory = role.global;
+        let Some(ProducerWitness::Abstraction { binders: definition, formals }) = self.witness(factory)
+            else { return Ok(None); };
+        let Some(Expr::Function { parameters, body, .. }) = self.graph.expressions.get(factory)
+            else { return Ok(None); };
+        charge(budget, formals.len())?;
+        if formals.is_empty() || parameters != formals || formals.len() != definition.len()
+            || definition.len() != use_header.len() || actuals.len() != formals.len()
+        { return Ok(None); }
+        let Some(Expr::Function { parameters: inner, captures, .. }) = self.graph.expressions.get(*body)
+            else { return Ok(None); };
+        if inner.len() != 1 || captures.is_empty() || self.graph.metadata.contains_key(&inner[0])
+            || !self.graph.targets.contains_key(body)
+        { return Ok(None); }
+        charge(budget, formals.len().checked_mul(3).ok_or(Failure::Resource)?)?;
+        let mut definitions = HashSet::new();
+        let mut uses = HashSet::new();
+        let mut slots = HashSet::new();
+        definitions.try_reserve(formals.len()).map_err(|_| Failure::Resource)?;
+        uses.try_reserve(formals.len()).map_err(|_| Failure::Resource)?;
+        slots.try_reserve(formals.len()).map_err(|_| Failure::Resource)?;
+        for (((def, dk), (use_binder, uk)), (formal, argument)) in definition.iter()
+            .zip(use_header).zip(formals.iter().zip(actuals))
+        {
+            charge(budget, 1)?;
+            if !definitions.insert(*def) || !uses.insert(*use_binder) || !slots.insert(*formal)
+                || self.graph.metadata.get(formal) != Some(def)
+                || !matches!(self.graph.expressions.get(*formal), Some(Expr::Slot))
+                || self.ownership.get(*formal).ok_or(Failure::Invalid)?.flags != 0
+                || !same_kind(dk, uk, budget)?
+            { return Ok(None); }
+            match (dk, argument.value.as_ref()) {
+                (Kind::EffectRow, KindedArgument::RowArg(_)) => {}
+                (Kind::Type | Kind::Arrow(_, _), KindedArgument::TypeArg(_)) => {}
+                _ => return Ok(None),
+            }
+            let Some(Expr::Merge(inputs)) = self.graph.expressions.get(argument.port) else { return Ok(None); };
+            charge(budget, inputs.len())?;
+            if inputs.iter().any(|port| !self.graph.metadata.contains_key(port)
+                || !matches!(self.graph.expressions.get(*port), Some(Expr::Slot)))
+            { return Ok(None); }
+        }
+        Ok(Some((factory, *body)))
+    }
+
+    fn tag(&self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<Result<RecipeTag, Decline>, Failure>
+    {
+        charge(budget, 1)?;
+        let source = self.graph.expressions.get(expression).ok_or(Failure::Invalid)?;
+        let role = self.ownership.get(expression).ok_or(Failure::Invalid)?;
+        if role.flags & OPAQUE_PROVIDER != 0 { return Ok(Err(Decline::ConflictingOwnership)); }
+        Ok(Ok(match source {
+            Expr::Scalar => RecipeTag::Scalar,
+            Expr::Slot => {
+                if role.flags & (ASSIGNED | AMBIGUOUS_GLOBAL) != 0 { return Ok(Err(Decline::ConflictingOwnership)); }
+                let metadata = self.graph.metadata.contains_key(&expression);
+                let categories = usize::from(metadata) + usize::from(role.flags & RESOURCE != 0)
+                    + usize::from(role.flags & GLOBAL != 0) + usize::from(role.flags & DICTIONARY != 0);
+                if categories > 1 { return Ok(Err(Decline::ConflictingOwnership)); }
+                RecipeTag::Slot(if metadata { SlotRole::Metadata }
+                    else if role.flags & RESOURCE != 0 { SlotRole::Resource }
+                    else if role.flags & GLOBAL != 0 { SlotRole::Global { source: role.global } }
+                    else if role.flags & DICTIONARY != 0 { SlotRole::Dictionary {
+                        start: role.dictionary_start, len: role.dictionary_len } }
+                    else { SlotRole::Unbound })
+            }
+            Expr::Alias(_) => RecipeTag::Alias,
+            Expr::Merge(_) => RecipeTag::Merge,
+            Expr::Function { .. } => RecipeTag::Function,
+            Expr::Call { type_application: true, .. } => {
+                let Some((factory, body)) = self.typed_factory(expression, budget)?
+                    else { return Ok(Err(Decline::UnsealedTypedCall)); };
+                RecipeTag::TypedCall { factory, body }
+            }
+            // The weaker code shape depends only on value. Original ordered
+            // bindings, residuals and late Unknown are owner-transport work.
+            Expr::Evidence { .. } => RecipeTag::Evidence,
+            _ => return Ok(Err(Decline::Unsupported)),
+        }))
+    }
+
+    fn child_count(&self, expression: usize, tag: RecipeTag) -> Result<usize, Failure> {
+        Ok(match (tag, self.graph.expressions.get(expression).ok_or(Failure::Invalid)?) {
+            (RecipeTag::Slot(SlotRole::Global { .. }) | RecipeTag::Alias, _) => 1,
+            (RecipeTag::Slot(SlotRole::Dictionary { len, .. }), _) => len,
+            (RecipeTag::Merge, Expr::Merge(values)) => values.len(),
+            (RecipeTag::Function, Expr::Function { .. }) => 0,
+            (RecipeTag::TypedCall { .. }, Expr::Call { arguments, .. }) => arguments.len().checked_add(2).ok_or(Failure::Resource)?,
+            (RecipeTag::Evidence, Expr::Evidence { .. }) => 1,
+            (RecipeTag::Scalar | RecipeTag::Slot(_), _) => 0,
+            _ => return Err(Failure::Invalid),
+        })
+    }
+
+    fn child(&self, expression: usize, tag: RecipeTag, position: usize) -> Result<usize, Failure> {
+        let source = self.graph.expressions.get(expression).ok_or(Failure::Invalid)?;
+        Ok(match (tag, source) {
+            (RecipeTag::Slot(SlotRole::Global { source }), _) if position == 0 => source,
+            (RecipeTag::Slot(SlotRole::Dictionary { start, len }), _) if position < len => {
+                let original = self.dictionary.get(start.checked_add(position).ok_or(Failure::Resource)?).ok_or(Failure::Invalid)?;
+                let binding = self.dictionary_binding(*original).ok_or(Failure::Invalid)?;
+                let entry = self.graph.evidence.get(original.evidence_ordinal).ok_or(Failure::Invalid)?;
+                if entry.1 != expression || entry.0 != (binding.0, binding.1) { return Err(Failure::Invalid); }
+                binding.2
+            }
+            (RecipeTag::Alias, Expr::Alias(value)) if position == 0 => *value,
+            (RecipeTag::Merge, Expr::Merge(values)) => *values.get(position).ok_or(Failure::Invalid)?,
+            (RecipeTag::TypedCall { factory, body }, Expr::Call { arguments, .. }) => {
+                if position < arguments.len() { arguments[position] }
+                else if position == arguments.len() { factory }
+                else if position == arguments.len() + 1 { body }
+                else { return Err(Failure::Invalid); }
+            }
+            (RecipeTag::Evidence, Expr::Evidence { value, .. }) if position == 0 => *value,
+            _ => return Err(Failure::Invalid),
+        })
+    }
+
+    fn finish(&self, expression: usize, tag: RecipeTag, budget: &mut TypeWorkBudget)
+        -> Result<Result<LocalShape, Decline>, Failure>
+    {
+        let mut union = LocalShape::Empty;
+        let count = self.child_count(expression, tag)?;
+        charge(budget, count)?;
+        for position in 0..count {
+            let child = self.child(expression, tag, position)?;
+            let Some(Cell::Accepted(prepared)) = self.cells.get(child) else { return Ok(Err(Decline::Dependency)); };
+            match tag {
+                RecipeTag::Slot(SlotRole::Dictionary { .. }) => {
+                    let Some(next) = combine(union, prepared.shape) else { return Ok(Err(Decline::MixedProjection)); };
+                    union = next;
+                }
+                RecipeTag::Merge => {
+                    if !matches!(prepared.shape, LocalShape::Empty | LocalShape::Metadata) {
+                        return Ok(Err(Decline::MixedProjection));
+                    }
+                }
+                RecipeTag::TypedCall { factory, body } => {
+                    let arguments = count - 2;
+                    let valid = if position < arguments {
+                        matches!(prepared.shape, LocalShape::Empty | LocalShape::Metadata)
+                    } else if position == arguments { prepared.shape == LocalShape::Callable(factory) }
+                    else { prepared.shape == LocalShape::Callable(body) };
+                    if !valid { return Ok(Err(Decline::MixedProjection)); }
+                }
+                RecipeTag::Evidence if position == 0 => {
+                    if !matches!(prepared.shape, LocalShape::Callable(_)) { return Ok(Err(Decline::MixedProjection)); }
+                    union = prepared.shape;
+                }
+                RecipeTag::Alias | RecipeTag::Slot(SlotRole::Global { .. }) => union = prepared.shape,
+                _ => {}
+            }
+        }
+        Ok(Ok(match tag {
+            RecipeTag::Scalar | RecipeTag::Merge | RecipeTag::Slot(SlotRole::Metadata | SlotRole::Resource) => LocalShape::Metadata,
+            RecipeTag::Function => LocalShape::Callable(expression),
+            RecipeTag::TypedCall { body, .. } => LocalShape::Callable(body),
+            RecipeTag::Slot(SlotRole::Unbound) => LocalShape::Empty,
+            RecipeTag::Slot(_) | RecipeTag::Alias | RecipeTag::Evidence => union,
+        }))
+    }
+
+    fn enter(&mut self, expression: usize, pending: &mut Vec<Work>, budget: &mut TypeWorkBudget)
+        -> Result<(), Failure>
+    {
+        // Reserve before Visiting is published. These two units also cover
+        // resetting this temporary cell if later resource refusal unwinds.
+        charge(budget, 2)?;
+        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        match self.tag(expression, budget)? {
+            Ok(tag) => {
+                *self.cells.get_mut(expression).ok_or(Failure::Invalid)? = Cell::Visiting;
+                pending.push(Work { expression, tag, next: 0 });
+            }
+            Err(reason) => *self.cells.get_mut(expression).ok_or(Failure::Invalid)? = Cell::Declined(reason),
+        }
+        Ok(())
+    }
+
+    fn compile_one(&mut self, root: usize, budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        charge(budget, 1)?;
+        match self.cells.get(root).copied().ok_or(Failure::Invalid)? {
+            Cell::Accepted(_) => return Ok(true),
+            Cell::Declined(_) => return Ok(false),
+            Cell::Visiting => return Err(Failure::Invalid),
+            Cell::Unseen => {}
+        }
+        let mut pending = Vec::new();
+        let result = (|| {
+            self.enter(root, &mut pending, budget)?;
+            while let Some(work) = pending.last().copied() {
+                charge(budget, 1)?;
+                if matches!(self.cells[work.expression], Cell::Declined(_)) { pending.pop(); continue; }
+                let count = self.child_count(work.expression, work.tag)?;
+                if work.next < count {
+                    let child = self.child(work.expression, work.tag, work.next)?;
+                    pending.last_mut().ok_or(Failure::Invalid)?.next += 1;
+                    match self.cells.get(child).copied().ok_or(Failure::Invalid)? {
+                        Cell::Accepted(_) => {}
+                        Cell::Declined(_) => self.cells[work.expression] = Cell::Declined(Decline::Dependency),
+                        Cell::Visiting => {
+                            self.cells[child] = Cell::Declined(Decline::Cyclic);
+                            self.cells[work.expression] = Cell::Declined(Decline::Cyclic);
+                        }
+                        Cell::Unseen => self.enter(child, &mut pending, budget)?,
+                    }
+                    continue;
+                }
+                self.cells[work.expression] = match self.finish(work.expression, work.tag, budget)? {
+                    Ok(shape) => Cell::Accepted(Prepared { tag: work.tag, shape }),
+                    Err(reason) => Cell::Declined(reason),
+                };
+                pending.pop();
+            }
+            Ok(matches!(self.cells[root], Cell::Accepted(_)))
+        })();
+        if result.is_err() {
+            // Flat iterative cleanup; completed accepted/declined cells remain
+            // reusable. A work refusal never becomes a semantic decline.
+            for work in pending {
+                if matches!(self.cells[work.expression], Cell::Visiting) {
+                    self.cells[work.expression] = Cell::Unseen;
+                }
+            }
+        }
+        result
+    }
+
+    pub(super) fn compile_set(&mut self, roots: &[usize], budget: &mut TypeWorkBudget) -> Result<bool, Failure> {
+        charge(budget, roots.len())?;
+        for root in roots { if !self.compile_one(*root, budget)? { return Ok(false); } }
+        Ok(true)
+    }
+
+    pub(super) fn prepared(&self, expression: usize) -> Option<PreparedSource<'g>> {
+        let Cell::Accepted(prepared) = *self.cells.get(expression)? else { return None; };
+        Some(PreparedSource { expression, tag: prepared.tag, shape: prepared.shape,
+            source: self.graph.expressions.get(expression)?, witness: self.witness(expression) })
+    }
+
+    pub(super) fn decline(&self, expression: usize) -> Option<Decline> {
+        match self.cells.get(expression)? { Cell::Declined(reason) => Some(*reason), _ => None }
+    }
+
+    // Indexed source ownership only, independent of the shape cache. A
+    // dictionary Slot whose inputs decline/cycle still has its original role.
+    // This neither proves absence of occurrence writers nor grants admission;
+    // the owner must use the role with the original definition-context laws.
+    pub(super) fn source_slot_role(&self, expression: usize, budget: &mut TypeWorkBudget)
+        -> Result<Option<SlotRole>, Failure>
+    {
+        charge(budget, 1)?;
+        if !matches!(self.graph.expressions.get(expression).ok_or(Failure::Invalid)?, Expr::Slot) {
+            return Ok(None);
+        }
+        Ok(match self.tag(expression, budget)? {
+            Ok(RecipeTag::Slot(role)) => Some(role),
+            Ok(_) => return Err(Failure::Invalid),
+            Err(_) => None,
+        })
+    }
+
+    pub(super) fn dictionary_sources(&self, expression: usize) -> Option<&[DictionarySource]> {
+        let role = self.ownership.get(expression)?;
+        if role.flags & DICTIONARY == 0 { return None; }
+        self.dictionary.get(role.dictionary_start..role.dictionary_start.checked_add(role.dictionary_len)?)
+    }
+
+    pub(super) fn dictionary_binding(&self, source: DictionarySource)
+        -> Option<&'g (crate::interface::RequirementId, crate::interface::MethodId, usize)>
+    {
+        let Expr::Evidence { bindings, .. } = self.graph.expressions.get(source.evidence_expression)? else { return None; };
+        bindings.get(source.binding_ordinal)
+    }
+
+    // Preflight ALL requested local equations before allocating ANY routes.
+    // The requested expressions must be distinct; each supplied class must be
+    // proved for the COMPLETE occurrence by the owner. LocalShape provides no
+    // class authority or conversion. Duplicate CHILD operands remain in
+    // original order. This operation grants no complete-port/head publication.
+    // Alias/Merge child Heads do not instantiate their children's local recipe:
+    // the owner-held visit must separately supply/authenticate those equations
+    // or exact original concrete leaves. No missing child is assumed empty.
+    pub(super) fn instantiate_primitives(
+        &mut self, requested: &[(usize, ProjectionClass)], context: usize, routes: &mut FrameArena,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Vec<LocalRecipe>>, Failure> {
+        charge(budget, requested.len())?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(requested.len()).map_err(|_| Failure::Resource)?;
+        for (expression, _) in requested {
+            charge(budget, 1)?;
+            if !seen.insert(*expression) { return Ok(None); }
+            if !self.compile_one(*expression, budget)? { return Ok(None); }
+            let prepared = self.prepared(*expression).ok_or(Failure::Invalid)?;
+            match (prepared.tag, prepared.source) {
+                (RecipeTag::Scalar, Expr::Scalar) | (RecipeTag::Slot(_), Expr::Slot) => {}
+                (RecipeTag::Alias, Expr::Alias(child)) if child != expression => {}
+                (RecipeTag::Merge, Expr::Merge(children)) => {
+                    charge(budget, children.len())?;
+                    if children.contains(expression) { return Ok(None); }
+                }
+                // These source tags are prepared and shared, but no owner-held
+                // Function/typed Call/Evidence materializer exists in this file.
+                // In particular, do NOT return Free/Empty/Head(self) as a stand-in.
+                (RecipeTag::Function | RecipeTag::TypedCall { .. } | RecipeTag::Evidence, _) => return Ok(None),
+                _ => return Err(Failure::Invalid),
+            }
+        }
+        charge(budget, requested.len())?;
+        let mut result = Vec::new();
+        result.try_reserve_exact(requested.len()).map_err(|_| Failure::Resource)?;
+        for (expression, class) in requested {
+            charge(budget, 1)?;
+            let prepared = self.prepared(*expression).ok_or(Failure::Invalid)?;
+            let route = match prepared.source {
+                Expr::Scalar => routes.free(budget)?,
+                // Local Slot is EMPTY regardless of the owner-supplied
+                // complete occurrence class or the prepared weaker shape.
+                Expr::Slot => routes.empty(budget)?,
+                Expr::Alias(child) => routes.head(OriginalPort { expression: *child, context }, budget)?,
+                Expr::Merge(children) => {
+                    let count = children.len().checked_add(1).ok_or(Failure::Resource)?;
+                    charge(budget, count)?;
+                    let mut sources = Vec::new();
+                    sources.try_reserve_exact(count).map_err(|_| Failure::Resource)?;
+                    sources.push(routes.free(budget)?);
+                    for child in children { sources.push(routes.head(OriginalPort { expression: *child, context }, budget)?); }
+                    routes.join(ProjectionClass::Metadata, &sources, budget)?
+                }
+                _ => return Err(Failure::Invalid), // Fully preflighted above.
+            };
+            result.push(LocalRecipe { expression: *expression, class: *class, route });
+        }
+        Ok(Some(result))
+    }
+}

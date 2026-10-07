@@ -4294,6 +4294,22 @@ pub(crate) fn clone_kinded_type_parameters_with_budget(
     Ok(cloned)
 }
 
+/// Copies exact ordered binder/kind records with fallible reconstruction storage.
+/// Charges one record plus each retained Kind node, without a separate walk.
+pub(crate) fn clone_kinded_type_parameters_fallibly_with_budget(
+    parameters: &[(TypeVariableId, Kind)],
+    budget: &mut TypeWorkBudget,
+) -> Result<Vec<(TypeVariableId, Kind)>, ()> {
+    budget.charge(parameters.len())?;
+    let mut cloned = Vec::new();
+    cloned.try_reserve(parameters.len()).map_err(|_| ())?;
+    for (parameter, kind) in parameters {
+        let kind = owner_arguments::clone_kind_admitted(kind, budget, &mut allocation_error)?;
+        cloned.push((*parameter, kind));
+    }
+    Ok(cloned)
+}
+
 fn clone_kind(kind: &Kind) -> Kind {
     let mut unbounded = TypeWorkBudget::unbounded();
     match clone_kind_with_budget(kind, &mut unbounded) {
@@ -5575,6 +5591,24 @@ mod tests {
             same_type_with_budget(&ty, &ty, &mut equality_short),
             Err(())
         );
+
+        // The new witness uses the same Kind reconstruction for an exact
+        // ordered mixed-kind vector, without a fake Forall Type carrier.
+        let parameters = [
+            (first, Kind::Type),
+            (second, Kind::EffectRow),
+            (TypeVariableId::new(2), Kind::Arrow(Box::new(Kind::Type), Box::new(Kind::EffectRow))),
+        ];
+        const PARAMETER_CELLS: usize = 3 + 1 + 1 + 3;
+        for available in 0..PARAMETER_CELLS {
+            assert!(matches!(clone_kinded_type_parameters_fallibly_with_budget(
+                &parameters, &mut TypeWorkBudget::with_limit(available),
+            ), Err(())));
+            let mut retry = TypeWorkBudget::with_limit(PARAMETER_CELLS);
+            let copied = clone_kinded_type_parameters_fallibly_with_budget(&parameters, &mut retry).unwrap();
+            assert_eq!(copied.as_slice(), parameters.as_slice());
+            assert_eq!(retry.used(), PARAMETER_CELLS);
+        }
 
         discard_type_iteratively(cloned);
         discard_type_iteratively(ty);

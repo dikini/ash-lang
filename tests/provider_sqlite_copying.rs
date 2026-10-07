@@ -239,3 +239,39 @@ Sqlite.StepError(error) => Sqlite.Err error
     }
     assert_eq!(copied_sizes(&observations), (vec![13], vec![13, 13]));
 }
+
+#[test]
+fn qualified_forwarding_chain_preserves_integer_and_source_completion() {
+    let fixture = Fixture::new();
+    for (name, source) in [
+        (
+            "forwarding-chain.ash",
+            include_str!("fixtures/provider-experiments/sqlite-copying/forwarding-chain.ash"),
+        ),
+        (
+            "provider.ash",
+            include_str!("fixtures/provider-experiments/sqlite-copying/provider.ash"),
+        ),
+        (
+            "sqlite.ash",
+            include_str!("fixtures/provider-experiments/sqlite-copying/sqlite.ash"),
+        ),
+    ] {
+        fs::write(fixture.path(name), source).unwrap();
+    }
+    let (value, observations) = fixture.run("forwarding-chain.ash");
+    assert_eq!(value, "Completed(Completed(Ok(42), Closed), Closed)");
+    assert_closed_probe(&observations, 1);
+    for operation in ["column_count", "column_type", "column_int64"] {
+        assert_eq!(observations.calls(operation), 1, "{operation}");
+    }
+    for operation in ["finalize", "close"] {
+        assert!(
+            observations
+                .events()
+                .contains(&Event::Call { operation, code: 0 })
+        );
+    }
+    assert_eq!(observations.calls("close_v2"), 0);
+    assert_eq!(copied_sizes(&observations), (vec![], vec![]));
+}

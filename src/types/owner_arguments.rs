@@ -553,26 +553,63 @@ pub(super) fn clone_kind_precharged<B: TypeWorkMeter>(
     budget: &mut B,
     storage_error: &mut impl FnMut(&mut B) -> B::Error,
 ) -> Result<Kind, B::Error> {
+    clone_kind_with_admission(kind, budget, storage_error, &mut |_, _| Ok(()))
+}
+
+pub(super) fn clone_kind_admitted<B: TypeWorkMeter>(
+    kind: &Kind,
+    budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+) -> Result<Kind, B::Error> {
+    clone_kind_with_admission(kind, budget, storage_error, &mut |budget, count| budget.charge(count))
+}
+
+// One reconstruction kernel serves existing prepaid callers and the new paid
+// witness. Admission occurs before retaining each root/child Visit record.
+fn clone_kind_with_admission<B: TypeWorkMeter>(
+    kind: &Kind,
+    budget: &mut B,
+    storage_error: &mut impl FnMut(&mut B) -> B::Error,
+    admit: &mut impl FnMut(&mut B, usize) -> Result<(), B::Error>,
+) -> Result<Kind, B::Error> {
     enum Task<'a> {
         Visit(&'a Kind),
         Arrow,
     }
+    fn reserve<T, V, B: TypeWorkMeter>(
+        pending: &mut Vec<T>,
+        values: &mut Vec<V>,
+        budget: &mut B,
+        storage_error: &mut impl FnMut(&mut B) -> B::Error,
+    ) -> Result<(), B::Error> {
+        pending.try_reserve(3).map_err(|_| storage_error(budget))?;
+        values.try_reserve(1).map_err(|_| storage_error(budget))?;
+        Ok(())
+    }
     let mut pending = Vec::new();
+    admit(budget, 1)?;
     pending.try_reserve(1).map_err(|_| storage_error(budget))?;
     pending.push(Task::Visit(kind));
     let mut values = Vec::new();
     while let Some(task) = pending.pop() {
-        pending.try_reserve(3).map_err(|_| storage_error(budget))?;
-        values.try_reserve(1).map_err(|_| storage_error(budget))?;
         match task {
-            Task::Visit(Kind::Type) => values.push(Kind::Type),
-            Task::Visit(Kind::EffectRow) => values.push(Kind::EffectRow),
+            Task::Visit(Kind::Type) => {
+                reserve(&mut pending, &mut values, budget, storage_error)?;
+                values.push(Kind::Type);
+            }
+            Task::Visit(Kind::EffectRow) => {
+                reserve(&mut pending, &mut values, budget, storage_error)?;
+                values.push(Kind::EffectRow);
+            }
             Task::Visit(Kind::Arrow(domain, codomain)) => {
+                admit(budget, 2)?;
+                reserve(&mut pending, &mut values, budget, storage_error)?;
                 pending.push(Task::Arrow);
                 pending.push(Task::Visit(codomain));
                 pending.push(Task::Visit(domain));
             }
             Task::Arrow => {
+                reserve(&mut pending, &mut values, budget, storage_error)?;
                 let right = values.pop().expect("kind codomain");
                 let left = values.pop().expect("kind domain");
                 values.push(Kind::Arrow(Box::new(left), Box::new(right)));

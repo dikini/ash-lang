@@ -3,6 +3,12 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+mod deferred_frame;
+mod typed_environment;
+mod local_recipe;
+mod source_visit;
+mod deferred_evidence;
+
 use super::{Failure, FunctionMetadataPreparation, MetadataVariables, charge, copy_slice, index};
 use crate::{
     core::{
@@ -264,6 +270,76 @@ struct EvidenceIndex {
     first: HashMap<EvidenceKey, usize>,
 }
 
+// Original typed Core production witnesses. These records preserve operands;
+// they authorize neither a value answer nor a completed frame. Every graph
+// rebuild remints them from that rebuild's typed Core and original graph ports.
+struct ProducerArgument {
+    port: usize,
+    value: crate::types::IterativeArgumentOwner,
+}
+
+impl std::fmt::Debug for ProducerArgument {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.debug_struct("ProducerArgument")
+            .field("port", &self.port)
+            .field("value", self.value.as_ref())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+enum ProducerWitness {
+    Abstraction {
+        binders: Vec<(crate::types::TypeVariableId, crate::types::Kind)>,
+        formals: Vec<usize>,
+    },
+    Application {
+        function: usize,
+        binders: Vec<(crate::types::TypeVariableId, crate::types::Kind)>,
+        arguments: Vec<ProducerArgument>,
+    },
+}
+
+impl ProducerWitness {
+    fn copy(&self, offset: usize, budget: &mut TypeWorkBudget) -> Result<Self, Failure> {
+        // Expression/formal/argument ports share the expression namespace.
+        // TypeVariableId labels and kinded semantic operands are not graph IDs.
+        let relocate = |port: usize| port.checked_add(offset).ok_or(Failure::Invalid);
+        charge(budget, 1)?;
+        Ok(match self {
+            Self::Abstraction { binders, formals } => {
+                let binders = crate::types::clone_kinded_type_parameters_fallibly_with_budget(binders, budget)
+                    .map_err(|()| Failure::Resource)?;
+                let mut copied = copy_slice(formals, budget)?;
+                for formal in &mut copied {
+                    *formal = relocate(*formal)?;
+                }
+                Self::Abstraction { binders, formals: copied }
+            }
+            Self::Application { function, binders, arguments } => {
+                let binders = crate::types::clone_kinded_type_parameters_fallibly_with_budget(binders, budget)
+                    .map_err(|()| Failure::Resource)?;
+                charge(budget, arguments.len())?;
+                let mut copied = Vec::new();
+                copied.try_reserve_exact(arguments.len()).map_err(|_| Failure::Resource)?;
+                for argument in arguments {
+                    let value = crate::types::IterativeArgumentOwner::new(
+                        crate::types::clone_kinded_argument_with_budget(argument.value.as_ref(), budget)
+                            .map_err(|()| Failure::Resource)?,
+                    );
+                    copied.push(ProducerArgument { port: relocate(argument.port)?, value });
+                }
+                Self::Application { function: relocate(*function)?, binders, arguments: copied }
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ProducerTable {
+    entries: HashMap<usize, ProducerWitness>,
+}
+
 #[derive(Debug)]
 pub(super) struct Graph {
     expressions: Vec<Expr>,
@@ -283,6 +359,9 @@ pub(super) struct Graph {
     // One fallibly allocated record keeps the table off ordinary Graph frames.
     // The original ordered evidence vector remains the authority for every hit.
     evidence_index: Vec<EvidenceIndex>,
+    // One optional heap record keeps the two witness variants off Graph frames.
+    // Original ordered expressions and Type/Row operands remain authoritative.
+    producers: Vec<ProducerTable>,
 }
 
 #[cfg(test)]
@@ -314,6 +393,7 @@ pub(super) fn provider_capture_graph_for_test(
             .unwrap_or_default(),
         evidence: Vec::new(),
         evidence_index: Vec::new(),
+        producers: Vec::new(),
     }
 }
 
@@ -366,6 +446,57 @@ pub(super) fn provider_typed_capture_graph_for_test(
 }
 
 impl Graph {
+    fn install_producer(
+        &mut self,
+        expression: usize,
+        witness: ProducerWitness,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        charge(budget, 1)?;
+        if self.producers.is_empty() {
+            self.producers.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+            self.producers.push(ProducerTable { entries: HashMap::new() });
+        }
+        let entries = &mut self.producers[0].entries;
+        entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+        match entries.entry(expression) {
+            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(witness); Ok(()) }
+            std::collections::hash_map::Entry::Occupied(_) => Err(Failure::Invalid),
+        }
+    }
+
+    fn discard_producer(&mut self, expression: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        // The rewrite invalidates construction authority, including when the
+        // replacement happens to have the same reduced ownership routes.
+        if let Some(table) = self.producers.first_mut() {
+            charge(budget, 1)?;
+            table.entries.remove(&expression);
+        }
+        Ok(())
+    }
+
+    fn move_producer(
+        &mut self,
+        original: usize,
+        payload: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if let Some(table) = self.producers.first_mut() {
+            charge(budget, 1)?;
+            // Reserve before removing the only owning record. Dictionary
+            // wrappers retain their own original Evidence coordinates.
+            table.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+            charge(budget, 1)?;
+            if table.entries.contains_key(&payload) {
+                return Err(Failure::Invalid);
+            }
+            if let Some(witness) = table.entries.remove(&original) {
+                table.entries.insert(payload, witness);
+            }
+        }
+        Ok(())
+    }
+
     fn provider_bindings<'a>(
         storage: &'a mut Vec<ProviderQueryBindings>,
         budget: &mut TypeWorkBudget,
@@ -460,6 +591,14 @@ impl Graph {
         );
         for (&code, &expression) in &imported.positions {
             self.position(code + code_offset, expression + offset, budget)?;
+        }
+        if let Some(table) = imported.producers.first() {
+            charge(budget, table.entries.len())?;
+            for (&expression, witness) in &table.entries {
+                let expression = expression.checked_add(offset).ok_or(Failure::Invalid)?;
+                let witness = witness.copy(offset, budget)?;
+                self.install_producer(expression, witness, budget)?;
+            }
         }
         charge(budget, imported.metadata.len())?;
         self.metadata
@@ -1149,6 +1288,7 @@ impl Graph {
             ) {
                 return Err(Failure::Invalid);
             }
+            self.discard_producer(id, budget)?;
             *self.expressions.get_mut(id).ok_or(Failure::Invalid)? = Expr::Unknown;
         }
         Ok(())
@@ -1490,6 +1630,11 @@ impl Graph {
                     &mut captures,
                     budget,
                 )?;
+                let binders = crate::types::clone_kinded_type_parameters_fallibly_with_budget(
+                    abstraction.parameters(), budget,
+                ).map_err(|()| Failure::Resource)?;
+                let formals = copy_slice(&parameters, budget)?;
+                self.install_producer(id, ProducerWitness::Abstraction { binders, formals }, budget)?;
                 Expr::Function {
                     parameters,
                     body: index(abstraction.body()),
@@ -1498,6 +1643,7 @@ impl Graph {
             }
             PureComputation::TypeApplication(application) => {
                 let mut arguments = Vec::new();
+                let mut exact = Vec::new();
                 let Type::Forall(parameters, _) = &nodes[index(application.function())].ty else {
                     return Err(Failure::Invalid);
                 };
@@ -1505,19 +1651,24 @@ impl Graph {
                 let mut rows = application.row_arguments().iter();
                 for (_, kind) in parameters.iter() {
                     let mut metadata = MetadataVariables::default();
-                    if matches!(kind, crate::types::Kind::EffectRow) {
-                        super::retain_row_variables(
-                            &mut metadata,
-                            rows.next().ok_or(Failure::Invalid)?,
-                            budget,
-                        )?;
+                    let value = if matches!(kind, crate::types::Kind::EffectRow) {
+                        let row = rows.next().ok_or(Failure::Invalid)?;
+                        super::retain_row_variables(&mut metadata, row, budget)?;
+                        crate::types::KindedArgument::RowArg(
+                            crate::types::clone_effect_row_with_budget(row, budget)
+                                .map_err(|()| Failure::Resource)?,
+                        )
                     } else {
-                        super::retain_type_variables(
-                            &mut metadata,
-                            ordinary.next().ok_or(Failure::Invalid)?,
-                            budget,
-                        )?;
-                    }
+                        let ty = ordinary.next().ok_or(Failure::Invalid)?;
+                        super::retain_type_variables(&mut metadata, ty, budget)?;
+                        crate::types::KindedArgument::TypeArg(
+                            crate::types::clone_type_with_budget(ty, budget)
+                                .map_err(|()| Failure::Resource)?,
+                        )
+                    };
+                    // Guard the complete owned term before any later fallible
+                    // slot, reservation or publication can abandon the loop.
+                    let value = crate::types::IterativeArgumentOwner::new(value);
                     let mut slots = Vec::new();
                     for variable in metadata.variables {
                         let slot = self.symbol(types, variable, source, budget)?;
@@ -1527,10 +1678,18 @@ impl Graph {
                     let argument = self.push(Expr::Merge(slots), source, budget)?;
                     arguments.try_reserve(1).map_err(|_| Failure::Resource)?;
                     arguments.push(argument);
+                    charge(budget, 1)?;
+                    exact.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    exact.push(ProducerArgument { port: argument, value });
                 }
                 if ordinary.next().is_some() || rows.next().is_some() {
                     return Err(Failure::Invalid);
                 }
+                let binders = crate::types::clone_kinded_type_parameters_fallibly_with_budget(parameters, budget)
+                    .map_err(|()| Failure::Resource)?;
+                self.install_producer(id, ProducerWitness::Application {
+                    function: index(application.function()), binders, arguments: exact,
+                }, budget)?;
                 Expr::Call {
                     function: index(application.function()),
                     arguments,
@@ -1867,6 +2026,7 @@ impl Graph {
             metadata: HashMap::new(),
             evidence: Vec::new(),
             evidence_index: Vec::new(),
+        producers: Vec::new(),
         };
         charge(budget, nodes.len())?;
         graph
@@ -1927,6 +2087,7 @@ impl Graph {
                 .iter()
                 .find(|method| method.requirement.is_none())
             {
+                graph.discard_producer(id, budget)?;
                 let selected = graph.method_target(
                     method.target,
                     method.method,
@@ -1977,6 +2138,7 @@ impl Graph {
             if !evidence.is_empty() {
                 let original = std::mem::replace(&mut graph.expressions[id], Expr::Slot);
                 let value = graph.push(original, source, budget)?;
+                graph.move_producer(id, value, budget)?;
                 graph.expressions[id] = Expr::Evidence {
                     value,
                     bindings: evidence,
@@ -2257,6 +2419,7 @@ enum Atom {
     Free,
     Unknown,
     Closure(usize, usize),
+    FramedClosure(usize, deferred_frame::CompletedFrame),
     Aggregate(usize, usize),
     Constructor(ConstructorId),
     Resource(usize, usize),
@@ -2541,6 +2704,10 @@ struct FunctionCaptureInstallation<'s, 'g> {
 
 impl FunctionCaptureInstallation<'_, '_> {
     fn install(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        source_visit::install_function(self, budget)
+    }
+
+    fn install_original(self, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
         let Self {
             analysis,
             slot,
@@ -2971,6 +3138,19 @@ impl<'s, 'g> CheckedEvidenceVisit<'s, 'g> {
                     .install_captures(budget)?
                     .route_dictionary(budget)?
                     .publish(budget),
+            },
+            Atom::FramedClosure(function, frame) => {
+                charge(budget, 1)?; // adapter dispatch, separate from frame lookup
+                // Definition constructors retain exact original provenance.
+                // Their Evidence boundary uses the original ordered transport;
+                // this is declared source transport, not a late family fallback.
+                let creation = self.analysis.frames.first().ok_or(Failure::Invalid)?
+                    .arena.original_creation(frame, budget)?;
+                if let Some(creation) = creation {
+                    self.route_atom(Atom::Closure(function, creation), budget)
+                } else {
+                    self.route_framed_evidence(function, frame, budget)
+                }
             },
             other => {
                 self.analysis.atom(self.slot, other, budget)?;
@@ -3404,6 +3584,189 @@ impl AtomStore<'_> {
     }
 }
 
+// Constructed only during the installed, exclusive definition Function visit
+// or the existing cfg(test) coalescence witness. General Call/Evidence family
+// admission remains disabled until its complete occurrence plan is proved.
+struct AdmittedFrame {
+    function: usize,
+}
+
+struct FrameState {
+    arena: deferred_frame::Arena,
+    types: typed_environment::Arena,
+    type_origins: HashMap<usize, Vec<typed_environment::TypeOrigin>>,
+    type_readers: HashMap<usize, Vec<usize>>,
+    readers: HashMap<deferred_frame::OriginalPort, Vec<usize>>,
+    capture_classes: HashMap<(usize, usize, usize), deferred_frame::ProjectionClass>,
+    incoming: HashMap<usize, Vec<deferred_frame::RouteId>>,
+    transfers: HashSet<(Option<usize>, usize, usize, deferred_frame::CompletedFrame)>,
+    evidence_preparations: HashMap<EvidencePreparationKey, EvidencePreparation>,
+    evidence_coalescer: Option<deferred_evidence::Coalescer>,
+}
+
+struct FrameLeaves<'a> {
+    graph: &'a Graph,
+    classes: &'a HashMap<(usize, usize, usize), deferred_frame::ProjectionClass>,
+    indices: &'a HashMap<(usize, usize), usize>,
+    slots: &'a [Slot],
+    frozen: Option<usize>,
+}
+
+impl deferred_frame::Leaves for FrameLeaves<'_> {
+    fn atoms(&self, port: deferred_frame::OriginalPort) -> Option<&[Atom]> {
+        let slot = self.slots.get(*self.indices.get(&(port.expression, port.context))?)?;
+        if slot.key != (port.expression, port.context) { return None; }
+        if self.frozen.is_some_and(|end| port.context >= end || !slot.terminal) { return None; }
+        Some(&slot.atoms)
+    }
+    fn capture_class(&self, function: usize, creation: usize, capture: usize) -> Option<deferred_frame::ProjectionClass> {
+        self.classes.get(&(function, creation, capture)).copied()
+    }
+    fn function_captures(&self, function: usize) -> Option<&[usize]> {
+        match self.graph.expressions.get(function)? {
+            Expr::Function { captures, .. } => Some(captures),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum FramePortWork {
+    Concrete(usize),
+    Original(deferred_frame::OriginalPort),
+    Virtual(deferred_frame::RouteId),
+    Closure(deferred_frame::CompletedFrame),
+}
+
+// Include in capture::value after `mod deferred_evidence;`. This fragment
+// assumes the existing parent AdmittedFrame { function: usize } and FrameState.
+// Required FrameState fields (add to its existing declaration):
+//   evidence_preparations: HashMap<EvidencePreparationKey, EvidencePreparation>,
+//   evidence_coalescer: Option<deferred_evidence::Coalescer>,
+// Normal initialization: HashMap::new(), Some(Coalescer::new()).
+// Focus snapshot initialization: HashMap::new(), None. Copy existing arena/
+// TypeOrigins as before; never copy admission or grow coalesced state in focus.
+
+type EvidencePreparationKey = (usize, usize, usize, usize);
+
+struct EvidencePreparation {
+    family: deferred_evidence::FamilyPlan,
+    admitted: AdmittedFrame,
+}
+
+impl FrameState {
+    // Storage initialization only; no source admission or frame is produced.
+    fn new_deferred() -> Self {
+        Self {
+            arena: deferred_frame::Arena::new(),
+            types: typed_environment::Arena::new(),
+            type_origins: HashMap::new(), type_readers: HashMap::new(),
+            readers: HashMap::new(), capture_classes: HashMap::new(),
+            incoming: HashMap::new(), transfers: HashSet::new(),
+            evidence_preparations: HashMap::new(),
+            evidence_coalescer: Some(deferred_evidence::Coalescer::new()),
+        }
+    }
+}
+
+// This is the sole Local(q,E) compiler/qualifier seam: a future checked source
+// preparation calls deferred_evidence::prepare_family with ORIGINAL complete
+// CaptureTopology and exact local recipes, obtains its borrowed capability,
+// reserves this map and inserts (G,e,args_context,E) -> EvidencePreparation.
+// There is deliberately NO production Evidence insertion/constructor here;
+// the separate definition Function visit retains original Evidence transport.
+// Missing preparation is Invalid for an already framed operand; no fallback.
+
+struct EvidenceVisitTransport<'s, 'g> {
+    analysis: &'s mut Analysis<'g>,
+    output: usize,
+}
+
+impl deferred_evidence::Transport for EvidenceVisitTransport<'_, '_> {
+    fn arena(&mut self) -> Result<&mut deferred_frame::Arena, Failure> {
+        Ok(&mut self.analysis.frames.first_mut().ok_or(Failure::Invalid)?.arena)
+    }
+
+    fn publish_head(&mut self, port: deferred_frame::OriginalPort,
+        complete: deferred_frame::RouteId, budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        // Existing method pays queue storage, changes revision, wakes virtual
+        // readers AND resets/requeues any original concrete destination port.
+        self.analysis.publish_frame_head(port, complete, budget)
+    }
+
+    fn bind_origin(&mut self, context: usize, origin: typed_environment::TypeOrigin,
+        budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        // Includes unresolved OriginalContext edges, not just known env IDs.
+        self.analysis.bind_type_origin(context, origin, budget)
+    }
+
+    fn publish_output(&mut self, function: usize, frame: deferred_frame::CompletedFrame,
+        budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        self.analysis.atom(self.output, Atom::FramedClosure(function, frame), budget)
+    }
+}
+
+impl Analysis<'_> {
+    fn transfer_framed_evidence(
+        &mut self, output: usize, function: usize, frame: deferred_frame::CompletedFrame,
+        evidence: usize, arguments_context: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.focus.is_some() || self.frozen_contexts != 0 { return Err(Failure::Invalid); }
+        // Original Evidence construction, not a new route-key context.
+        let specialized = self.context(arguments_context, Transition::Call(evidence), budget)?;
+        let key = (function, evidence, arguments_context, specialized);
+        charge(budget, 4)?; // remove/take and guaranteed restoration below.
+        let (preparation, mut coalescer) = {
+            let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+            let preparation = frames.evidence_preparations.remove(&key).ok_or(Failure::Invalid)?;
+            let Some(coalescer) = frames.evidence_coalescer.take() else {
+                frames.evidence_preparations.insert(key, preparation);
+                return Err(Failure::Invalid);
+            };
+            (preparation, coalescer)
+        };
+        // The exclusively borrowed original visit admits no nested Evidence
+        // execution; publication only queues readers. Every Result restores
+        // the removed preparation and coalescer; their map capacity remains.
+        let result = (|| {
+            if !preparation.family.matches(function, evidence, arguments_context, specialized) {
+                return Err(Failure::Invalid);
+            }
+            let alternatives = self.frame_alternatives(frame, budget)?;
+            let mut transport = EvidenceVisitTransport { analysis: self, output };
+            for (alternative, captures) in alternatives.iter().enumerate() {
+                coalescer.transfer(&preparation.family, &preparation.admitted,
+                    deferred_evidence::InputKey { frame, alternative }, captures,
+                    &mut transport, budget)?;
+            }
+            Ok(())
+        })();
+        // No method above removes FrameState; this is the same owned carrier.
+        let Some(frames) = self.frames.first_mut() else { return Err(Failure::Invalid); };
+        frames.evidence_preparations.insert(key, preparation);
+        frames.evidence_coalescer = Some(coalescer);
+        result
+    }
+}
+
+impl CheckedEvidenceVisit<'_, '_> {
+    fn route_framed_evidence(self, function: usize, frame: deferred_frame::CompletedFrame,
+        budget: &mut TypeWorkBudget) -> Result<Self, Failure>
+    {
+        self.analysis.transfer_framed_evidence(self.slot, function, frame,
+            self.evidence, self.arguments_context, budget)?;
+        Ok(self)
+    }
+}
+
+// Add this arm to CheckedEvidenceVisit::route_atom before `other =>`:
+// Atom::FramedClosure(function, frame) => self.route_framed_evidence(function, frame, budget),
+// Keep the original Closure/Unknown/other arms and original Evidence input
+// installation/readiness unchanged. There is no generic permission to coalesce
+// different E values or the raw original G,I results outside this Evidence.
 pub(super) struct Analysis<'a> {
     graph: &'a Graph,
     evidence_ports: HashMap<usize, Vec<usize>>,
@@ -3440,9 +3803,443 @@ pub(super) struct Analysis<'a> {
     focus: Option<(usize, usize)>,
     cuts: HashMap<(usize, usize, usize), PreparedCut>,
     provider_closed_data: bool,
+    frames: Vec<FrameState>,
+    // Once per normal Graph loan; focused snapshots never prepare/admit source.
+    source_recipes: Vec<local_recipe::Compiler<'a>>,
 }
 
 impl<'a> Analysis<'a> {
+    fn projected_atom(atom: deferred_frame::ProjectedAtom) -> Atom {
+        match atom {
+            deferred_frame::ProjectedAtom::Original(atom) => atom,
+            deferred_frame::ProjectedAtom::Closure { function, frame } => Atom::FramedClosure(function, frame),
+        }
+    }
+
+    fn watch_frame_head(
+        &mut self, port: deferred_frame::OriginalPort, reader: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        frames.readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let readers = frames.readers.entry(port).or_default();
+        charge(budget, readers.len())?;
+        if !readers.contains(&reader) {
+            charge(budget, 1)?;
+            readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+            readers.push(reader);
+        }
+        Ok(())
+    }
+
+    fn frame_atoms(
+        &mut self, route: deferred_frame::RouteId, reader: Option<usize>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<Atom>, Failure> {
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        let leaves = FrameLeaves { graph: self.graph, classes: &frames.capture_classes, indices: &self.indices, slots: &self.slots, frozen: None };
+        let result = frames.arena.resolve_observed(route, &leaves, budget)?;
+        if let Some(reader) = reader {
+            for port in result.leaves {
+                charge(budget, 1)?;
+                let slot = *self.indices.get(&(port.expression, port.context)).ok_or(Failure::Invalid)?;
+                self.watch(slot, reader, budget)?;
+            }
+            for port in result.heads { self.watch_frame_head(port, reader, budget)?; }
+        }
+        charge(budget, result.atoms.len())?;
+        let mut atoms = Vec::new();
+        atoms.try_reserve_exact(result.atoms.len()).map_err(|_| Failure::Resource)?;
+        atoms.extend(result.atoms.into_iter().map(Self::projected_atom));
+        Ok(atoms)
+    }
+
+    fn publish_frame_head(
+        &mut self, original: deferred_frame::OriginalPort, complete: deferred_frame::RouteId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if original.context < self.frozen_contexts { return Err(Failure::Invalid); }
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        let readers = frames.readers.get(&original).map_or(&[][..], |readers| &readers[..]);
+        charge(budget, readers.len() + 2)?;
+        let concrete = self.indices.get(&(original.expression, original.context)).copied();
+        if concrete.is_some_and(|slot| self.slots[slot].terminal) { return Err(Failure::Invalid); }
+        self.pending.try_reserve(readers.len() + usize::from(concrete.is_some())).map_err(|_| Failure::Resource)?;
+        if frames.arena.publish_head(original, complete, budget)? {
+            // A new capture alternative changes value revision even when the
+            // one-code call-target projection has already been delivered.
+            self.revision += 1;
+            if let Some(slot) = concrete {
+                self.slots[slot].preparation = SlotPreparation::Pending;
+                if !self.slots[slot].queued {
+                    self.slots[slot].queued = true;
+                    self.pending.push_back(slot);
+                }
+            }
+            for &reader in readers {
+                if !self.slots[reader].queued {
+                    self.slots[reader].queued = true;
+                    self.pending.push_back(reader);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn original_frame_atoms(
+        &mut self, original: deferred_frame::OriginalPort, observe: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Option<Vec<Atom>>, Failure> {
+        let head = self.frames.first().ok_or(Failure::Invalid)?.arena.lookup_head(original, budget)?;
+        if let Some(head) = head {
+            if observe { if let Some(reader) = self.current { self.watch_frame_head(original, reader, budget)?; } }
+            return self.frame_atoms(head, if observe { self.current } else { None }, budget).map(Some);
+        }
+        charge(budget, 1)?;
+        let Some(&slot) = self.indices.get(&(original.expression, original.context)) else { return Ok(None); };
+        if observe { if let Some(reader) = self.current { self.watch(slot, reader, budget)?; } }
+        copy_slice(&self.slots[slot].atoms, budget).map(Some)
+    }
+
+    fn frame_alternatives(
+        &self, frame: deferred_frame::CompletedFrame, budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<deferred_frame::CaptureAlternative>, Failure> {
+        self.frames.first().ok_or(Failure::Invalid)?.arena.alternatives(frame, budget)
+    }
+
+    fn provider_independent_framed(
+        &mut self, root: FramePortWork, allow_callable: bool, budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let mut pending = copy_slice(&[root], budget)?;
+        let mut visited = HashSet::new();
+        while let Some(work) = pending.pop() {
+            charge(budget, 1)?;
+            if visited.contains(&work) { continue; }
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            visited.insert(work);
+            let atoms = match work {
+                FramePortWork::Concrete(slot) => copy_slice(&self.slots.get(slot).ok_or(Failure::Invalid)?.atoms, budget)?,
+                FramePortWork::Original(original) => self.original_frame_atoms(original, false, budget)?.ok_or(Failure::Invalid)?,
+                FramePortWork::Virtual(route) => self.frame_atoms(route, None, budget)?,
+                FramePortWork::Closure(frame) => {
+                    for alternative in self.frame_alternatives(frame, budget)? {
+                        let Expr::Function { captures, .. } = &self.graph.expressions[alternative.function] else { return Err(Failure::Invalid); };
+                        charge(budget, captures.len())?;
+                        if captures.len() != alternative.captures.len()
+                            || !captures.iter().zip(&alternative.captures).all(|(original, (capture, _))| original == capture) {
+                            return Err(Failure::Invalid);
+                        }
+                        pending.try_reserve(alternative.captures.len()).map_err(|_| Failure::Resource)?;
+                        for (_, route) in alternative.captures { pending.push(FramePortWork::Virtual(route)); }
+                    }
+                    // Zero declared captures is a valid vacuous conjunction.
+                    continue;
+                }
+            };
+            if atoms.is_empty() { return Err(Failure::Invalid); }
+            for atom in atoms {
+                let fields = match atom {
+                    Atom::Free | Atom::Constructor(_) => None,
+                    Atom::FramedClosure(_, frame) if allow_callable => {
+                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        pending.push(FramePortWork::Closure(frame));
+                        None
+                    }
+                    Atom::Closure(target, context) if allow_callable => {
+                        let Expr::Function { captures, .. } = &self.graph.expressions[target] else { return Err(Failure::Invalid); };
+                        Some((captures.as_slice(), context))
+                    }
+                    Atom::Aggregate(target, context) => match &self.graph.expressions[target] {
+                        Expr::Tuple(fields) | Expr::Call { arguments: fields, .. } => Some((fields.as_slice(), context)),
+                        _ => return Err(Failure::Invalid),
+                    },
+                    _ => return Err(Failure::Invalid),
+                };
+                if let Some((fields, context)) = fields {
+                    charge(budget, fields.len())?;
+                    pending.try_reserve(fields.len()).map_err(|_| Failure::Resource)?;
+                    for field in fields {
+                        // Concrete environments preserve their original missing
+                        // capture rejection; virtual alternatives are explicit.
+                        pending.push(FramePortWork::Original(deferred_frame::OriginalPort { expression: *field, context }));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn dependencies_framed(
+        &mut self, root: usize, budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<Atom>, Failure> {
+        let mut pending = copy_slice(&[FramePortWork::Concrete(root)], budget)?;
+        let mut visited = HashSet::new();
+        let mut resources = Vec::new();
+        while let Some(work) = pending.pop() {
+            charge(budget, 1)?;
+            if visited.contains(&work) { continue; }
+            visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+            visited.insert(work);
+            let atoms = match work {
+                FramePortWork::Concrete(slot) => {
+                    if let Some(reader) = self.current { self.watch(slot, reader, budget)?; }
+                    copy_slice(&self.slots[slot].atoms, budget)?
+                }
+                FramePortWork::Original(original) => {
+                    let Some(atoms) = self.original_frame_atoms(original, true, budget)? else { continue; };
+                    atoms
+                }
+                FramePortWork::Virtual(route) => self.frame_atoms(route, self.current, budget)?,
+                FramePortWork::Closure(frame) => {
+                    for alternative in self.frame_alternatives(frame, budget)? {
+                        charge(budget, alternative.captures.len())?;
+                        pending.try_reserve(alternative.captures.len()).map_err(|_| Failure::Resource)?;
+                        for (_, route) in alternative.captures { pending.push(FramePortWork::Virtual(route)); }
+                    }
+                    continue;
+                }
+            };
+            for atom in atoms {
+                charge(budget, 1)?;
+                let fields = match atom {
+                    Atom::Resource(..) => {
+                        charge(budget, resources.len())?;
+                        if !resources.contains(&atom) {
+                            resources.try_reserve(1).map_err(|_| Failure::Resource)?;
+                            resources.push(atom);
+                        }
+                        None
+                    }
+                    Atom::FramedClosure(_, frame) => {
+                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        pending.push(FramePortWork::Closure(frame));
+                        None
+                    }
+                    Atom::Closure(target, context) => {
+                        let Expr::Function { captures, .. } = &self.graph.expressions[target] else { return Err(Failure::Invalid); };
+                        Some((captures.as_slice(), context))
+                    }
+                    Atom::Aggregate(target, context) => match &self.graph.expressions[target] {
+                        Expr::Tuple(fields) | Expr::Call { arguments: fields, .. } => Some((fields.as_slice(), context)),
+                        Expr::Resource { body, success: Some(_), .. } => Some((std::slice::from_ref(body), context)),
+                        _ => return Err(Failure::Invalid),
+                    },
+                    _ => None,
+                };
+                if let Some((fields, context)) = fields {
+                    charge(budget, fields.len())?;
+                    pending.try_reserve(fields.len()).map_err(|_| Failure::Resource)?;
+                    for field in fields {
+                        charge(budget, 1)?;
+                        pending.push(FramePortWork::Original(deferred_frame::OriginalPort { expression: *field, context }));
+                    }
+                }
+            }
+        }
+        Ok(resources)
+    }
+
+    fn install_frame_link(
+        &mut self, target: usize, source: deferred_frame::RouteId,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.slots[target].terminal { return Err(Failure::Invalid); }
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        frames.incoming.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let routes = frames.incoming.entry(target).or_default();
+        charge(budget, routes.len())?;
+        if routes.contains(&source) { return Ok(()); }
+        charge(budget, 1)?;
+        routes.try_reserve(1).map_err(|_| Failure::Resource)?;
+        // Reserve initial delivery before publishing the retained live link.
+        self.pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+        routes.push(source);
+        self.revision += 1;
+        if !self.slots[target].queued {
+            self.slots[target].queued = true;
+            self.pending.push_back(target);
+        }
+        Ok(())
+    }
+
+    fn deliver_frame_links(&mut self, target: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure> {
+        if self.slots[target].terminal { return Ok(()); }
+        let Some(frames) = self.frames.first() else { return Ok(()); };
+        charge(budget, 1)?;
+        let Some(routes) = frames.incoming.get(&target) else { return Ok(()); };
+        let routes = copy_slice(routes, budget)?;
+        for route in routes {
+            // Every live leaf/head wakes THIS destination, including after its
+            // local Alias/Merge setup is complete. Answers themselves are never
+            // cached across a normal source revision.
+            for atom in self.frame_atoms(route, Some(target), budget)? {
+                self.atom(target, atom, budget)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn transfer_framed_call(
+        &mut self, slot: usize, expression: usize, context: usize,
+        target: usize, frame: deferred_frame::CompletedFrame, actual: &[usize],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let stamp = (self.current, slot, target, frame);
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 2)?;
+        if frames.arena.function(frame)? != target { return Err(Failure::Invalid); }
+        // Type-origin propagation remains live even after structural capture
+        // transfer is complete; the same Invoke may acquire a new environment.
+        let already = frames.transfers.contains(&stamp);
+        frames.transfers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let graph = self.graph;
+        let Expr::Function { parameters, captures, body } = &graph.expressions[target] else { return Err(Failure::Invalid); };
+        if parameters.len() != actual.len() { return Err(Failure::Invalid); }
+        // The real ordinary invocation, actual term parameters, body output and
+        // control target remain those of the original call and original target.
+        let invoked = self.context(context, Transition::Invoke(expression, target), budget)?;
+        self.transfer_frame_type_origins(frame, invoked, slot, budget)?;
+        if already { return Ok(()); }
+        let own = self.current == Some(slot);
+        charge(budget, 1)?;
+        for (&parameter, &argument) in parameters.iter().zip(actual) {
+            let parameter = if own { self.install_slot(parameter, invoked, budget)? }
+                else { self.slot(parameter, invoked, budget)? };
+            self.edge(parameter, argument, budget)?;
+        }
+        for capture in captures {
+            let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+            let class = frames.arena.capture_class(frame, *capture, budget)?;
+            let source = frames.arena.transfer_union(frame, *capture, class, budget)?;
+            let destination = if own { self.install_slot(*capture, invoked, budget)? }
+                else { self.slot(*capture, invoked, budget)? };
+            self.install_frame_link(destination, source, budget)?;
+        }
+        self.link(slot, *body, invoked, budget)?;
+        self.frames.first_mut().ok_or(Failure::Invalid)?.transfers.insert(stamp);
+        Ok(())
+    }
+    fn watch_type_origins(&mut self, context: usize, reader: usize,
+        budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 1)?;
+        frames.type_readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let readers = frames.type_readers.entry(context).or_default();
+        charge(budget, readers.len())?;
+        if !readers.contains(&reader) {
+            readers.try_reserve(1).map_err(|_| Failure::Resource)?;
+            readers.push(reader);
+        }
+        Ok(())
+    }
+
+    fn bind_type_origin(&mut self, context: usize, origin: typed_environment::TypeOrigin,
+        budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        if context < self.frozen_contexts { return Err(Failure::Invalid); }
+        let frames = self.frames.first_mut().ok_or(Failure::Invalid)?;
+        charge(budget, 2)?;
+        if let Some(origins) = frames.type_origins.get(&context) {
+            charge(budget, origins.len())?;
+            if origins.contains(&origin) { return Ok(()); }
+        }
+        let readers = frames.type_readers.get(&context).map(Vec::as_slice).unwrap_or(&[]);
+        charge(budget, readers.len() + 1)?;
+        self.pending.try_reserve(readers.len()).map_err(|_| Failure::Resource)?;
+        frames.type_origins.try_reserve(1).map_err(|_| Failure::Resource)?;
+        let origins = frames.type_origins.entry(context).or_default();
+        origins.try_reserve(1).map_err(|_| Failure::Resource)?;
+        // A full Environment ID can be bound to the original context; an
+        // unresolved context edge remains explicit and is never ignored when
+        // another known environment happens to exist at the same invocation.
+        if let typed_environment::TypeOrigin::Environment(id) = origin {
+            frames.types.get(id)?;
+            if self.frozen_contexts == 0 {
+                frames.types.bind_context(context, id, budget)?;
+            }
+            // In a focused query the Type arena is immutable. New query-local
+            // context associations live only in type_origins below; they never
+            // grow the frozen Type/Row environment arena or normal analysis.
+        }
+        origins.push(origin);
+        self.revision += 1;
+        for &reader in readers {
+            if !self.slots[reader].queued {
+                self.slots[reader].queued = true;
+                self.pending.push_back(reader);
+            }
+        }
+        Ok(())
+    }
+
+    fn resolved_type_origins(&mut self, context: usize, reader: Option<usize>,
+        budget: &mut TypeWorkBudget)
+        -> Result<(Vec<typed_environment::TypeEnvironmentId>, bool), Failure>
+    {
+        let mut pending = copy_slice(&[(context, false)], budget)?;
+        let mut active = HashSet::new();
+        let mut visited = HashSet::new();
+        let mut environments = Vec::new();
+        let mut unresolved = false;
+        while let Some((context, finish)) = pending.pop() {
+            charge(budget, 1)?;
+            if visited.contains(&context) { continue; }
+            if finish {
+                active.remove(&context);
+                visited.try_reserve(1).map_err(|_| Failure::Resource)?;
+                visited.insert(context);
+                continue;
+            }
+            if active.contains(&context) {
+                // Ordinary analysis may fold recurrent contexts. That is an
+                // unresolved typing origin, not a newly invalid Ash program.
+                // A future source admission must decline this family first.
+                unresolved = true;
+                continue;
+            }
+            active.try_reserve(1).map_err(|_| Failure::Resource)?;
+            active.insert(context);
+            pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+            pending.push((context, true));
+            if let Some(reader) = reader { self.watch_type_origins(context, reader, budget)?; }
+            let frames = self.frames.first().ok_or(Failure::Invalid)?;
+            let origins = frames.type_origins.get(&context).map(Vec::as_slice).unwrap_or(&[]);
+            if origins.is_empty() { unresolved = true; }
+            charge(budget, origins.len())?;
+            for origin in origins {
+                match *origin {
+                    typed_environment::TypeOrigin::Environment(id) => {
+                        charge(budget, environments.len())?;
+                        if !environments.contains(&id) {
+                            environments.try_reserve(1).map_err(|_| Failure::Resource)?;
+                            environments.push(id);
+                        }
+                    }
+                    typed_environment::TypeOrigin::OriginalContext(source) => {
+                        pending.try_reserve(1).map_err(|_| Failure::Resource)?;
+                        pending.push((source, false));
+                    }
+                }
+            }
+        }
+        Ok((environments, unresolved))
+    }
+
+    fn transfer_frame_type_origins(&mut self, frame: deferred_frame::CompletedFrame,
+        invoked: usize, reader: usize, budget: &mut TypeWorkBudget) -> Result<(), Failure>
+    {
+        for alternative in self.frame_alternatives(frame, budget)? {
+            if let typed_environment::TypeOrigin::OriginalContext(source) = alternative.type_origin {
+                self.watch_type_origins(source, reader, budget)?;
+            }
+            self.bind_type_origin(invoked, alternative.type_origin, budget)?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)] // Static cut identity and its terminal contract are separate inputs.
     pub(super) fn restore_cut(
         &mut self,
@@ -3578,6 +4375,26 @@ impl<'a> Analysis<'a> {
         charge(budget, self.slots.len())?;
         query.contexts = self.contexts.copy(budget)?;
         query.frozen_contexts = query.contexts.len();
+        if let Some(frames) = self.frames.first() {
+            let arena = frames.arena.snapshot(query.frozen_contexts, budget)?;
+            charge(budget, 1)?;
+            query.frames.try_reserve_exact(1).map_err(|_| Failure::Resource)?;
+            charge(budget, frames.capture_classes.len())?;
+            let mut capture_classes = HashMap::new();
+            capture_classes.try_reserve(frames.capture_classes.len()).map_err(|_| Failure::Resource)?;
+            capture_classes.extend(frames.capture_classes.iter().map(|(key, class)| (*key, *class)));
+            let types = frames.types.snapshot(query.frozen_contexts, budget)?;
+            charge(budget, frames.type_origins.len())?;
+            let mut type_origins = HashMap::new();
+            type_origins.try_reserve(frames.type_origins.len()).map_err(|_| Failure::Resource)?;
+            for (&context, origins) in &frames.type_origins {
+                if context < query.frozen_contexts { type_origins.insert(context, copy_slice(origins, budget)?); }
+            }
+            query.frames.push(FrameState { arena, types, type_origins, type_readers: HashMap::new(),
+                readers: HashMap::new(), capture_classes,
+                incoming: HashMap::new(), transfers: HashSet::new(),
+                evidence_preparations: HashMap::new(), evidence_coalescer: None });
+        }
         query
             .slots
             .try_reserve(self.slots.len())
@@ -3637,6 +4454,22 @@ impl<'a> Analysis<'a> {
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
         charge(budget, 1)?;
+        if let Some(frames) = self.frames.first_mut() {
+            let leaves = FrameLeaves { graph: self.graph, classes: &frames.capture_classes, indices: &self.indices, slots: &self.slots, frozen: Some(self.frozen_contexts) };
+            let original = deferred_frame::OriginalPort { expression, context: frozen };
+            match frames.arena.freeze_virtual(original, &leaves, budget)? {
+                deferred_frame::Observation::Absent => {}
+                deferred_frame::Observation::Present(atoms) => {
+                    let target = self.slot(expression, active, budget)?;
+                    if !self.slots[target].terminal && (!self.slots[target].atoms.is_empty() || !self.slots[target].edges.is_empty()) {
+                        return Err(Failure::Invalid);
+                    }
+                    self.slots[target].terminal = true;
+                    for atom in atoms { self.atom(target, Self::projected_atom(atom), budget)?; }
+                    return Ok(());
+                }
+            }
+        }
         let source = *self
             .indices
             .get(&(expression, frozen))
@@ -3708,11 +4541,14 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         for capture in captures {
-            let slot = *self
-                .indices
-                .get(&(*capture, context))
-                .ok_or(Failure::Invalid)?;
-            self.provider_independent_slot(slot, true, budget)?;
+            if self.frames.is_empty() {
+                let slot = *self.indices.get(&(*capture, context)).ok_or(Failure::Invalid)?;
+                self.provider_independent_slot(slot, true, budget)?;
+            } else {
+                self.provider_independent_framed(FramePortWork::Original(deferred_frame::OriginalPort {
+                    expression: *capture, context,
+                }), true, budget)?;
+            }
         }
         Ok(())
     }
@@ -3729,6 +4565,16 @@ impl<'a> Analysis<'a> {
     }
 
     fn provider_independent_slot(
+        &mut self,
+        root: usize,
+        allow_callable: bool,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.frames.is_empty() { self.provider_independent_concrete(root, allow_callable, budget) }
+        else { self.provider_independent_framed(FramePortWork::Concrete(root), allow_callable, budget) }
+    }
+
+    fn provider_independent_concrete(
         &self,
         root: usize,
         allow_callable: bool,
@@ -3878,7 +4724,7 @@ impl<'a> Analysis<'a> {
         let mut returns = false;
         for atom in copy_slice(&self.slots[function].atoms, budget)? {
             match atom {
-                Atom::Closure(target, _) => {
+                Atom::Closure(target, _) | Atom::FramedClosure(target, _) => {
                     let context =
                         self.context(context, Transition::Invoke(expression, target), budget)?;
                     let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
@@ -3924,7 +4770,7 @@ impl<'a> Analysis<'a> {
         let mut targets = Vec::new();
         for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
             match atom {
-                Atom::Closure(target, _) => {
+                Atom::Closure(target, _) | Atom::FramedClosure(target, _) => {
                     let context =
                         self.context(context, Transition::Invoke(expression, target), budget)?;
                     let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
@@ -4205,6 +5051,8 @@ impl<'a> Analysis<'a> {
             focus: None,
             cuts: HashMap::new(),
             provider_closed_data: false,
+            frames: Vec::new(),
+            source_recipes: Vec::new(),
         })
     }
 
@@ -4401,6 +5249,7 @@ impl<'a> Analysis<'a> {
                 }
                 .evaluate(budget)?
             };
+            self.deliver_frame_links(slot, budget)?;
             // Live ordered edges are processed on every visit, including after
             // setup completion. A later owner/Unknown is never a cached answer.
             // Evaluate has finished installing this visit's edges. atom() below
@@ -4488,6 +5337,13 @@ impl<'a> Analysis<'a> {
         // commits it after propagation; direct evaluation still always runs.
         let (expression, context) = self.slots[slot].key;
         let graph = self.graph;
+        if let Some(frames) = self.frames.first() {
+            let original = deferred_frame::OriginalPort { expression, context };
+            if let Some(route) = frames.arena.lookup_head(original, budget)? {
+                for atom in self.frame_atoms(route, Some(slot), budget)? { self.atom(slot, atom, budget)?; }
+                return Ok(SetupOutcome::NeedsInputsOrDynamic);
+            }
+        }
         let setup = match &graph.expressions[expression] {
             Expr::Scalar => {
                 self.atom(slot, Atom::Free, budget)?;
@@ -4563,6 +5419,16 @@ impl<'a> Analysis<'a> {
                 charge(budget, atom_count)?;
                 for atom_index in 0..atom_count {
                     let atom = self.slots[function].atoms[atom_index];
+                    charge(budget, 1)?; // added provenance adapter dispatch
+                    let atom = match atom {
+                        Atom::FramedClosure(target, frame) => {
+                            match self.frames.first().ok_or(Failure::Invalid)?.arena.original_creation(frame, budget)? {
+                                Some(creation) => Atom::Closure(target, creation),
+                                None => atom,
+                            }
+                        }
+                        _ => atom,
+                    };
                     match atom {
                         Atom::Closure(target, creation) => {
                             let Expr::Function {
@@ -4579,6 +5445,11 @@ impl<'a> Analysis<'a> {
                             // Readiness watches above are refreshed on every
                             // evaluation. Once this exact transfer succeeds,
                             // its existing edges carry later argument/capture atoms.
+                            if !self.frames.is_empty() {
+                                let invoked = self.context(context, Transition::Invoke(expression, target), budget)?;
+                                self.watch_type_origins(creation, slot, budget)?;
+                                self.bind_type_origin(invoked, typed_environment::TypeOrigin::OriginalContext(creation), budget)?;
+                            }
                             let transfer = (self.current, slot, target, creation);
                             charge(budget, 1)?;
                             if self.callable_transfers.contains(&transfer) {
@@ -4602,6 +5473,9 @@ impl<'a> Analysis<'a> {
                                 transfer,
                             }
                             .install(budget)?;
+                        }
+                        Atom::FramedClosure(target, frame) => {
+                            self.transfer_framed_call(slot, expression, context, target, frame, &actual, budget)?;
                         }
                         Atom::Constructor(_) => self.atom(
                             slot,
@@ -5069,6 +5943,15 @@ impl<'a> Analysis<'a> {
         root: usize,
         budget: &mut TypeWorkBudget,
     ) -> Result<Vec<Atom>, Failure> {
+        if self.frames.is_empty() { self.dependencies_concrete(root, budget) }
+        else { self.dependencies_framed(root, budget) }
+    }
+
+    fn dependencies_concrete(
+        &mut self,
+        root: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Vec<Atom>, Failure> {
         let mut pending = copy_slice(&[root], budget)?;
         let mut visited = HashSet::new();
         let mut resources = Vec::new();
@@ -5292,6 +6175,7 @@ mod tests {
             metadata: HashMap::new(),
             evidence: Vec::new(),
             evidence_index: Vec::new(),
+        producers: Vec::new(),
         }
     }
 
@@ -10536,4 +11420,221 @@ mod tests {
         );
     }
     // ASH_INPUT169_END_TESTS
+// Include inside existing capture::value::tests. These are synthetic original
+// graph correspondence regressions, NOT admitted typed Ash source witnesses.
+// This Evidence-family token is constructed only in cfg(test); production
+// Evidence admission is off. The independent definition constructor retains
+// exact original creation provenance and original Evidence transport.
+
+fn evidence_union_test_graph() -> Graph {
+    graph(vec![
+        Expr::Slot, Expr::Slot, Expr::Scalar,
+        Expr::Function { parameters: Vec::new(), body: 2, captures: vec![0, 1] },
+        Expr::Evidence { value: 3, bindings: Vec::new() },
+        Expr::Evidence { value: 3, bindings: Vec::new() },
+        Expr::Slot, Expr::Slot, Expr::Slot,
+    ])
+}
+
+fn evidence_union_input(
+    analysis: &mut Analysis<'_>, creation: usize, admitted: &AdmittedFrame,
+    work: &mut TypeWorkBudget,
+) -> deferred_frame::CompletedFrame {
+    let arena = &mut analysis.frames[0].arena;
+    let q0 = arena.head(deferred_frame::OriginalPort { expression: 0, context: creation }, work).unwrap();
+    let q1 = arena.head(deferred_frame::OriginalPort { expression: 1, context: creation }, work).unwrap();
+    let pending = arena.bindings(3, &[0, 1], &[(0, q0), (1, q1)],
+        &[deferred_frame::ProjectionClass::Metadata; 2],
+        typed_environment::TypeOrigin::OriginalContext(creation), work).unwrap();
+    arena.complete_under(pending, admitted).unwrap()
+}
+
+fn evidence_union_family(
+    reference: &mut Analysis<'_>, candidate: &mut Analysis<'_>, evidence: usize,
+    specialized: usize, work: &mut TypeWorkBudget,
+) -> deferred_evidence::FamilyPlan {
+    let topology = reference.prepare_capture_topology(3, evidence, work).unwrap();
+    let empty = candidate.frames[0].arena.empty(work).unwrap();
+    let locals = [0, 1].map(|expression| deferred_evidence::LocalRecipe {
+        expression, class: deferred_frame::ProjectionClass::Metadata, route: empty,
+    });
+    deferred_evidence::prepare_family(reference.graph, &reference.capture_topologies[topology],
+        topology, 3, evidence, 0, specialized, &locals, work).unwrap().unwrap()
+}
+
+#[test]
+fn evidence_coalesces_complementary_empty_capture_ports_before_provider_validity() {
+    let graph = evidence_union_test_graph();
+    let mut work = TypeWorkBudget::unbounded();
+    let mut reference = Analysis::new(&graph, &mut work).unwrap();
+    let a = reference.context(0, Transition::Root(71), &mut work).unwrap();
+    let b = reference.context(0, Transition::Root(72), &mut work).unwrap();
+    let e = reference.context(0, Transition::Call(4), &mut work).unwrap();
+    for creation in [a, b] {
+        for capture in [0, 1] { reference.slot(capture, creation, &mut work).unwrap(); }
+    }
+    reference.atom(reference.indices[&(0, a)], Atom::Free, &mut work).unwrap();
+    reference.atom(reference.indices[&(1, b)], Atom::Free, &mut work).unwrap();
+    reference.specialize_captures(3, a, e, 4, 0, &mut work).unwrap();
+    reference.specialize_captures(3, b, e, 4, 0, &mut work).unwrap();
+    reference.close(&mut work).unwrap();
+    let original_output = reference.slot(6, 0, &mut work).unwrap();
+    reference.atom(original_output, Atom::Closure(3, e), &mut work).unwrap();
+    assert!(reference.provider_independent_concrete(original_output, true, &mut work).is_ok());
+
+    let mut candidate = Analysis::new(&graph, &mut work).unwrap();
+    candidate.contexts = reference.contexts.copy(&mut work).unwrap();
+    candidate.frames.push(FrameState::new_deferred());
+    for creation in [a, b] {
+        for capture in [0, 1] { candidate.slot(capture, creation, &mut work).unwrap(); }
+    }
+    candidate.atom(candidate.indices[&(0, a)], Atom::Free, &mut work).unwrap();
+    candidate.atom(candidate.indices[&(1, b)], Atom::Free, &mut work).unwrap();
+    let admitted = AdmittedFrame { function: 3 };
+    let input_a = evidence_union_input(&mut candidate, a, &admitted, &mut work);
+    let input_b = evidence_union_input(&mut candidate, b, &admitted, &mut work);
+    let family = evidence_union_family(&mut reference, &mut candidate, 4, e, &mut work);
+    let output = candidate.slot(6, 0, &mut work).unwrap();
+    let mut coalescer = deferred_evidence::Coalescer::new();
+    let a_capture = candidate.frame_alternatives(input_a, &mut work).unwrap().remove(0);
+    let b_capture = candidate.frame_alternatives(input_b, &mut work).unwrap().remove(0);
+    let frame_a = coalescer.transfer(&family, &admitted,
+        deferred_evidence::InputKey { frame: input_a, alternative: 0 }, &a_capture,
+        &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+    assert!(candidate.provider_independent_slot(output, true, &mut work).is_err());
+    // Exercise BOTH concrete destination invalidation and virtual-reader wakeup.
+    let concrete = candidate.slot(1, e, &mut work).unwrap();
+    candidate.watch_frame_head(deferred_frame::OriginalPort { expression: 1, context: e },
+        output, &mut work).unwrap();
+    candidate.close(&mut work).unwrap();
+    assert!(candidate.slots[concrete].atoms.is_empty());
+    assert!(!candidate.slots[concrete].queued);
+    let revision = candidate.revision;
+    let frame_b = coalescer.transfer(&family, &admitted,
+        deferred_evidence::InputKey { frame: input_b, alternative: 0 }, &b_capture,
+        &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+    assert_eq!(frame_a, frame_b);
+    assert_eq!(candidate.slots[output].atoms, vec![Atom::FramedClosure(3, frame_a)]);
+    assert!(candidate.revision > revision);
+    assert!(candidate.slots[concrete].queued);
+    assert!(candidate.slots[output].queued);
+    candidate.close(&mut work).unwrap();
+    assert!(candidate.provider_independent_slot(output, true, &mut work).is_ok());
+    for capture in [0, 1] {
+        let port = deferred_frame::OriginalPort { expression: capture, context: e };
+        let projected = candidate.original_frame_atoms(port, false, &mut work).unwrap().unwrap();
+        assert_eq!(projected, reference.slots[reference.indices[&(capture, e)]].atoms);
+    }
+    // Exact input replay changes neither stable frame nor published heads/revision.
+    let revision = candidate.revision;
+    let replay = coalescer.transfer(&family, &admitted,
+        deferred_evidence::InputKey { frame: input_b, alternative: 0 }, &b_capture,
+        &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+    assert_eq!(replay, frame_a);
+    assert_eq!(candidate.revision, revision);
+
+    // Different E cannot borrow the first E's complementary creation feed.
+    let e2 = reference.context(0, Transition::Call(5), &mut work).unwrap();
+    let candidate_e2 = candidate.context(0, Transition::Call(5), &mut work).unwrap();
+    assert_eq!(e2, candidate_e2);
+    reference.specialize_captures(3, b, e2, 5, 0, &mut work).unwrap();
+    reference.close(&mut work).unwrap();
+    let original_e2 = reference.slot(7, 0, &mut work).unwrap();
+    reference.atom(original_e2, Atom::Closure(3, e2), &mut work).unwrap();
+    assert!(reference.provider_independent_concrete(original_e2, true, &mut work).is_err());
+    let family2 = evidence_union_family(&mut reference, &mut candidate, 5, e2, &mut work);
+    let output2 = candidate.slot(7, 0, &mut work).unwrap();
+    let frame2 = coalescer.transfer(&family2, &admitted,
+        deferred_evidence::InputKey { frame: input_b, alternative: 0 }, &b_capture,
+        &mut EvidenceVisitTransport { analysis: &mut candidate, output: output2 }, &mut work).unwrap();
+    assert_ne!(frame_a, frame2);
+    assert!(candidate.provider_independent_slot(output2, true, &mut work).is_err());
+
+    // Raw G,A remains a separate provider alternative beside valid G,E.
+    let original_raw = reference.slot(8, 0, &mut work).unwrap();
+    reference.atom(original_raw, Atom::Closure(3, e), &mut work).unwrap();
+    reference.atom(original_raw, Atom::Closure(3, a), &mut work).unwrap();
+    assert!(reference.provider_independent_concrete(original_raw, true, &mut work).is_err());
+    let candidate_raw = candidate.slot(8, 0, &mut work).unwrap();
+    candidate.atom(candidate_raw, Atom::FramedClosure(3, frame_a), &mut work).unwrap();
+    candidate.atom(candidate_raw, Atom::FramedClosure(3, input_a), &mut work).unwrap();
+    assert!(candidate.provider_independent_slot(candidate_raw, true, &mut work).is_err());
+
+    // ContextPaths can fold two actual Evidence argument contexts onto one E.
+    // Even the SAME input frame/alternative must contribute both dictionaries.
+    // This exercises the original recurrence and transfer, not a fabricated E.
+    {
+        use crate::interface::{InterfaceId, MethodId, RequirementId, RequirementOwner};
+        let requirement = RequirementId::new(RequirementOwner::Global(BinderId::generated(982)), 0);
+        let interface = InterfaceId::new(crate::module::ModuleId::new(982), 0);
+        let methods = [MethodId::new(interface, 0), MethodId::new(interface, 1)];
+        let mut graph = evidence_union_test_graph();
+        graph.expressions[4] = Expr::Evidence { value: 3,
+            bindings: vec![(requirement, methods[0], 6), (requirement, methods[1], 7)] };
+        graph.evidence = vec![((requirement, methods[0]), 0), ((requirement, methods[1]), 1)];
+        let mut reference = Analysis::new(&graph, &mut work).unwrap();
+        let a = reference.context(0, Transition::Root(71), &mut work).unwrap();
+        let e = reference.context(a, Transition::Call(4), &mut work).unwrap();
+        let b = reference.context(e, Transition::Invoke(70, 72), &mut work).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(reference.context(b, Transition::Call(4), &mut work).unwrap(), e);
+        for context in [a, b] {
+            for argument in [6, 7] { reference.slot(argument, context, &mut work).unwrap(); }
+        }
+        for capture in [0, 1] { reference.slot(capture, 0, &mut work).unwrap(); }
+        reference.atom(reference.indices[&(6, a)], Atom::Free, &mut work).unwrap();
+        reference.atom(reference.indices[&(7, b)], Atom::Free, &mut work).unwrap();
+        reference.specialize_captures(3, 0, e, 4, a, &mut work).unwrap();
+        reference.specialize_captures(3, 0, e, 4, b, &mut work).unwrap();
+        reference.close(&mut work).unwrap();
+        let original_output = reference.slot(8, 0, &mut work).unwrap();
+        reference.atom(original_output, Atom::Closure(3, e), &mut work).unwrap();
+        assert!(reference.provider_independent_concrete(original_output, true, &mut work).is_ok());
+
+        let mut candidate = Analysis::new(&graph, &mut work).unwrap();
+        candidate.contexts = reference.contexts.copy(&mut work).unwrap();
+        candidate.frames.push(FrameState::new_deferred());
+        for context in [a, b] {
+            for argument in [6, 7] { candidate.slot(argument, context, &mut work).unwrap(); }
+        }
+        for capture in [0, 1] { candidate.slot(capture, 0, &mut work).unwrap(); }
+        candidate.atom(candidate.indices[&(6, a)], Atom::Free, &mut work).unwrap();
+        candidate.atom(candidate.indices[&(7, b)], Atom::Free, &mut work).unwrap();
+        let admitted = AdmittedFrame { function: 3 };
+        let input = evidence_union_input(&mut candidate, 0, &admitted, &mut work);
+        let alternative = candidate.frame_alternatives(input, &mut work).unwrap().remove(0);
+        let topology = reference.prepare_capture_topology(3, 4, &mut work).unwrap();
+        let empty = candidate.frames[0].arena.empty(&mut work).unwrap();
+        let locals = [0, 1].map(|expression| deferred_evidence::LocalRecipe {
+            expression, class: deferred_frame::ProjectionClass::Metadata, route: empty,
+        });
+        let family_a = deferred_evidence::prepare_family(&graph, &reference.capture_topologies[topology],
+            topology, 3, 4, a, e, &locals, &mut work).unwrap().unwrap();
+        let family_b = deferred_evidence::prepare_family(&graph, &reference.capture_topologies[topology],
+            topology, 3, 4, b, e, &locals, &mut work).unwrap().unwrap();
+        assert!(family_a.matches(3, 4, a, e));
+        assert!(!family_a.matches(3, 4, b, e));
+        let output = candidate.slot(8, 0, &mut work).unwrap();
+        let mut coalescer = deferred_evidence::Coalescer::new();
+        let input_key = deferred_evidence::InputKey { frame: input, alternative: 0 };
+        let frame_a = coalescer.transfer(&family_a, &admitted, input_key, &alternative,
+            &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+        assert!(candidate.provider_independent_slot(output, true, &mut work).is_err());
+        let frame_b = coalescer.transfer(&family_b, &admitted, input_key, &alternative,
+            &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+        assert_eq!(frame_a, frame_b);
+        candidate.close(&mut work).unwrap();
+        assert!(candidate.provider_independent_slot(output, true, &mut work).is_ok());
+        for capture in [0, 1] {
+            let port = deferred_frame::OriginalPort { expression: capture, context: e };
+            assert_eq!(candidate.original_frame_atoms(port, false, &mut work).unwrap().unwrap(),
+                reference.slots[reference.indices[&(capture, e)]].atoms);
+        }
+        let revision = candidate.revision;
+        coalescer.transfer(&family_b, &admitted, input_key, &alternative,
+            &mut EvidenceVisitTransport { analysis: &mut candidate, output }, &mut work).unwrap();
+        assert_eq!(candidate.revision, revision);
+    }
+}
+
 }
