@@ -456,6 +456,7 @@ const KIND_SITES: &[KindSite] = &[
     kind_site!("src/core/capture.rs::KindedArguments.0", FieldTransientCarrierRetentionPreservedCarrierTypeOperationTypeTransientWork),
     kind_site!("src/core/capture.rs::Metadata.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::Analysis.owner_rows", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
+    kind_site!("src/core/capture/control.rs::RowEquation.Residual.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::ControlCodeInventory.graph", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::ControlCodeInventory.owner_rows", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/core/capture/control.rs::TypeUniverseBuilder.ordered", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),

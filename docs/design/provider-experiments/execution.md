@@ -417,14 +417,18 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
 
-Latest integrated common code checkpoint is `a4b557bf76fef1a274ca5474941e7d4c4ea701f7`,
-merging Common commit `4a6c50cdb769043a93a934cca3d6ebfd7c1fe368` with an unsigned
-merge preserving both histories. Receipt 278 passes the complete unfiltered
-`CARGO_BUILD_JOBS=1 cargo xtask verify` in the original worktree. The four
-original Common deliveries and subsequent verified shared reductions are merged
-into `codex/provider-experiments`; `main` is unchanged. The latest delivery
-shares exact value-context prefixes while preserving original context IDs and
-live propagation. Its evidence is recorded at the end of this file.
+Latest completed integrated common code checkpoint is
+`f0a8e59a8ac824af959f72ff19af10a7563d0ba7`, merging Common commit
+`1fa1f4f91d2c29bd8f38d180991336963d9aff75` with an unsigned merge preserving
+both histories. Receipt 284 passes the complete unfiltered original-worktree
+`CARGO_BUILD_JOBS=1 cargo xtask verify` at normal policies on 2026-10-07.
+The four original Common deliveries and subsequent verified shared reductions
+are merged into `codex/provider-experiments`; `main` is unchanged.
+
+The completed-phase delivery and its connected Common and integrated gates
+are complete. The entry at the end records selected changes, rejected trials,
+exact measured costs and verification scope. The next candidates remain private:
+a contextual frame consumer and reuse of completed context-extension checks.
 
 The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
@@ -7076,3 +7080,89 @@ parents are retained in `preparation-delivery-282/fusion-docs-integration/`.
 Production work and depth limits remain unchanged. The larger copying,
 persistence and bound-NUL cases still lack normal-budget completion; the
 completed diagnostic measurements above do not establish that completion.
+
+
+### Completed-phase control preparation (2026-10-07, receipt 284)
+
+This delivery keeps three shared implementation changes: a control Call consumer
+records a delivered prefix only after all original successor and opaque handling
+succeeds; known failed row-prefix matching produces an `Unproved` equation with
+no residual membership work; control substitution borrows immutable prepared
+Type replacements through the same structural kernel used by owned callers.
+Later values, original close barriers, exact creation contexts, complete Type/Row
+arguments, independent Core validation and fallible bounded work remain.
+
+The original four SQLite programs complete their original public/native assertions
+under temporary diagnostic completion ceilings, restored after every run. Against
+the preceding authenticated baseline, the delivered-prefix change saves
+1,190 source / 3,622 Core units in copying and bound-NUL, 1,599 / 7,923 in
+persistence, and 219 / 1,244 in resume. Borrowed replacements additionally save
+66 / 192, 111 / 300 and 18 / 54 respectively. The row phase has zero measured
+endpoint benefit in those four cases. The other four owners remain unchanged;
+no capacity discounts or cross-owner pooling are used.
+
+Three independent candidates were rejected and exactly reversed: indexed dirty
+edges increased work throughout; strict-predecessor qualification increased both
+source and Core work; global constructor staging reduced copying source work by
+17,423 but increased its Core work by 5,234, increased persistence by 2,620 / 6,804
+and resume by 834 / 1,488. Constructor staging passed 190 normal tests and a real
+nine-method SQLite forwarding session; a separate cached-binary debugger run hit
+the qualified path. Successful execution therefore did not imply acceptable cost.
+None of those rejected implementations is retained.
+
+The selected source still needs 1,213,365 source units for copying and bound-NUL,
+598,259 for persistence and 203,282 for resume. Independent Core needs 905,455,
+905,450, 1,610,536 and 289,301 respectively. Persistence final elaboration remains
+376,641. Normal source/final limits remain 327,680 and Core remains 983,040.
+The larger three normal-limit cases remain unresolved. These measured results do
+not establish an intrinsic lower bound or justify larger quotas.
+
+The next private fusion slice targets material contextual child expansion,
+retaining distinct original owner and dictionary routes. It is not part of this
+verified source delivery. SQLite owns its library, manifests and native adapters;
+Common owns shared compiler, Core, capture, checking and generic runtime. Engine
+windows remain serial and commits and merges unsigned. These records are bounded
+DN-0036 experimental evidence, without normative language authority.
+
+The connected Common gate returns successfully at 2026-10-07 14:30:22 UTC
+after 1,081.205 seconds with one build job. It passes 1,684 workspace library
+tests (1,638 Ash, 40 adapter, six native-buffer), 320 public tests across 18
+suites, normal resume, both focused carrier checks, all 43 architecture checks,
+all-target compilation, formatting, strict workspace Clippy and warning-denied
+rustdoc. Independent Core row-relay validation after both rebuilds and the
+formal open-Delta, distinct capture-demand and lacks-negative cases pass.
+All three source/index guards are preserved and no engines remain.
+
+Evidence is retained in `requested-root-metadata-160/author/` under the Common
+evidence directory: the individual call-prefix, row-equation, borrowed-input,
+finite and fusion trials, and `selected-phase-batch-connected-verification-v1/`.
+Root's independent normal/raw/native/contract reviews are in
+`call-prefix-and-row-delivery-284/`. Source commit, preserving unsigned original
+merge and integrated full verification remain pending at this source checkpoint.
+Diagnostic completion remains separate from normal-policy acceptance.
+
+
+### Completed-phase integration receipt (2026-10-07)
+
+The pending status at the source checkpoint above is superseded by the actual
+return. Unsigned Common commit `1fa1f4f91d2c29bd8f38d180991336963d9aff75`
+is integrated by unsigned Original merge
+`f0a8e59a8ac824af959f72ff19af10a7563d0ba7`, preserving both histories.
+Its committed tree matches the verified Common tree. Original ran
+`CARGO_BUILD_JOBS=1 cargo xtask verify` with normal policies and exited zero
+at 2026-10-07 14:52:53 UTC after 1,118.282 seconds. Formatting, metadata,
+all-target build, strict Clippy, workspace tests and warning-denied rustdoc pass.
+The raw log contains 108 unfiltered parent groups and 3,364 parent passes,
+with nine separately checked nested summaries and zero failures or ignored tests.
+Ash library passes 1,638 cases and architecture passes 43.
+
+The log SHA-256 is
+`b815c774d494de6925c68d6482abbdd6b361d284abf5fffd05a8ecd63e42d93c`.
+The raw return and root audit are retained in
+`call-prefix-and-row-delivery-284/` under the Common evidence directory.
+All three worktree guards preserve unrelated source, indexes and branches;
+no engines remain at the explicit return. No work or depth limit changed.
+This verifies the shared reduction, not normal-budget completion of the larger
+three SQLite programs. SQLite retains library/native ownership; Common retains
+shared compiler and merge ownership. The next private frame and context-hit
+candidates require their own execution, cost comparison and review.

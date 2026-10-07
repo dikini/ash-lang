@@ -2872,3 +2872,37 @@ records exact checking ledgers and resource accumulation. A nearby passing
 program permits a bounded comparison of helper declaration admission, call
 transport and body shape. Common owns those shared compiler repairs and their
 integration. Diagnostic success does not satisfy the original acceptance gate.
+
+
+## 2026-10-07: completed-phase preparation checkpoint
+
+The selected shared source records a delivered control-call prefix only after
+success, consumes a known failed row equation without redundant membership work,
+and borrows prepared replacement Types through the existing substitution kernel.
+The connected Common normal gate passes workspace and public tests, independent
+Core/rebuild cases, all 43 architecture checks, build, formatting, strict lint
+and warning-denied docs. Source commit, preserving original merge and integrated
+full verification are the next delivery checkpoint.
+
+The original four SQLite programs supply actual native cost evidence under
+restored diagnostic ceilings. Selected changes save work but do not cure the
+larger three normal-limit refusals. Dirty-edge, strict-predecessor and constructor
+staging candidates are rejected and exactly reversed; passing native execution
+alone is insufficient when measured work rises. A private typed-route/frame
+candidate targets contextual expansion and has no execution claim yet. Shared
+compiler ownership remains Common's, native/library ownership remains SQLite's,
+and engine windows remain serial. DN-0036 retains experimental authority.
+
+
+## 2026-10-07: completed-phase integration
+
+Common commit `1fa1f4f91d2c29bd8f38d180991336963d9aff75` is integrated by
+unsigned Original merge `f0a8e59a8ac824af959f72ff19af10a7563d0ba7`.
+The original-worktree full gate passes all six stages with 3,364 parent passes,
+zero failures or ignored cases, and all unrelated work preserved. Receipt 284
+records the actual return and independent raw-log and guard audit. No limits
+change, and the three larger SQLite normal-budget deficits remain unresolved.
+Fusion continues the private frame consumer; a smaller context-extension reuse
+candidate is source-reviewed but uncompiled and unmeasured. Neither candidate
+is part of this verified delivery. Library/native ownership and serial engine
+coordination remain unchanged.
