@@ -106,18 +106,17 @@ unchanged-limit or complete-program claim is inferred from the lookup repair.
 ## Current checkpoint
 
 Latest completed integrated common code checkpoint is
-`13d2b89ce97300ed31a3a9b050c6452868937d23`, merging Common commit
-`70e97735b888bb1b907bf50307331ad1fce9435a` with an unsigned merge preserving
-both histories. Receipt 282 passes the complete unfiltered original-worktree
-`CARGO_BUILD_JOBS=1 cargo xtask verify`. Subsequent documentation-only merges
-advance the original tip to `0d0c2bd7e4266fbcb4303385b6d7d9146fa65129`.
+`f0a8e59a8ac824af959f72ff19af10a7563d0ba7`, merging Common commit
+`1fa1f4f91d2c29bd8f38d180991336963d9aff75` with an unsigned merge preserving
+both histories. Receipt 284 passes the complete unfiltered original-worktree
+`CARGO_BUILD_JOBS=1 cargo xtask verify` at normal policies on 2026-10-07.
 The four original Common deliveries and subsequent verified shared reductions
 are merged into `codex/provider-experiments`; `main` is unchanged.
 
-The completed-phase follow-on passes its connected Common gate at normal
-policies on 2026-10-07. Its source commit, original merge and integrated gate
-remain the next checkpoint. The entry at the end records selected changes,
-rejected trials, exact measured costs and verification scope.
+The completed-phase delivery and its connected Common and integrated gates
+are complete. The entry at the end records selected changes, rejected trials,
+exact measured costs and verification scope. The next candidates remain private:
+a contextual frame consumer and reuse of completed context-extension checks.
 
 The expanded SQLite manifest, adapter, Ash library and larger programs remain
 preserved SQLite-owned work outside this delivery. Resume executes under normal
@@ -5020,3 +5019,29 @@ Root's independent normal/raw/native/contract reviews are in
 `call-prefix-and-row-delivery-284/`. Source commit, preserving unsigned original
 merge and integrated full verification remain pending at this source checkpoint.
 Diagnostic completion remains separate from normal-policy acceptance.
+
+
+### Completed-phase integration receipt (2026-10-07)
+
+The pending status at the source checkpoint above is superseded by the actual
+return. Unsigned Common commit `1fa1f4f91d2c29bd8f38d180991336963d9aff75`
+is integrated by unsigned Original merge
+`f0a8e59a8ac824af959f72ff19af10a7563d0ba7`, preserving both histories.
+Its committed tree matches the verified Common tree. Original ran
+`CARGO_BUILD_JOBS=1 cargo xtask verify` with normal policies and exited zero
+at 2026-10-07 14:52:53 UTC after 1,118.282 seconds. Formatting, metadata,
+all-target build, strict Clippy, workspace tests and warning-denied rustdoc pass.
+The raw log contains 108 unfiltered parent groups and 3,364 parent passes,
+with nine separately checked nested summaries and zero failures or ignored tests.
+Ash library passes 1,638 cases and architecture passes 43.
+
+The log SHA-256 is
+`b815c774d494de6925c68d6482abbdd6b361d284abf5fffd05a8ecd63e42d93c`.
+The raw return and root audit are retained in
+`call-prefix-and-row-delivery-284/` under the Common evidence directory.
+All three worktree guards preserve unrelated source, indexes and branches;
+no engines remain at the explicit return. No work or depth limit changed.
+This verifies the shared reduction, not normal-budget completion of the larger
+three SQLite programs. SQLite retains library/native ownership; Common retains
+shared compiler and merge ownership. The next private frame and context-hit
+candidates require their own execution, cost comparison and review.
