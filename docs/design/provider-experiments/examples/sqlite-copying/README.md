@@ -21,11 +21,15 @@ copies a Unicode TEXT/BLOB row without reacquisition. `control-discard.ash`
 discards that owned continuation: source cleanup queries the outer connection
 before statement finalization and connection close. Both control entries pass
 the public driver and actual host after the verified shared repair import.
-The current seventeen-case public suite passes fourteen cases, including the
-original reset/clear program, and retains three compiler work failures: copying,
-its NUL-input alternative and persistence. The text, resume and discard hosts
-return their required values, authenticated finalize/close reports and zero
-retained owners. The three larger hosts stop before any native observation.
+The recorded full seventeen-case public checkpoint passes fourteen cases,
+including the original reset/clear program, and retains three compiler work
+failures: copying, its NUL-input alternative and persistence. Fresh runs of the
+four original tests after the latest shared import confirm that resume passes
+and the same three programs still exhaust Type work at normal limits. These
+four runs do not repeat the full suite. The recorded text, resume and discard
+host runs return their required values, authenticated finalize/close reports
+and zero retained owners. The three larger hosts stop before any native
+observation.
 The manifest and control fixtures are committed in the SQLite worktree; the
 complete SQLite delivery remains pending those larger programs.
 The [current execution record](../../execution.md#current-sqlite-checkpoint)

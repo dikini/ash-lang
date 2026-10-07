@@ -231,11 +231,13 @@ CARGO_BUILD_JOBS=1 cargo run --locked -p ash-foreign-adapter --example sqlite_se
 It returns complete closed statement/connection reports, observes thirteen
 copied input and output bytes, and leaves no retained native owner. The packaged
 resume and discard entries also pass through the actual host. Shared compiler
-cost support is verified and imported into the SQLite worktree. Its latest
+cost support is verified and imported into the SQLite worktree. Recorded full
 checks pass all sixty adapter tests and fourteen of seventeen public SQLite
-cases. Copying, the NUL-input alternative and file-session persistence still
-stop with TypeResourceExhausted before native observations; further shared
-compiler repair remains required. The
+cases. Four fresh original-program tests after the latest shared import confirm
+that resume passes, while copying, the NUL-input alternative and file-session
+persistence still stop with TypeResourceExhausted before native observations.
+The fresh four-case run does not repeat the full adapter or public suite;
+further shared compiler repair remains required. The
 [current execution record](../docs/design/provider-experiments/execution.md#current-sqlite-checkpoint)
 records the checked import and remaining failures. Earlier receipts 136 and
 150 retain their own source evidence. This does not establish a completed
