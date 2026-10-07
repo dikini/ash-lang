@@ -1,6 +1,7 @@
 //! Structural types shared by elaboration and Core.
 
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::HashMap,
     fmt,
@@ -984,6 +985,27 @@ impl EffectRow {
             self.tail.iter().flat_map(|tail| tail.lacks.iter()),
             |argument, budget| {
                 substitute_type_variables_with(
+                    argument,
+                    replacements,
+                    |cells| budget.charge(cells),
+                    || (),
+                )
+            },
+            budget,
+        )
+    }
+
+    pub(crate) fn substitute_type_variables_borrowed_with_budget(
+        &self,
+        replacements: &HashMap<TypeVariableId, &Type>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Self, ()> {
+        rebuild_effect_row_with_budget(
+            self.known.iter(),
+            self.tail.as_ref().map(|tail| tail.variable),
+            self.tail.iter().flat_map(|tail| tail.lacks.iter()),
+            |argument, budget| {
+                substitute_type_variables_borrowed_with(
                     argument,
                     replacements,
                     |cells| budget.charge(cells),
@@ -3075,9 +3097,43 @@ pub(crate) fn substitute_type_variables_with<E>(
     }
 }
 
+pub(crate) fn substitute_type_variables_borrowed_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, &Type>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Type, E> {
+    match substitute_type_and_row_variables(
+        ty,
+        replacements,
+        &HashMap::new(),
+        &mut charge,
+        &mut allocation_error,
+    )? {
+        Ok(ty) => Ok(ty),
+        Err(_) => unreachable!("ordinary type substitution cannot violate row constraints"),
+    }
+}
+
 pub(crate) fn substitute_type_and_row_variables_with<E>(
     ty: &Type,
     replacements: &HashMap<TypeVariableId, Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), E>,
+    mut allocation_error: impl FnMut() -> E,
+) -> Result<Result<Type, EffectRowError>, E> {
+    substitute_type_and_row_variables(
+        ty,
+        replacements,
+        row_replacements,
+        &mut charge,
+        &mut allocation_error,
+    )
+}
+
+pub(crate) fn substitute_type_and_row_variables_borrowed_with<E>(
+    ty: &Type,
+    replacements: &HashMap<TypeVariableId, &Type>,
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
     mut charge: impl FnMut(usize) -> Result<(), E>,
     mut allocation_error: impl FnMut() -> E,
@@ -3444,6 +3500,24 @@ pub(crate) fn substitute_kinded_argument_with(
     .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
 }
 
+pub(crate) fn substitute_kinded_argument_borrowed_with(
+    argument: &KindedArgument,
+    replacements: &HashMap<TypeVariableId, &Type>,
+    row_replacements: &HashMap<TypeVariableId, EffectRow>,
+    mut charge: impl FnMut(usize) -> Result<(), ()>,
+) -> Result<Result<KindedArgument, EffectRowError>, ()> {
+    substitute_structural_type_and_row_variables(
+        SubstitutionRoot::Argument(argument),
+        replacements,
+        row_replacements,
+        None,
+        &mut charge,
+        &mut || (),
+        None,
+    )
+    .map(|result| result.map(|value| value.into_argument().expect("argument substitution root")))
+}
+
 pub(crate) fn substitute_effect_row_with(
     row: &EffectRow,
     replacements: &HashMap<TypeVariableId, Type>,
@@ -3462,9 +3536,9 @@ pub(crate) fn substitute_effect_row_with(
     .map(|result| result.map(|value| value.into_row().expect("row substitution root")))
 }
 
-fn substitute_type_and_row_variables<E>(
+fn substitute_type_and_row_variables<E, R: Borrow<Type>>(
     ty: &Type,
-    replacements: &HashMap<TypeVariableId, Type>,
+    replacements: &HashMap<TypeVariableId, R>,
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
     allocation_error: &mut impl FnMut() -> E,
@@ -3485,9 +3559,9 @@ fn substitute_type_and_row_variables<E>(
     clippy::type_complexity,
     reason = "the local traversal shape mirrors substitution state without a module-level alias"
 )]
-fn substitute_structural_type_and_row_variables<E>(
+fn substitute_structural_type_and_row_variables<E, R: Borrow<Type>>(
     root: SubstitutionRoot<'_>,
-    replacements: &HashMap<TypeVariableId, Type>,
+    replacements: &HashMap<TypeVariableId, R>,
     row_replacements: &HashMap<TypeVariableId, EffectRow>,
     template: Option<TemplateRowReplacements<'_>>,
     charge: &mut impl FnMut(usize) -> Result<(), E>,
@@ -3547,7 +3621,7 @@ fn substitute_structural_type_and_row_variables<E>(
                     charge(1)?;
                     rebuilt.push(StructuralValue::type_value(Type::Variable(*identity)));
                 } else if let Some(replacement) = replacements.get(identity) {
-                    work.push(Task::Visit(replacement, false));
+                    work.push(Task::Visit(replacement.borrow(), false));
                 } else if let Some(invalid_source) = invalid_source.as_mut() {
                     return Err(invalid_source());
                 } else {
@@ -5504,6 +5578,145 @@ mod tests {
 
         discard_type_iteratively(cloned);
         discard_type_iteratively(ty);
+    }
+
+    #[test]
+    fn borrowed_replacement_transport_keeps_shadowing_rows_and_owned_results() {
+        let shadowed = TypeVariableId::new(81);
+        let actual = TypeVariableId::new(82);
+        let nested = TypeVariableId::new(83);
+        let row_variable = TypeVariableId::new(84);
+        let effect = EffectId::new(ModuleId::new(81), 0);
+        let excluded = EffectId::new(ModuleId::new(81), 1);
+        // Deliberately noncanonical empty-effect Function input. The old
+        // transport clones it before substitution; the borrowed route must
+        // produce exactly the same final canonical result without that clone.
+        let replacement = Type::EffectfulFunction(
+            Box::new(Type::Variable(nested)),
+            Box::new(ComputationType::new(
+                Type::Variable(shadowed),
+                EffectRow::empty(),
+            )),
+        );
+        let originals = HashMap::from([
+            (shadowed, Type::Bool),
+            (actual, replacement),
+            (nested, Type::Int),
+        ]);
+        let borrowed: HashMap<_, _> = originals.iter().map(|(id, ty)| (*id, ty)).collect();
+        let mut owned = HashMap::new();
+        let mut setup = TypeWorkBudget::unbounded();
+        for (id, ty) in &originals {
+            owned.insert(*id, clone_type_with_budget(ty, &mut setup).unwrap());
+        }
+        let row = effect_row_from_owned_parts_with_budget(
+            vec![EffectInstance::new(
+                effect,
+                Box::new([Type::Variable(actual)]),
+            )],
+            Some((
+                EffectRowVariable::rigid(row_variable),
+                vec![EffectInstance::new(
+                    excluded,
+                    Box::new([Type::Variable(actual)]),
+                )],
+            )),
+            &mut setup,
+        )
+        .unwrap();
+        let source = Type::Forall(
+            Box::new([(shadowed, Kind::Type)]),
+            Box::new(Type::Tuple(Box::new([
+                Type::Variable(shadowed),
+                Type::Variable(actual),
+                Type::function_computation(
+                    Type::Unit,
+                    ComputationType::new(Type::Variable(actual), row.clone()),
+                ),
+            ]))),
+        );
+        let rows = HashMap::new();
+        let expected = substitute_type_and_row_variables_with(
+            &source,
+            &owned,
+            &rows,
+            |units| setup.charge(units),
+            || (),
+        )
+        .unwrap()
+        .unwrap();
+        let mut measured = TypeWorkBudget::unbounded();
+        let result = substitute_type_and_row_variables_borrowed_with(
+            &source,
+            &borrowed,
+            &rows,
+            |units| measured.charge(units),
+            || (),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, expected);
+        let Type::Forall(_, body) = &result else {
+            panic!("forall retained")
+        };
+        let Type::Tuple(items) = body.as_ref() else {
+            panic!("tuple retained")
+        };
+        assert_eq!(items[0], Type::Variable(shadowed));
+        assert_eq!(
+            items[1],
+            Type::Function(
+                Box::new(Type::Variable(nested)),
+                Box::new(Type::Variable(shadowed)),
+            )
+        );
+        let expected_row = row
+            .substitute_type_variables_with_budget(&owned, &mut setup)
+            .unwrap();
+        let actual_row = row
+            .substitute_type_variables_borrowed_with_budget(&borrowed, &mut setup)
+            .unwrap();
+        assert_eq!(actual_row, expected_row);
+        let argument = KindedArgument::RowArg(row);
+        let expected_argument =
+            substitute_kinded_argument_with(&argument, &owned, &rows, |units| setup.charge(units))
+                .unwrap()
+                .unwrap();
+        let actual_argument =
+            substitute_kinded_argument_borrowed_with(&argument, &borrowed, &rows, |units| {
+                setup.charge(units)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(actual_argument, expected_argument);
+        let required = measured.used();
+        for available in 0..required {
+            let mut short = TypeWorkBudget::with_limit(available);
+            assert!(
+                substitute_type_and_row_variables_borrowed_with(
+                    &source,
+                    &borrowed,
+                    &rows,
+                    |units| short.charge(units),
+                    || (),
+                )
+                .is_err()
+            );
+            let mut retry = TypeWorkBudget::with_limit(required);
+            assert_eq!(
+                substitute_type_and_row_variables_borrowed_with(
+                    &source,
+                    &borrowed,
+                    &rows,
+                    |units| retry.charge(units),
+                    || (),
+                )
+                .unwrap()
+                .unwrap(),
+                expected
+            );
+            assert_eq!(retry.used(), required);
+        }
     }
 
     #[test]

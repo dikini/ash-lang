@@ -323,6 +323,29 @@ pub(super) struct CallSuccessors {
     pub(super) returns: bool,
 }
 
+// Owned only by one exact observed control State inside one discover invocation.
+// It records delivered work, not a stable classification of the growing port.
+// The immutable graph and append-only Analysis slots keep this coordinate exact;
+// focused queries start a fresh discover and never import these tokens.
+pub(super) struct DeliveredCallPrefix {
+    end: usize,
+    opaque: u8,
+}
+
+pub(super) struct PendingCallPrefix(DeliveredCallPrefix);
+
+impl PendingCallPrefix {
+    // The control consumer calls this only after the complete successor and
+    // opaque branches succeed. Refusal cannot advance its retained frontier.
+    pub(super) fn publish(
+        self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<DeliveredCallPrefix, Failure> {
+        charge(budget, 1)?;
+        Ok(self.0)
+    }
+}
+
 #[cfg(test)]
 pub(super) fn provider_typed_capture_graph_for_test(
     metadata: Option<crate::types::TypeVariableId>,
@@ -3872,6 +3895,58 @@ impl<'a> Analysis<'a> {
         })
     }
 
+    // Only discover's exact observed-State record supplies a delivered prefix.
+    // Other callers keep calls(), including provider-independent queries.
+    pub(super) fn calls_after(
+        &mut self,
+        code: usize,
+        context: usize,
+        delivered: Option<&DeliveredCallPrefix>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(CallSuccessors, PendingCallPrefix), Failure> {
+        let port = self.port(code, context, budget)?;
+        self.close(budget)?;
+        let (expression, _) = self.slots[port].key;
+        let Expr::Call { function, .. } = self.graph.expressions[expression] else {
+            return Err(Failure::Invalid);
+        };
+        let function = self.slot(function, context, budget)?;
+        // Snapshot BEFORE successor processing can install further live routes.
+        // Phase dispatch and the retained endpoint read are bounded scalar work.
+        charge(budget, 2)?;
+        let end = self.slots[function].atoms.len();
+        let (start, mut opaque) = match delivered {
+            Some(prefix) => (prefix.end, prefix.opaque),
+            None => (0, 0),
+        };
+        let mut targets = Vec::new();
+        for atom in copy_slice(&self.slots[function].atoms[start..end], budget)? {
+            match atom {
+                Atom::Closure(target, _) => {
+                    let context =
+                        self.context(context, Transition::Invoke(expression, target), budget)?;
+                    let target = *self.graph.targets.get(&target).ok_or(Failure::Invalid)?;
+                    targets.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    targets.push((target, context));
+                }
+                Atom::Unknown => opaque |= 1,
+                Atom::Constructor(_) => opaque |= 2,
+                _ => {}
+            }
+        }
+        // Flags are an exact monotone summary of the delivered ordered prefix.
+        // Their two scalar projections replace the original bool assignments.
+        charge(budget, 2)?;
+        Ok((
+            CallSuccessors {
+                targets,
+                unknown: opaque & 1 != 0,
+                returns: opaque & 2 != 0,
+            },
+            PendingCallPrefix(DeliveredCallPrefix { end, opaque }),
+        ))
+    }
+
     pub(super) fn dispatch(
         &mut self,
         request: usize,
@@ -6237,6 +6312,120 @@ mod tests {
             Err(Failure::Invalid)
         ));
         assert!(malformed.callable_transfers.is_empty());
+    }
+
+    #[test]
+    fn delivered_control_call_prefix_keeps_late_arguments_and_opaque_replays_live() {
+        let mut graph = call_transfer_graph();
+        graph.positions.insert(6, 6);
+        graph.targets.extend([(5, 50), (7, 70)]);
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&graph, &mut work).unwrap();
+            let function = analysis.slot(0, 0, &mut work).unwrap();
+            analysis
+                .atom(function, Atom::Closure(5, 0), &mut work)
+                .unwrap();
+            let argument = analysis.slot(1, 0, &mut work).unwrap();
+            analysis.atom(argument, Atom::Free, &mut work).unwrap();
+            let capture = analysis.slot(3, 0, &mut work).unwrap();
+            analysis.atom(capture, Atom::Free, &mut work).unwrap();
+            let call = analysis.slot(6, 0, &mut work).unwrap();
+            analysis.close(&mut work).unwrap();
+            (analysis, function, argument, call)
+        };
+        let (mut analysis, function, argument, call) = setup();
+        let mut work = TypeWorkBudget::unbounded();
+        let (first, publication) = analysis.calls_after(6, 0, None, &mut work).unwrap();
+        assert_eq!(first.targets.len(), 1);
+        assert_eq!(first.targets[0].0, 50);
+        assert!(!first.unknown && !first.returns);
+        let delivered = publication.publish(&mut work).unwrap();
+        assert_eq!(delivered.end, analysis.slots[function].atoms.len());
+        let (unchanged, _) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert!(unchanged.targets.is_empty());
+        assert!(!unchanged.unknown && !unchanged.returns);
+
+        // Callee-prefix completion never freezes its argument/capture/body facts.
+        let late_owner = Atom::Resource(9, 0);
+        analysis.atom(argument, late_owner, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[call].atoms.contains(&late_owner));
+        assert_eq!(delivered.end, analysis.slots[function].atoms.len());
+
+        analysis
+            .atom(function, Atom::Closure(7, 0), &mut work)
+            .unwrap();
+        analysis.atom(function, Atom::Unknown, &mut work).unwrap();
+        let family = crate::types::NominalTypeId::new(crate::module::ModuleId::new(77), 1);
+        let constructor = ConstructorId::new(family, 0);
+        analysis
+            .atom(function, Atom::Constructor(constructor), &mut work)
+            .unwrap();
+        assert!(delivered.end < analysis.slots[function].atoms.len());
+        let (suffix, publication) = analysis
+            .calls_after(6, 0, Some(&delivered), &mut work)
+            .unwrap();
+        assert_eq!(suffix.targets.len(), 1);
+        assert_eq!(suffix.targets[0].0, 70);
+        assert!(suffix.unknown && suffix.returns);
+        assert!(analysis.slots[call].atoms.contains(&Atom::Unknown));
+        assert!(analysis.slots[call].atoms.contains(&late_owner));
+
+        // An atom appended after query completion is beyond its fixed snapshot,
+        // even when the control consumer publishes after handling successors.
+        let creation = analysis
+            .context(0, Transition::Root(20), &mut work)
+            .unwrap();
+        let capture = analysis.slot(3, creation, &mut work).unwrap();
+        analysis.atom(capture, Atom::Free, &mut work).unwrap();
+        analysis
+            .atom(function, Atom::Closure(5, creation), &mut work)
+            .unwrap();
+        let opaque = publication.publish(&mut work).unwrap();
+        let (late, publication) = analysis
+            .calls_after(6, 0, Some(&opaque), &mut work)
+            .unwrap();
+        assert_eq!(late.targets.len(), 1);
+        assert_eq!(late.targets[0].0, 50);
+        assert!(late.unknown && late.returns);
+        let opaque = publication.publish(&mut work).unwrap();
+        assert_ne!(opaque.opaque, 0);
+        let (repeat, _) = analysis
+            .calls_after(6, 0, Some(&opaque), &mut work)
+            .unwrap();
+        assert!(repeat.targets.is_empty());
+        assert!(repeat.unknown && repeat.returns);
+
+        // Every first-query/publication cut refuses a completed token. Retrying
+        // with the exact measured work uses a fresh original Analysis setup.
+        let (mut measured, ..) = setup();
+        let mut exact = TypeWorkBudget::unbounded();
+        let (expected, publication) = measured.calls_after(6, 0, None, &mut exact).unwrap();
+        publication.publish(&mut exact).unwrap();
+        let required = exact.used();
+        for available in 0..required {
+            let (mut refused, ..) = setup();
+            let mut short = TypeWorkBudget::with_limit(available);
+            let result = refused
+                .calls_after(6, 0, None, &mut short)
+                .and_then(|(_, publication)| publication.publish(&mut short));
+            assert!(matches!(result, Err(Failure::Resource)));
+            let (mut retried, ..) = setup();
+            let mut retry = TypeWorkBudget::with_limit(required);
+            let (actual, publication) = retried.calls_after(6, 0, None, &mut retry).unwrap();
+            let completed = publication.publish(&mut retry).unwrap();
+            assert_eq!(actual.targets, expected.targets);
+            assert_eq!(actual.unknown, expected.unknown);
+            assert_eq!(actual.returns, expected.returns);
+            assert_eq!(retry.used(), required);
+            assert_eq!(
+                completed.end,
+                retried.slots[retried.indices[&(0, 0)]].atoms.len()
+            );
+        }
     }
 
     #[test]
