@@ -1,0 +1,5 @@
+{
+  "command": "CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo clippy --locked --workspace --all-targets -- -D warnings",
+  "exit_code": 0,
+  "seconds": 83.4939296245575
+}

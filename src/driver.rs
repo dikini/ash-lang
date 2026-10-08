@@ -1605,7 +1605,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(failure.reason(), crate::core::ValidationReason::Resource);
-        assert!(short.used() >= 7 && short.used() <= 7 + exact - 1);
+        assert!(short.used() >= 7 && short.used() < 7 + exact);
         let mut retry = TypeWorkBudget::with_limit(7 + exact);
         retry.charge(7).unwrap();
         crate::core::validate::validate_modules_with_work(
