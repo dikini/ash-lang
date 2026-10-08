@@ -518,6 +518,21 @@ RSS, rounded to 10 ms and 4 MiB. Point predictions, tolerances, engineering
 targets and compiler stopping limits remain distinct. Ordinary compiler limits
 are unchanged, and new program shapes still need completed measurements.
 
+## Adopted calibration and accepted deficits
+
+The [adopted offline assessment](accepted-deficits.md) now distinguishes
+`accepted-with-deficit`: measured median or maximum costs may exceed an
+original review threshold or workload target by at most 10% of each exceeded
+baseline. Every excess reports its original baseline as a future optimization
+target. Larger excesses require review, and missing/out-of-range observations
+remain outside calibration. Predictions and baselines are unchanged.
+
+The current 52 cases still pass without deficits; the separate reference keeps
+nine acceptable and five outside-calibration cases. Thirty synthetic boundary
+replays verify the exact rule. The accompanying Type/Core work-budget review
+is scope-qualified advice for Common's separate admission work, with no
+compiler policy or Rust change in this checkpoint.
+
 ## Functional Rust SQLite reference
 
 Five working Rust counterparts now cover copying, persistence, resume,

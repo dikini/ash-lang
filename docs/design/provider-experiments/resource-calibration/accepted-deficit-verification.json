@@ -1,0 +1,50 @@
+{
+  "checks": {
+    "all_parent_model_fields_preserved": true,
+    "all_previous_evidence_byte_identical": true,
+    "every_known_exceeded_baseline_reported": true,
+    "exact_ten_percent_included_greater_deficit_requires_review": true,
+    "future_target_original_baseline": true,
+    "local_document_links_checked": 53,
+    "margin_does_not_compound": true,
+    "old_model_replay_json_identity": true,
+    "real_data_points_observations_and_statuses_preserved": true,
+    "required_reduction_denominator_observed_cost": true,
+    "scope_and_missing_observation_precedence": true
+  },
+  "compiler_limit_changes": false,
+  "compiler_processes": 0,
+  "created_utc": "2026-10-08T08:08:52.139770+00:00",
+  "independent_review": {
+    "implementation_and_boundaries": "limit_provenance: approved; all 30 synthetic results independently replayed, prior 52+14 model replays identical",
+    "report_and_work_budget_review": "calibration_baseline_review: approved; numbers and authority boundaries match evidence"
+  },
+  "merge_or_integration": false,
+  "offline_only": true,
+  "primary_status_counts": {
+    "acceptable-for-current-decision": 52,
+    "accepted-with-deficit": 0,
+    "outside-calibration": 0,
+    "review-needed": 0
+  },
+  "reference_status_counts": {
+    "acceptable-for-current-decision": 9,
+    "accepted-with-deficit": 0,
+    "outside-calibration": 5,
+    "review-needed": 0
+  },
+  "rust_source_changes": false,
+  "schema_version": 1,
+  "self_check": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 tools/resource_budget_estimates.py self-check",
+    "passed": true,
+    "stdout": "Connected offline fit, calibration, adoption, exact deficit boundaries, measured review and scope self-check passed.\n"
+  },
+  "synthetic_boundary_count": 30,
+  "synthetic_boundary_status_counts": {
+    "acceptable-for-current-decision": 8,
+    "accepted-with-deficit": 9,
+    "outside-calibration": 3,
+    "review-needed": 10
+  }
+}

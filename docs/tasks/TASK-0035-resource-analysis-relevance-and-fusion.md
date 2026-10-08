@@ -77,6 +77,16 @@ replay accepts all 52 primary cases, including observed maxima. The separate
 the provisional targets. No compiler runs or production changes occurred.
 Optimization remains paused.
 
+Common delegated the user's adoption of the calibrated measurements with an
+explicit at-most-ten-percent accepted deficit. The offline follow-up retains
+prior evidence, reports accepted deficits as future optimization targets, and
+reviews separate charged-unit Type/Core references. The
+[completed offline adoption](../design/provider-experiments/resource-calibration/accepted-deficits.md)
+retains all 52 normal acceptances and the five reference scope flags; thirty
+synthetic boundary replays verify the new outcome and future-target reports.
+Common owns shared compiler admission changes; this worktree makes no Rust or
+stopping-policy change and uses no compiler window.
+
 ## Paused optimization work
 
 Execute the [analysis plan](../design/provider-experiments/analysis-plan.md):

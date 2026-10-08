@@ -3,6 +3,7 @@
 + d*resource_sites*nodes. Physical review allowances and refusal limits are separate.
 """
 import argparse
+from fractions import Fraction
 import json
 import math
 from pathlib import Path
@@ -97,6 +98,30 @@ def calibrate(model, startup_summary, base_sha256, startup_sha256):
     return result
 
 
+def adopt(model, parent_sha256):
+    """Adopt a bounded deficit without changing any prediction or baseline."""
+    if not model.get("decision_support_calibration"):
+        raise ValueError("deficit adoption requires a calibrated physical decision model")
+    result = json.loads(json.dumps(model))
+    result["accepted_deficit_fraction"] = 0.10
+    result["decision_support_adoption"] = {
+        "schema": "accepted-deficit-v1",
+        "provenance": {"parent_model_sha256": parent_sha256, "estimator_sha256": collector.sha(__file__)},
+        "interpretation": [
+            "A measured overrun is accepted with a deficit only when it is at most 10% of every exceeded baseline.",
+            "Review thresholds and current-workload targets remain separate and unchanged; allowances never compound.",
+            "Each optimization target is the original baseline, with the required reduction measured from observed cost.",
+            "Missing measurements and cases outside calibration remain outside-calibration; no compiler policy changes."]}
+    return result
+
+
+def accepted_fraction(model):
+    value = model.get("accepted_deficit_fraction", 0)
+    if not collector.numeric(value) or not 0 <= value <= 0.10:
+        raise ValueError("accepted_deficit_fraction must be between zero and 0.10")
+    return value
+
+
 def fit_summary(summary):
     cases = [case for case in summary["cases"] if case.get("accepted_for_models")]
     vectors = {case["id"]: features(case) for case in cases}
@@ -164,44 +189,78 @@ def prediction(model, value):
                                if calibration else "Rough typical-cost prediction, not an admission allowance or limit adjustment.")}
 
 
-def decision(case, estimated):
-    physical, reasons = {}, []
+def decision(case, estimated, accepted_deficit_fraction=0, report_deficits=False):
+    physical, reasons, deficits = {}, list(estimated.get("scope_reasons", [])), []
     if estimated["outside_observed_ranges"]:
         reasons.append("outside-observed-feature-ranges")
     for name in PHYSICAL:
         predicted = estimated["responses"].get(name, {})
-        observed = observation(case, name) or {}
+        observed = observation(case, name)
+        observed = observed if isinstance(observed, dict) else {}
         median, maximum = observed.get("median"), observed.get("max")
         valid = (collector.numeric(median) and collector.numeric(maximum) and 0 <= median <= maximum
                  and collector.numeric(observed.get("n")) and observed["n"] >= 3)
-        ready = predicted.get("review_threshold") is not None and predicted.get("current_workload_target") is not None
+        ready = all(collector.numeric(predicted.get(key)) and predicted[key] > 0
+                    for key in ("review_threshold", "current_workload_target"))
         physical[name] = {**predicted, "observed_median": median, "observed_maximum": maximum,
                           "measurement_count": observed.get("n")}
-        if not valid or not ready:
+        if not valid:
             reasons.append("missing-or-invalid-measured-" + name)
-            continue
-        physical[name].update({"median_within_review_threshold": median <= predicted["review_threshold"],
-                              "maximum_within_review_threshold": maximum <= predicted["review_threshold"],
-                              "median_within_current_target": median <= predicted["current_workload_target"],
-                              "maximum_within_current_target": maximum <= predicted["current_workload_target"]})
-    within = all(value.get("maximum_within_review_threshold") and value.get("maximum_within_current_target")
-                 for value in physical.values())
-    return {"case": case["id"], "status": ("outside-calibration" if reasons else
-                                           "acceptable-for-current-decision" if within else "review-needed"),
-            "scope_reasons": reasons, "outside_observed_ranges": estimated["outside_observed_ranges"],
-            "responses": physical}
+        if not ready:
+            reasons.append("missing-or-invalid-baseline-" + name)
+        if valid and ready:
+            physical[name].update({"median_within_review_threshold": median <= predicted["review_threshold"],
+                                  "maximum_within_review_threshold": maximum <= predicted["review_threshold"],
+                                  "median_within_current_target": median <= predicted["current_workload_target"],
+                                  "maximum_within_current_target": maximum <= predicted["current_workload_target"]})
+        # Decimal spellings from JSON are compared exactly, without multiplying by float 1.1.
+        # Report known exceedances even if another statistic or the overall scope is invalid.
+        for baseline in ("review_threshold", "current_workload_target"):
+            base = predicted.get(baseline)
+            if not collector.numeric(base) or base <= 0:
+                continue
+            for statistic, value in (("median", median), ("max", maximum)):
+                if not collector.numeric(value) or value <= base:
+                    continue
+                original, observed_cost = Fraction(str(base)), Fraction(str(value))
+                deficit = observed_cost - original
+                deficits.append({"measure": name, "units": predicted.get("units"), "statistic": statistic,
+                                 "baseline": baseline, "baseline_value": base, "observed": value,
+                                 "absolute_deficit": float(deficit), "relative_deficit": float(deficit / original),
+                                 "optimization_target": base, "reduction_needed": float(deficit),
+                                 "reduction_needed_fraction_of_observed": float(deficit / observed_cost),
+                                 "within_accepted_deficit": deficit <= Fraction(str(accepted_deficit_fraction)) * original})
+    status = ("outside-calibration" if reasons else "acceptable-for-current-decision" if not deficits else
+              "accepted-with-deficit" if all(row["within_accepted_deficit"] for row in deficits) else "review-needed")
+    result = {"case": case["id"], "status": status, "scope_reasons": reasons,
+              "outside_observed_ranges": estimated["outside_observed_ranges"], "responses": physical}
+    if report_deficits:
+        result.update(accepted_deficit_fraction=accepted_deficit_fraction, deficits=deficits)
+    return result
 
 
 def evaluate(model, summary):
     rows = {name: [] for name in RESPONSES}
     excluded, decisions = [], []
+    fraction = accepted_fraction(model)
+    adopted = "accepted_deficit_fraction" in model
     for case in summary["cases"]:
         if not case.get("accepted_for_models"):
             excluded.append(case["id"])
             continue
-        estimated = prediction(model, case)
+        try:
+            estimated = prediction(model, case)
+        except ValueError:
+            if not adopted:
+                raise
+            # A current target remains reportable even when features cannot produce a review threshold.
+            estimated = {"outside_observed_ranges": {}, "scope_reasons": ["missing-or-invalid-input-features"],
+                         "responses": {name: {"units": RESPONSES[name], "current_workload_target": value}
+                                       for name, value in model["decision_support_calibration"]["current_workload_targets"].items()}}
+            decisions.append(decision(case, estimated, fraction, report_deficits=True))
+            continue
         if model.get("decision_support_calibration"):
-            decisions.append(decision(case, estimated))
+            decisions.append(decision(case, estimated, fraction, report_deficits=adopted))
         for name, result in estimated["responses"].items():
             observed = actual(case, name)
             if result["predicted"] is not None and collector.numeric(observed):
@@ -210,12 +269,16 @@ def evaluate(model, summary):
     result = {"interpretation": "Descriptive comparison with existing examined evidence; no refitting and no claim of blind validation.",
               "excluded_case_ids": excluded, "responses": {name: errors(values) for name, values in rows.items()}}
     if model.get("decision_support_calibration"):
+        statuses = ["acceptable-for-current-decision", "review-needed", "outside-calibration"]
+        if adopted:
+            statuses.insert(1, "accepted-with-deficit")
         result["decision_support"] = {
             "interpretation": "Current measured cases only; feature ranges do not validate unmeasured combinations. "
                               "Review-needed requests investigation, not automatic optimization or compiler refusal.",
-            "status_counts": {status: sum(row["status"] == status for row in decisions) for status in
-                              ("acceptable-for-current-decision", "review-needed", "outside-calibration")},
+            "status_counts": {status: sum(row["status"] == status for row in decisions) for status in statuses},
             "cases": decisions}
+        if adopted:
+            result["decision_support"]["accepted_deficit_fraction"] = fraction
     return result
 
 
@@ -264,12 +327,68 @@ def self_check():
     assert checked["decision_support"]["cases"][2]["status"] == "outside-calibration"
     large = prediction(calibrated, {"nodes": 40000, "type_nodes": 1, "type_depth": 1, "resource_sites": 0})
     assert large["responses"]["cpu_seconds"]["review_threshold"] > large["responses"]["cpu_seconds"]["current_workload_target"]
+    adopted = adopt(calibrated, "calibrated-parent-hash")
+    assert {key: value for key, value in adopted.items() if key not in
+            ("accepted_deficit_fraction", "decision_support_adoption")} == calibrated
+    assert prediction(adopted, physical_cases[3]) == prediction(calibrated, physical_cases[3])
+    assert "accepted-with-deficit" not in checked["decision_support"]["status_counts"]
+    boundary_model = json.loads(json.dumps(adopted))
+    boundary_case = json.loads(json.dumps(physical_cases[3]))
+    # Construct canonical decimal boundaries with exact rational arithmetic, never float 1.1 multiplication.
+    for name, baseline in ((name, baseline) for name in PHYSICAL for baseline in
+                           ("review_threshold", "current_workload_target")):
+        for response, fixed in (("cpu_seconds", 0.18 if name == "cpu_seconds" and baseline == "current_workload_target" else 0.105),
+                                ("peak_rss_kib", 65536 if name == "peak_rss_kib" and baseline == "current_workload_target" else 16384)):
+            boundary_model["responses"][response]["coefficients"] = {"intercept": fixed, **{term: 0 for term in TERMS}}
+        estimated = prediction(boundary_model, boundary_case)
+        base = estimated["responses"][name][baseline]
+        for overrun, expected in (("0", "acceptable-for-current-decision"), ("0.10", "accepted-with-deficit"),
+                                  ("0.100001", "review-needed")):
+            for maximum_only in (False, True):
+                for response, value in (("cpu_seconds", 0.02), ("peak_rss_kib", 16000)):
+                    key = "wrapper_inclusive_child_total_seconds" if response == "cpu_seconds" else "peak_rss_kib"
+                    boundary_case["process"]["off"][key] = {"median": value, "max": value, "n": 3}
+                value = float(Fraction(str(base)) * (1 + Fraction(overrun)))
+                key = "wrapper_inclusive_child_total_seconds" if name == "cpu_seconds" else "peak_rss_kib"
+                boundary_case["process"]["off"][key] = {"median": base if maximum_only else value, "max": value, "n": 3}
+                assessed = evaluate(boundary_model, {"cases": [boundary_case]})["decision_support"]
+                row = assessed["cases"][0]
+                assert row["status"] == expected, (name, baseline, overrun, maximum_only, row)
+                assert assessed["status_counts"][expected] == 1
+                if overrun == "0.10":
+                    assert row["deficits"] and all(d["relative_deficit"] == 0.1 and
+                           d["reduction_needed_fraction_of_observed"] == float(Fraction(1, 11)) and
+                           d["optimization_target"] == base for d in row["deficits"])
+                    old_model = {key: value for key, value in boundary_model.items() if key not in
+                                 ("accepted_deficit_fraction", "decision_support_adoption")}
+                    old = evaluate(old_model, {"cases": [boundary_case]})["decision_support"]
+                    assert old["cases"][0]["status"] == "review-needed"
+                    assert "accepted-with-deficit" not in old["status_counts"]
+    # Within 10% of the review threshold is insufficient when the independent target has a larger deficit.
+    boundary_model["responses"]["cpu_seconds"]["coefficients"] = {"intercept": 0.18, **{term: 0 for term in TERMS}}
+    boundary_case["process"]["off"] = {
+        "wrapper_inclusive_child_total_seconds": {"median": 0.3, "max": 0.4, "n": 3},
+        "peak_rss_kib": {"median": 16000, "max": 16000, "n": 3}}
+    multi = evaluate(boundary_model, {"cases": [boundary_case]})["decision_support"]["cases"][0]
+    assert multi["status"] == "review-needed" and len(multi["deficits"]) == 2
+    assert {d["baseline"]: d["within_accepted_deficit"] for d in multi["deficits"]} == {
+        "review_threshold": True, "current_workload_target": False}
+    boundary_case["features"]["nodes"] = calibrated["feature_ranges"]["nodes"]["max"] + 1
+    scoped = evaluate(boundary_model, {"cases": [boundary_case]})["decision_support"]["cases"][0]
+    assert scoped["status"] == "outside-calibration" and scoped["deficits"]
+    boundary_case["features"] = physical_cases[3]["features"]
+    boundary_case["process"]["off"]["peak_rss_kib"]["max"] = None
+    missing = evaluate(boundary_model, {"cases": [boundary_case]})["decision_support"]["cases"][0]
+    assert missing["status"] == "outside-calibration" and missing["deficits"]
+    boundary_case["features"] = {}
+    invalid = evaluate(boundary_model, {"cases": [boundary_case]})["decision_support"]["cases"][0]
+    assert invalid["status"] == "outside-calibration" and invalid["deficits"]
     for case in cases:
         case["features"] = {"nodes": 1, "type_nodes": 1, "type_depth": 1, "resource_sites": 0}
     failed = fit_summary({"cases": cases})
     assert failed["responses"]["cpu_seconds"]["status"] == "rank-insufficient"
     assert prediction(failed, cases[0])["responses"]["cpu_seconds"]["predicted"] is None
-    print("Connected offline fit, calibration, prediction, measured review and scope self-check passed.")
+    print("Connected offline fit, calibration, adoption, exact deficit boundaries, measured review and scope self-check passed.")
 
 
 def main():
@@ -277,6 +396,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser("fit"); command.add_argument("summary", type=Path); command.add_argument("--output", type=Path, required=True)
     command = commands.add_parser("calibrate"); command.add_argument("model", type=Path); command.add_argument("startup_summary", type=Path); command.add_argument("--output", type=Path, required=True)
+    command = commands.add_parser("adopt"); command.add_argument("model", type=Path); command.add_argument("--output", type=Path, required=True)
     command = commands.add_parser("predict"); command.add_argument("model", type=Path); command.add_argument("features", type=Path)
     command = commands.add_parser("evaluate"); command.add_argument("model", type=Path); command.add_argument("summary", type=Path)
     commands.add_parser("self-check")
@@ -300,6 +420,14 @@ def main():
         collector.dump(args.output, model)
         print(json.dumps({"output": str(args.output), "cpu_point_floor_seconds": model["decision_support_calibration"]["cpu_point_floor_seconds"],
                           "interpretation": "No refit; physical review allowances and current-workload targets remain separate."}, indent=2))
+    elif args.command == "adopt":
+        if args.output.resolve() == args.model.resolve():
+            raise ValueError("adoption output must preserve the parent model")
+        model = adopt(json.loads(args.model.read_text()), collector.sha(args.model))
+        model["decision_support_adoption"]["provenance"]["parent_model_path"] = str(args.model.resolve())
+        collector.dump(args.output, model)
+        print(json.dumps({"output": str(args.output), "accepted_deficit_fraction": model["accepted_deficit_fraction"],
+                          "interpretation": "Original predictions and baselines retained; deficits assessed independently."}, indent=2))
     else:
         model = json.loads(args.model.read_text())
         result = prediction(model, json.loads(args.features.read_text())) if args.command == "predict" else evaluate(model, json.loads(args.summary.read_text()))

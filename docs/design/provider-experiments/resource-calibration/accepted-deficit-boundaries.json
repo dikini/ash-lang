@@ -1,0 +1,2842 @@
+{
+  "adopted_model_sha256": "0cb6577673030d9958bb3a4ad645ea81cf9dfeb69f65eddf4cd7a3599d06b955",
+  "cases": [
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "cpu_seconds-review_threshold-0-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.22,
+              "median": 0.22,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0-median-and-maximum",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.22,
+            "observed_median": 0.22,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "cpu_seconds-review_threshold-0-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.22,
+              "median": 0.22,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0-maximum-only",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.22,
+            "observed_median": 0.22,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "cpu_seconds-review_threshold-0.10-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0.10-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.242,
+              "median": 0.242,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0.10-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 0.242,
+            "observed_median": 0.242,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "cpu_seconds-review_threshold-0.10-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0.10-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.242,
+              "median": 0.22,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0.10-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.242,
+            "observed_median": 0.22,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "cpu_seconds-review_threshold-0.100001-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0.100001-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.24200022,
+              "median": 0.24200022,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0.100001-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 0.02200022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.24200022,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.02200022,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          },
+          {
+            "absolute_deficit": 0.02200022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.24200022,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.02200022,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 0.24200022,
+            "observed_median": 0.24200022,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "cpu_seconds-review_threshold-0.100001-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-review_threshold-0.100001-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.24200022,
+              "median": 0.22,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-review_threshold-0.100001-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 0.02200022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.24200022,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.02200022,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.24200022,
+            "observed_median": 0.22,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "cpu_seconds-current_workload_target-0-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.3,
+              "median": 0.3,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0-median-and-maximum",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.3,
+            "observed_median": 0.3,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "cpu_seconds-current_workload_target-0-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.3,
+              "median": 0.3,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0-maximum-only",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.3,
+            "observed_median": 0.3,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "cpu_seconds-current_workload_target-0.10-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0.10-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.33,
+              "median": 0.33,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0.10-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.33,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.33,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": false,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.33,
+            "observed_median": 0.33,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "cpu_seconds-current_workload_target-0.10-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0.10-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.33,
+              "median": 0.3,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0.10-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.33,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.33,
+            "observed_median": 0.3,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "cpu_seconds-current_workload_target-0.100001-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0.100001-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.3300003,
+              "median": 0.3300003,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0.100001-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 0.0300003,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.3300003,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.0300003,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          },
+          {
+            "absolute_deficit": 0.0300003,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.3300003,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.0300003,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": false,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.3300003,
+            "observed_median": 0.3300003,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "cpu_seconds-current_workload_target-0.100001-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "cpu_seconds-current_workload_target-0.100001-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.3300003,
+              "median": 0.3,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "cpu_seconds-current_workload_target-0.100001-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 0.0300003,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.3300003,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.0300003,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.3300003,
+            "observed_median": 0.3,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "peak_rss_kib-review_threshold-0-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 20480.0,
+              "median": 20480.0,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0-median-and-maximum",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 20480.0,
+            "observed_median": 20480.0,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "peak_rss_kib-review_threshold-0-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 20480.0,
+              "median": 20480,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0-maximum-only",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 20480.0,
+            "observed_median": 20480,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "peak_rss_kib-review_threshold-0.10-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0.10-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 22528.0,
+              "median": 22528.0,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0.10-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 2048.0,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.0,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.0,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 2048.0,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.0,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.0,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 22528.0,
+            "observed_median": 22528.0,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "peak_rss_kib-review_threshold-0.10-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0.10-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 22528.0,
+              "median": 20480,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0.10-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 2048.0,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.0,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.0,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 22528.0,
+            "observed_median": 20480,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "peak_rss_kib-review_threshold-0.100001-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0.100001-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 22528.02048,
+              "median": 22528.02048,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0.100001-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 2048.02048,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.02048,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.02048,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "median",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          },
+          {
+            "absolute_deficit": 2048.02048,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.02048,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.02048,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 22528.02048,
+            "observed_median": 22528.02048,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "peak_rss_kib-review_threshold-0.100001-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-review_threshold-0.100001-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 22528.02048,
+              "median": 20480,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-review_threshold-0.100001-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 2048.02048,
+            "baseline": "review_threshold",
+            "baseline_value": 20480,
+            "measure": "peak_rss_kib",
+            "observed": 22528.02048,
+            "optimization_target": 20480,
+            "reduction_needed": 2048.02048,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 22528.02048,
+            "observed_median": 20480,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "peak_rss_kib-current_workload_target-0-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 65536.0,
+              "median": 65536.0,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0-median-and-maximum",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 65536.0,
+            "observed_median": 65536.0,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "acceptable-for-current-decision",
+      "id": "peak_rss_kib-current_workload_target-0-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 65536.0,
+              "median": 65536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0-maximum-only",
+        "deficits": [],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 65536.0,
+            "observed_median": 65536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "acceptable-for-current-decision"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "peak_rss_kib-current_workload_target-0.10-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0.10-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72089.6,
+              "median": 72089.6,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0.10-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 6553.6,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.6,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.6,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 6553.6,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.6,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.6,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": false,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72089.6,
+            "observed_median": 72089.6,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "peak_rss_kib-current_workload_target-0.10-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0.10-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72089.6,
+              "median": 65536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0.10-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 6553.6,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.6,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.6,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72089.6,
+            "observed_median": 65536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "peak_rss_kib-current_workload_target-0.100001-median-and-maximum",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0.100001-median-and-maximum",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72089.665536,
+              "median": 72089.665536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0.100001-median-and-maximum",
+        "deficits": [
+          {
+            "absolute_deficit": 6553.665536,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.665536,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.665536,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "median",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          },
+          {
+            "absolute_deficit": 6553.665536,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.665536,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.665536,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": false,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72089.665536,
+            "observed_median": 72089.665536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "peak_rss_kib-current_workload_target-0.100001-maximum-only",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "peak_rss_kib-current_workload_target-0.100001-maximum-only",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72089.665536,
+              "median": 65536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Synthetic mathematical boundary; fractional KiB is not an actual GNU time observation.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "peak_rss_kib-current_workload_target-0.100001-maximum-only",
+        "deficits": [
+          {
+            "absolute_deficit": 6553.665536,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089.665536,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.665536,
+            "reduction_needed_fraction_of_observed": 0.09090991735462059,
+            "relative_deficit": 0.100001,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72089.665536,
+            "observed_median": 65536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "multiple-baselines",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "multiple-baselines",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.4,
+              "median": 0.3,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "0.4 seconds fits the review-threshold margin but exceeds the target margin; neither margin can hide the other.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "multiple-baselines",
+        "deficits": [
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "review_threshold",
+            "baseline_value": 0.37,
+            "measure": "cpu_seconds",
+            "observed": 0.4,
+            "optimization_target": 0.37,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.075,
+            "relative_deficit": 0.08108108108108109,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.1,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.4,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.1,
+            "reduction_needed_fraction_of_observed": 0.25,
+            "relative_deficit": 0.3333333333333333,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.4,
+            "observed_median": 0.3,
+            "predicted": 0.18,
+            "raw_predicted": 0.18,
+            "review_threshold": 0.37,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "outside-calibration",
+      "id": "outside-range-with-deficit",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1605,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "outside-range-with-deficit",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.242,
+              "median": 0.242,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Range failure has precedence even when the known deficit is at the accepted boundary.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "outside-range-with-deficit",
+        "deficits": [
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {
+          "nodes": {
+            "observed": {
+              "max": 1604,
+              "min": 13
+            },
+            "value": 1605
+          }
+        },
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 0.242,
+            "observed_median": 0.242,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [
+          "outside-observed-feature-ranges"
+        ],
+        "status": "outside-calibration"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "outside-calibration",
+      "id": "missing-maximum-with-known-deficit",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "missing-maximum-with-known-deficit",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": null,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.242,
+              "median": 0.242,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "An incomplete measure prevents acceptance; known CPU deficits remain reported.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "missing-maximum-with-known-deficit",
+        "deficits": [
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.022,
+            "baseline": "review_threshold",
+            "baseline_value": 0.22,
+            "measure": "cpu_seconds",
+            "observed": 0.242,
+            "optimization_target": 0.22,
+            "reduction_needed": 0.022,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": false,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": false,
+            "observed_maximum": 0.242,
+            "observed_median": 0.242,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "measurement_count": 3,
+            "observed_maximum": null,
+            "observed_median": 12000,
+            "predicted": 12288,
+            "raw_predicted": 12288,
+            "review_threshold": 20480,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [
+          "missing-or-invalid-measured-peak_rss_kib"
+        ],
+        "status": "outside-calibration"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "outside-calibration",
+      "id": "missing-features-with-known-target-deficit",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {},
+        "id": "missing-features-with-known-target-deficit",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 12000,
+              "median": 12000,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.33,
+              "median": 0.33,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "No point/review prediction is invented without features; the known current target can still be reported.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "missing-features-with-known-target-deficit",
+        "deficits": [
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.33,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "median",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          },
+          {
+            "absolute_deficit": 0.03,
+            "baseline": "current_workload_target",
+            "baseline_value": 0.3,
+            "measure": "cpu_seconds",
+            "observed": 0.33,
+            "optimization_target": 0.3,
+            "reduction_needed": 0.03,
+            "reduction_needed_fraction_of_observed": 0.09090909090909091,
+            "relative_deficit": 0.1,
+            "statistic": "max",
+            "units": "observation-off wrapper-inclusive child CPU seconds",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "measurement_count": 3,
+            "observed_maximum": 0.33,
+            "observed_median": 0.33,
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "measurement_count": 3,
+            "observed_maximum": 12000,
+            "observed_median": 12000,
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [
+          "missing-or-invalid-input-features",
+          "missing-or-invalid-baseline-cpu_seconds",
+          "missing-or-invalid-baseline-peak_rss_kib"
+        ],
+        "status": "outside-calibration"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.18,
+        "peak_rss_kib": 12288
+      }
+    },
+    {
+      "expected_status": "accepted-with-deficit",
+      "id": "RSS-target-integral-KiB-72089",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "RSS-target-integral-KiB-72089",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72089,
+              "median": 65536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Integral KiB observation immediately below/above the exact 72089.6 KiB ten-percent target ceiling.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "RSS-target-integral-KiB-72089",
+        "deficits": [
+          {
+            "absolute_deficit": 6553.0,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72089,
+            "optimization_target": 65536,
+            "reduction_needed": 6553.0,
+            "reduction_needed_fraction_of_observed": 0.09090152450443202,
+            "relative_deficit": 0.0999908447265625,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": true
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72089,
+            "observed_median": 65536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "accepted-with-deficit"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    },
+    {
+      "expected_status": "review-needed",
+      "id": "RSS-target-integral-KiB-72090",
+      "input_case": {
+        "accepted_for_models": true,
+        "family": "synthetic-deficit-boundary",
+        "features": {
+          "nodes": 1480,
+          "resource_sites": 2,
+          "type_depth": 4,
+          "type_nodes": 494
+        },
+        "id": "RSS-target-integral-KiB-72090",
+        "process": {
+          "off": {
+            "peak_rss_kib": {
+              "max": 72090,
+              "median": 65536,
+              "n": 3
+            },
+            "wrapper_inclusive_child_total_seconds": {
+              "max": 0.02,
+              "median": 0.02,
+              "n": 3
+            }
+          }
+        },
+        "work": {}
+      },
+      "note": "Integral KiB observation immediately below/above the exact 72089.6 KiB ten-percent target ceiling.",
+      "result": {
+        "accepted_deficit_fraction": 0.1,
+        "case": "RSS-target-integral-KiB-72090",
+        "deficits": [
+          {
+            "absolute_deficit": 6554.0,
+            "baseline": "current_workload_target",
+            "baseline_value": 65536,
+            "measure": "peak_rss_kib",
+            "observed": 72090,
+            "optimization_target": 65536,
+            "reduction_needed": 6554.0,
+            "reduction_needed_fraction_of_observed": 0.09091413510889167,
+            "relative_deficit": 0.100006103515625,
+            "statistic": "max",
+            "units": "observation-off GNU time process peak RSS KiB",
+            "within_accepted_deficit": false
+          }
+        ],
+        "outside_observed_ranges": {},
+        "responses": {
+          "cpu_seconds": {
+            "current_workload_target": 0.3,
+            "maximum_within_current_target": true,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 0.02,
+            "observed_median": 0.02,
+            "predicted": 0.105,
+            "raw_predicted": 0.105,
+            "review_threshold": 0.22,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off wrapper-inclusive child CPU seconds"
+          },
+          "peak_rss_kib": {
+            "current_workload_target": 65536,
+            "maximum_within_current_target": false,
+            "maximum_within_review_threshold": true,
+            "measurement_count": 3,
+            "median_within_current_target": true,
+            "median_within_review_threshold": true,
+            "observed_maximum": 72090,
+            "observed_median": 65536,
+            "predicted": 65536,
+            "raw_predicted": 65536,
+            "review_threshold": 98304,
+            "role": "physical-cost",
+            "status": "point-estimate",
+            "units": "observation-off GNU time process peak RSS KiB"
+          }
+        },
+        "scope_reasons": [],
+        "status": "review-needed"
+      },
+      "synthetic": true,
+      "test_only_constant_point_overrides": {
+        "cpu_seconds": 0.105,
+        "peak_rss_kib": 65536
+      }
+    }
+  ],
+  "comparison": "Exact rational comparisons of reported decimal numeric values; no epsilon and no compounding.",
+  "interpretation": "Thirty synthetic offline policy boundaries, not measured Ash or Rust programs. Constant physical point overrides isolate each baseline; actual adopted model/measurements are unchanged.",
+  "old_model_replay_json_identity": true,
+  "schema_version": 1,
+  "status_counts": {
+    "acceptable-for-current-decision": 8,
+    "accepted-with-deficit": 9,
+    "outside-calibration": 3,
+    "review-needed": 10
+  }
+}

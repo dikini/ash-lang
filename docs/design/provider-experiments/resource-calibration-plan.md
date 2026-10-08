@@ -314,3 +314,34 @@ Use the connected offline self-check and real stored-data replay, including
 an over-budget observation and an outside-range case. Authenticate the source
 summaries against preserved archives and check documentation links. Preserve
 an unsigned pushed checkpoint and return a readable coordination handoff.
+
+## Accepted deficit adoption
+
+Common's delegated user direction adopts the calibrated offline measurements
+and accepts at most a ten-percent deficit for decision support. Preserve all
+previous models, input snapshots, replays and indexes. Add a distinct
+`accepted-with-deficit` outcome for valid, in-range measured CPU/RSS medians
+or maxima above a review threshold or current-workload target by no more than
+ten percent of that original baseline. A larger deficit requires review;
+missing observations and outside-range cases remain outside calibration.
+
+Report every exceeded baseline, observed statistic, absolute and relative
+deficit, and the original baseline as a future optimization target. Show the
+required reduction relative to the observation separately; a ten-percent
+baseline deficit needs a 9.09-percent reduction in observed cost. Keep point
+predictions, thresholds and targets unchanged, and do not compound margins.
+Use exact comparisons for the stated ten-percent boundary.
+
+Replay the existing datasets and produce indexed synthetic boundary evidence
+for zero, exactly ten percent and above ten percent, including independent
+CPU/RSS threshold/target checks, maximum-only excess, multiple baselines,
+missing observations and outside-range precedence. Retain old-model behavior.
+Run only offline Python checks; do not build or change Rust, compiler limits,
+shared source, integration or merge state.
+
+Review conservative rounded-up completed charged maxima for separate Type and
+independent Core references, with a separate at-most-ten-percent hard margin.
+Record missing owner coverage, rounding headroom and the current Core multiplier.
+Common owns production admission changes and its serial Cargo window. Deliver
+an unsigned checkpoint and readable handoff; this task does not adopt those
+work budgets into the compiler.
