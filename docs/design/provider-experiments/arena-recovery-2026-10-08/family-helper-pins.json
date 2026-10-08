@@ -1,8 +1,0 @@
-{
-  "status": "frozen source-only recovery draft; uncompiled; not composed",
-  "files": {
-    "helpers.rs": "8bacab3256847bdfc13b2a6b44ee7b2bb9f8f163705c02b719f0203501987ebf",
-    "certificate-getter.rs": "a43798e3b4d7f4c598495dcd289c6b526901f6d67166f03d4db5ffbd18b63490",
-    "integration.md": "81a33e5cf31e840812a8fc9b7b1b68292e05447e707f1a131cec52a6801dc3f6"
-  }
-}

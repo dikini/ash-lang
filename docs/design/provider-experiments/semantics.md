@@ -2487,9 +2487,9 @@ Until then, the normative specification remains the comparison baseline.
 
 ## Selected copying values and literals (SQLite workstream)
 
-This candidate extends P-1 only on the experiment branch. Current `spec/`
-excludes these values and literals; integration into the experiment is not a
-product transition.
+This candidate extends experimental P-1 wherever the bounded implementation is
+retained. Current `spec/` excludes these values and literals; experimental
+retention does not establish a product transition.
 
 `Bytes` and `String` are distinct built-in types of kind `Type`. Bytes denotes
 an immutable finite sequence of arbitrary bytes. String denotes immutable valid

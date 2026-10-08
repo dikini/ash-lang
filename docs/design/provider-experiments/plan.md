@@ -13,10 +13,13 @@ scoped arena providers. Compare source descriptions, inferred and explicit
 contracts, type checking, Core execution, and native behavior. Develop the
 extensions so successful work can become part of Ash and its standard library.
 
-Work in `.worktree/provider-experiments` on `codex/provider-experiments`, using
-the root Cargo workspace and lockfile. The [package](README.md) records the
-baseline and carried design inputs. Worktree isolation keeps candidate behavior
-off `main`; bounded scope does not require a disposable implementation.
+The initial experiment used `.worktree/provider-experiments` on
+`codex/provider-experiments`. These are historical source paths; the
+[package](README.md#checkout-and-scope) describes reproduction from any checkout
+containing the delivery. The
+[consolidation record](execution.md#current-consolidation-checkpoint) identifies
+the checked source, results and retention status. Retaining a verified bounded
+experiment on `main` does not adopt its candidate semantics or architecture.
 
 The user's 2026-10-03 direction prioritizes completed source capabilities over
 additional internal test granularity. The immediate integration target is S-01:
@@ -41,7 +44,9 @@ native-call profile, steps or completion criteria.
 The common workstream uses `codex/common-resource-support` in
 `.worktree/common-resource-support`, starting from unsigned recovery commit
 `167bd8c`. That checkpoint is unverified. Each accepted delivery merges with an
-unsigned merge commit into `codex/provider-experiments`; main is excluded.
+unsigned merge commit into `codex/provider-experiments`. This historical
+handoff excluded `main`; later experimental retention is recorded separately
+in the consolidation record.
 
 1. Restore a coherent tagged owner migration in `types`, `resolved`, `kind`,
    evidence, elaboration and every Core consumer. Check independent owner
@@ -98,8 +103,10 @@ remain preserved SQLite-owned work. The
 all five packaged programs passing under calibrated public-driver admission,
 matched reuse of seventeen original cases, and a fresh supplementary forwarding
 regression. Historical default-budget refusals retain their original scope;
-calibrated admission does not establish reduced compiler work. Preserving SQLite
-integration and the final combined gate remain pending. Standalone/explicit
+calibrated admission does not establish reduced compiler work. At that SQLite
+source checkpoint, preserving integration and the final combined gate remained
+pending. Consult the consolidation record for later verification and disposition.
+Standalone/explicit
 budgets, depth and validation remain unchanged; the
 [calibrated policy](calibrated-admission-2026-10-08/README.md) records the larger
 public-driver phase allowances.
@@ -171,14 +178,16 @@ substitute for source-to-Core execution.
 
 The [selected complete owner row arguments](semantics.md#selected-complete-owner-row-arguments)
 extend DN-0036 experimental P-1 after independent contract and prose approval.
-Selection remains informative and off `main`; it is not current Ash, product
-adoption or executed source proof. The earlier module-publication baseline
+Selection remains informative wherever the experimental implementation is
+retained. It does not define current Ash, establish product adoption or supply
+a formal proof. The earlier module-publication baseline
 was Type-only. Common Batch 0 integrates the complete argument migration, and
 Batch 3 moving-source evidence executes the formal open-row callback. The
 finite per-request capture witness and required row/control cases pass connected
 common verification. The original-branch merge and its fresh final gate are
 recorded separately.
-[Execution](execution.md#current-checkpoint) records the precise evidence.
+[Execution](execution.md#current-consolidation-checkpoint) records the current
+consolidation status; earlier receipts retain their named checkpoint scope.
 The callback exclusion above means foreign callback ABI; this pressure case executes an ordinary synchronous Ash
 function application within a provider clause.
 
@@ -231,8 +240,8 @@ These implementation checkpoints refine Step 2; they do not replace Steps 3
 through 7. M1 belongs to common Batch 0. M2 through M4 and the S-01 part of M5
 form the connected source-to-runtime delivery in common Batch 1. The complete
 row and control cases in M5 belong to common Batch 3. The labels below are not delivery batch
-numbers. The [current checkpoint](execution.md#current-checkpoint) records
-actual progress and evidence. Each row depends on acceptance of its predecessor.
+numbers. The [consolidation checkpoint](execution.md#current-consolidation-checkpoint)
+records current status and evidence. Each row depends on acceptance of its predecessor.
 
 | Checkpoint | Boundary removed | Required exit evidence |
 | --- | --- | --- |
@@ -441,8 +450,10 @@ The result assessment uses DN-0036's success criteria:
 | Failed design | Do not merge the experiment branch. Record counterexamples and reasons; disposal is optional. |
 | Inconclusive or partial result | State the supported fragment and remaining questions. Do not merge unresolved behavior; refine or plan the next bounded comparison. |
 
-Experiment completion means its questions have answers. Merge readiness
-additionally requires a successful design and the adoption work below.
+Experiment completion means its questions have answers. Retention of a verified
+bounded experimental fragment requires attributable evidence and explicit
+limitations. Product adoption additionally requires a successful design and the
+adoption work below. Retention alone does not complete this broader plan.
 
 ## Step 7: bring successful work into Ash and its standard library
 
@@ -452,8 +463,9 @@ additionally requires a successful design and the adoption work below.
    supported targets, and remaining limits.
 2. Prepare the change proposal for language semantics and architectural
    decisions for converged non-language choices. Retain successful code on this
-   branch while those contracts are reviewed; rewriting it from scratch is not
-   a prerequisite for adoption.
+   branch or another explicitly experimental retained checkpoint while those
+   contracts are reviewed; rewriting it from scratch is not a prerequisite for
+   adoption.
 3. Following acceptance, create product tasks and detailed execution plans for
    coherent checkpoints. Map existing experimental code to each checkpoint's
    requirements: retain conforming parts, revise gaps, and remove failed
@@ -472,10 +484,11 @@ additionally requires a successful design and the adoption work below.
    evidence supports it. Preserve existing Pure and Effect behavior and add
    compatibility checks. Document supported native builds, authoring workflow,
    developer tools, costs, errors, and explicit foreign assumptions.
-7. Run the full product verification and required review. Integrate the
-   successful branch only when the accepted contract, implementation,
-   specification, library documentation, and evidence agree. Integration into
-   `main` establishes current Ash behavior.
+7. Run the full product verification and required review. Adopt the successful
+   implementation as product behavior only when the accepted contract,
+   implementation, specification, library documentation and evidence agree.
+   Current language semantics derive from `spec/`; experimental retention on
+   `main` does not substitute for this adoption workflow.
 
 An unsuccessful experiment remains unmerged. Useful code need not be discarded;
 retention does not waive the successful-design and product-verification gates.

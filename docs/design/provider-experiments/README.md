@@ -3,7 +3,7 @@
 > This package is informative and governed by
 > [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 > Candidate contracts, syntax, and Core rules are experimental. The
-> [execution record](execution.md#current-checkpoint) identifies implemented and
+> [execution record](execution.md#current-consolidation-checkpoint) identifies implemented and
 > reviewed components. The public SQLite session is verified and integrated on the
 > original experimental branch. Basic arena integration is also verified and
 > merged. Advanced row/control support is merged into the original branch; the execution
@@ -26,8 +26,8 @@ type checking, Core execution, and actual native behavior.
 - [Environment](environment.json): observed native inputs and design snapshots.
 - [Authoring log](authoring-log.md): observed friction and candidate assistance
   to evaluate during the implementation.
-- [Execution record](execution.md): active checkpoint ownership and verified
-  evidence; it has no independent semantic authority.
+- [Execution record](execution.md): retained evidence, checkpoint provenance and
+  disposition; it has no independent semantic authority.
 - [Analysis disposition](analysis-closure.md) and [algebra study](analysis-algebra.md):
   retained F-2 findings, the rejected compound F-1 trial and calibrated admission.
   The former task and execution plans are retired; further algorithmic reduction
@@ -47,24 +47,29 @@ separate program for Ash-authored foreign-library interfaces and generic host
 ABI support. It can use this package's findings without adding experiment
 inputs or completion requirements.
 
-## Worktree and scope
+## Checkout and scope
 
-Use `/home/dikini/Projects/ash-lang/.worktree/provider-experiments` on branch
-`codex/provider-experiments`. The product baseline is
-`124e164094a9a338fd5ce6a58f979da463285f28`. Current DN-0034, DN-0035, DN-0036, and
-the design index were copied from the main checkout as uncommitted design
-inputs. The environment record contains their hashes at transfer. Changes to
-DN-0036 made in this worktree link this package. The other carried notes are
-context, not new work performed by this experiment.
+Run the commands below from the repository root of any checkout containing this
+experimental delivery. Use that checkout's Cargo workspace, lockfile and pinned
+Rust toolchain. Its branch name or directory does not establish verification;
+consult the [consolidation checkpoint](execution.md#current-consolidation-checkpoint)
+for the checked source and results.
 
-Extend the existing Ash implementation in this worktree: parsing and resolution
-in `src/`, checking and elaboration, the shared typed Core, and the existing
-Effect evaluator. Source cases run through `driver::run_path` and the current
-integration-test helpers. Use the root Cargo workspace and lockfile. A focused
-adapter crate may isolate unsafe foreign calls within that workspace if needed;
-it supplies native primitives, not another parser, checker, or runtime.
-Documentation lives here. The plan includes the proposal and task path to adopt
-successful code, specify the language changes, and establish library APIs.
+Historical provenance: the initial experiment used
+`/home/dikini/Projects/ash-lang/.worktree/provider-experiments`, branch
+`codex/provider-experiments`, from product baseline
+`124e164094a9a338fd5ce6a58f979da463285f28`. DN-0034, DN-0035, DN-0036 and the
+design index were copied from the main checkout as uncommitted design inputs.
+The environment record contains their transfer hashes. Changes to DN-0036 linked
+this package; the other carried notes supplied context. These paths describe
+that source checkpoint, not a required checkout for reproduction.
+
+The experiment extends parsing, resolution, checking and elaboration in `src/`,
+the shared typed Core and the existing Effect evaluator. Source cases use
+`driver::run_path` and the integration-test helpers. The adapter crate isolates
+unsafe native calls; it does not supply another parser, checker or runtime.
+The plan records the proposal and task path needed to adopt successful designs,
+specify language changes and establish library APIs.
 
 The additive `driver::run_path_with_foreign_runtime` entry point executes the
 experimental native cases. Its `RunConfiguration` carries static manifest
@@ -74,12 +79,13 @@ dispatch. Existing `run_path` callers retain their API.
 
 ## Reproducing common source cases
 
-From the original experiment worktree or common implementation worktree, run
-the public driver tests with one Cargo build job. These commands execute the linked Ash programs and assert actual
-native observations:
+From the checkout root, run the public driver tests with one Cargo build job.
+These commands execute linked Ash programs and assert native observations.
+The commands disable a configured compiler wrapper for reproducibility without
+changing Cargo configuration. Their presence is not a new pass receipt:
 
 ```bash
-CARGO_BUILD_JOBS=1 cargo test -p ash --test provider_sqlite_source copying_sqlite_session_executes_through_public_foreign_runtime -- --exact
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test -p ash --test provider_sqlite_source copying_sqlite_session_executes_through_public_foreign_runtime -- --exact
 ```
 
 The SQLite [entry module](../../../tests/fixtures/provider-experiments/sqlite-copying/entry.ash)
@@ -90,21 +96,63 @@ finalization before connection close. The
 [SQLite helper](../../../tests/provider_sqlite_source.rs) shows the complete
 public binding setup.
 
+The host example also runs all five
+[packaged SQLite programs](examples/sqlite-copying/README.md): Unicode TEXT,
+copying, file session/reopen, captured resume and owned discard. Build from the
+checkout root, then run against a private package copy so the session database
+belongs to that copy:
+
+```sh
+(
+    ash_repo=$(pwd -P)
+    CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo build --locked -p ash-foreign-adapter --example sqlite_session || exit
+    sqlite_example_dir=$(mktemp -d) || exit
+    cp "$ash_repo"/docs/design/provider-experiments/examples/sqlite-copying/*.ash "$sqlite_example_dir"/ || exit
+    printf 'Example directory: %s\n' "$sqlite_example_dir"
+    cd "$sqlite_example_dir" || exit
+    sqlite_example_status=0
+    for sqlite_entry in text-entry.ash copying-entry.ash session-entry.ash control-resume.ash control-discard.ash
+    do
+        "$ash_repo/target/debug/examples/sqlite_session" "$sqlite_example_dir/$sqlite_entry" || sqlite_example_status=1
+    done
+    exit "$sqlite_example_status"
+)
+```
+
+This recipe uses the workspace's default `target` directory. If a custom Cargo
+target directory is configured, use its `debug/examples/sqlite_session` binary.
+Use a fresh private directory for each session run. Keep the printed directory
+while reviewing its source, observations and database; remove it afterward.
+Check the complete source value and native observations against the package's
+required outcomes. A successful host exit alone does not establish source-level
+success or successful completion.
+
 The arena [entry module](../../../tests/fixtures/provider-experiments/arena-basic/entry.ash)
 uses typed configuration `(64, 4)` and reads native usage `(0, 64, 0, 4)`.
 The [public driver setup](../../../tests/provider_arena_source.rs) registers the
 original memory manifest and its executable adapter. Reproduce the lifecycle:
 
 ```bash
-CARGO_BUILD_JOBS=1 cargo test -p ash --test provider_arena_source arena_acquires_queries_actual_usage_and_releases_through_public_driver -- --exact
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test -p ash --test provider_arena_source arena_acquires_queries_actual_usage_and_releases_through_public_driver -- --exact
 ```
 
 The wider suite covers repeated and nested activations, zero capacities, native
 configuration refusal without body or release, dependent access escape rejection,
 and release exactly once. The adapter uses the existing physical arena backing;
-compiler dispatch contains no arena-specific resource policy. Typed allocation,
-Layout evidence, references, containment, borrowing, sharing and storage-provider
-families remain separate arena work.
+compiler dispatch contains no arena-specific resource policy. The selected scalar
+allocation test connects source allocation and loading to native storage:
+
+```sh
+CARGO_BUILD_JOBS=1 RUSTC_WRAPPER= cargo test --locked -p ash --test provider_arena_allocation ash_allocates_and_reads_native_storage_before_arena_completion -- --exact
+```
+
+Its assertions require `Completed(41, Closed)`, one eight-byte store and load,
+matching native owner/allocation identities, one scope release and zero retained
+owners. The selected functional checkpoint passes this test and the wider seven-case
+allocation suite. The consolidation checkpoint distinguishes that frozen source
+from subsequent scanner/lint changes and the pending combined workspace gate. The selected `StorageProvider<R, T>` family covers
+finite scalar layouts. Additional payload layouts, general containment, borrowing
+and sharing, and providers beyond this selected family remain separate arena work.
 
 The execution record names the verified integration commit for each completed
 delivery; later moving-branch receipts remain separate. They test the selected experiment, not current
