@@ -6,6 +6,10 @@ edition = "2024"
 rust-version = "1.97.1"
 publish = false
 
+[features]
+# Isolated TASK-0035 measurement tooling; not a production resource policy.
+resource-calibration = []
+
 [dependencies]
 sha2 = "=0.10.9"
 ash-native-buffer = { path = "native-buffer" }

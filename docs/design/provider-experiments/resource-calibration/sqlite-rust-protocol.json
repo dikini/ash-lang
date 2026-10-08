@@ -1,0 +1,150 @@
+{
+  "status": "frozen before compiler dispatch; source-only review and preflight",
+  "purpose": "Informational functional Rust SQLite compiler comparison; no Ash optimizer or policy change",
+  "baseline_checkpoint": "dfaee6078b121edda10e7899cddd5ba66a354297",
+  "rustc_path": "/home/dikini/.rustup/toolchains/1.97.1-x86_64-unknown-linux-gnu/bin/rustc",
+  "rustc_sha256": "d3a664c970a9fd8361b64194861bebc1ae37b9054e5ee3400dc1c9e691797eea",
+  "expected_release": "1.97.1",
+  "expected_llvm_version": "22.1.6",
+  "version_queries": 1,
+  "modes": [
+    "metadata",
+    "full_unoptimized",
+    "full_optimized"
+  ],
+  "warmups": 1,
+  "repetitions": 3,
+  "compiler_processes": 60,
+  "runtime_executions": 10,
+  "target_processes": 71,
+  "bounds": {
+    "total_window_seconds": 180,
+    "per_process_timeout_seconds": 10
+  },
+  "common_rustc_args": [
+    "-L",
+    "native=/home/dikini/Projects/ash-lang/.worktree/resource-calibration/target/calibration/release/build/ash-foreign-adapter-22ce65110bc6356e/out"
+  ],
+  "native": {
+    "native_inputs": {
+      "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6": {
+        "bytes": 1522152,
+        "sha256": "4633a4be13fdf05cb0f859e04fb06077a1fe30a90e405721a23873bd1f3d88a8"
+      },
+      "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/target/calibration/release/build/ash-foreign-adapter-22ce65110bc6356e/out/libash_sqlite_bridge.a": {
+        "bytes": 4488,
+        "sha256": "b3985ce42f63e4ee2939a539c1e9a2fded0539e21cf595125e686b4bb278154c"
+      }
+    },
+    "sqlite_version": "3.46.1",
+    "sqlite_sourceid": "2024-08-13 09:16:08 c9c2ab54ba1f5f46360f1b4f35d849cd3f080e6fc2b6c60e91b16c63f69aalt1"
+  },
+  "cases": [
+    {
+      "id": "copying",
+      "entry_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/copying.rs",
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "input_paths": [
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/copying.rs",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs"
+      ],
+      "input_sha256": {
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/copying.rs": "4b3cca91a5cd1f2ceecee413e9bd300667d4846441e322ab7bc9b1a92cab22cc",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+      },
+      "expected_stdout": "sqlite copying reference passed\n"
+    },
+    {
+      "id": "persistence",
+      "entry_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/persistence.rs",
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "input_paths": [
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/persistence.rs",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs"
+      ],
+      "input_sha256": {
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/persistence.rs": "b15baa8745f6a7ac7b9a45a20e531b7a4dd8fa3e2fb7187ea79c65cc66e764dc",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+      },
+      "expected_stdout": "sqlite persistence reference passed\n"
+    },
+    {
+      "id": "resume",
+      "entry_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/resume.rs",
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "input_paths": [
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/resume.rs",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs"
+      ],
+      "input_sha256": {
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/resume.rs": "ecdf2df1d1d085241f5e34da5b7e05bf8516269fd45bd7ad50baabb0f6fa76a3",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+      },
+      "expected_stdout": "sqlite resume approximation passed\n"
+    },
+    {
+      "id": "bound_nul",
+      "entry_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bound_nul.rs",
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "input_paths": [
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bound_nul.rs",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs"
+      ],
+      "input_sha256": {
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bound_nul.rs": "fca31e418390aef6cf21e90fb2fdcc169494a80bbb56ad64c5663acc42b6e29c",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+      },
+      "expected_stdout": "sqlite bound NUL reference passed\n"
+    },
+    {
+      "id": "forwarding",
+      "entry_path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/forwarding.rs",
+      "cwd": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration",
+      "input_paths": [
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/forwarding.rs",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs"
+      ],
+      "input_sha256": {
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/forwarding.rs": "b7aa227864caa004353ceb8525c8b0c43e74b51893a8a3d856b3ff9105c6ac86",
+        "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/tools/reference-sqlite/bridge.rs": "9ba62b690f688fc47bca26f3db14eced364f3ee39335edf46391f67b105a5fe1"
+      },
+      "expected_stdout": "sqlite forwarding reference passed\n"
+    }
+  ],
+  "measurement_boundaries": {
+    "metadata": "Rust resolution, type/trait and MIR borrow checking plus library metadata encoding; no LLVM/object generation or native linking",
+    "full_unoptimized": "Complete unoptimized native compiler job including object emission and linking; opt-level0, debuginfo0, codegen-units1",
+    "full_optimized": "Complete optimized native compiler job including LLVM/object emission and linking; opt-level3, debuginfo0, codegen-units1",
+    "execution": "Untimed validation separately executes both final binaries per case; actual SQLite behavior and assertions required",
+    "physical": "Matching wrapper monotonic wall and native-precision child CPU; target GNU wall and reported peak RSS also retained; min/median/max over three fresh processes"
+  },
+  "interpretation": [
+    "Functional counterparts and source sizes of the same order do not equal identical checking obligations.",
+    "The shared Rust bridge is compiled in every fresh job; the standard library, system SQLite and existing C copy shim are precompiled dependencies.",
+    "The Rust FnOnce continuation approximates the tested resume path; it does not implement Ash algebraic effects or independent Core validation.",
+    "The witnesses exercise successful completion and pre-native refusal. Rust Completion::Failed collapses the distinct Ash consumed/retained failure reports; these native-failure paths are not compared.",
+    "Rust i64 matches these SQLite witness values, not Ash arbitrary-precision integers.",
+    "No Cargo, Ash builds, incremental Rust compilation or model fitting."
+  ],
+  "schema_version": 1,
+  "simultaneous_engines": 1,
+  "frozen_utc": "2026-10-08T06:34:01.287997+00:00",
+  "pinned_native_inputs": [
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libsqlite3.so.0.8.6",
+      "sha256": "4633a4be13fdf05cb0f859e04fb06077a1fe30a90e405721a23873bd1f3d88a8"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/target/calibration/release/build/ash-foreign-adapter-22ce65110bc6356e/out/libash_sqlite_bridge.a",
+      "sha256": "b3985ce42f63e4ee2939a539c1e9a2fded0539e21cf595125e686b4bb278154c"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/foreign-adapter/sqlite_bridge.c",
+      "sha256": "2baf1966655199e5f78175b3210e95620b80e1e7ccdca382bf90233bd308a19a"
+    },
+    {
+      "path": "/home/dikini/Projects/ash-lang/.worktree/resource-calibration/foreign-adapter/vendor/sqlite3.h",
+      "sha256": "89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515"
+    }
+  ]
+}

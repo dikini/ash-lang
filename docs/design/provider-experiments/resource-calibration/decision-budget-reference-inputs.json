@@ -1,0 +1,920 @@
+{
+  "cases": [
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 10,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 3
+      },
+      "id": "flat-width0",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12440,
+            "median": 12388,
+            "min": 12344,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.009241000000000027,
+            "median": 0.009198999999999985,
+            "min": 0.006148999999999988,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 75,
+          "median": 75,
+          "min": 75,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 127,
+          "median": 127,
+          "min": 127,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 6,
+          "median": 6,
+          "min": 6,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 1
+        },
+        "resolution": {
+          "max": 33,
+          "median": 33,
+          "min": 33,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 61,
+          "median": 61,
+          "min": 61,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 202,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 51
+      },
+      "id": "flat-width16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 12828,
+            "median": 12740,
+            "min": 12488,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.010045000000000026,
+            "median": 0.010016999999999998,
+            "min": 0.008074000000000026,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 1419,
+          "median": 1419,
+          "min": 1419,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 1807,
+          "median": 1807,
+          "min": 1807,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 118,
+          "median": 118,
+          "min": 118,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 1
+        },
+        "resolution": {
+          "max": 593,
+          "median": 593,
+          "min": 593,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 1341,
+          "median": 1341,
+          "min": 1341,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 778,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 195
+      },
+      "id": "flat-width64",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13400,
+            "median": 13156,
+            "min": 13080,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.015144000000000046,
+            "median": 0.013559000000000015,
+            "min": 0.012403999999999998,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 5451,
+          "median": 5451,
+          "min": 5451,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 6847,
+          "median": 6847,
+          "min": 6847,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 454,
+          "median": 454,
+          "min": 454,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 1
+        },
+        "resolution": {
+          "max": 2273,
+          "median": 2273,
+          "min": 2273,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 5181,
+          "median": 5181,
+          "min": 5181,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "flat",
+      "features": {
+        "nodes": 1546,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 387
+      },
+      "id": "flat-width128",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14240,
+            "median": 14232,
+            "min": 13808,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.030834999999999946,
+            "median": 0.027306000000000052,
+            "min": 0.020605999999999958,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 10827,
+          "median": 10827,
+          "min": 10827,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 13567,
+          "median": 13567,
+          "min": 13567,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 902,
+          "median": 902,
+          "min": 902,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 2,
+          "median": 2,
+          "min": 2,
+          "n": 1
+        },
+        "resolution": {
+          "max": 4513,
+          "median": 4513,
+          "min": 4513,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 10301,
+          "median": 10301,
+          "min": 10301,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 48,
+        "resource_sites": 0,
+        "type_depth": 3,
+        "type_nodes": 16
+      },
+      "id": "nested_type-depth1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13164,
+            "median": 12844,
+            "min": 12812,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.00790499999999994,
+            "median": 0.00759399999999999,
+            "min": 0.0068829999999999725,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 725,
+          "median": 725,
+          "min": 725,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 748,
+          "median": 748,
+          "min": 748,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 1
+        },
+        "resolution": {
+          "max": 205,
+          "median": 205,
+          "min": 205,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 673,
+          "median": 673,
+          "min": 673,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 66,
+        "resource_sites": 0,
+        "type_depth": 6,
+        "type_nodes": 28
+      },
+      "id": "nested_type-depth4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13336,
+            "median": 13324,
+            "min": 13224,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011657000000000028,
+            "median": 0.007550000000000057,
+            "min": 0.007492999999999972,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 1814,
+          "median": 1814,
+          "min": 1814,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 1975,
+          "median": 1975,
+          "min": 1975,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 73,
+          "median": 73,
+          "min": 73,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 1
+        },
+        "resolution": {
+          "max": 352,
+          "median": 352,
+          "min": 352,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 1714,
+          "median": 1714,
+          "min": 1714,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 138,
+        "resource_sites": 0,
+        "type_depth": 18,
+        "type_nodes": 76
+      },
+      "id": "nested_type-depth16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13664,
+            "median": 13536,
+            "min": 13196,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.011759999999999993,
+            "median": 0.010386000000000117,
+            "min": 0.010372999999999966,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 8870,
+          "median": 8870,
+          "min": 8870,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 11923,
+          "median": 11923,
+          "min": 11923,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 193,
+          "median": 193,
+          "min": 193,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 1
+        },
+        "resolution": {
+          "max": 940,
+          "median": 940,
+          "min": 940,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 8578,
+          "median": 8578,
+          "min": 8578,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 186,
+        "resource_sites": 0,
+        "type_depth": 26,
+        "type_nodes": 108
+      },
+      "id": "nested_type-depth24",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13712,
+            "median": 13460,
+            "min": 13284,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.019509,
+            "median": 0.018346000000000084,
+            "min": 0.015278999999999932,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 15974,
+          "median": 15974,
+          "min": 15974,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 23035,
+          "median": 23035,
+          "min": 23035,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 273,
+          "median": 273,
+          "min": 273,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 1
+        },
+        "resolution": {
+          "max": 1332,
+          "median": 1332,
+          "min": 1332,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 15554,
+          "median": 15554,
+          "min": 15554,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "nested_type",
+      "features": {
+        "nodes": 234,
+        "resource_sites": 0,
+        "type_depth": 34,
+        "type_nodes": 140
+      },
+      "id": "nested_type-depth32",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 13684,
+            "median": 13620,
+            "min": 13360,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.015183000000000058,
+            "median": 0.014539999999999775,
+            "min": 0.014514000000000027,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 24998,
+          "median": 24998,
+          "min": 24998,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 37731,
+          "median": 37731,
+          "min": 37731,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 353,
+          "median": 353,
+          "min": 353,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 24,
+          "median": 24,
+          "min": 24,
+          "n": 1
+        },
+        "resolution": {
+          "max": 1724,
+          "median": 1724,
+          "min": 1724,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 24450,
+          "median": 24450,
+          "min": 24450,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 58,
+        "resource_sites": 0,
+        "type_depth": 2,
+        "type_nodes": 15
+      },
+      "id": "prerequisite-depth1",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 14728,
+            "median": 14540,
+            "min": 14164,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.009786000000000072,
+            "median": 0.007998999999999978,
+            "min": 0.007980999999999794,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 1335,
+          "median": 1335,
+          "min": 1335,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 1266,
+          "median": 1266,
+          "min": 1266,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 67,
+          "median": 67,
+          "min": 67,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "resolution": {
+          "max": 246,
+          "median": 246,
+          "min": 246,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 2536,
+          "median": 2536,
+          "min": 2536,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 70,
+        "resource_sites": 0,
+        "type_depth": 5,
+        "type_nodes": 21
+      },
+      "id": "prerequisite-depth4",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15044,
+            "median": 14820,
+            "min": 14484,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.013249000000000066,
+            "median": 0.012738999999999945,
+            "min": 0.008384999999999976,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 2844,
+          "median": 2844,
+          "min": 2844,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 3378,
+          "median": 3378,
+          "min": 3378,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 85,
+          "median": 85,
+          "min": 85,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "resolution": {
+          "max": 315,
+          "median": 315,
+          "min": 315,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 3949,
+          "median": 3949,
+          "min": 3949,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 118,
+        "resource_sites": 0,
+        "type_depth": 17,
+        "type_nodes": 45
+      },
+      "id": "prerequisite-depth16",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15044,
+            "median": 14920,
+            "min": 14876,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.013558000000000181,
+            "median": 0.013303999999999983,
+            "min": 0.012965000000000115,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 16980,
+          "median": 16980,
+          "min": 16980,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 25956,
+          "median": 25956,
+          "min": 25956,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 157,
+          "median": 157,
+          "min": 157,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "resolution": {
+          "max": 591,
+          "median": 591,
+          "min": 591,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 14101,
+          "median": 14101,
+          "min": 14101,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 150,
+        "resource_sites": 0,
+        "type_depth": 25,
+        "type_nodes": 61
+      },
+      "id": "prerequisite-depth24",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15540,
+            "median": 15200,
+            "min": 14944,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.02249100000000004,
+            "median": 0.01871299999999998,
+            "min": 0.017737000000000114,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 33604,
+          "median": 33604,
+          "min": 33604,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 53568,
+          "median": 53568,
+          "min": 53568,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 205,
+          "median": 205,
+          "min": 205,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "resolution": {
+          "max": 775,
+          "median": 775,
+          "min": 775,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 24869,
+          "median": 24869,
+          "min": 24869,
+          "n": 1
+        }
+      }
+    },
+    {
+      "accepted_for_models": true,
+      "family": "prerequisite",
+      "features": {
+        "nodes": 182,
+        "resource_sites": 0,
+        "type_depth": 33,
+        "type_nodes": 77
+      },
+      "id": "prerequisite-depth32",
+      "process": {
+        "off": {
+          "peak_rss_kib": {
+            "max": 15708,
+            "median": 15568,
+            "min": 15428,
+            "n": 3
+          },
+          "wrapper_inclusive_child_total_seconds": {
+            "max": 0.028900999999999843,
+            "median": 0.02391999999999994,
+            "min": 0.023388000000000186,
+            "n": 3
+          }
+        }
+      },
+      "work": {
+        "final-elaboration": {
+          "max": 55988,
+          "median": 55988,
+          "min": 55988,
+          "n": 1
+        },
+        "independent-effect-core": {
+          "max": 91228,
+          "median": 91228,
+          "min": 91228,
+          "n": 1
+        },
+        "linked-interface": {
+          "max": 253,
+          "median": 253,
+          "min": 253,
+          "n": 1
+        },
+        "module-linking": {
+          "max": 43,
+          "median": 43,
+          "min": 43,
+          "n": 1
+        },
+        "resolution": {
+          "max": 959,
+          "median": 959,
+          "min": 959,
+          "n": 1
+        },
+        "source-checking": {
+          "max": 38837,
+          "median": 38837,
+          "min": 38837,
+          "n": 1
+        }
+      }
+    }
+  ],
+  "interpretation": "Descriptive cross-check on14 already examined paired Ash cases; prior startup control and some repeated structures; no independent validation or extra training. CPU/RSS have three observations, charges one separate observer record.",
+  "schema_version": 1,
+  "source_summary": {
+    "path": "/tmp/ash-resource-reference-results-20261008/summary.json",
+    "sha256": "68b467bf1c18978a46744d2d109f10a87794d5a9962ba8055d51dba1844c85cf"
+  }
+}

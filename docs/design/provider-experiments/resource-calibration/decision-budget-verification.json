@@ -1,0 +1,127 @@
+{
+  "checks": {
+    "all_primary_medians_and_maxima_acceptable": true,
+    "feature_ranges_unchanged": true,
+    "local_links_checked": 45,
+    "previous_evidence_byte_identical": true,
+    "raw_response_objects_unchanged": true,
+    "reference_physical_tolerances_met_with_scope_flags_retained": true,
+    "source_projections_match_archived_summaries": true
+  },
+  "cli_predict": {
+    "features_json": "{\"nodes\": 1480, \"resource_sites\": 2, \"type_depth\": 4, \"type_nodes\": 494}",
+    "output": {
+      "features": {
+        "nodes": 1480,
+        "resource_sites": 2,
+        "resource_size_product": 2960,
+        "type_depth": 4,
+        "type_depth_product": 1976,
+        "type_nodes": 494
+      },
+      "input_sha256": "04fb9707f2d430e7fa43e9dbdab458d32b67c67455d66ab109f3d7a51c4a7054",
+      "interpretation": "Physical points and separate review allowances; acceptance requires actual measurements. Unmeasured combinations are not validated, even inside feature ranges. Charged work is diagnostic only; no refusal limit or optimizer decision is implied.",
+      "model_sha256": "a80c6f488176423945917f7b718c49fa1b7d9e47f2ef428e312a3ddf597c4f25",
+      "outside_observed_ranges": {},
+      "responses": {
+        "cpu_seconds": {
+          "current_workload_target": 0.3,
+          "predicted": 0.10486911280061295,
+          "raw_predicted": 0.10486911280061295,
+          "review_threshold": 0.22,
+          "role": "physical-cost",
+          "status": "point-estimate",
+          "units": "observation-off wrapper-inclusive child CPU seconds"
+        },
+        "final-elaboration": {
+          "predicted": 110812.45572728445,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        },
+        "independent-effect-core": {
+          "predicted": 478435.89969863475,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        },
+        "linked-interface": {
+          "predicted": 14257.934552763436,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        },
+        "module-linking": {
+          "predicted": 3510.1067455684856,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        },
+        "peak_rss_kib": {
+          "current_workload_target": 65536,
+          "predicted": 26367.850888330293,
+          "raw_predicted": 26367.850888330293,
+          "review_threshold": 40960,
+          "role": "physical-cost",
+          "status": "point-estimate",
+          "units": "observation-off GNU time process peak RSS KiB"
+        },
+        "resolution": {
+          "predicted": 26877.628160052172,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        },
+        "source-checking": {
+          "predicted": 476786.15127045417,
+          "role": "diagnostic-only",
+          "status": "point-estimate",
+          "units": "charged units, including reservations"
+        }
+      }
+    }
+  },
+  "compiler_processes": 0,
+  "created_utc": "2026-10-08T06:54:23.797297+00:00",
+  "independent_review": {
+    "snapshot_review": "calibration_baseline_review: passed",
+    "tool_and_report_review": "limit_provenance: approved; no blockers"
+  },
+  "offline_only": true,
+  "primary_status_counts": {
+    "acceptable-for-current-decision": 52,
+    "outside-calibration": 0,
+    "review-needed": 0
+  },
+  "reference_status_counts": {
+    "acceptable-for-current-decision": 9,
+    "outside-calibration": 5,
+    "review-needed": 0
+  },
+  "schema_version": 1,
+  "self_check": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 python3 tools/resource_budget_estimates.py self-check",
+    "passed": true,
+    "stdout": "Connected offline fit, calibration, prediction, measured review and scope self-check passed.\n"
+  },
+  "source_summary_receipts": [
+    {
+      "archive": "cpu-precision-measurements.tar.gz",
+      "case_count": 44,
+      "member": "cpu-precision/summary.json",
+      "summary_sha256": "2821841d38305976146fc7dbfe91de07e984c944ec010b3d3e49e2a4aaada06b"
+    },
+    {
+      "archive": "reference-basics-measurements.tar.gz",
+      "case_count": 8,
+      "member": "measurements/basics-corrected/summary.json",
+      "summary_sha256": "6700fc3edbcf6e21efa0d2d94d6a5dfe7d33f6373f2cae1f0099cbb00cf94758"
+    },
+    {
+      "archive": "reference-measurements.tar.gz",
+      "case_count": 14,
+      "member": "measurements/reference/summary.json",
+      "summary_sha256": "68b467bf1c18978a46744d2d109f10a87794d5a9962ba8055d51dba1844c85cf"
+    }
+  ]
+}

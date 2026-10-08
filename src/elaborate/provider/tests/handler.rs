@@ -5,7 +5,17 @@ const SQLITE: &str =
 const PROVIDER: &str =
     include_str!("../../../../tests/fixtures/provider-experiments/sqlite-copying/provider.ash");
 
-const STATEMENT_METHODS: [&str; 3] = ["bind_int", "step", "column_int"];
+const STATEMENT_METHODS: [&str; 9] = [
+    "bind_int",
+    "step",
+    "column_int",
+    "bind_bytes",
+    "column_bytes",
+    "bind_text",
+    "column_text",
+    "reset",
+    "clear_bindings",
+];
 
 fn statement_links(
     fixture: &Fixture,
@@ -46,12 +56,12 @@ fn statement_links(
 fn assert_statement_occurrences(
     fixture: &Fixture,
     occurrences: &[CheckedGlobalOccurrence],
-    expected: [usize; 3],
+    expected: [usize; 9],
 ) {
     let links = statement_links(fixture);
     let definition = &fixture.resolved.resources()[1];
     assert_eq!(links.len(), expected.len());
-    let mut actual = [0; 3];
+    let mut actual = [0; 9];
     for occurrence in occurrences {
         let span = occurrence.occurrence.origin.primary_span();
         let owners = definition
@@ -138,7 +148,14 @@ fn actual_statement_handlers_check_tuple_columns_and_each_error_branch() {
     let fixture = &fixture.fixture;
     let draft = check(fixture, 1).unwrap();
     let definition = &fixture.resolved.resources()[1];
-    assert_eq!(draft.clauses.len(), 3);
+    assert_eq!(
+        draft
+            .clauses
+            .iter()
+            .map(|clause| (clause.operation, clause.resume))
+            .collect::<Vec<_>>(),
+        statement_links(fixture)
+    );
     assert_eq!(
         draft.direct_demands.known(),
         std::slice::from_ref(&definition.interpreted.instance)
@@ -730,12 +747,17 @@ fn conditional_recipe_owned_selected_statement_survives_helper_context_drop() {
             .iter()
             .all(|slot| slot.selection().is_none())
     }));
-    assert_eq!(owned.staged_externals.occurrences.len(), 3);
+    assert_statement_occurrences(
+        &fixture.fixture,
+        &owned.staged_externals.occurrences,
+        [1; 9],
+    );
+    let expected_links = statement_links(&fixture.fixture);
     drop(sources);
     drop(fixture);
     assert_eq!(
-        crate::core::validate::owned_handler_links_for_test(&owned.template).len(),
-        3
+        crate::core::validate::owned_handler_links_for_test(&owned.template),
+        expected_links
     );
 }
 
@@ -837,9 +859,14 @@ fn conditional_recipe_owned_work_is_exact_prefixed_fresh_and_unpublished() {
                             .iter()
                             .all(|slot| slot.selection().is_none())
                     }));
+                    assert_statement_occurrences(
+                        &fixture.fixture,
+                        &owned.staged_externals.occurrences,
+                        [1; 9],
+                    );
                     assert_eq!(
-                        crate::core::validate::owned_handler_links_for_test(&owned.template).len(),
-                        3
+                        crate::core::validate::owned_handler_links_for_test(&owned.template),
+                        statement_links(&fixture.fixture)
                     );
                 } else {
                     match result {
@@ -1121,7 +1148,14 @@ fn independent_actual_connection_fragment_requires_canonical_entry() {
 fn independent_actual_statement_fragment_checks_all_real_clause_roots() {
     let fixture = actual_fixture(SQLITE);
     let draft = fragment(check(&fixture.fixture, 1).unwrap());
-    assert_eq!(draft.clauses.len(), 3);
+    assert_eq!(
+        draft
+            .clauses
+            .iter()
+            .map(|clause| (clause.operation(), clause.resume()))
+            .collect::<Vec<_>>(),
+        statement_links(&fixture.fixture)
+    );
     let result = independent(&fixture.fixture, &draft, &mut TypeWorkBudget::unbounded());
     assert!(
         result.is_ok(),
@@ -1882,9 +1916,19 @@ fn selected_error_mapper_covers_all_statement_roots_and_ordered_methods() {
     let source = SQLITE.replace("ForeignError error", "ForeignError (Provider.map error)");
     let fixture = selected_error_fixture(&source);
     let draft = compile(&fixture.fixture, 1).unwrap();
+    assert_statement_occurrences(
+        &fixture.fixture,
+        &draft.staged_externals.as_ref().unwrap().occurrences,
+        [1; 9],
+    );
     assert_eq!(
-        draft.staged_externals.as_ref().unwrap().occurrences.len(),
-        3
+        draft
+            .fragment
+            .clauses
+            .iter()
+            .map(|clause| (clause.operation(), clause.resume()))
+            .collect::<Vec<_>>(),
+        statement_links(&fixture.fixture)
     );
     assert!(
         draft
@@ -1907,9 +1951,19 @@ fn selected_error_mapper_in_later_clause_forwarder_and_stored_value_keeps_forest
             &format!("Native.Err(error) => {{\nlet stored : Native.Error -> Native.Error = Provider.map\nlet forward : Native.Error -> Native.Error = fn(value) {{\nProvider.map value\n}}\nresume (Err (ForeignError ({body})))\n}}"));
         let fixture = selected_error_fixture(&source);
         let draft = compile(&fixture.fixture, 1).unwrap();
+        assert_statement_occurrences(
+            &fixture.fixture,
+            &draft.staged_externals.as_ref().unwrap().occurrences,
+            [2, 0, 2, 2, 2, 2, 2, 2, 2],
+        );
         assert_eq!(
-            draft.staged_externals.as_ref().unwrap().occurrences.len(),
-            4
+            draft
+                .fragment
+                .clauses
+                .iter()
+                .map(|clause| (clause.operation(), clause.resume()))
+                .collect::<Vec<_>>(),
+            statement_links(&fixture.fixture)
         );
         let result =
             independent_compiled(&fixture.fixture, &draft, &mut TypeWorkBudget::unbounded());
@@ -1963,7 +2017,7 @@ fn malformed_original_handler_coordinates_refuse_without_publication_and_retry()
                 .collect::<Vec<_>>(),
             statement_links(f)
         );
-        assert_statement_occurrences(f, &compiler.provider_global_occurrences, [1; 3]);
+        assert_statement_occurrences(f, &compiler.provider_global_occurrences, [1; 9]);
         let mut prepared_ids = compiler
             .provider_global_occurrences
             .iter()
@@ -2027,12 +2081,12 @@ fn malformed_original_handler_coordinates_refuse_without_publication_and_retry()
         );
         assert!(original_slots.iter().all(|slot| slot.selection().is_none()));
         drop(compiler);
-        let retry = compile(f, 1)
-            .expect("fresh compiler retries the unchanged original three-root fixture");
+        let retry =
+            compile(f, 1).expect("fresh compiler retries the unchanged original nine-root fixture");
         assert_statement_occurrences(
             f,
             &retry.staged_externals.as_ref().unwrap().occurrences,
-            [1; 3],
+            [1; 9],
         );
         assert_eq!(
             retry
@@ -2135,7 +2189,9 @@ fn selected_handler_compile_and_check_work_are_cumulative_and_unpublished() {
     independent_compiled(f, &draft, &mut measured).unwrap();
     let check_cost = measured.used();
     eprintln!(
-        "selected handler forest roots=3 occurrences=3 compile={compile_cost} check={check_cost}; builder/constraint ledgers separate"
+        "selected handler forest roots={} occurrences={} compile={compile_cost} check={check_cost}; builder/constraint ledgers separate",
+        draft.fragment.clauses.len(),
+        draft.staged_externals.as_ref().unwrap().occurrences.len()
     );
     for prefix in [0, 23] {
         for allowance in [compile_cost - 1, compile_cost] {
@@ -2229,9 +2285,19 @@ fn selected_nested_error_prerequisites_in_all_roots_authenticate_catalog() {
         );
     let fixture = external::HelperFixture::new(&source, &helper);
     let draft = compile(&fixture.fixture, 1).unwrap();
+    assert_statement_occurrences(
+        &fixture.fixture,
+        &draft.staged_externals.as_ref().unwrap().occurrences,
+        [1; 9],
+    );
     assert_eq!(
-        draft.staged_externals.as_ref().unwrap().occurrences.len(),
-        3
+        draft
+            .fragment
+            .clauses
+            .iter()
+            .map(|clause| (clause.operation(), clause.resume()))
+            .collect::<Vec<_>>(),
+        statement_links(&fixture.fixture)
     );
     let result = independent_compiled(&fixture.fixture, &draft, &mut TypeWorkBudget::unbounded());
     assert!(

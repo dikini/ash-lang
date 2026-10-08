@@ -1,0 +1,98 @@
+{
+  "status": "frozen before reference execution",
+  "frozen_utc": "2026-10-08T05:51:42.664507+00:00",
+  "purpose": "Compare budget predictions with observed chargedwork, directCPU/wall/RSS, and a Rust shared-language reference; no optimization/productionlimit change",
+  "baseline_checkpoint": "64ada6c5843d43aa0c423928af6c30d80bcd3923",
+  "charge_curves": {
+    "nested_type": {
+      "source": [
+        15,
+        272,
+        386
+      ],
+      "core": [
+        28,
+        269,
+        451
+      ]
+    },
+    "prerequisite": {
+      "source": [
+        25,
+        346,
+        2165
+      ],
+      "core": {
+        "numerator": [
+          157,
+          623,
+          1752
+        ],
+        "denominator": 2
+      }
+    }
+  },
+  "curve_coefficient_order": "quadratic,linear,constant",
+  "curve_status": "Empirical reference expectations from prior completed depths 1,2,4,8,12,16; not asymptotic language bounds; charged units include reservations",
+  "held_out_depths": [
+    24,
+    32
+  ],
+  "paired_structure_families": {
+    "flat_widths": [
+      0,
+      16,
+      64,
+      128
+    ],
+    "nested_type_depths": [
+      1,
+      4,
+      16,
+      24,
+      32
+    ],
+    "prerequisite_depths": [
+      1,
+      4,
+      16,
+      24,
+      32
+    ]
+  },
+  "paired_run_counts": {
+    "pairs": 14,
+    "warmups_per_language": 1,
+    "measured_per_language": 3,
+    "timed_fresh_processes": 112,
+    "additional_ash_observers": 14,
+    "native_rust_validation_builds": 1,
+    "native_rust_validation_executions": 1
+  },
+  "supplemental_ash_basics": {
+    "case_count": 8,
+    "warmups_per_mode": 1,
+    "measured_per_mode": 3,
+    "modes": [
+      "on",
+      "off"
+    ],
+    "fresh_processes": 64,
+    "status": "Existing positive integration fixtures; no Rust pair or budget prediction claimed"
+  },
+  "bounds": {
+    "combined_total_seconds": 180,
+    "per_process_seconds": 10,
+    "simultaneous_engines": 1,
+    "cargo_builds": 0,
+    "production_limit_changes": false,
+    "diagnostic_base_limit": 16777216
+  },
+  "measurement_boundaries": {
+    "ash": "Existing optimized CLI through load/check/Core validation/evaluate/render/teardown; observation-off CPU/RSS and one observed charge vector",
+    "rust": "Rust 1.97.1 resolution, type/trait and MIR borrow checking plus library metadata encoding; LLVM/object/native code generation excluded from measurements",
+    "physical": "Same external GNU timer and native-precision child CPU; matching wrapper-inclusive monotonic wall time is also recorded",
+    "work": "Rust work units unavailable; only Ash charge vectors predicted; no unit conversion across languages"
+  },
+  "model_selection": "No new fitting during the round; compare frozen polynomial predictions with new depths; no Bayesian fit yet"
+}

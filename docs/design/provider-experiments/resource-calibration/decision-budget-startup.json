@@ -1,0 +1,420 @@
+{
+  "cases": [
+    {
+      "ash_input": {
+        "event": "input",
+        "features": {
+          "applications": 0,
+          "binders": 0,
+          "bytes": 36,
+          "definitions": 1,
+          "dependency_edges": 0,
+          "effect_instances": 0,
+          "effects": 0,
+          "expressions": 2,
+          "functions": 0,
+          "handlers": 0,
+          "implementations": 0,
+          "import_selectors": 0,
+          "imports": 0,
+          "interface_members": 0,
+          "interfaces": 0,
+          "kind_depth": 0,
+          "kind_nodes": 0,
+          "literal_string_bytes": 0,
+          "matches": 0,
+          "module_depth": 1,
+          "modules": 1,
+          "nodes": 10,
+          "patterns": 1,
+          "requirements": 0,
+          "resource_definitions": 0,
+          "resource_sites": 0,
+          "row_nodes": 0,
+          "scope_depth": 1,
+          "type_declarations": 0,
+          "type_depth": 2,
+          "type_nodes": 3
+        },
+        "module_depth_basis": "dependency path in module vertices; leaf is one",
+        "omissions": [
+          "implicit type binders",
+          "term binders",
+          "reference/name nodes"
+        ],
+        "schema": "surface-input-v1",
+        "scope_depth_basis": "nested SurfaceBlock records",
+        "sources": [
+          {
+            "bytes": 36,
+            "path": "/tmp/ash-resource-reference-cases-20261008/inputs/flat-width0/entry.ash",
+            "sha256": "f71027b7cd3962767989591ef17f8c658d2671a79b36fcfc83953ad6ccc71eb7"
+          }
+        ]
+      },
+      "ash_phases": {
+        "evaluation": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 12680,
+              "rss_end_kib": 12680,
+              "rss_start_kib": 12680
+            }
+          ],
+          "wall_ns": 47911
+        },
+        "final-elaboration": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 12084,
+              "rss_end_kib": 12084,
+              "rss_start_kib": 12004
+            }
+          ],
+          "wall_ns": 192122,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 16777216,
+            "event": "work",
+            "normal_limit": 327680,
+            "phase": "final-elaboration",
+            "work_cumulative": 75
+          }
+        },
+        "independent-effect-core": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 12680,
+              "rss_end_kib": 12680,
+              "rss_start_kib": 12088
+            }
+          ],
+          "wall_ns": 205948,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 50331648,
+            "event": "work",
+            "normal_limit": 983040,
+            "phase": "independent-effect-core",
+            "work_cumulative": 127
+          }
+        },
+        "input-metrics": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 8152,
+              "rss_end_kib": 8152,
+              "rss_start_kib": 8152
+            }
+          ],
+          "wall_ns": 484613
+        },
+        "linked-interface": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 12004,
+              "rss_end_kib": 12004,
+              "rss_start_kib": 11876
+            }
+          ],
+          "wall_ns": 66936,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 16777216,
+            "event": "work",
+            "normal_limit": 327680,
+            "phase": "linked-interface",
+            "work_cumulative": 6
+          }
+        },
+        "loading": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 7976,
+              "rss_end_kib": 7976,
+              "rss_start_kib": 6172
+            }
+          ],
+          "wall_ns": 228921
+        },
+        "module-linking": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 11876,
+              "rss_end_kib": 11876,
+              "rss_start_kib": 11876
+            }
+          ],
+          "wall_ns": 119866,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 16777216,
+            "event": "work",
+            "normal_limit": 327680,
+            "phase": "module-linking",
+            "work_cumulative": 2
+          }
+        },
+        "pipeline": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 12680,
+              "rss_end_kib": 12680,
+              "rss_start_kib": 6172
+            }
+          ],
+          "wall_ns": 3550049
+        },
+        "resolution": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 9492,
+              "rss_end_kib": 9492,
+              "rss_start_kib": 8152
+            }
+          ],
+          "wall_ns": 189437,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 16777216,
+            "event": "work",
+            "normal_limit": 327680,
+            "phase": "resolution",
+            "work_cumulative": 33
+          }
+        },
+        "source-checking": {
+          "completed_count": 1,
+          "endpoint_count": 1,
+          "rss_boundaries": [
+            {
+              "process_peak_rss_kib": 11876,
+              "rss_end_kib": 11876,
+              "rss_start_kib": 9492
+            }
+          ],
+          "wall_ns": 363845,
+          "work": {
+            "completed": true,
+            "diagnostic_limit": 16777216,
+            "event": "work",
+            "normal_limit": 327680,
+            "phase": "source-checking",
+            "work_cumulative": 61
+          }
+        }
+      },
+      "ash_to_rust_median_ratios": {
+        "target_peak_rss_kib": 0.21164491218478781,
+        "target_system_seconds": 0.0,
+        "target_user_seconds": null,
+        "target_wall_seconds": 0.0,
+        "wrapper_child_system_seconds": 0.26398397061279005,
+        "wrapper_child_total_seconds": 0.2919298022912628,
+        "wrapper_child_user_seconds": 0.2515644555694634,
+        "wrapper_wall_seconds": 0.29879002429037355
+      },
+      "ash_work": {
+        "final-elaboration": {
+          "completed": true,
+          "diagnostic_limit": 16777216,
+          "event": "work",
+          "normal_limit": 327680,
+          "phase": "final-elaboration",
+          "work_cumulative": 75
+        },
+        "independent-effect-core": {
+          "completed": true,
+          "diagnostic_limit": 50331648,
+          "event": "work",
+          "normal_limit": 983040,
+          "phase": "independent-effect-core",
+          "work_cumulative": 127
+        },
+        "linked-interface": {
+          "completed": true,
+          "diagnostic_limit": 16777216,
+          "event": "work",
+          "normal_limit": 327680,
+          "phase": "linked-interface",
+          "work_cumulative": 6
+        },
+        "module-linking": {
+          "completed": true,
+          "diagnostic_limit": 16777216,
+          "event": "work",
+          "normal_limit": 327680,
+          "phase": "module-linking",
+          "work_cumulative": 2
+        },
+        "resolution": {
+          "completed": true,
+          "diagnostic_limit": 16777216,
+          "event": "work",
+          "normal_limit": 327680,
+          "phase": "resolution",
+          "work_cumulative": 33
+        },
+        "source-checking": {
+          "completed": true,
+          "diagnostic_limit": 16777216,
+          "event": "work",
+          "normal_limit": 327680,
+          "phase": "source-checking",
+          "work_cumulative": 61
+        }
+      },
+      "charge_predictions": {},
+      "controlled_complete": true,
+      "differences": [
+        "Ash Int and Rust i64 differ; all inputs are 42, so integer range is not exercised.",
+        "Ash performs effect Core verification and evaluates main; Rust emits library metadata without executing run.",
+        "Rust performs ownership/borrow analyses and metadata encoding; these do not correspond one-for-one to Ash phases.",
+        "Rust loads its implicit standard-library interface; Ash loads its own builtin interfaces. Neither lane rebuilds dependencies.",
+        "Source bytes and language-specific AST node counts are recorded separately, not treated as equal units across languages."
+      ],
+      "family": "flat",
+      "held_out": false,
+      "id": "flat-width0",
+      "issues": [],
+      "language_metrics": {
+        "ash": {
+          "target_peak_rss_kib": {
+            "max": 12440,
+            "median": 12388,
+            "min": 12344,
+            "n": 3
+          },
+          "target_system_seconds": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "n": 3
+          },
+          "target_user_seconds": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "n": 3
+          },
+          "target_wall_seconds": {
+            "max": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "n": 3
+          },
+          "wrapper_child_system_seconds": {
+            "max": 0.007231000000000015,
+            "median": 0.006323999999999996,
+            "min": 0.004286999999999985,
+            "n": 3
+          },
+          "wrapper_child_total_seconds": {
+            "max": 0.009241000000000027,
+            "median": 0.009198999999999985,
+            "min": 0.006148999999999988,
+            "n": 3
+          },
+          "wrapper_child_user_seconds": {
+            "max": 0.0028749999999999887,
+            "median": 0.0020100000000000118,
+            "min": 0.0018620000000000025,
+            "n": 3
+          },
+          "wrapper_wall_seconds": {
+            "max": 0.009533291,
+            "median": 0.009484008,
+            "min": 0.006443269,
+            "n": 3
+          }
+        },
+        "rust": {
+          "target_peak_rss_kib": {
+            "max": 58848,
+            "median": 58532,
+            "min": 58004,
+            "n": 3
+          },
+          "target_system_seconds": {
+            "max": 0.02,
+            "median": 0.02,
+            "min": 0.02,
+            "n": 3
+          },
+          "target_user_seconds": {
+            "max": 0.01,
+            "median": 0.0,
+            "min": 0.0,
+            "n": 3
+          },
+          "target_wall_seconds": {
+            "max": 0.03,
+            "median": 0.02,
+            "min": 0.02,
+            "n": 3
+          },
+          "wrapper_child_system_seconds": {
+            "max": 0.024488999999999983,
+            "median": 0.02395599999999999,
+            "min": 0.023521000000000014,
+            "n": 3
+          },
+          "wrapper_child_total_seconds": {
+            "max": 0.034125,
+            "median": 0.03151100000000001,
+            "min": 0.031239999999999962,
+            "n": 3
+          },
+          "wrapper_child_user_seconds": {
+            "max": 0.010169000000000011,
+            "median": 0.007989999999999997,
+            "min": 0.006750999999999979,
+            "n": 3
+          },
+          "wrapper_wall_seconds": {
+            "max": 0.034051674,
+            "median": 0.031741381,
+            "min": 0.031447057,
+            "n": 3
+          }
+        }
+      },
+      "parameters": {
+        "width": 0
+      },
+      "shared_structure": {
+        "entry_result": 42,
+        "generic_type_nesting_depth": 0,
+        "identity_calls": 0,
+        "monomorphic_identity_functions": 0
+      },
+      "startup_control": true
+    }
+  ],
+  "complete": true,
+  "interpretation": "Measured zero-width whole-process Ash control, not a universal startup lower bound. Extracted from already examined paired evidence.",
+  "interrupted": null,
+  "schema_version": 1,
+  "source_summary": {
+    "path": "/tmp/ash-resource-reference-results-20261008/summary.json",
+    "sha256": "68b467bf1c18978a46744d2d109f10a87794d5a9962ba8055d51dba1844c85cf"
+  }
+}

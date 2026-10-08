@@ -21721,12 +21721,16 @@ pub(crate) fn link_modules_with_budget(
     entry: crate::module::ModuleId,
     constraint_work: &mut InterfaceConstraintBudget,
 ) -> Result<ResolvedModuleProgram, TypeError> {
-    link_modules_with_budgets(
-        modules,
-        entry,
-        constraint_work,
-        &mut TypeWorkBudget::default(),
-    )
+    let mut type_work = TypeWorkBudget::default();
+    let result = link_modules_with_budgets(modules, entry, constraint_work, &mut type_work);
+    crate::calibration::work(
+        "module-linking",
+        type_work.used(),
+        crate::types::TYPE_WORK_LIMIT,
+        type_work.limit(),
+        result.is_ok(),
+    );
+    result
 }
 
 pub(crate) fn link_modules_with_budgets(

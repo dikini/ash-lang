@@ -1,0 +1,60 @@
+{
+  "owned_directory": "/tmp/ash-sqlite-calibrated-examples-y8y1mrv4",
+  "results": [
+    {
+      "entry": "text-entry.ash",
+      "exit_code": 0,
+      "elapsed_seconds": 0.36238819400023203,
+      "issues": [],
+      "phase_reports": [
+        "compiler work: SourceChecking used=163782 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: FinalElaboration used=60618 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: IndependentCore used=91011 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false"
+      ]
+    },
+    {
+      "entry": "copying-entry.ash",
+      "exit_code": 0,
+      "elapsed_seconds": 1.6125157890000992,
+      "issues": [],
+      "phase_reports": [
+        "compiler work: SourceChecking used=1212707 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: FinalElaboration used=165717 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: IndependentCore used=903995 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false"
+      ]
+    },
+    {
+      "entry": "session-entry.ash",
+      "exit_code": 0,
+      "elapsed_seconds": 1.9176160999995773,
+      "issues": [],
+      "phase_reports": [
+        "compiler work: SourceChecking used=597855 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: FinalElaboration used=376641 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: IndependentCore used=1609027 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false"
+      ]
+    },
+    {
+      "entry": "control-resume.ash",
+      "exit_code": 0,
+      "elapsed_seconds": 0.7010528989994782,
+      "issues": [],
+      "phase_reports": [
+        "compiler work: SourceChecking used=203215 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: FinalElaboration used=103738 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: IndependentCore used=289063 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false"
+      ]
+    },
+    {
+      "entry": "control-discard.ash",
+      "exit_code": 0,
+      "elapsed_seconds": 0.5237244569998438,
+      "issues": [],
+      "phase_reports": [
+        "compiler work: SourceChecking used=263159 budget=1245184 hard_limit=1369702 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: FinalElaboration used=147254 budget=393216 hard_limit=432537 completed=true assessment=WithinBudget optimization_target=false",
+        "compiler work: IndependentCore used=109243 budget=1638400 hard_limit=1802240 completed=true assessment=WithinBudget optimization_target=false"
+      ]
+    }
+  ]
+}

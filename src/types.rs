@@ -42,7 +42,10 @@ impl Default for TypeWorkBudget {
     fn default() -> Self {
         Self {
             used: 0,
-            limit: TYPE_WORK_LIMIT,
+            limit: crate::calibration::limit(
+                TYPE_WORK_LIMIT,
+                crate::calibration::DiagnosticOwner::Structural,
+            ),
         }
     }
 }
@@ -61,6 +64,10 @@ impl TypeWorkBudget {
 
     pub(crate) const fn used(&self) -> usize {
         self.used
+    }
+
+    pub(crate) const fn limit(&self) -> usize {
+        self.limit
     }
 
     pub(crate) const fn remaining(&self) -> usize {

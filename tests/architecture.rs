@@ -435,6 +435,20 @@ const TASK_4_PHASE_CONSTRAINT: &str = "kind inference is intentionally absent on
 
 #[rustfmt::skip]
 const KIND_SITES: &[KindSite] = &[
+    // Diagnostic visits borrow written surface records; the source graph owns disposal.
+    kind_site!("src/calibration_features.rs::Visit.Nominal.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Definition.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Equation.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Block.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Local.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Expr.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Type.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Kind.0", FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Parameter.0", FieldSurfaceDeclaredKindDeclaredProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Row.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Effect.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Application.0", FieldSurfaceProjectionOnlyDeferredProjectionProjectionProjectionSurfaceTree, Borrowed),
+    kind_site!("src/calibration_features.rs::Visit.Handler.0", FieldSurfaceCarrierRetentionPreservedCarrierProjectionProjectionSurfaceTree, Borrowed),
     // Fused borrowed zonking retains source nodes and guards owned results.
     kind_site!("src/elaborate.rs::$fn_zonk_compound_root_with_status_and_inference_and_rows::Task.Type.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),
     kind_site!("src/elaborate.rs::$fn_zonk_compound_root_with_status_and_inference_and_rows::Task.Argument.0", FieldBorrowedTransientCarrierRetentionPreservedCarrierElaborationInferenceTypeTypeTree),

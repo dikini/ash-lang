@@ -2776,6 +2776,25 @@ common Batch 3 paths were preserved in a retained stash and pinned source
 copies before isolating this delivery. The source-control and lexical-row
 repairs remain separate unverified progress.
 
+## 2026-10-05: readable copying API and bounded helper pressure
+
+Packed String literals replace byte-constructor generation for SQL, paths and
+TEXT. The selected library exports nullable TEXT/BLOB families and exact
+statement provider methods. A host example supplies authenticated manifests and
+the executable binding while source imports remain passive. Native copying
+checks storage kind before conversion: requesting an integer from malformed
+TEXT must produce wrong-kind refusal, not UTF-8 conversion failure.
+
+Long nested result matches exceed the existing source projection limit. Ordinary
+typed helpers preserve operation order without changing that limit. Connected
+execution then exposed another boundary: specialized capture traversal scans
+unrelated dictionary evidence ports for each capture, exhausting the unchanged
+327,680-unit type ledger in larger helper programs. GDB identified the actual
+module-root capture pass and repeated scan. This motivates a bounded exact-port
+index, not a higher limit or a new authoring tool. Verification remains pending
+for the larger copying and persistence programs; [execution](execution.md)
+records the current evidence.
+
 ## 2026-10-05: connected control, validation and consumer handoffs
 
 Connected receipt68 passes 1,577 library cases without an ignore and 44 public
@@ -2830,6 +2849,29 @@ and all twenty-three unrelated working files are preserved. The external
 verification outcome, which governs completion and the consumer handoff.
 Independent SQLite and arena merges follow that verified checkpoint. Shared
 source remains common-owned, and Cargo leases remain explicit and serial.
+
+## 2026-10-05: smaller diagnostic programs and passing neighbors
+
+The verified shared cost checkpoint is imported through unsigned SQLite merge
+`51f68a48dcdd336074c7220451cb7135ec0e491a`, preserving all thirty-four pending
+paths. The serial workspace all-targets check passes. The matching
+fourteen-operation API remains a prepared common input rather than an integrated
+SQLite delivery.
+
+Separate diagnostic reductions retain most copying and persistence behavior
+while reproducing typing work refusal. Removing reset's final `Done`, changing
+the text to ASCII or returning only the final value also leaves refusal.
+Nested inlining instead crosses the unchanged parser-depth boundary and cannot
+be interpreted as a capture-cost comparison. Two staged reset forms execute
+with the original native call sequence, retained copied triple and completion
+reports. Their helper, evidence and capture topology changes remain explicit;
+the original programs and assertions stay unchanged.
+
+The [execution record](execution.md#sqlite-import-and-diagnostic-source-reductions-2026-10-05)
+records exact checking ledgers and resource accumulation. A nearby passing
+program permits a bounded comparison of helper declaration admission, call
+transport and body shape. Common owns those shared compiler repairs and their
+integration. Diagnostic success does not satisfy the original acceptance gate.
 
 
 ## 2026-10-07: completed-phase preparation checkpoint
@@ -2904,3 +2946,31 @@ independent normal typing limits. Their measured completed-native observations
 do not constitute normal-limit acceptance. Fusion remains an unverified
 follow-on. Experimental DN-0036 evidence does not establish current Ash
 semantics, production architecture, or an intrinsic lower bound.
+
+
+## 2026-10-08: SQLite copying execution under calibrated admission
+
+The SQLite worktree imports corrected Common delivery `cce01be` through unsigned
+merge `817f3828`, preserving all independent adapter, library and example work.
+All five packaged programs now execute through the actual host: Unicode TEXT,
+full copying, transaction/reuse/reopen persistence, captured resume and owned
+discard. Complete source results, copy sizes and native completion observations
+match the existing assertions. The supplementary forwarding case passes freshly;
+Common's original seventeen passes transfer under matched executable input pins.
+
+The host prints charged source, final-elaborator and Core work, nominal/hard
+budgets, completion and assessment on success and partial failure. Missing
+measurements are unobserved. All fifteen measured phases fit nominal calibrated
+budgets without accepted deficits. Copying retains 1,212,707 source units: the
+admission change does not establish reduced compiler work. Native ownership and
+independent validation are unchanged.
+
+The selected String/TEXT contract is reconciled with exact manifest identities,
+appended coordinates, fourteen native operations and copying outcomes. NOMEM
+retains its native failure code; host work/storage refusal remains terminal.
+Independent static reviews find no actionable adapter/library, host or contract
+issues. [Delivery evidence](sqlite-copying-delivery-2026-10-08/README.md) records
+fresh build, programs, forwarding and strict affected lint returns, plus exact
+source pins and explicitly reused evidence. No full native suite or combined
+workspace gate is claimed from those focused checks. Preserving SQLite
+integration and final combined verification remain with the coordinator.

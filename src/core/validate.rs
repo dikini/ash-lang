@@ -48,6 +48,14 @@ use crate::{
 /// owner retain [`TYPE_WORK_LIMIT`].
 const CORE_VALIDATION_TYPE_WORK_LIMIT: usize = 3 * TYPE_WORK_LIMIT;
 
+#[inline]
+fn core_validation_type_work_limit() -> usize {
+    crate::calibration::limit(
+        CORE_VALIDATION_TYPE_WORK_LIMIT,
+        crate::calibration::DiagnosticOwner::Core,
+    )
+}
+
 /// Membership in canonical foreign registrations requires visiting their
 /// module inventory and exact effect identities. Pay before each traversal.
 pub(crate) fn registered_foreign_effect_with_charge<E>(
@@ -3493,8 +3501,9 @@ pub(in crate::core) fn check_provider_external_structure(
     )
     .map_err(|()| ValidationError::new(ValidationReason::Resource, None))?;
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
-    let allowance = work.remaining().min(CORE_VALIDATION_TYPE_WORK_LIMIT);
-    let prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - allowance;
+    let capacity = validator.type_work_limit;
+    let allowance = work.remaining().min(capacity);
+    let prefix = capacity - allowance;
     validator.type_work.set(prefix);
     validator.contextual_registry = Some(canonical);
     validator.contextual_native_authentication = native_authentication;
@@ -3538,8 +3547,9 @@ pub(crate) fn check_ordinary_effect_modules_with_budget_for_test(
     work: &mut TypeWorkBudget,
 ) -> Result<(), ValidationError> {
     let mut validator = Validator::new_modules(program, sources, module_sources)?;
-    let allowance = work.remaining().min(CORE_VALIDATION_TYPE_WORK_LIMIT);
-    let prefix = CORE_VALIDATION_TYPE_WORK_LIMIT - allowance;
+    let capacity = validator.type_work_limit;
+    let allowance = work.remaining().min(capacity);
+    let prefix = capacity - allowance;
     validator.type_work.set(prefix);
     let result = validator.run_effect();
     work.charge(validator.type_work.get() - prefix)
@@ -3556,7 +3566,7 @@ pub(super) fn validate_effect_modules_family(
         program,
         sources,
         module_sources,
-        &mut TypeWorkBudget::with_limit(CORE_VALIDATION_TYPE_WORK_LIMIT),
+        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
     )
 }
 
@@ -3629,7 +3639,7 @@ pub fn validate_modules(
         program,
         sources,
         module_sources,
-        &mut TypeWorkBudget::with_limit(CORE_VALIDATION_TYPE_WORK_LIMIT),
+        &mut TypeWorkBudget::with_limit(core_validation_type_work_limit()),
     )
 }
 
@@ -3863,7 +3873,7 @@ impl<'program, 'source, F: CoreOperationFamily + ScopeFamily> Validator<'program
             provider_handler_entry: None,
             provider_fragment_locals: None,
             type_work: Cell::new(0),
-            type_work_limit: CORE_VALIDATION_TYPE_WORK_LIMIT,
+            type_work_limit: core_validation_type_work_limit(),
             #[cfg(test)]
             owner_parameter_index_work: Cell::new(0),
             #[cfg(test)]

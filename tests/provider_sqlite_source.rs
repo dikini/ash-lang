@@ -350,7 +350,7 @@ fn sqlite_library_declarations_check_against_registered_dependencies() {
         if loaded.canonical_path() == fixture("sqlite.ash").canonicalize().unwrap() {
             assert_eq!(resolved.resources().len(), 2);
             assert_eq!(resolved.resources()[0].handlers.len(), 1);
-            assert_eq!(resolved.resources()[1].handlers.len(), 3);
+            assert_eq!(resolved.resources()[1].handlers.len(), 9);
             for resource in resolved.resources() {
                 assert!(checked.iter().any(|module| {
                     module

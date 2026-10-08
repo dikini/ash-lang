@@ -78,24 +78,31 @@ Core, public control/row programs, architecture and strict quality checks.
 Common commit `1fa1f4f` is integrated by unsigned Original merge `f0a8e59`,
 and the complete normal-policy original-worktree gate passes receipt 284.
 Dirty-edge, strict-predecessor and global-constructor staging trials increased
-measured work and were exactly reversed. The larger three SQLite cases still exceed
-normal limits; the next private fusion study targets contextual child expansion.
-No work or depth limit changes are selected.
+measured work and were exactly reversed. At that checkpoint the larger three
+SQLite cases still exceeded normal limits; a private fusion study targeted
+contextual child expansion. That delivery selected no work or depth limit change.
 
 The follow-on context-extension lookup reuses an exact completed `(parent,
 Transition)` witness before the unchanged recurrence walk. It preserves context
 identities and adds no carrier. All 60 normal Value tests, 320 public cases,
 normal native resume, build, formatting and strict Clippy pass. Four completed
 SQLite cost runs show small Source/Core reductions, with all other owner totals
-unchanged and the real recurrence-miss tax included. The larger three normal
-refusals remain open. Common commit `478e043` is integrated through unsigned
-Original merge `5001156`; the complete Original gate passes. See
+unchanged and the real recurrence-miss tax included. At that checkpoint the
+larger three normal refusals remained open. Common commit `478e043` is integrated
+through unsigned Original merge `5001156`; the complete Original gate passes. See
 [execution](execution.md#value-context-extension-integration-2026-10-07).
 
 The String/TEXT manifest, executable adapter, source library and larger programs
-remain preserved SQLite-owned work. Their passing cases and three default-budget
-typing refusals stay separate from this generic delivery and from the verified
-common lifecycle/control delivery. No work or depth limit changes.
+remain preserved SQLite-owned work. The
+[SQLite delivery evidence](sqlite-copying-delivery-2026-10-08/README.md) now records
+all five packaged programs passing under calibrated public-driver admission,
+matched reuse of seventeen original cases, and a fresh supplementary forwarding
+regression. Historical default-budget refusals retain their original scope;
+calibrated admission does not establish reduced compiler work. Preserving SQLite
+integration and the final combined gate remain pending. Standalone/explicit
+budgets, depth and validation remain unchanged; the
+[calibrated policy](calibrated-admission-2026-10-08/README.md) records the larger
+public-driver phase allowances.
 
 Common owns shared compiler, Core, capture, provider checking and generic runtime
 changes after the SQLite handoff. SQLite owns its library, manifest and native

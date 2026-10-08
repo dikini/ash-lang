@@ -1,0 +1,946 @@
+{
+  "rounds": {
+    "complete": {
+      "case_count": 44,
+      "raw_count": 352,
+      "measured_count": 264,
+      "warmup_count": 88,
+      "failure_count": 0,
+      "frozen_model_pairs": 24,
+      "frozen_before_all_heldout": true,
+      "log_input_artifact_hashes_verified": true
+    },
+    "cpu": {
+      "case_count": 44,
+      "raw_count": 352,
+      "measured_count": 264,
+      "warmup_count": 88,
+      "failure_count": 0,
+      "frozen_model_pairs": 24,
+      "frozen_before_all_heldout": true,
+      "log_input_artifact_hashes_verified": true
+    }
+  },
+  "cpu_precision_sqlite": [
+    {
+      "case": "sqlite-copying",
+      "process_off": {
+        "peak_rss_kib": {
+          "max": 34412,
+          "median": 34380,
+          "min": 33884,
+          "n": 3
+        },
+        "system_seconds": {
+          "max": 0.03,
+          "median": 0.02,
+          "min": 0.02,
+          "n": 3
+        },
+        "user_seconds": {
+          "max": 0.18,
+          "median": 0.15,
+          "min": 0.14,
+          "n": 3
+        },
+        "wall_seconds": {
+          "max": 0.21,
+          "median": 0.18,
+          "min": 0.17,
+          "n": 3
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "max": 0.03557699999999997,
+          "median": 0.030433000000000376,
+          "min": 0.027565999999999757,
+          "n": 3
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "max": 0.21458399999999989,
+          "median": 0.1837040000000001,
+          "min": 0.1798390000000003,
+          "n": 3
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "max": 0.18701800000000013,
+          "median": 0.1532709999999997,
+          "min": 0.14426200000000033,
+          "n": 3
+        }
+      },
+      "gnu_target_cpu_median_seconds": 0.17,
+      "phase_on_wall_ns": {
+        "evaluation": {
+          "max": 1360545,
+          "median": 1247932,
+          "min": 1229768,
+          "n": 3
+        },
+        "final-elaboration": {
+          "max": 16916447,
+          "median": 16695300,
+          "min": 16326946,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 56323648,
+          "median": 52639534,
+          "min": 52480956,
+          "n": 3
+        },
+        "input-metrics": {
+          "max": 622994,
+          "median": 576777,
+          "min": 569894,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 1508022,
+          "median": 1446035,
+          "min": 1367418,
+          "n": 3
+        },
+        "loading": {
+          "max": 2185459,
+          "median": 2115367,
+          "min": 2019758,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 845794,
+          "median": 779029,
+          "min": 744493,
+          "n": 3
+        },
+        "pipeline": {
+          "max": 181378844,
+          "median": 175922188,
+          "min": 173189347,
+          "n": 3
+        },
+        "resolution": {
+          "max": 3318635,
+          "median": 3228335,
+          "min": 3103000,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 93289890,
+          "median": 91503051,
+          "min": 89847751,
+          "n": 3
+        }
+      },
+      "phase_on_median_fraction_of_pipeline": {
+        "source-checking": 0.5187833579625426,
+        "independent-effect-core": 0.30302646732653826,
+        "final-elaboration": 0.09427223026598744,
+        "evaluation": 0.007205593309385247
+      },
+      "observer_overhead": {
+        "peak_rss_kib": {
+          "median_difference": 108,
+          "median_ratio": 1.0031413612565445
+        },
+        "system_seconds": {
+          "median_difference": 0.009999999999999998,
+          "median_ratio": 1.5
+        },
+        "user_seconds": {
+          "median_difference": -0.009999999999999981,
+          "median_ratio": 0.9333333333333335
+        },
+        "wall_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "median_difference": 0.003161999999999665,
+          "median_ratio": 1.10390037130745
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "median_difference": -0.00014700000000011926,
+          "median_ratio": 0.9991997996777418
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "median_difference": -0.0033089999999997843,
+          "median_ratio": 0.9784107887336823
+        }
+      },
+      "admission_charges": {
+        "final-elaboration": {
+          "max": 165717,
+          "median": 165717,
+          "min": 165717,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 903995,
+          "median": 903995,
+          "min": 903995,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15742,
+          "median": 15742,
+          "min": 15742,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4030,
+          "median": 4030,
+          "min": 4030,
+          "n": 3
+        },
+        "resolution": {
+          "max": 27413,
+          "median": 27413,
+          "min": 27413,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1212707,
+          "median": 1212707,
+          "min": 1212707,
+          "n": 3
+        }
+      }
+    },
+    {
+      "case": "sqlite-persistence",
+      "process_off": {
+        "peak_rss_kib": {
+          "max": 43584,
+          "median": 43400,
+          "min": 43272,
+          "n": 3
+        },
+        "system_seconds": {
+          "max": 0.04,
+          "median": 0.03,
+          "min": 0.03,
+          "n": 3
+        },
+        "user_seconds": {
+          "max": 0.21,
+          "median": 0.19,
+          "min": 0.19,
+          "n": 3
+        },
+        "wall_seconds": {
+          "max": 0.26,
+          "median": 0.23,
+          "min": 0.22,
+          "n": 3
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "max": 0.04264899999999994,
+          "median": 0.03428599999999982,
+          "min": 0.032233999999999874,
+          "n": 3
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "max": 0.25920400000000043,
+          "median": 0.22946599999999995,
+          "min": 0.22765299999999966,
+          "n": 3
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "max": 0.2165550000000005,
+          "median": 0.1954189999999998,
+          "min": 0.19518000000000013,
+          "n": 3
+        }
+      },
+      "gnu_target_cpu_median_seconds": 0.22,
+      "phase_on_wall_ns": {
+        "evaluation": {
+          "max": 4082064,
+          "median": 4023594,
+          "min": 3953993,
+          "n": 3
+        },
+        "final-elaboration": {
+          "max": 39237672,
+          "median": 36393641,
+          "min": 33379880,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 110866520,
+          "median": 107488052,
+          "min": 105039196,
+          "n": 3
+        },
+        "input-metrics": {
+          "max": 746296,
+          "median": 689109,
+          "min": 677207,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 3105363,
+          "median": 2962554,
+          "min": 2905556,
+          "n": 3
+        },
+        "loading": {
+          "max": 2204014,
+          "median": 2186281,
+          "min": 2035447,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 1031935,
+          "median": 983384,
+          "min": 853609,
+          "n": 3
+        },
+        "pipeline": {
+          "max": 230071608,
+          "median": 219015096,
+          "min": 218109279,
+          "n": 3
+        },
+        "resolution": {
+          "max": 6452724,
+          "median": 4674934,
+          "min": 4365258,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 57853112,
+          "median": 57566589,
+          "min": 57250625,
+          "n": 3
+        }
+      },
+      "phase_on_median_fraction_of_pipeline": {
+        "source-checking": 0.2624859669542074,
+        "independent-effect-core": 0.4818783202488853,
+        "final-elaboration": 0.16616955481461423,
+        "evaluation": 0.018128495120099865
+      },
+      "observer_overhead": {
+        "peak_rss_kib": {
+          "median_difference": 60,
+          "median_ratio": 1.0013824884792626
+        },
+        "system_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "user_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wall_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "median_difference": 0.0029810000000005665,
+          "median_ratio": 1.086945108790777
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "median_difference": 0.0014819999999997613,
+          "median_ratio": 1.0064584731507054
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "median_difference": 0.003928999999999849,
+          "median_ratio": 1.0201055168637638
+        }
+      },
+      "admission_charges": {
+        "final-elaboration": {
+          "max": 376641,
+          "median": 376641,
+          "min": 376641,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 1609087,
+          "median": 1609087,
+          "min": 1609087,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 48578,
+          "median": 48578,
+          "min": 48578,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4136,
+          "median": 4136,
+          "min": 4136,
+          "n": 3
+        },
+        "resolution": {
+          "max": 44240,
+          "median": 44240,
+          "min": 44240,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 597882,
+          "median": 597882,
+          "min": 597882,
+          "n": 3
+        }
+      }
+    },
+    {
+      "case": "sqlite-resume",
+      "process_off": {
+        "peak_rss_kib": {
+          "max": 23092,
+          "median": 23076,
+          "min": 22716,
+          "n": 3
+        },
+        "system_seconds": {
+          "max": 0.01,
+          "median": 0.01,
+          "min": 0.01,
+          "n": 3
+        },
+        "user_seconds": {
+          "max": 0.05,
+          "median": 0.04,
+          "min": 0.04,
+          "n": 3
+        },
+        "wall_seconds": {
+          "max": 0.06,
+          "median": 0.06,
+          "min": 0.06,
+          "n": 3
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "max": 0.01571200000000017,
+          "median": 0.015283999999999853,
+          "min": 0.011634999999999618,
+          "n": 3
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "max": 0.0657890000000001,
+          "median": 0.06214300000000028,
+          "min": 0.06123099999999981,
+          "n": 3
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "max": 0.050505000000000244,
+          "median": 0.049596000000000195,
+          "min": 0.04643100000000011,
+          "n": 3
+        }
+      },
+      "gnu_target_cpu_median_seconds": 0.05,
+      "phase_on_wall_ns": {
+        "evaluation": {
+          "max": 958126,
+          "median": 823572,
+          "min": 794998,
+          "n": 3
+        },
+        "final-elaboration": {
+          "max": 9989390,
+          "median": 9289430,
+          "min": 9283859,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 21837483,
+          "median": 19011907,
+          "min": 18417366,
+          "n": 3
+        },
+        "input-metrics": {
+          "max": 682347,
+          "median": 541180,
+          "min": 532263,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 1214429,
+          "median": 1182970,
+          "min": 1131463,
+          "n": 3
+        },
+        "loading": {
+          "max": 2177585,
+          "median": 1513954,
+          "min": 1504606,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 695952,
+          "median": 695181,
+          "min": 680423,
+          "n": 3
+        },
+        "pipeline": {
+          "max": 63106484,
+          "median": 60057657,
+          "min": 59783170,
+          "n": 3
+        },
+        "resolution": {
+          "max": 3044258,
+          "median": 2810417,
+          "min": 2798905,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 19793210,
+          "median": 19545594,
+          "min": 19495127,
+          "n": 3
+        }
+      },
+      "phase_on_median_fraction_of_pipeline": {
+        "source-checking": 0.3246068523785402,
+        "independent-effect-core": 0.31801436758873775,
+        "final-elaboration": 0.15538537016354267,
+        "evaluation": 0.01323724633480124
+      },
+      "observer_overhead": {
+        "peak_rss_kib": {
+          "median_difference": -112,
+          "median_ratio": 0.9951464725255676
+        },
+        "system_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "user_seconds": {
+          "median_difference": 0.010000000000000002,
+          "median_ratio": 1.25
+        },
+        "wall_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "median_difference": -0.0022799999999993936,
+          "median_ratio": 0.8508243915205826
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "median_difference": 0.0041039999999998855,
+          "median_ratio": 1.0660412274914288
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "median_difference": 0.002837999999999674,
+          "median_ratio": 1.0572223566416579
+        }
+      },
+      "admission_charges": {
+        "final-elaboration": {
+          "max": 103738,
+          "median": 103738,
+          "min": 103738,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 289063,
+          "median": 289063,
+          "min": 289063,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15190,
+          "median": 15190,
+          "min": 15190,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3950,
+          "median": 3950,
+          "min": 3950,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25542,
+          "median": 25542,
+          "min": 25542,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 203215,
+          "median": 203215,
+          "min": 203215,
+          "n": 3
+        }
+      }
+    },
+    {
+      "case": "sqlite-bound_nul",
+      "process_off": {
+        "peak_rss_kib": {
+          "max": 34432,
+          "median": 34300,
+          "min": 33856,
+          "n": 3
+        },
+        "system_seconds": {
+          "max": 0.03,
+          "median": 0.02,
+          "min": 0.01,
+          "n": 3
+        },
+        "user_seconds": {
+          "max": 0.16,
+          "median": 0.15,
+          "min": 0.14,
+          "n": 3
+        },
+        "wall_seconds": {
+          "max": 0.18,
+          "median": 0.18,
+          "min": 0.17,
+          "n": 3
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "max": 0.03152599999999994,
+          "median": 0.022447000000000106,
+          "min": 0.019822000000000006,
+          "n": 3
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "max": 0.1843599999999994,
+          "median": 0.1822440000000003,
+          "min": 0.17926900000000012,
+          "n": 3
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "max": 0.1645379999999994,
+          "median": 0.1597970000000002,
+          "min": 0.14774300000000018,
+          "n": 3
+        }
+      },
+      "gnu_target_cpu_median_seconds": 0.17,
+      "phase_on_wall_ns": {
+        "evaluation": {
+          "max": 854922,
+          "median": 835264,
+          "min": 784779,
+          "n": 3
+        },
+        "final-elaboration": {
+          "max": 16887392,
+          "median": 16496916,
+          "min": 16410493,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 58231324,
+          "median": 56604928,
+          "min": 53356856,
+          "n": 3
+        },
+        "input-metrics": {
+          "max": 794859,
+          "median": 784358,
+          "min": 593279,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 1573035,
+          "median": 1539752,
+          "min": 1450975,
+          "n": 3
+        },
+        "loading": {
+          "max": 2519870,
+          "median": 2309002,
+          "min": 2225956,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 826748,
+          "median": 796962,
+          "min": 712734,
+          "n": 3
+        },
+        "pipeline": {
+          "max": 188867197,
+          "median": 187995553,
+          "min": 183295083,
+          "n": 3
+        },
+        "resolution": {
+          "max": 3301073,
+          "median": 3271537,
+          "min": 3112488,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 103443406,
+          "median": 99113527,
+          "min": 94762822,
+          "n": 3
+        }
+      },
+      "phase_on_median_fraction_of_pipeline": {
+        "source-checking": 0.5247789376574483,
+        "independent-effect-core": 0.30831888715963734,
+        "final-elaboration": 0.08775162889092382,
+        "evaluation": 0.004442998712847213
+      },
+      "observer_overhead": {
+        "peak_rss_kib": {
+          "median_difference": -8,
+          "median_ratio": 0.9997667638483965
+        },
+        "system_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "user_seconds": {
+          "median_difference": 0.010000000000000009,
+          "median_ratio": 1.0666666666666667
+        },
+        "wall_seconds": {
+          "median_difference": 0.010000000000000009,
+          "median_ratio": 1.0555555555555556
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "median_difference": 0.0023009999999996644,
+          "median_ratio": 1.1025081302623805
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "median_difference": 0.013171999999999517,
+          "median_ratio": 1.072276727903248
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "median_difference": 0.003940000000000055,
+          "median_ratio": 1.0246562826586234
+        }
+      },
+      "admission_charges": {
+        "final-elaboration": {
+          "max": 165717,
+          "median": 165717,
+          "min": 165717,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 903990,
+          "median": 903990,
+          "min": 903990,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15742,
+          "median": 15742,
+          "min": 15742,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 4030,
+          "median": 4030,
+          "min": 4030,
+          "n": 3
+        },
+        "resolution": {
+          "max": 27413,
+          "median": 27413,
+          "min": 27413,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 1212707,
+          "median": 1212707,
+          "min": 1212707,
+          "n": 3
+        }
+      }
+    },
+    {
+      "case": "sqlite-forwarding",
+      "process_off": {
+        "peak_rss_kib": {
+          "max": 23220,
+          "median": 22680,
+          "min": 22484,
+          "n": 3
+        },
+        "system_seconds": {
+          "max": 0.01,
+          "median": 0.0,
+          "min": 0.0,
+          "n": 3
+        },
+        "user_seconds": {
+          "max": 0.05,
+          "median": 0.05,
+          "min": 0.05,
+          "n": 3
+        },
+        "wall_seconds": {
+          "max": 0.06,
+          "median": 0.06,
+          "min": 0.06,
+          "n": 3
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "max": 0.012373999999999885,
+          "median": 0.011576000000000253,
+          "min": 0.005452000000000012,
+          "n": 3
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "max": 0.06532799999999961,
+          "median": 0.06355400000000033,
+          "min": 0.06263699999999961,
+          "n": 3
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "max": 0.0571849999999996,
+          "median": 0.052953999999999724,
+          "min": 0.05197800000000008,
+          "n": 3
+        }
+      },
+      "gnu_target_cpu_median_seconds": 0.05,
+      "phase_on_wall_ns": {
+        "evaluation": {
+          "max": 1026896,
+          "median": 783567,
+          "min": 774379,
+          "n": 3
+        },
+        "final-elaboration": {
+          "max": 9641654,
+          "median": 9494867,
+          "min": 8929973,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 19776508,
+          "median": 19400860,
+          "min": 19128135,
+          "n": 3
+        },
+        "input-metrics": {
+          "max": 689019,
+          "median": 539527,
+          "min": 534608,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 1229607,
+          "median": 1206154,
+          "min": 1133838,
+          "n": 3
+        },
+        "loading": {
+          "max": 1571752,
+          "median": 1432150,
+          "min": 1422572,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 755114,
+          "median": 730928,
+          "min": 692555,
+          "n": 3
+        },
+        "pipeline": {
+          "max": 60228878,
+          "median": 59793839,
+          "min": 59298485,
+          "n": 3
+        },
+        "resolution": {
+          "max": 2827630,
+          "median": 2784379,
+          "min": 2767407,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 19147202,
+          "median": 19137683,
+          "min": 18971008,
+          "n": 3
+        }
+      },
+      "phase_on_median_fraction_of_pipeline": {
+        "source-checking": 0.31790733342234934,
+        "independent-effect-core": 0.32717294548081627,
+        "final-elaboration": 0.15764642004455073,
+        "evaluation": 0.01310447720207428
+      },
+      "observer_overhead": {
+        "peak_rss_kib": {
+          "median_difference": 148,
+          "median_ratio": 1.0065255731922398
+        },
+        "system_seconds": {
+          "median_difference": 0.01,
+          "median_ratio": null
+        },
+        "user_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wall_seconds": {
+          "median_difference": 0.0,
+          "median_ratio": 1.0
+        },
+        "wrapper_inclusive_child_system_seconds": {
+          "median_difference": 0.003777999999999615,
+          "median_ratio": 1.3263648928817842
+        },
+        "wrapper_inclusive_child_total_seconds": {
+          "median_difference": 0.0027400000000001867,
+          "median_ratio": 1.0431129433237905
+        },
+        "wrapper_inclusive_child_user_seconds": {
+          "median_difference": -0.0023409999999994824,
+          "median_ratio": 0.9557918193148867
+        }
+      },
+      "admission_charges": {
+        "final-elaboration": {
+          "max": 107066,
+          "median": 107066,
+          "min": 107066,
+          "n": 3
+        },
+        "independent-effect-core": {
+          "max": 315193,
+          "median": 315193,
+          "min": 315193,
+          "n": 3
+        },
+        "linked-interface": {
+          "max": 15098,
+          "median": 15098,
+          "min": 15098,
+          "n": 3
+        },
+        "module-linking": {
+          "max": 3934,
+          "median": 3934,
+          "min": 3934,
+          "n": 3
+        },
+        "resolution": {
+          "max": 25557,
+          "median": 25557,
+          "min": 25557,
+          "n": 3
+        },
+        "source-checking": {
+          "max": 216584,
+          "median": 216584,
+          "min": 216584,
+          "n": 3
+        }
+      }
+    }
+  ]
+}
