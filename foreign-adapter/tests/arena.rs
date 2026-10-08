@@ -276,3 +276,87 @@ fn pointer_and_metadata_products_reject_before_any_payload_initializer() {
     assert_eq!(arena.usage().used_payload_bytes, 0);
     assert_eq!(arena.usage().object_count, 0);
 }
+
+#[test]
+fn result_admission_precedes_native_publication_and_stale_candidates_never_initialize() {
+    use ash_foreign_adapter::arena::PreparedCommitFailure;
+    let mut arena = Arena::new(32, 3).unwrap();
+    let layout = PayloadLayout::new(LayoutTag::new(21), 8, 8).unwrap();
+    let before = arena.usage();
+    let key = {
+        let pending = arena.prepare_allocation(layout, 0).unwrap();
+        let key = pending.candidate_key();
+        assert_eq!(arena.usage(), before);
+        assert_eq!(
+            arena.read(key, layout.tag()),
+            Err(AccessError::UnknownObject)
+        );
+        // Simulated evaluator refusal: abandon preparation without publication.
+        key
+    };
+    assert_eq!(arena.usage(), before);
+    let pending = arena.prepare_allocation(layout, 0).unwrap();
+    assert_eq!(pending.candidate_key(), key);
+    assert_eq!(
+        arena
+            .commit_prepared(pending, |bytes| {
+                bytes.copy_from_slice(&41_i64.to_le_bytes());
+                Ok::<_, ()>(())
+            })
+            .unwrap(),
+        key
+    );
+    assert_eq!(arena.read(key, layout.tag()).unwrap(), 41_i64.to_le_bytes());
+
+    let stale = arena.prepare_allocation(layout, 0).unwrap();
+    let rejected = stale.candidate_key();
+    let ready = arena.prepare_allocation(layout, 0).unwrap();
+    arena.commit_prepared(ready, |_| Ok::<_, ()>(())).unwrap();
+    let before = arena.usage();
+    let mut initialized = false;
+    assert_eq!(
+        arena.commit_prepared(stale, |_| {
+            initialized = true;
+            Ok::<_, ()>(())
+        }),
+        Err(PreparedCommitFailure::InvalidPreparation)
+    );
+    assert!(!initialized);
+    assert_eq!(arena.usage(), before);
+    assert_eq!(arena.read(key, layout.tag()).unwrap(), 41_i64.to_le_bytes());
+    // A physical candidate key is not an independently authorized object.
+    assert_eq!(rejected.object_id(), 2);
+
+    let foreign = arena.prepare_allocation(layout, 0).unwrap();
+    let mut other = Arena::new(32, 3).unwrap();
+    assert_eq!(
+        other.commit_prepared(foreign, |_| {
+            initialized = true;
+            Ok::<_, ()>(())
+        }),
+        Err(PreparedCommitFailure::InvalidPreparation)
+    );
+    assert!(!initialized);
+    assert_eq!(other.usage().object_count, 0);
+    assert_eq!(arena.usage(), before);
+
+    let pending = arena.prepare_allocation(layout, 0).unwrap();
+    assert_eq!(
+        arena.commit_prepared(pending, |bytes| {
+            bytes.fill(99);
+            Err("admission")
+        }),
+        Err(PreparedCommitFailure::Initialization("admission"))
+    );
+    assert_eq!(arena.usage(), before);
+    assert_eq!(arena.read(key, layout.tag()).unwrap(), 41_i64.to_le_bytes());
+    let pending = arena.prepare_allocation(layout, 0).unwrap();
+    let last = arena
+        .commit_prepared(pending, |bytes| {
+            assert!(bytes.iter().all(|byte| *byte == 0));
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert_eq!(last.object_id(), 3);
+    assert_eq!(arena.usage().object_count, 3);
+}

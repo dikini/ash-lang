@@ -141,6 +141,8 @@ fn runtime_value_class(value: &Value) -> &'static str {
     match value {
         Value::ResourceHandle(_) => "resource-handle",
         Value::NativeStateView(_) => "native-state-view",
+        Value::LayoutWitness(_) => "layout-witness",
+        Value::Reference { .. } => "reference",
         Value::Bytes(_) => "bytes",
         Value::String(_) => "string",
         Value::Intrinsic(_) => "intrinsic",

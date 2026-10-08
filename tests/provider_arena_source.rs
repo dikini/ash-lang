@@ -87,11 +87,18 @@ fn repeated_and_nested_arenas_have_unique_native_owners_and_one_release_each() {
 }
 #[test]
 fn arena_native_configuration_refusal_executes_no_body_or_release() {
-    let (configuration, mut runtime, observations) = configuration("refused-entry.ash");
-    let result = run_path_with_foreign_runtime(configuration, &mut runtime).unwrap();
-    assert_eq!(result.value_display(), "NotAcquired(InvalidArenaConfig)");
-    assert_eq!(observations.events(), vec![ArenaEvent::Refused]);
-    assert_eq!(runtime.retained_owner_count(), 0);
+    for name in [
+        "refused-entry.ash",
+        "wide-config-entry.ash",
+        "wide-slots-entry.ash",
+    ] {
+        let (configuration, mut runtime, observations) = configuration(name);
+        let result = run_path_with_foreign_runtime(configuration, &mut runtime)
+            .unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+        assert_eq!(result.value_display(), "NotAcquired(InvalidArenaConfig)");
+        assert_eq!(observations.events(), vec![ArenaEvent::Refused]);
+        assert_eq!(runtime.retained_owner_count(), 0);
+    }
 }
 #[test]
 fn resource_dependent_arena_access_cannot_escape() {

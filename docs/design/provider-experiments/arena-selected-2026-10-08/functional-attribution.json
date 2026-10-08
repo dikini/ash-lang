@@ -1,0 +1,11 @@
+{
+  "status": "historical functional verification; later scanner and mechanical lint changes require final connected checks and combined gate",
+  "source_manifest_sha256": "833bcb70c551b5e746579d08ffee53931c6ac4f5a20f862e02e4a29718ccf976",
+  "raw_log_sha256": "77b2dcee00c146b5674360c91087fc7d5f04da5d22357504f1b097c1b391c89d",
+  "files": {
+    "round-compile-repair-pins.json": "833bcb70c551b5e746579d08ffee53931c6ac4f5a20f862e02e4a29718ccf976",
+    "round-compile-repair-receipt.json": "15d224342bc4240b0e1d8d0bdfd82d1a5562ea60b83567d1212efdeb06d4e9c1"
+  },
+  "selection": "1674 library tests and 7 provider_arena_allocation integration tests; original log retained externally",
+  "integrated_verification": null
+}

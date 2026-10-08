@@ -1,0 +1,86 @@
+{
+  "status": "finished",
+  "source_pins": "round-retention-lint-pins.json",
+  "checks": [
+    {
+      "name": "carrier-inventory",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash",
+        "--test",
+        "architecture",
+        "--",
+        "--exact",
+        "every_production_type_field_is_manifested_bidirectionally",
+        "carrier_scanner_module_value_reexports_preserve_generic_type_and_wrapper_paths"
+      ],
+      "exit_code": 0,
+      "seconds": 30.19,
+      "log": "round-retention-lint-carrier-inventory.log"
+    },
+    {
+      "name": "strict-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--keep-going",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 91.14,
+      "log": "round-retention-lint-strict-clippy.log"
+    },
+    {
+      "name": "adapter",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "ash-foreign-adapter"
+      ],
+      "exit_code": 0,
+      "seconds": 11.1,
+      "log": "round-retention-lint-adapter.log"
+    },
+    {
+      "name": "native41",
+      "command": [
+        "cargo",
+        "run",
+        "--locked",
+        "-p",
+        "ash-foreign-adapter",
+        "--example",
+        "arena_typed",
+        "--",
+        "tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash"
+      ],
+      "exit_code": 0,
+      "seconds": 0.3,
+      "log": "round-retention-lint-native41.log"
+    },
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 5.58,
+      "log": "round-retention-lint-format.log"
+    }
+  ]
+}

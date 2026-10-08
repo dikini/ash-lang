@@ -1,0 +1,11 @@
+{
+  "authority": "Informative DN36; experimental main retention does not adopt semantics or production architecture",
+  "source_review": "Two independent Sol reviewers approve source reconciliation; separate Sol review approves six selected Arena documents",
+  "relative_links_checked": 176,
+  "markdown_anchors_checked": 68,
+  "missing_links_or_anchors": 0,
+  "markdownlint": "11 changed Markdown files pass all default rules except MD013 line-width and MD012 historical blank-line layout, excluded in a private per-run configuration; no repository lint policy changed",
+  "formal_notation": "Selected safety sequent uses canonical family; native state preservation distinct from evaluator rollback; nonmechanized argument and foreign assumptions explicit",
+  "retired_capsule": "Exactly ten byte-identical superseded files preserved at commit1f3f26180686469d3361d865bb9191df913402aa; successful replacement receipts retained here",
+  "integrated_gate": "pending"
+}

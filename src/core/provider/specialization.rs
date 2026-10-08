@@ -67,6 +67,97 @@ pub(crate) struct ProviderScopeAdmission {
     pub(crate) retained: Box<[crate::types::TypeVariableId]>,
     pub(crate) native_effect: crate::types::EffectInstance,
     pub(crate) protocol: super::ProviderScopeProtocol,
+    pub(crate) families: Box<[ProviderFamilyAdmission]>,
+}
+
+/// Genuine original family authority at its source publication phase. The
+/// private original allocation, not this borrowed wrapper, owns the proof.
+pub(crate) struct ProviderPreparedFamilyOriginal<'a> {
+    pub(crate) authority: &'a crate::elaborate::provider::ProviderFamilyOriginalAuthority,
+    pub(crate) committed: bool,
+}
+
+struct ProviderFamilyContractView<'a> {
+    identity: super::ProviderFamilyIdentity,
+    application: &'a crate::interface::InterfaceApplication,
+    requirements: &'a [crate::interface::CheckedRequirement],
+    methods: &'a [(crate::interface::MethodId, crate::types::OperationId)],
+    handler: &'a crate::core::validate::CheckedHandlerContractCertificate,
+}
+
+/// Compiler claims for one complete selected family goal. The original
+/// certificate and final copied graph must authenticate these before admission.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ProviderFamilyAdmission {
+    pub(crate) identity: super::ProviderFamilyIdentity,
+    pub(crate) application: crate::interface::InterfaceApplication,
+    pub(crate) payload: crate::types::Type,
+    pub(crate) native_effect: crate::types::EffectInstance,
+    pub(crate) lexical: crate::interface::LexicalEvidenceId,
+    pub(crate) requirements: Box<
+        [(
+            crate::interface::EvidenceSelection,
+            crate::interface::EvidenceNodeId,
+        )],
+    >,
+    pub(crate) selections: Box<
+        [(
+            crate::interface::EvidenceSelection,
+            crate::interface::EvidenceNodeId,
+        )],
+    >,
+}
+impl ProviderFamilyAdmission {
+    pub(super) fn clone_with_budget(
+        &self,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Self, crate::core::BuildError> {
+        use crate::core::BuildError;
+        let resource = || BuildError::TypeWorkExceeded;
+        work.charge(
+            self.requirements
+                .len()
+                .checked_add(self.selections.len())
+                .and_then(|count| count.checked_add(1))
+                .ok_or_else(resource)?,
+        )
+        .map_err(|()| resource())?;
+        let mut requirements = Vec::new();
+        requirements
+            .try_reserve_exact(self.requirements.len())
+            .map_err(|_| resource())?;
+        requirements.extend(self.requirements.iter().cloned());
+        let mut selections = Vec::new();
+        selections
+            .try_reserve_exact(self.selections.len())
+            .map_err(|_| resource())?;
+        selections.extend(self.selections.iter().cloned());
+        Ok(Self {
+            identity: self.identity,
+            application: self
+                .application
+                .clone_with_budget(work)
+                .map_err(|()| resource())?,
+            payload: crate::types::clone_type_with_budget(&self.payload, work)
+                .map_err(|()| resource())?,
+            native_effect: crate::types::clone_effect_instance_with_budget(
+                &self.native_effect,
+                work,
+            )
+            .map_err(|()| resource())?,
+            lexical: self.lexical,
+            requirements: requirements.into_boxed_slice(),
+            selections: selections.into_boxed_slice(),
+        })
+    }
+}
+impl Drop for ProviderFamilyAdmission {
+    fn drop(&mut self) {
+        crate::types::discard_type_iteratively(std::mem::replace(
+            &mut self.payload,
+            crate::types::Type::Unit,
+        ));
+    }
 }
 impl Drop for ProviderScopeAdmission {
     fn drop(&mut self) {
@@ -83,6 +174,19 @@ pub(crate) struct ProviderSpecializationEntries<'a> {
     pub(crate) clauses: &'a [crate::core::EffectClause],
     pub(crate) body: NodeId,
     pub(crate) capture_globals: &'a [(crate::resolved::BinderId, NodeId)],
+    pub(crate) families: &'a [ProviderSpecializationFamilyEntries<'a>],
+}
+
+pub(crate) struct ProviderSpecializationFamilyEntries<'a> {
+    pub(crate) state: &'a crate::core::TypedBinder,
+    pub(crate) handler: crate::core::HandlerId,
+    pub(crate) clauses: &'a [crate::core::EffectClause],
+    pub(crate) dictionaries: &'a [ProviderSpecializationDictionaryEntry<'a>],
+}
+
+pub(crate) struct ProviderSpecializationDictionaryEntry<'a> {
+    pub(crate) binder: &'a crate::core::TypedBinder,
+    pub(crate) initializer: NodeId,
 }
 
 fn renamed<T: Copy + Eq>(
@@ -827,6 +931,188 @@ pub(in crate::core) fn prepare_handler_rows(
     })
 }
 
+/// Exact inputs for one member of a single-owner source dispatch group.
+pub(crate) struct ProviderGroupRowsInput<'a> {
+    pub(crate) original: &'a crate::core::validate::CheckedHandlerTemplate,
+    pub(crate) types:
+        &'a std::collections::HashMap<crate::types::TypeVariableId, crate::types::Type>,
+    pub(crate) rows:
+        &'a std::collections::HashMap<crate::types::TypeVariableId, crate::types::EffectRow>,
+    pub(crate) provided: &'a crate::types::EffectInstance,
+    pub(crate) native: &'a crate::types::EffectInstance,
+}
+
+/// Solves the body-only removal and each clause's own native interpretation.
+/// The common continuation row is reconstructed from direct demand, never
+/// from a feedback-containing final clause row.
+pub(crate) fn prepare_group_handler_rows(
+    inputs: &[ProviderGroupRowsInput<'_>],
+    answer: &crate::types::Type,
+    body: &crate::types::EffectRow,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[ResolvedProviderHandlerRows]>, ValidationError> {
+    use crate::types::{
+        EffectRow, EffectRowError, clone_effect_row_with_budget, same_effect_rows_with_budget,
+    };
+    if inputs.is_empty() {
+        return Err(ValidationError::new(
+            crate::core::ValidationReason::Registry,
+            None,
+        ));
+    }
+    super::charge(work, inputs.len())?;
+    let mut remainder = clone_effect_row_with_budget(body, work).map_err(|()| super::resource())?;
+    let remove =
+        |row: &EffectRow, effect: &crate::types::EffectInstance, work: &mut TypeWorkBudget| {
+            match row
+                .remove_exact_with_budget(effect, work)
+                .map_err(|()| super::resource())?
+            {
+                Ok(row) => Ok(row),
+                Err(EffectRowError::Missing) => {
+                    clone_effect_row_with_budget(row, work).map_err(|()| super::resource())
+                }
+                Err(_) => Err(ValidationError::new(
+                    crate::core::ValidationReason::EffectRow,
+                    None,
+                )),
+            }
+        };
+    for input in inputs {
+        remainder = remove(&remainder, input.provided, work)?;
+    }
+    let mut output =
+        clone_effect_row_with_budget(&remainder, work).map_err(|()| super::resource())?;
+    let mut records = Vec::new();
+    records
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| super::resource())?;
+    for input in inputs {
+        let checked = input.original;
+        // Capture-sensitive templates remain an explicit unsupported fragment;
+        // this path does not fabricate a capture result for a family member.
+        if checked.needs_actual_captures() {
+            return Err(ValidationError::new(
+                crate::core::ValidationReason::ResourceEscape,
+                None,
+            ));
+        }
+        let captures =
+            crate::core::capture::ActualCaptureInputs::empty(checked.original_template());
+        let (direct, pending) = checked.original_recipe().realize_direct(
+            input.types,
+            input.rows,
+            captures.rows(),
+            work,
+        )?;
+        let canonical = checked.original_row_contract().realize_direct(
+            input.types,
+            input.rows,
+            captures.rows(),
+            work,
+        )?;
+        if !same_effect_rows_with_budget(&direct, &canonical, work)
+            .map_err(|()| super::resource())?
+        {
+            return Err(super::invalid(checked.original_program().root));
+        }
+        let outward = remove(&direct, input.native, work)?;
+        output = output
+            .union_with_budget(&outward, work)
+            .map_err(|()| super::resource())?
+            .map_err(|error| ValidationError::row_union_failure(error, None))?;
+        records.push((direct, pending, captures));
+    }
+    let mut solutions = Vec::new();
+    solutions
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| super::resource())?;
+    for (input, (direct, pending_rows, captures)) in inputs.iter().zip(records) {
+        let checked = input.original;
+        let hidden = checked.original_hidden();
+        if input.types.contains_key(&hidden[0].0)
+            || input.rows.contains_key(&hidden[1].0)
+            || pending_rows.len() != checked.original_pending_rows().len()
+        {
+            return Err(super::invalid(checked.original_program().root));
+        }
+        super::charge(work, pending_rows.len())?;
+        let mut pending = std::collections::HashMap::new();
+        pending
+            .try_reserve(pending_rows.len())
+            .map_err(|_| super::resource())?;
+        for (record, row) in checked.original_pending_rows().iter().zip(pending_rows) {
+            if pending.insert(record.identity, row).is_some() {
+                return Err(super::invalid(checked.original_program().root));
+            }
+        }
+        let mut complete = OriginalSubstitutions {
+            types: std::collections::HashMap::new(),
+            rows: std::collections::HashMap::new(),
+        };
+        super::charge(
+            work,
+            input
+                .types
+                .len()
+                .checked_add(input.rows.len())
+                .and_then(|n| n.checked_add(2))
+                .ok_or_else(super::resource)?,
+        )?;
+        complete
+            .types
+            .try_reserve(input.types.len() + 1)
+            .map_err(|_| super::resource())?;
+        complete
+            .rows
+            .try_reserve(input.rows.len() + 1)
+            .map_err(|_| super::resource())?;
+        for (id, ty) in input.types {
+            complete.insert_type(
+                *id,
+                crate::types::clone_type_with_budget(ty, work).map_err(|()| super::resource())?,
+            );
+        }
+        for (id, row) in input.rows {
+            complete.insert_row(
+                *id,
+                clone_effect_row_with_budget(row, work).map_err(|()| super::resource())?,
+            );
+        }
+        complete.insert_type(
+            hidden[0].0,
+            crate::types::clone_type_with_budget(answer, work).map_err(|()| super::resource())?,
+        );
+        complete.insert_row(
+            hidden[1].0,
+            clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?,
+        );
+        let realized = checked.original_recipe().realize_nodes(
+            checked.original_program(),
+            &complete.types,
+            &complete.rows,
+            &pending,
+            captures.rows(),
+            &output,
+            work,
+        )?;
+        solutions.push(ResolvedProviderHandlerRows {
+            original_arena: checked.original_program().arena,
+            direct,
+            epsilon: clone_effect_row_with_budget(&remainder, work)
+                .map_err(|()| super::resource())?,
+            output: clone_effect_row_with_budget(&output, work).map_err(|()| super::resource())?,
+            residual: clone_effect_row_with_budget(&output, work)
+                .map_err(|()| super::resource())?,
+            pending,
+            node_rows: realized.nodes,
+            handler_outputs: realized.handlers,
+            captures,
+        });
+    }
+    Ok(solutions.into_boxed_slice())
+}
+
 /// Original checked lifecycle authority. This preparation-only token is bound
 /// to the exact original arena, catalog, entry, and frozen typed node forest.
 /// It is deliberately absent from executable specialization proof storage.
@@ -1221,6 +1507,11 @@ impl PartialEq for OriginalProviderSpecialization {
     }
 }
 impl Eq for OriginalProviderSpecialization {}
+/// Source-only frozen copied-flow facts. There is no conversion to the final
+/// original-specialization token; final catalog admission remains independent.
+#[derive(Debug)]
+pub(super) struct PreparedProviderCaptureReceipt(std::sync::Arc<SpecializationProof>);
+
 #[derive(Debug)]
 struct SpecializationProof {
     arena: crate::core::dialect::ArenaId,
@@ -1236,6 +1527,79 @@ struct SpecializationProof {
     occurrences: Vec<SpecializedOccurrence>,
     anchors: Vec<SpecializedAnchor>,
     state_accesses: Vec<NodeId>,
+    families: Vec<SpecializedFamily>,
+    native_storage: Vec<AdmittedNativeStorageRelation>,
+    native: Option<std::sync::Arc<crate::foreign::ForeignModuleFact>>,
+}
+
+struct SpecializedFamily {
+    certificate: std::sync::Arc<crate::core::validate::CheckedHandlerContractCertificate>,
+    header: ProviderFamilyAdmission,
+    provided: crate::types::EffectInstance,
+    state: super::projection::NodeProjection,
+    handler: crate::core::HandlerId,
+    clauses: Vec<super::projection::NodeProjection>,
+    nodes: Vec<NodeId>,
+    dictionaries: Vec<SpecializedDictionary>,
+}
+
+impl std::fmt::Debug for SpecializedFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpecializedFamily")
+            .field("header", &self.header)
+            .field("handler", &self.handler)
+            .field("dictionaries", &self.dictionaries)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+struct SpecializedDictionary {
+    requirement: crate::interface::RequirementId,
+    method: crate::interface::MethodId,
+    binder: crate::resolved::BinderId,
+    projection: super::projection::NodeProjection,
+    initializer: super::projection::NodeProjection,
+    producer: crate::foreign::ForeignLayoutProducer,
+}
+
+/// Minted only by original-template projection and exact native-flow transfer.
+#[derive(Debug)]
+pub(crate) struct AdmittedNativeStorageRelation {
+    request: NodeId,
+    operand: NodeId,
+    request_projection: super::projection::NodeProjection,
+    operand_projection: super::projection::NodeProjection,
+    operation: crate::types::OperationId,
+    effect: crate::types::EffectInstance,
+    owner: crate::types::TypeVariableId,
+    family: super::ProviderFamilyIdentity,
+    member: usize,
+    result: super::HandlerNativeStorageResult,
+}
+
+impl AdmittedNativeStorageRelation {
+    pub(crate) fn request(&self) -> NodeId {
+        self.request
+    }
+    pub(crate) fn operation(&self) -> crate::types::OperationId {
+        self.operation
+    }
+    pub(crate) fn effect(&self) -> &crate::types::EffectInstance {
+        &self.effect
+    }
+    pub(crate) fn owner(&self) -> crate::types::TypeVariableId {
+        self.owner
+    }
+    pub(crate) fn family(&self) -> super::ProviderFamilyIdentity {
+        self.family
+    }
+    pub(crate) fn member(&self) -> usize {
+        self.member
+    }
+    pub(in crate::core) fn result(&self) -> super::HandlerNativeStorageResult {
+        self.result
+    }
 }
 struct SpecializedOccurrence {
     slot: usize,
@@ -1588,6 +1952,1707 @@ fn target_node(
         .ok_or_else(|| super::invalid(node))
 }
 
+fn reconstruct_group_rows(
+    admission: &ProviderScopeAdmission,
+    copies: &[ProviderCopiedTemplate<'_>],
+    body: &crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>,
+    work: &mut TypeWorkBudget,
+) -> Result<Box<[ResolvedProviderHandlerRows]>, ValidationError> {
+    use crate::types::{KindedArgument, TemplateIdentityRenaming};
+    let count = admission
+        .families
+        .len()
+        .checked_add(1)
+        .ok_or_else(super::resource)?;
+    super::charge(work, count.checked_mul(4).ok_or_else(super::resource)?)?;
+    let mut formals = Vec::new();
+    let mut provided = Vec::new();
+    let mut natives = Vec::new();
+    let mut originals = Vec::new();
+    formals
+        .try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    provided
+        .try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    natives
+        .try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    originals
+        .try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    let variables = std::collections::HashMap::new();
+    let nominals = std::collections::HashMap::new();
+    let renaming = TemplateIdentityRenaming {
+        variables: &variables,
+        nominals: &nominals,
+    };
+    for member in 0..count {
+        let copy = copies.get(member + 2).ok_or_else(super::resource)?;
+        let ProviderOriginalTemplate::Handler(original) = copy.original else {
+            return Err(super::invalid(original_root(copy)));
+        };
+        let mut sigma = OriginalSubstitutions {
+            types: std::collections::HashMap::new(),
+            rows: std::collections::HashMap::new(),
+        };
+        super::charge(
+            work,
+            admission
+                .arguments
+                .len()
+                .checked_add(usize::from(member != 0))
+                .ok_or_else(super::resource)?,
+        )?;
+        sigma
+            .types
+            .try_reserve(admission.arguments.len() + usize::from(member != 0))
+            .map_err(|_| super::resource())?;
+        sigma
+            .rows
+            .try_reserve(admission.arguments.len())
+            .map_err(|_| super::resource())?;
+        for (formal, actual) in admission
+            .definition
+            .parameters
+            .iter()
+            .zip(&admission.arguments)
+        {
+            authenticate_actual(formal.id, actual, &copy.substitution, work)?;
+            match actual {
+                KindedArgument::TypeArg(ty) => {
+                    sigma.insert_type(
+                        formal.id,
+                        crate::types::clone_type_with_budget(ty, work)
+                            .map_err(|()| super::resource())?,
+                    );
+                }
+                KindedArgument::RowArg(row) => {
+                    sigma.insert_row(
+                        formal.id,
+                        crate::types::clone_effect_row_with_budget(row, work)
+                            .map_err(|()| super::resource())?,
+                    );
+                }
+            }
+        }
+        let (provided_template, native_template) = if member == 0 {
+            (
+                &admission.definition.provided.instance,
+                &admission.definition.interpreted.instance,
+            )
+        } else {
+            let family = admission
+                .definition
+                .family_template
+                .as_ref()
+                .ok_or_else(|| super::invalid(original.original_program().root))?;
+            let claim = &admission.families[member - 1];
+            if claim.identity.definition != admission.definition.id
+                || claim.identity.parameter != family.parameter.id
+            {
+                return Err(super::invalid(original.original_program().root));
+            }
+            let actual = crate::types::KindedArgument::TypeArg(
+                crate::types::clone_type_with_budget(&claim.payload, work)
+                    .map_err(|()| super::resource())?,
+            );
+            let actual = crate::types::IterativeArgumentOwner::new(actual);
+            authenticate_actual(family.parameter.id, &actual, &copy.substitution, work)?;
+            sigma.insert_type(
+                family.parameter.id,
+                crate::types::clone_type_with_budget(&claim.payload, work)
+                    .map_err(|()| super::resource())?,
+            );
+            (&family.provided.instance, &family.interpreted.instance)
+        };
+        provided.push(substitute_instance(
+            provided_template,
+            &copy.substitution,
+            &renaming,
+            work,
+        )?);
+        natives.push(substitute_instance(
+            native_template,
+            &copy.substitution,
+            &renaming,
+            work,
+        )?);
+        originals.push(original);
+        formals.push(sigma);
+    }
+    let mut inputs = Vec::new();
+    super::charge(work, count)?;
+    inputs
+        .try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    for member in 0..count {
+        inputs.push(ProviderGroupRowsInput {
+            original: originals[member],
+            types: &formals[member].types,
+            rows: &formals[member].rows,
+            provided: &provided[member],
+            native: &natives[member],
+        });
+    }
+    prepare_group_handler_rows(&inputs, &body.ty, &body.effects, work)
+}
+
+fn family_certificate<'a>(
+    admission: &ProviderScopeAdmission,
+    registry: &'a crate::resolved::ResolvedRegistry,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a crate::elaborate::provider::CheckedProviderContracts, ValidationError> {
+    super::charge(work, registry.provider_contract_count())?;
+    let certificate = registry
+        .provider_contracts()
+        .find(|(module, _)| **module == admission.definition.id.module())
+        .map(|(_, certificate)| certificate.as_ref())
+        .ok_or_else(|| super::invalid(at))?;
+    super::charge(work, certificate.resource_count())?;
+    if !certificate
+        .resource_contracts()
+        .any(|(_, _, fact)| std::sync::Arc::ptr_eq(fact, &admission.definition))
+    {
+        return Err(super::invalid(at));
+    }
+    Ok(certificate)
+}
+
+/// Reconstructs the member header from the genuine original certificate and
+/// the complete outer Type/Row actuals. Hidden answer/row equations, disjoint
+/// freshening, and source ownership remain the enclosing admission's checks.
+fn authenticate_family_header(
+    admission: &ProviderScopeAdmission,
+    family: &ProviderFamilyAdmission,
+    copy: &ProviderCopiedTemplate<'_>,
+    registry: &crate::resolved::ResolvedRegistry,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::types::EffectInstance, ValidationError> {
+    let at = original_root(copy);
+    let certificate = family_certificate(admission, registry, at, work)?;
+    super::charge(
+        work,
+        certificate
+            .resource_count()
+            .checked_mul(5)
+            .ok_or_else(super::resource)?,
+    )?;
+    let fact = admission.definition.id;
+    let contract = ProviderFamilyContractView {
+        identity: certificate
+            .family_identity(fact)
+            .ok_or_else(|| super::invalid(at))?,
+        application: certificate
+            .family_provider_application(fact)
+            .ok_or_else(|| super::invalid(at))?,
+        requirements: certificate
+            .family_requirements(fact)
+            .ok_or_else(|| super::invalid(at))?,
+        methods: certificate
+            .family_methods(fact)
+            .ok_or_else(|| super::invalid(at))?,
+        handler: certificate
+            .family_handler_certificate(fact)
+            .ok_or_else(|| super::invalid(at))?,
+    };
+    authenticate_family_header_with_contract(
+        admission, family, copy, registry, renaming, &contract, work,
+    )
+}
+
+fn authenticate_family_header_with_contract(
+    admission: &ProviderScopeAdmission,
+    family: &ProviderFamilyAdmission,
+    copy: &ProviderCopiedTemplate<'_>,
+    registry: &crate::resolved::ResolvedRegistry,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    contract: &ProviderFamilyContractView<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::types::EffectInstance, ValidationError> {
+    use crate::types::{Kind, KindedArgument, Type};
+    let ProviderOriginalTemplate::Handler(original) = copy.original else {
+        return Err(ValidationError::new(
+            crate::core::ValidationReason::NodeType,
+            None,
+        ));
+    };
+    let at = original.original_program().root;
+    let fact = admission.definition.as_ref();
+    let written = fact
+        .family_template
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    let ProviderFamilyContractView {
+        identity,
+        application,
+        requirements,
+        methods,
+        handler: original_certificate,
+    } = *contract;
+    if !original.authenticates_certificate(original_certificate) {
+        return Err(super::invalid(at));
+    }
+    if family.identity != identity
+        || identity.definition != fact.id
+        || identity.parameter != written.parameter.id
+        || written.parameter.kind != Kind::Type
+        || original.original_template() != crate::resolved::ProviderTemplateId::new(fact.id, 3)
+        || admission.arguments.len() != fact.parameters.len()
+        || family.requirements.len() != requirements.len()
+        || !matches!(&family.payload, Type::Unit | Type::Bool | Type::Int)
+    {
+        return Err(super::invalid(at));
+    }
+    original.authenticate_source(work)?;
+    original.authenticate_definition(fact, work)?;
+    super::charge(work, fact.parameters.len())?;
+    for (parameter, actual) in fact.parameters.iter().zip(&admission.arguments) {
+        match (&parameter.kind, actual) {
+            (Kind::Type, KindedArgument::TypeArg(actual)) => {
+                let substituted = copy
+                    .substitution
+                    .types
+                    .get(&parameter.id)
+                    .ok_or_else(|| super::invalid(at))?;
+                if !crate::types::same_type_with_budget(substituted, actual, work)
+                    .map_err(|()| super::resource())?
+                {
+                    return Err(super::invalid(at));
+                }
+            }
+            (Kind::EffectRow, KindedArgument::RowArg(actual)) => {
+                let substituted = copy
+                    .substitution
+                    .rows
+                    .get(&parameter.id)
+                    .ok_or_else(|| super::invalid(at))?;
+                if !crate::types::same_effect_rows_with_budget(substituted, actual, work)
+                    .map_err(|()| super::resource())?
+                {
+                    return Err(super::invalid(at));
+                }
+            }
+            _ => return Err(super::invalid(at)),
+        }
+    }
+    let payload = copy
+        .substitution
+        .types
+        .get(&identity.parameter)
+        .ok_or_else(|| super::invalid(at))?;
+    if !crate::types::same_type_with_budget(payload, &family.payload, work)
+        .map_err(|()| super::resource())?
+        || !same_application(application, &written.provider_application, work)?
+        || !same_application(
+            &specialized_application(application, copy, renaming, work)?,
+            &family.application,
+            work,
+        )?
+    {
+        return Err(super::invalid(at));
+    }
+    let provided = substitute_instance(
+        &written.provided.instance,
+        &copy.substitution,
+        renaming,
+        work,
+    )?;
+    let native = substitute_instance(
+        &written.interpreted.instance,
+        &copy.substitution,
+        renaming,
+        work,
+    )?;
+    if crate::types::compare_effect_instances_with_budget(&native, &family.native_effect, work)
+        .map_err(|()| super::resource())?
+        != std::cmp::Ordering::Equal
+        || registry.foreign_effect(provided.effect())
+    {
+        return Err(super::invalid(at));
+    }
+    let mut original_native = false;
+    for registered in registry.foreign_modules() {
+        super::charge(work, 1)?;
+        if std::sync::Arc::ptr_eq(registered, &admission.native) {
+            if original_native {
+                return Err(super::invalid(at));
+            }
+            original_native = true;
+        }
+    }
+    let storage = admission
+        .native
+        .storage
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    if !original_native
+        || native.effect() != storage.effect()
+        || fact.state.ty.outer_nominal() != Some(storage.state())
+        || !matches!(native.arguments().get(storage.owner_parameter()),
+            Some(KindedArgument::TypeArg(Type::Variable(owner))) if *owner == admission.identity)
+        || !matches!(native.arguments().get(storage.payload_parameter()),
+            Some(KindedArgument::TypeArg(payload)) if crate::types::same_type_with_budget(
+                payload, &family.payload, work).map_err(|()| super::resource())?)
+    {
+        return Err(super::invalid(at));
+    }
+    authenticate_family_selections(
+        admission,
+        family,
+        requirements,
+        methods,
+        copy,
+        registry,
+        renaming,
+        at,
+        work,
+    )?;
+    Ok(provided)
+}
+
+/// A locator retains the whole immutable plan. The selected family may occur
+/// beneath an implementation root, but must be reachable from that exact root.
+fn authenticate_family_selection_reachability(
+    selection: &crate::interface::EvidenceSelection,
+    selected: crate::interface::EvidenceNodeId,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    use crate::interface::EvidenceNode;
+    let count = selection.node_count();
+    if selected.index() >= count || selection.root().index() >= count {
+        return Err(super::invalid(at));
+    }
+    super::charge(work, count.checked_add(1).ok_or_else(super::resource)?)?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(count)
+        .map_err(|_| super::resource())?;
+    seen.resize(count, false);
+    let mut pending = Vec::new();
+    pending.try_reserve(1).map_err(|_| super::resource())?;
+    pending.push(selection.root());
+    let mut found = false;
+    while let Some(node) = pending.pop() {
+        super::charge(work, 1)?;
+        let visited = seen
+            .get_mut(node.index())
+            .ok_or_else(|| super::invalid(at))?;
+        if *visited {
+            continue;
+        }
+        *visited = true;
+        found |= node == selected;
+        let prerequisites = match selection.node(node).ok_or_else(|| super::invalid(at))? {
+            EvidenceNode::ProviderFamily { prerequisites, .. }
+            | EvidenceNode::Implementation { prerequisites, .. } => prerequisites,
+            EvidenceNode::NativeLayout { .. }
+            | EvidenceNode::Lexical { .. }
+            | EvidenceNode::Abstract { .. } => &[],
+        };
+        super::charge(work, prerequisites.len())?;
+        pending
+            .try_reserve(prerequisites.len())
+            .map_err(|_| super::resource())?;
+        for prerequisite in prerequisites {
+            if prerequisite.index() >= node.index() {
+                return Err(super::invalid(at));
+            }
+            pending.push(*prerequisite);
+        }
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(super::invalid(at))
+    }
+}
+
+/// Independently authenticates every retained occurrence plan. Equivalent
+/// family goals may share one handler, never another occurrence's plan receipt.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "original certificate, full sigma and immutable occurrence plans remain separate"
+)]
+fn authenticate_family_selections(
+    admission: &ProviderScopeAdmission,
+    family: &ProviderFamilyAdmission,
+    requirements: &[crate::interface::CheckedRequirement],
+    methods: &[(crate::interface::MethodId, crate::types::OperationId)],
+    copy: &ProviderCopiedTemplate<'_>,
+    registry: &crate::resolved::ResolvedRegistry,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    use crate::interface::EvidenceNode;
+    use crate::types::{IterativeTypeOwner, Kind, KindedArgument, Type};
+    if family.selections.is_empty()
+        || requirements.len() != 1
+        || requirements.len() != family.requirements.len()
+    {
+        return Err(super::invalid(at));
+    }
+    let layout = admission
+        .native
+        .layout
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    let storage = admission
+        .native
+        .storage
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    super::charge(work, admission.native.canonical_interfaces().len())?;
+    let canonical = admission
+        .native
+        .canonical_interfaces()
+        .iter()
+        .find(|interface| interface.id == layout.interface())
+        .ok_or_else(|| super::invalid(at))?;
+    let [parameter] = canonical.parameters.as_ref() else {
+        return Err(super::invalid(at));
+    };
+    let [method] = canonical.methods.as_ref() else {
+        return Err(super::invalid(at));
+    };
+    if parameter.kind != Kind::Type
+        || parameter.id != layout.payload_parameter()
+        || method.id != layout.method()
+        || method.id.interface() != canonical.id
+        || method.id.declaration() != 0
+        || !method.type_parameters.is_empty()
+        || layout.witness() != storage.witness()
+    {
+        return Err(super::invalid(at));
+    }
+    super::charge(work, family.selections.len())?;
+    for (index, (selection, selected)) in family.selections.iter().enumerate() {
+        super::charge(work, index)?;
+        if family.selections[..index].iter().any(|(other, node)| {
+            selected == node
+                && selection.shares_plan_with(other)
+                && selection.root() == other.root()
+        }) {
+            return Err(super::invalid(at));
+        }
+        authenticate_family_selection_reachability(selection, *selected, at, work)?;
+        let Some(EvidenceNode::ProviderFamily {
+            source,
+            definition,
+            parameter,
+            application,
+            prerequisites,
+            methods: selected_methods,
+        }) = selection.node(*selected)
+        else {
+            return Err(super::invalid(at));
+        };
+        if source != family.lexical
+            || definition != family.identity.definition
+            || parameter != family.identity.parameter
+            || prerequisites.len() != requirements.len()
+            || selected_methods.len() != methods.len()
+            || !same_application(application, &family.application, work)?
+        {
+            return Err(super::invalid(at));
+        }
+        super::charge(
+            work,
+            selected_methods
+                .len()
+                .checked_add(requirements.len())
+                .ok_or_else(super::resource)?,
+        )?;
+        if !selected_methods
+            .iter()
+            .copied()
+            .eq(methods.iter().map(|(method, _)| *method))
+        {
+            return Err(super::invalid(at));
+        }
+        for (ordinal, (required, prerequisite)) in
+            requirements.iter().zip(prerequisites).enumerate()
+        {
+            if required.id.owner()
+                != crate::interface::RequirementOwner::ResourceFamily(admission.definition.id)
+                || usize::try_from(required.id.declaration()).ok() != Some(ordinal)
+                || prerequisite.index() >= selected.index()
+            {
+                return Err(super::invalid(at));
+            }
+            let required = specialized_application(required.application(), copy, renaming, work)?;
+            let [KindedArgument::TypeArg(payload)] = required.arguments() else {
+                return Err(super::invalid(at));
+            };
+            let (encoding, size, alignment) = match payload {
+                Type::Unit => (crate::foreign::ForeignScalarEncoding::Unit, 0, 1),
+                Type::Bool => (crate::foreign::ForeignScalarEncoding::Bool, 1, 1),
+                Type::Int => (crate::foreign::ForeignScalarEncoding::Signed64, 8, 8),
+                _ => return Err(super::invalid(at)),
+            };
+            let Some(EvidenceNode::NativeLayout { producer }) = selection.node(*prerequisite)
+            else {
+                return Err(super::invalid(at));
+            };
+            let dictionary =
+                registry
+                    .foreign_layout_dictionary(producer, work)
+                    .map_err(|failure| {
+                        if failure.is_resource_exhaustion() {
+                            super::resource()
+                        } else {
+                            super::invalid(at)
+                        }
+                    })?;
+            let producer_payload = IterativeTypeOwner::new(producer.payload_type());
+            if required.interface() != canonical.id
+                || producer.interface() != required.interface()
+                || producer.method() != method.id
+                || producer.witness() != layout.witness()
+                || dictionary.producer() != producer
+                || !crate::types::same_type_with_budget(&producer_payload, payload, work)
+                    .map_err(|()| super::resource())?
+                || !crate::types::same_type_with_budget(dictionary.payload_type(), payload, work)
+                    .map_err(|()| super::resource())?
+                || dictionary.encoding() != encoding
+                || dictionary.size() != size
+                || dictionary.natural_alignment() != alignment
+            {
+                return Err(super::invalid(at));
+            }
+            // The first occurrence still supplies the one copied dictionary
+            // binder. Later plans authenticate independently above.
+            if index == 0 {
+                let (first, first_prerequisite) = &family.requirements[ordinal];
+                if !first.shares_plan_with(selection)
+                    || first.root() != selection.root()
+                    || first_prerequisite != prerequisite
+                {
+                    return Err(super::invalid(at));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The first authenticated occurrence supplies the original dictionary formal.
+/// Each later occurrence carries its own separately authenticated receipt.
+fn authenticate_family_prerequisite(
+    family: &ProviderFamilyAdmission,
+    ordinal: usize,
+    at: NodeId,
+    work: &mut TypeWorkBudget,
+) -> Result<crate::foreign::ForeignLayoutProducer, ValidationError> {
+    use crate::interface::EvidenceNode;
+    super::charge(
+        work,
+        family
+            .requirements
+            .len()
+            .checked_add(1)
+            .ok_or_else(super::resource)?,
+    )?;
+    let (selection, selected) = family
+        .selections
+        .first()
+        .ok_or_else(|| super::invalid(at))?;
+    let Some(EvidenceNode::ProviderFamily {
+        source,
+        definition,
+        parameter,
+        application,
+        prerequisites,
+        ..
+    }) = selection.node(*selected)
+    else {
+        return Err(super::invalid(at));
+    };
+    if source != family.lexical
+        || definition != family.identity.definition
+        || parameter != family.identity.parameter
+        || prerequisites.len() != family.requirements.len()
+        || !same_application(application, &family.application, work)?
+    {
+        return Err(super::invalid(at));
+    }
+    for ((first, locator), prerequisite) in family.requirements.iter().zip(prerequisites) {
+        if !first.shares_plan_with(selection)
+            || first.root() != selection.root()
+            || locator != prerequisite
+            || prerequisite.index() >= selected.index()
+        {
+            return Err(super::invalid(at));
+        }
+    }
+    let prerequisite = *prerequisites
+        .get(ordinal)
+        .ok_or_else(|| super::invalid(at))?;
+    let Some(EvidenceNode::NativeLayout { producer }) = selection.node(prerequisite) else {
+        return Err(super::invalid(at));
+    };
+    Ok(producer)
+}
+
+/// After `authenticate_family_header` succeeds for these same inputs, produces
+/// immutable dictionary projections, never binding or execution authority.
+/// Final reauthentication must match each to one ordinary Let with this
+/// binder/initializer and check domination of the owning scope.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "original certificate, copied graph and canonical native authority remain separate"
+)]
+fn authenticate_family_dictionaries(
+    admission: &ProviderScopeAdmission,
+    family: &ProviderFamilyAdmission,
+    entry: &ProviderSpecializationFamilyEntries<'_>,
+    copy: &ProviderCopiedTemplate<'_>,
+    registry: &crate::resolved::ResolvedRegistry,
+    arena: crate::core::dialect::ArenaId,
+    target: &[crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
+    nodes: &std::collections::HashMap<NodeId, NodeId>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<SpecializedDictionary>, ValidationError> {
+    let at = original_root(copy);
+    let certificate = family_certificate(admission, registry, at, work)?;
+    super::charge(work, certificate.resource_count())?;
+    let requirements = certificate
+        .family_requirements(admission.definition.id)
+        .ok_or_else(|| super::invalid(at))?;
+    authenticate_family_dictionaries_with_requirements(
+        admission,
+        family,
+        entry,
+        copy,
+        registry,
+        arena,
+        target,
+        nodes,
+        renaming,
+        requirements,
+        work,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source and final admission share canonical dictionary projection checks"
+)]
+fn authenticate_family_dictionaries_with_requirements(
+    admission: &ProviderScopeAdmission,
+    family: &ProviderFamilyAdmission,
+    entry: &ProviderSpecializationFamilyEntries<'_>,
+    copy: &ProviderCopiedTemplate<'_>,
+    registry: &crate::resolved::ResolvedRegistry,
+    arena: crate::core::dialect::ArenaId,
+    target: &[crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
+    nodes: &std::collections::HashMap<NodeId, NodeId>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    requirements: &[crate::interface::CheckedRequirement],
+    work: &mut TypeWorkBudget,
+) -> Result<Vec<SpecializedDictionary>, ValidationError> {
+    use crate::core::{EffectExprKind, PureExprKind, PureValue};
+    use crate::types::{IterativeTypeOwner, Kind, KindedArgument, Type};
+    let ProviderOriginalTemplate::Handler(original) = copy.original else {
+        return Err(ValidationError::new(
+            crate::core::ValidationReason::NodeType,
+            None,
+        ));
+    };
+    let at = original.original_program().root;
+    let formals = original.original_dictionary_parameters();
+    if requirements.len() != family.requirements.len() || entry.dictionaries.len() != formals.len()
+    {
+        return Err(super::invalid(at));
+    }
+    let layout = admission
+        .native
+        .layout
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    let storage = admission
+        .native
+        .storage
+        .as_ref()
+        .ok_or_else(|| super::invalid(at))?;
+    super::charge(work, admission.native.canonical_interfaces().len())?;
+    let canonical = admission
+        .native
+        .canonical_interfaces()
+        .iter()
+        .find(|interface| interface.id == layout.interface())
+        .ok_or_else(|| super::invalid(at))?;
+    let [interface_parameter] = canonical.parameters.as_ref() else {
+        return Err(super::invalid(at));
+    };
+    let [method] = canonical.methods.as_ref() else {
+        return Err(super::invalid(at));
+    };
+    if interface_parameter.kind != Kind::Type
+        || interface_parameter.id != layout.payload_parameter()
+        || method.id != layout.method()
+        || method.id.interface() != canonical.id
+        || method.id.declaration() != 0
+        || !method.type_parameters.is_empty()
+        || layout.witness() != storage.witness()
+    {
+        return Err(super::invalid(at));
+    }
+    super::charge(
+        work,
+        formals
+            .len()
+            .checked_add(requirements.len())
+            .ok_or_else(super::resource)?,
+    )?;
+    let mut dictionaries = Vec::new();
+    dictionaries
+        .try_reserve_exact(formals.len())
+        .map_err(|_| super::resource())?;
+    let mut binders = std::collections::HashSet::new();
+    binders
+        .try_reserve(formals.len())
+        .map_err(|_| super::resource())?;
+    let mut position = 0usize;
+    for (ordinal, requirement) in requirements.iter().enumerate() {
+        if requirement.id.owner()
+            != crate::interface::RequirementOwner::ResourceFamily(admission.definition.id)
+            || usize::try_from(requirement.id.declaration()).ok() != Some(ordinal)
+            || requirement.interface() != canonical.id
+        {
+            return Err(super::invalid(at));
+        }
+        // This scalar checkpoint admits the sealed one-method Layout contract;
+        // other prerequisite categories remain unsupported rather than erased.
+        let [KindedArgument::TypeArg(payload)] = requirement.arguments() else {
+            return Err(super::invalid(at));
+        };
+        let formal = formals.get(position).ok_or_else(|| super::invalid(at))?;
+        let supplied = entry
+            .dictionaries
+            .get(position)
+            .ok_or_else(|| super::invalid(at))?;
+        let mut replacements = std::collections::HashMap::new();
+        super::charge(work, 1)?;
+        replacements.try_reserve(1).map_err(|_| super::resource())?;
+        replacements.insert(interface_parameter.id, payload);
+        let signature = IterativeTypeOwner::new(
+            crate::types::substitute_type_variables_borrowed_with(
+                &method.annotation.ty,
+                &replacements,
+                |units| work.charge(units),
+                || (),
+            )
+            .map_err(|()| super::resource())?,
+        );
+        if !crate::types::same_type_with_budget(&signature, formal.ty(), work)
+            .map_err(|()| super::resource())?
+        {
+            return Err(super::invalid(at));
+        }
+        let expected = specialized_application(requirement.application(), copy, renaming, work)?;
+        let [KindedArgument::TypeArg(payload)] = expected.arguments() else {
+            return Err(super::invalid(at));
+        };
+        if !matches!(payload, Type::Unit | Type::Bool | Type::Int) {
+            return Err(super::invalid(at));
+        }
+        let producer = authenticate_family_prerequisite(family, ordinal, at, work)?;
+        let dictionary = registry
+            .foreign_layout_dictionary(producer, work)
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    super::resource()
+                } else {
+                    super::invalid(at)
+                }
+            })?;
+        let (encoding, size, alignment) = match payload {
+            Type::Unit => (crate::foreign::ForeignScalarEncoding::Unit, 0, 1),
+            Type::Bool => (crate::foreign::ForeignScalarEncoding::Bool, 1, 1),
+            Type::Int => (crate::foreign::ForeignScalarEncoding::Signed64, 8, 8),
+            _ => return Err(super::invalid(at)),
+        };
+        let producer_payload = IterativeTypeOwner::new(producer.payload_type());
+        if producer.interface() != expected.interface()
+            || producer.method() != method.id
+            || producer.witness() != layout.witness()
+            || dictionary.producer() != producer
+            || !crate::types::same_type_with_budget(dictionary.payload_type(), payload, work)
+                .map_err(|()| super::resource())?
+            || !crate::types::same_type_with_budget(&producer_payload, payload, work)
+                .map_err(|()| super::resource())?
+            || dictionary.encoding() != encoding
+            || dictionary.size() != size
+            || dictionary.natural_alignment() != alignment
+        {
+            return Err(super::invalid(at));
+        }
+        let binder = renamed(formal.id(), copy.freshening.binders, work)?;
+        if binder == formal.id()
+            || binder != supplied.binder.id()
+            || !matches!(binder, crate::resolved::BinderId::Generated(_))
+            || supplied.binder.arena() != arena
+            || !binders.insert(binder)
+        {
+            return Err(super::invalid(at));
+        }
+        let original_projection = super::projection::project_binder(at, formal, work)?;
+        let projection = specialize_projection(
+            &original_projection,
+            nodes,
+            &copy.freshening,
+            &copy.substitution,
+            renaming,
+            work,
+        )?;
+        let actual_projection =
+            super::projection::project_binder(projection.node, supplied.binder, work)?;
+        if !projection.same(&actual_projection, work)? {
+            return Err(super::invalid(projection.node));
+        }
+        let stored = target_node(arena, target, supplied.initializer)?;
+        let EffectExprKind::Pure(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) =
+            &stored.kind
+        else {
+            return Err(super::invalid(supplied.initializer));
+        };
+        let producer_type = IterativeTypeOwner::new(producer.producer_type());
+        if intrinsic.operation()
+            != (crate::core::packed::Intrinsic::ForeignLayoutWitness { producer })
+            || intrinsic.module() != producer.interface().module()
+            || !stored.effects.is_empty()
+            || !crate::types::same_type_with_budget(&stored.ty, &producer_type, work)
+                .map_err(|()| super::resource())?
+            || !crate::types::same_type_with_budget(supplied.binder.ty(), &stored.ty, work)
+                .map_err(|()| super::resource())?
+        {
+            return Err(super::invalid(supplied.initializer));
+        }
+        dictionaries.push(SpecializedDictionary {
+            requirement: requirement.id,
+            method: method.id,
+            binder,
+            projection,
+            initializer: super::projection::project(supplied.initializer, stored, work)?,
+            producer,
+        });
+        position = position.checked_add(1).ok_or_else(super::resource)?;
+    }
+    if position != formals.len() {
+        return Err(super::invalid(at));
+    }
+    Ok(dictionaries)
+}
+
+/// Transfers sealed original flow facts only after every copied node and catalog
+/// occurrence has matched its original projection under the complete sigma.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "source token, sigma and copied graph are separate authority"
+)]
+fn transfer_native_storage_relations(
+    admission: &ProviderScopeAdmission,
+    index: usize,
+    copy: &ProviderCopiedTemplate<'_>,
+    arena: crate::core::dialect::ArenaId,
+    target: &[crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
+    nodes: &std::collections::HashMap<NodeId, NodeId>,
+    renaming: &crate::types::TemplateIdentityRenaming<'_>,
+    proof: &mut SpecializationProof,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    let ProviderOriginalTemplate::Handler(original) = copy.original else {
+        return Err(super::invalid(original_root(copy)));
+    };
+    let family = admission
+        .families
+        .get(index)
+        .ok_or_else(|| super::invalid(proof.body))?;
+    let storage = admission
+        .native
+        .storage
+        .as_ref()
+        .ok_or_else(|| super::invalid(proof.body))?;
+    let member = index.checked_add(1).ok_or_else(super::resource)?;
+    let relations = original.original_native_storage_relations();
+    super::charge(work, relations.len())?;
+    proof
+        .native_storage
+        .try_reserve(relations.len())
+        .map_err(|_| super::resource())?;
+    for relation in relations {
+        let request = mapped(nodes, relation.request())?;
+        let effect = substitute_instance(relation.effect(), &copy.substitution, renaming, work)?;
+        let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Request(actual)) =
+            &target_node(arena, target, request)?.kind
+        else {
+            return Err(super::invalid(request));
+        };
+        let crate::core::EffectExprKind::Operation(crate::core::EffectOperation::Request(source)) =
+            &super::node(original.original_program(), relation.request())?.kind
+        else {
+            return Err(super::invalid(request));
+        };
+        let owner = copy
+            .substitution
+            .types
+            .get(&relation.owner())
+            .ok_or_else(|| super::invalid(request))?;
+        let result_matches = match relation.result() {
+            super::HandlerNativeStorageResult::Store { allocated, refused } => {
+                relation.operation() == storage.store()
+                    && allocated == storage.allocated_constructor()
+                    && refused == storage.refused_constructor()
+            }
+            super::HandlerNativeStorageResult::Load => relation.operation() == storage.load(),
+        };
+        if relation.family() != family.identity
+            || !matches!(owner, crate::types::Type::Variable(owner) if *owner == admission.identity)
+            || !result_matches
+            || effect.effect() != storage.effect()
+            || actual.operation() != relation.operation()
+            || actual.operand() != mapped(nodes, source.operand())?
+            || source.operation() != relation.operation()
+            || crate::types::compare_effect_instances_with_budget(
+                source.effect(),
+                relation.effect(),
+                work,
+            )
+            .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+            || crate::types::compare_effect_instances_with_budget(actual.effect(), &effect, work)
+                .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+            || crate::types::compare_effect_instances_with_budget(
+                &effect,
+                &family.native_effect,
+                work,
+            )
+            .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+        {
+            return Err(super::invalid(request));
+        }
+        let operand = actual.operand();
+        proof.native_storage.push(AdmittedNativeStorageRelation {
+            request,
+            operand,
+            request_projection: super::projection::project(
+                request,
+                target_node(arena, target, request)?,
+                work,
+            )?,
+            operand_projection: super::projection::project(
+                operand,
+                target_node(arena, target, operand)?,
+                work,
+            )?,
+            operation: relation.operation(),
+            effect,
+            owner: admission.identity,
+            family: relation.family(),
+            member,
+            result: relation.result(),
+        });
+    }
+    Ok(())
+}
+
+fn same_family_header(
+    expected: &ProviderFamilyAdmission,
+    actual: &ProviderFamilyAdmission,
+    work: &mut TypeWorkBudget,
+) -> Result<bool, ValidationError> {
+    if expected.identity != actual.identity
+        || expected.lexical != actual.lexical
+        || expected.requirements.len() != actual.requirements.len()
+        || expected.selections.len() != actual.selections.len()
+        || !same_application(&expected.application, &actual.application, work)?
+        || !crate::types::same_type_with_budget(&expected.payload, &actual.payload, work)
+            .map_err(|()| super::resource())?
+        || crate::types::compare_effect_instances_with_budget(
+            &expected.native_effect,
+            &actual.native_effect,
+            work,
+        )
+        .map_err(|()| super::resource())?
+            != std::cmp::Ordering::Equal
+    {
+        return Ok(false);
+    }
+    super::charge(
+        work,
+        expected
+            .requirements
+            .len()
+            .checked_add(expected.selections.len())
+            .ok_or_else(super::resource)?,
+    )?;
+    Ok(expected
+        .requirements
+        .iter()
+        .zip(&actual.requirements)
+        .all(|((left, lp), (right, rp))| {
+            lp == rp && left.shares_plan_with(right) && left.root() == right.root()
+        })
+        && expected
+            .selections
+            .iter()
+            .zip(&actual.selections)
+            .all(|((left, lp), (right, rp))| {
+                lp == rp && left.shares_plan_with(right) && left.root() == right.root()
+            }))
+}
+
+fn authenticate_family_members(
+    proof: &SpecializationProof,
+    scope: &ProviderScopeNode,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    if proof.families.len() != scope.attached.len()
+        || proof.families.len() != scope.descriptor.family_members().len()
+    {
+        return Err(super::invalid(proof.body));
+    }
+    super::charge(work, proof.families.len())?;
+    for (index, expected) in proof.families.iter().enumerate() {
+        let member = index.checked_add(1).ok_or_else(super::resource)?;
+        let handler = scope
+            .handler_member(member)
+            .ok_or_else(|| super::invalid(proof.body))?;
+        let state = scope
+            .handler_state_member(member)
+            .ok_or_else(|| super::invalid(proof.body))?;
+        if !same_family_header(
+            &expected.header,
+            &scope.descriptor.family_members()[index],
+            work,
+        )? || handler.id() != expected.handler
+            || handler.body() != proof.body
+            || handler.clauses().len() != expected.clauses.len()
+            || crate::types::compare_effect_instances_with_budget(
+                handler.effect(),
+                &expected.provided,
+                work,
+            )
+            .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+            || !expected.state.same(
+                &super::projection::project_binder(expected.state.node, state, work)?,
+                work,
+            )?
+        {
+            return Err(super::invalid(proof.body));
+        }
+        super::charge(work, expected.clauses.len())?;
+        for (expected, clause) in expected.clauses.iter().zip(handler.clauses()) {
+            if !expected.same(&super::projection::project_clause(clause, work)?, work)? {
+                return Err(super::invalid(expected.node));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Capture admission authenticates the copied request signature and its member
+/// receipt. Final Core admission separately authenticates all original nodes,
+/// origins, catalog occurrences and dictionary domination.
+pub(in crate::core) fn authenticate_native_storage_relations<
+    'a,
+    F: crate::core::dialect::CoreOperationFamily,
+>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &[crate::core::dialect::StoredNode<F>],
+    scope: &'a ProviderScopeNode,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a [AdmittedNativeStorageRelation], ValidationError> {
+    let specialization = scope
+        .descriptor
+        .specialization()
+        .ok_or_else(|| super::invalid(scope.handler.body()))?;
+    authenticate_copied_native_storage_relations(
+        arena,
+        nodes,
+        scope,
+        &specialization.0,
+        operation,
+        work,
+    )
+}
+
+/// Borrowed source-analysis facts after exact current-arena reauthentication.
+/// These facts cannot construct a final specialization or final layout token.
+struct AuthenticatedProviderCaptureProjection<'a> {
+    proof: &'a SpecializationProof,
+    scope: &'a ProviderScopeNode,
+    nodes_address: *const (),
+    nodes_len: usize,
+    operation_family: std::any::TypeId,
+}
+impl<'a> AuthenticatedProviderCaptureProjection<'a> {
+    pub(in crate::core) fn native_storage_relations(&self) -> &'a [AdmittedNativeStorageRelation] {
+        &self.proof.native_storage
+    }
+    pub(in crate::core) fn authenticates_scope<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        scope: &ProviderScopeNode,
+    ) -> bool {
+        self.operation_family == std::any::TypeId::of::<F>()
+            && self.nodes_len == nodes.len()
+            && std::ptr::eq(self.nodes_address, nodes.as_ptr().cast::<()>())
+            && std::ptr::eq(self.scope, scope)
+    }
+    pub(in crate::core) fn authenticates_layout<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        super::charge(work, 1)?;
+        if self.operation_family != std::any::TypeId::of::<F>()
+            || self.nodes_len != nodes.len()
+            || ordinal >= nodes.len()
+            || !std::ptr::eq(self.nodes_address, nodes.as_ptr().cast::<()>())
+        {
+            return Ok(false);
+        }
+        super::charge(work, self.proof.families.len())?;
+        for family in &self.proof.families {
+            super::charge(work, family.dictionaries.len())?;
+            for dictionary in &family.dictionaries {
+                if dictionary.initializer.node.index().ok() == Some(ordinal)
+                    && dictionary.producer == producer
+                {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Exact copied-flow receipt for a still-prepared source scope. This cannot
+/// authenticate an admitted scope or construct a final Core layout token.
+pub(in crate::core) struct AuthenticatedPreparedProviderCapture<'a>(
+    AuthenticatedProviderCaptureProjection<'a>,
+);
+impl<'a> AuthenticatedPreparedProviderCapture<'a> {
+    pub(in crate::core) fn native_storage_relations(&self) -> &'a [AdmittedNativeStorageRelation] {
+        self.0.native_storage_relations()
+    }
+    pub(in crate::core) fn authenticates_scope<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        scope: &ProviderScopeNode,
+    ) -> bool {
+        self.0.authenticates_scope(nodes, scope)
+    }
+    pub(in crate::core) fn authenticates_layout<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        self.0.authenticates_layout(nodes, ordinal, producer, work)
+    }
+}
+
+/// Source analysis of a genuine admitted specialization. This borrows only
+/// reauthenticated dictionary bindings and native-flow projections; it is not
+/// independent whole-program Core validation or a Prepared receipt.
+pub(in crate::core) struct AuthenticatedAdmittedProviderCapture<'a>(
+    AuthenticatedProviderCaptureProjection<'a>,
+);
+
+/// Both source phases retain their distinct original authority. A graph borrows
+/// each exact-slice view once for dictionary values and native request transfer.
+pub(in crate::core) enum AuthenticatedProviderSourceCapture<'a> {
+    Prepared(AuthenticatedPreparedProviderCapture<'a>),
+    Admitted(AuthenticatedAdmittedProviderCapture<'a>),
+}
+impl<'a> AuthenticatedProviderSourceCapture<'a> {
+    pub(in crate::core) fn native_storage_relations(&self) -> &'a [AdmittedNativeStorageRelation] {
+        match self {
+            Self::Prepared(view) => view.native_storage_relations(),
+            Self::Admitted(view) => view.0.native_storage_relations(),
+        }
+    }
+    pub(in crate::core) fn authenticates_scope<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        scope: &ProviderScopeNode,
+    ) -> bool {
+        match self {
+            Self::Prepared(view) => view.authenticates_scope(nodes, scope),
+            Self::Admitted(view) => view.0.authenticates_scope(nodes, scope),
+        }
+    }
+    pub(in crate::core) fn authenticates_layout<F: crate::core::dialect::CoreOperationFamily>(
+        &self,
+        nodes: &[crate::core::dialect::StoredNode<F>],
+        ordinal: usize,
+        producer: crate::foreign::ForeignLayoutProducer,
+        work: &mut TypeWorkBudget,
+    ) -> Result<bool, ValidationError> {
+        match self {
+            Self::Prepared(view) => view.authenticates_layout(nodes, ordinal, producer, work),
+            Self::Admitted(view) => view.0.authenticates_layout(nodes, ordinal, producer, work),
+        }
+    }
+}
+
+/// Source capture alone may consume this separately sealed receipt. A legacy
+/// Prepared descriptor or any final specialization cannot supply this token.
+/// Every original copied projection is checked against the post-zonk arena.
+pub(in crate::core) fn authenticate_prepared_provider_capture<
+    'a,
+    F: crate::core::dialect::CoreOperationFamily,
+>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &'a [crate::core::dialect::StoredNode<F>],
+    scope: &'a ProviderScopeNode,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<AuthenticatedPreparedProviderCapture<'a>, ValidationError> {
+    let receipt = scope
+        .descriptor
+        .prepared_capture()
+        .ok_or_else(|| super::invalid(scope.handler.body()))?;
+    let proof = &receipt.0;
+    super::charge(
+        work,
+        proof
+            .nodes
+            .len()
+            .checked_add(proof.clauses.len())
+            .ok_or_else(super::resource)?,
+    )?;
+    for expected in &proof.nodes {
+        let stored = capture_target_node(arena, nodes, expected.node)?;
+        let actual = super::projection::project_with::<F>(expected.node, stored, operation, work)?;
+        if !expected.same(&actual, work)? {
+            return Err(super::invalid(expected.node));
+        }
+    }
+    if proof.clauses.len() != scope.handler.clauses().len() {
+        return Err(super::invalid(proof.body));
+    }
+    for (expected, clause) in proof.clauses.iter().zip(scope.handler.clauses()) {
+        if !expected.same(&super::projection::project_clause(clause, work)?, work)? {
+            return Err(super::invalid(expected.node));
+        }
+    }
+    authenticate_capture_dictionary_bindings(arena, nodes, proof, operation, work)?;
+    authenticate_copied_native_storage_relations(arena, nodes, scope, proof, operation, work)?;
+    Ok(AuthenticatedPreparedProviderCapture(
+        AuthenticatedProviderCaptureProjection {
+            proof,
+            scope,
+            nodes_address: nodes.as_ptr().cast::<()>(),
+            nodes_len: nodes.len(),
+            operation_family: std::any::TypeId::of::<F>(),
+        },
+    ))
+}
+
+/// A final copied specialization may be analyzed before whole-program Core
+/// validation, while cleanup rows are still being solved. Authenticate only the
+/// exact source-analysis facts consumed here; final catalog, whole-forest and
+/// dictionary domination validation remain in OriginalProviderSpecialization.
+#[inline(never)]
+pub(in crate::core) fn authenticate_admitted_provider_capture<
+    'a,
+    F: crate::core::dialect::CoreOperationFamily,
+>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &'a [crate::core::dialect::StoredNode<F>],
+    scope: &'a ProviderScopeNode,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<AuthenticatedAdmittedProviderCapture<'a>, ValidationError> {
+    let specialization = scope
+        .descriptor
+        .specialization()
+        .ok_or_else(|| super::invalid(scope.handler.body()))?;
+    let proof = &specialization.0;
+    authenticate_copied_native_storage_relations(arena, nodes, scope, proof, operation, work)?;
+    authenticate_capture_dictionary_bindings(arena, nodes, proof, operation, work)?;
+    Ok(AuthenticatedAdmittedProviderCapture(
+        AuthenticatedProviderCaptureProjection {
+            proof,
+            scope,
+            nodes_address: nodes.as_ptr().cast::<()>(),
+            nodes_len: nodes.len(),
+            operation_family: std::any::TypeId::of::<F>(),
+        },
+    ))
+}
+
+fn authenticate_capture_dictionary_bindings<F: crate::core::dialect::CoreOperationFamily>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &[crate::core::dialect::StoredNode<F>],
+    proof: &SpecializationProof,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    super::charge(work, proof.families.len())?;
+    for family in &proof.families {
+        super::charge(work, family.dictionaries.len())?;
+        for dictionary in &family.dictionaries {
+            authenticate_dictionary_binding_nodes(arena, nodes, dictionary, operation, None, work)?;
+        }
+    }
+    Ok(())
+}
+
+fn capture_target_node<F: crate::core::dialect::CoreOperationFamily>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &[crate::core::dialect::StoredNode<F>],
+    node: NodeId,
+) -> Result<&crate::core::dialect::StoredNode<F>, ValidationError> {
+    if node.arena() != arena {
+        return Err(super::invalid(node));
+    }
+    nodes
+        .get(node.index().map_err(|_| super::invalid(node))?)
+        .ok_or_else(|| super::invalid(node))
+}
+
+fn authenticate_copied_native_storage_relations<
+    'a,
+    F: crate::core::dialect::CoreOperationFamily,
+>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &[crate::core::dialect::StoredNode<F>],
+    scope: &ProviderScopeNode,
+    proof: &'a SpecializationProof,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    work: &mut TypeWorkBudget,
+) -> Result<&'a [AdmittedNativeStorageRelation], ValidationError> {
+    if proof.arena != arena
+        || proof.definition != scope.descriptor.definition().id
+        || proof.body != scope.handler.body()
+        || proof.handler != scope.handler.id()
+        || proof.acquire != scope.acquire.body
+        || proof.finish != scope.finish.body
+        || proof.families.len() != scope.attached.len()
+        || proof.families.len() != scope.descriptor.family_members().len()
+    {
+        return Err(super::invalid(proof.body));
+    }
+    if proof.families.is_empty() && proof.native_storage.is_empty() {
+        return Ok(&proof.native_storage);
+    }
+    if proof
+        .native
+        .as_ref()
+        .is_none_or(|native| !std::ptr::eq(native.as_ref(), scope.descriptor.native()))
+    {
+        return Err(super::invalid(proof.body));
+    }
+    authenticate_family_members(proof, scope, work)?;
+    for (expected, binder) in [
+        (&proof.parameters[0], &scope.acquire.parameter),
+        (&proof.parameters[1], &scope.finish.parameter),
+        (&proof.parameters[2], &scope.handler_state),
+    ] {
+        if !expected.same(
+            &super::projection::project_binder(expected.node, binder, work)?,
+            work,
+        )? {
+            return Err(super::invalid(expected.node));
+        }
+    }
+    let storage = scope
+        .descriptor
+        .native()
+        .storage
+        .as_ref()
+        .ok_or_else(|| super::invalid(proof.body))?;
+    super::charge(work, proof.native_storage.len())?;
+    for receipt in &proof.native_storage {
+        let get = |node: NodeId| {
+            if node.arena() != arena {
+                return Err(super::invalid(node));
+            }
+            nodes
+                .get(node.index().map_err(|_| super::invalid(node))?)
+                .ok_or_else(|| super::invalid(node))
+        };
+        let stored = get(receipt.request)?;
+        let Some(crate::core::EffectOperation::Request(request)) = operation(&stored.kind) else {
+            return Err(super::invalid(receipt.request));
+        };
+        let family = receipt
+            .member
+            .checked_sub(1)
+            .and_then(|index| proof.families.get(index))
+            .ok_or_else(|| super::invalid(receipt.request))?;
+        let result_matches = match receipt.result {
+            super::HandlerNativeStorageResult::Store { allocated, refused } => {
+                receipt.operation == storage.store()
+                    && allocated == storage.allocated_constructor()
+                    && refused == storage.refused_constructor()
+            }
+            super::HandlerNativeStorageResult::Load => receipt.operation == storage.load(),
+        };
+        if !result_matches
+            || receipt.family != family.header.identity
+            || receipt.owner != scope.descriptor.identity()
+            || request.operation() != receipt.operation
+            || request.operand() != receipt.operand
+            || receipt.effect.effect() != storage.effect()
+            || crate::types::compare_effect_instances_with_budget(
+                request.effect(),
+                &receipt.effect,
+                work,
+            )
+            .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+            || crate::types::compare_effect_instances_with_budget(
+                &receipt.effect,
+                &family.header.native_effect,
+                work,
+            )
+            .map_err(|()| super::resource())?
+                != std::cmp::Ordering::Equal
+        {
+            return Err(super::invalid(receipt.request));
+        }
+        for (expected, actual) in [
+            (&receipt.request_projection, stored),
+            (&receipt.operand_projection, get(receipt.operand)?),
+        ] {
+            let current =
+                super::projection::project_with::<F>(expected.node, actual, operation, work)?;
+            if !expected.same(&current, work)? {
+                return Err(super::invalid(expected.node));
+            }
+        }
+    }
+    Ok(&proof.native_storage)
+}
+
+/// Only an ordinary nonrecursive Let may realize an original dictionary formal.
+fn authenticate_dictionary_binding(
+    expected: &SpecializedDictionary,
+    program: &UnvalidatedEffectProgram,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    authenticate_dictionary_binding_nodes(
+        program.arena,
+        &program.nodes,
+        expected,
+        super::row::effect_operation,
+        Some(&program.registry),
+        work,
+    )?;
+    Ok(())
+}
+
+fn authenticate_dictionary_binding_nodes<F: crate::core::dialect::CoreOperationFamily>(
+    arena: crate::core::dialect::ArenaId,
+    nodes: &[crate::core::dialect::StoredNode<F>],
+    expected: &SpecializedDictionary,
+    operation: for<'b> fn(&'b F::Kind) -> Option<&'b crate::core::EffectOperation>,
+    registry: Option<&crate::resolved::ResolvedRegistry>,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    super::charge(work, nodes.len())?;
+    let mut matched = false;
+    for stored in nodes {
+        use crate::core::{PureComputation as C, PureExprKind as P, PureValue as V};
+        let mut other_declaration = false;
+        let mut declarations = 0usize;
+        F::visit_operation_binders(&stored.kind, &mut |binder| {
+            declarations = declarations.saturating_add(1);
+            other_declaration |= binder.id() == expected.binder;
+        });
+        super::charge(work, declarations)?;
+        match F::pure(&stored.kind) {
+            Some(P::Value(V::Function(function))) => {
+                other_declaration |= function.parameter().id() == expected.binder;
+            }
+            Some(P::Computation(C::RecursiveBind(group))) => {
+                super::charge(work, group.members().len())?;
+                other_declaration |= group
+                    .members()
+                    .iter()
+                    .any(|member| member.binder().id() == expected.binder);
+            }
+            Some(P::Computation(C::Match(matching))) => {
+                super::charge(work, matching.arms().len())?;
+                for arm in matching.arms() {
+                    for binder in arm.pattern().binder_iter() {
+                        super::charge(work, 1)?;
+                        other_declaration |= binder.id() == expected.binder;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if other_declaration {
+            return Err(super::invalid(expected.projection.node));
+        }
+        let Some(P::Computation(C::Bind(binding))) = F::pure(&stored.kind) else {
+            continue;
+        };
+        if binding.binder().id() != expected.binder {
+            continue;
+        }
+        if matched
+            || binding.initializer() != expected.initializer.node
+            || !expected.projection.same(
+                &super::projection::project_binder(
+                    expected.projection.node,
+                    binding.binder(),
+                    work,
+                )?,
+                work,
+            )?
+        {
+            return Err(super::invalid(expected.projection.node));
+        }
+        matched = true;
+    }
+    if !matched {
+        return Err(super::invalid(expected.projection.node));
+    }
+    let stored = capture_target_node(arena, nodes, expected.initializer.node)?;
+    if !expected.initializer.same(
+        &super::projection::project_with::<F>(expected.initializer.node, stored, operation, work)?,
+        work,
+    )? {
+        return Err(super::invalid(expected.initializer.node));
+    }
+    let Some(crate::core::PureExprKind::Value(crate::core::PureValue::Intrinsic(intrinsic))) =
+        F::pure(&stored.kind)
+    else {
+        return Err(super::invalid(expected.initializer.node));
+    };
+    let ty = crate::types::IterativeTypeOwner::new(expected.producer.producer_type());
+    if let Some(registry) = registry {
+        registry
+            .foreign_layout_dictionary(expected.producer, work)
+            .map_err(|failure| {
+                if failure.is_resource_exhaustion() {
+                    super::resource()
+                } else {
+                    super::invalid(expected.initializer.node)
+                }
+            })?;
+    }
+    if intrinsic.operation()
+        != (crate::core::packed::Intrinsic::ForeignLayoutWitness {
+            producer: expected.producer,
+        })
+        || intrinsic.module() != expected.producer.interface().module()
+        || !F::effect_row(&stored.effects).is_empty()
+        || !crate::types::same_type_with_budget(&stored.ty, &ty, work)
+            .map_err(|()| super::resource())?
+    {
+        return Err(super::invalid(expected.initializer.node));
+    }
+    Ok(())
+}
+
+/// Source receipts freeze only complete types and rows. Later source zonking
+/// must preserve these projections; inference is never a wildcard authority.
+fn authenticate_concrete_capture_projections(
+    proof: &SpecializationProof,
+    work: &mut TypeWorkBudget,
+) -> Result<(), ValidationError> {
+    use crate::types::{
+        EffectRowVariable, IterativeArgumentOwner, KindedArgument, Type, TypeStructureNode,
+    };
+    fn unresolved(node: TypeStructureNode<'_>, _: &mut TypeWorkBudget) -> Result<bool, ()> {
+        Ok(matches!(node, TypeStructureNode::Type(Type::Inference(_)))
+            || matches!(node, TypeStructureNode::Tail(tail)
+                if matches!(tail.variable(), EffectRowVariable::Inference(_))))
+    }
+    fn check(
+        projection: &super::projection::NodeProjection,
+        work: &mut TypeWorkBudget,
+    ) -> Result<(), ValidationError> {
+        super::charge(work, projection.metadata.len())?;
+        for metadata in &projection.metadata {
+            let pending = match metadata {
+                super::projection::Metadata::Type(ty) => {
+                    crate::types::visit_type_structure_with_budget(ty, work, unresolved)
+                }
+                super::projection::Metadata::Argument(argument) => {
+                    crate::types::visit_argument_structure_with_budget(argument, work, unresolved)
+                }
+                super::projection::Metadata::Row(row) => {
+                    let row = crate::types::clone_effect_row_with_budget(row, work)
+                        .map_err(|()| super::resource())?;
+                    let argument = IterativeArgumentOwner::new(KindedArgument::RowArg(row));
+                    crate::types::visit_argument_structure_with_budget(&argument, work, unresolved)
+                }
+                super::projection::Metadata::Kind(_) => Ok(false),
+            }
+            .map_err(|()| super::resource())?;
+            if pending {
+                return Err(super::invalid(projection.node));
+            }
+        }
+        Ok(())
+    }
+    super::charge(
+        work,
+        proof
+            .nodes
+            .len()
+            .checked_add(proof.clauses.len())
+            .and_then(|count| count.checked_add(proof.parameters.len()))
+            .and_then(|count| count.checked_add(proof.families.len()))
+            .ok_or_else(super::resource)?,
+    )?;
+    for projection in proof
+        .nodes
+        .iter()
+        .chain(&proof.parameters)
+        .chain(&proof.clauses)
+    {
+        check(projection, work)?;
+    }
+    for family in &proof.families {
+        check(&family.state, work)?;
+        super::charge(
+            work,
+            family
+                .clauses
+                .len()
+                .checked_add(family.dictionaries.len())
+                .ok_or_else(super::resource)?,
+        )?;
+        for clause in &family.clauses {
+            check(clause, work)?;
+        }
+        for dictionary in &family.dictionaries {
+            check(&dictionary.projection, work)?;
+            check(&dictionary.initializer, work)?;
+        }
+    }
+    Ok(())
+}
+
+fn original_root(copy: &ProviderCopiedTemplate<'_>) -> NodeId {
+    match copy.original {
+        ProviderOriginalTemplate::Lifecycle(_, program) => program.root,
+        ProviderOriginalTemplate::Handler(original) => original.original_program().root,
+    }
+}
+
 impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
     /// Reconstructs every copied typed occurrence from original independently
     /// admitted templates. Compiler claims are consumed, never retained as proof.
@@ -1598,6 +3663,73 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
         copies: &[ProviderCopiedTemplate<'_>],
         work: &mut TypeWorkBudget,
     ) -> Result<std::sync::Arc<super::AdmittedProviderScope>, ValidationError> {
+        let proof =
+            self.reconstruct_provider_scope_capture(&admission, &entries, copies, None, work)?;
+        let specialization = OriginalProviderSpecialization(std::sync::Arc::new(proof));
+        let descriptor = super::AdmittedProviderScope {
+            definition: std::sync::Arc::clone(&admission.definition),
+            native: std::sync::Arc::clone(&admission.native),
+            arguments: std::mem::take(&mut admission.arguments),
+            identity: admission.identity,
+            retained: std::mem::take(&mut admission.retained),
+            native_effect: crate::types::clone_effect_instance_with_budget(
+                &admission.native_effect,
+                work,
+            )
+            .map_err(|()| super::resource())?,
+            protocol: admission.protocol,
+            specialization,
+            families: std::mem::take(&mut admission.families),
+        };
+        Ok(std::sync::Arc::new(descriptor))
+    }
+
+    /// Source capture preparation authenticates copied flow without publishing
+    /// a final catalog, executable descriptor, or final specialization token.
+    pub(crate) fn prepare_provider_scope_capture(
+        &self,
+        admission: ProviderScopeAdmission,
+        entries: ProviderSpecializationEntries<'_>,
+        copies: &[ProviderCopiedTemplate<'_>],
+        original: ProviderPreparedFamilyOriginal<'_>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<super::ProviderScopeAuthority, ValidationError> {
+        if admission.families.is_empty()
+            || !std::sync::Arc::ptr_eq(original.authority.fact(), &admission.definition)
+        {
+            return Err(super::invalid(entries.body));
+        }
+        original.authority.authenticate(original.committed, work)?;
+        let contract = ProviderFamilyContractView {
+            identity: original.authority.identity(),
+            application: original.authority.application(),
+            requirements: original.authority.requirements(),
+            methods: original.authority.methods(),
+            handler: original.authority.handler_certificate(),
+        };
+        let proof = self.reconstruct_provider_scope_capture(
+            &admission,
+            &entries,
+            copies,
+            Some(&contract),
+            work,
+        )?;
+        authenticate_concrete_capture_projections(&proof, work)?;
+        super::charge(work, 1)?;
+        Ok(super::ProviderScopeAuthority::prepared_with_capture(
+            admission,
+            PreparedProviderCaptureReceipt(std::sync::Arc::new(proof)),
+        ))
+    }
+
+    fn reconstruct_provider_scope_capture(
+        &self,
+        admission: &ProviderScopeAdmission,
+        entries: &ProviderSpecializationEntries<'_>,
+        copies: &[ProviderCopiedTemplate<'_>],
+        source_contract: Option<&ProviderFamilyContractView<'_>>,
+        work: &mut TypeWorkBudget,
+    ) -> Result<SpecializationProof, ValidationError> {
         use super::projection::{project, project_binder, project_clause};
         use crate::types::{
             KindedArgument, TemplateIdentityRenaming, Type, same_effect_rows_with_budget,
@@ -1606,13 +3738,25 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
         let (arena, target, catalog) = self
             .provider_projection_parts()
             .map_err(|_| super::invalid(entries.body))?;
-        if copies.len() != 3
+        let grouped = !admission.families.is_empty();
+        let expected_copies = admission
+            .families
+            .len()
+            .checked_add(3)
+            .ok_or_else(super::resource)?;
+        if copies.len() != expected_copies
+            || entries.families.len() != admission.families.len()
             || admission.arguments.len() != admission.definition.parameters.len()
             || !matches!(admission.arguments.first(),Some(KindedArgument::TypeArg(Type::Variable(id))) if *id==admission.identity)
         {
             return Err(super::invalid(entries.body));
         }
         let body = target_node(arena, target, entries.body)?;
+        let group_rows = if grouped {
+            Some(reconstruct_group_rows(admission, copies, body, work)?)
+        } else {
+            None
+        };
         super::charge(
             work,
             admission
@@ -1675,6 +3819,9 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             occurrences: Vec::new(),
             anchors: Vec::new(),
             state_accesses: Vec::new(),
+            families: Vec::new(),
+            native_storage: Vec::new(),
+            native: grouped.then(|| std::sync::Arc::clone(&admission.native)),
         };
         proof
             .nodes
@@ -1685,10 +3832,26 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             .try_reserve_exact(entries.clauses.len())
             .map_err(|_| super::resource())?;
         let mut phases = [false; 3];
-        for copy in copies {
+        let mut family_phases = Vec::new();
+        if grouped {
+            super::charge(work, admission.families.len())?;
+            family_phases
+                .try_reserve_exact(admission.families.len())
+                .map_err(|_| super::resource())?;
+            family_phases.resize(admission.families.len(), false);
+            proof
+                .families
+                .try_reserve_exact(admission.families.len())
+                .map_err(|_| super::resource())?;
+        }
+        for (copy_index, copy) in copies.iter().enumerate() {
+            let family_index = (grouped && copy_index >= 3).then(|| copy_index - 3);
             copy.freshening.authenticate(work)?;
             if copy.substitution.types.len()
-                != type_count.checked_add(1).ok_or_else(super::resource)?
+                != type_count
+                    .checked_add(1)
+                    .and_then(|count| count.checked_add(usize::from(family_index.is_some())))
+                    .ok_or_else(super::resource)?
                 || copy.substitution.rows.len()
                     != row_count.checked_add(1).ok_or_else(super::resource)?
             {
@@ -1738,6 +3901,9 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         super::LifecyclePhase::Acquire => 0,
                         super::LifecyclePhase::Finish => 1,
                     };
+                    if grouped && copy_index != phase {
+                        return Err(super::invalid(entries.body));
+                    }
                     let expected = if phase == 0 {
                         entries.acquire
                     } else {
@@ -1808,10 +3974,28 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                 ProviderOriginalTemplate::Handler(original) => {
                     original.authenticate_source(work)?;
                     original.authenticate_definition(&admission.definition, work)?;
+                    let (actual_state_binder, actual_handler, actual_clauses) =
+                        if let Some(index) = family_index {
+                            let family = entries
+                                .families
+                                .get(index)
+                                .ok_or_else(|| super::invalid(entries.body))?;
+                            (family.state, family.handler, family.clauses)
+                        } else {
+                            if grouped && copy_index != 2 {
+                                return Err(super::invalid(entries.body));
+                            }
+                            (entries.state, entries.handler, entries.clauses)
+                        };
                     if original.original_template().definition() != admission.definition.id
+                        || original.original_template()
+                            != crate::resolved::ProviderTemplateId::new(
+                                admission.definition.id,
+                                if family_index.is_some() { 3 } else { 2 },
+                            )
                         || renamed(original.original_handler(), copy.freshening.handlers, work)?
-                            != entries.handler
-                        || original.original_clauses().len() != entries.clauses.len()
+                            != actual_handler
+                        || original.original_clauses().len() != actual_clauses.len()
                     {
                         return Err(super::invalid(entries.body));
                     }
@@ -1830,7 +4014,7 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                     )?;
                     let actual_state = project_binder(
                         mapped(&nodes, original.original_program().root)?,
-                        entries.state,
+                        actual_state_binder,
                         work,
                     )?;
                     if !specialize_projection(
@@ -1919,15 +4103,27 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                             })?,
                         )
                     };
-                    let rows = original.prepare_rows(
-                        &formals.types,
-                        &formals.rows,
-                        &body.ty,
-                        &body.effects,
-                        &provided,
-                        actual_capture,
-                        work,
-                    )?;
+                    let legacy_rows = if grouped {
+                        None
+                    } else {
+                        Some(original.prepare_rows(
+                            &formals.types,
+                            &formals.rows,
+                            &body.ty,
+                            &body.effects,
+                            &provided,
+                            actual_capture,
+                            work,
+                        )?)
+                    };
+                    let rows = if let Some(rows) = &group_rows {
+                        rows.get(family_index.map_or(0, |index| index + 1))
+                            .ok_or_else(|| super::invalid(entries.body))?
+                    } else {
+                        legacy_rows
+                            .as_ref()
+                            .ok_or_else(|| super::invalid(entries.body))?
+                    };
                     super::charge(work, rows.node_rows.len())?;
                     if copy.node_rows.len() != rows.node_rows.len() {
                         return Err(super::invalid(entries.body));
@@ -1980,10 +4176,17 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                             return Err(super::invalid(entries.body));
                         }
                     }
+                    let mut family_clauses = Vec::new();
+                    if family_index.is_some() {
+                        super::charge(work, actual_clauses.len())?;
+                        family_clauses
+                            .try_reserve_exact(actual_clauses.len())
+                            .map_err(|_| super::resource())?;
+                    }
                     for (frozen, actual) in original
                         .original_clause_projections()
                         .iter()
-                        .zip(entries.clauses)
+                        .zip(actual_clauses)
                     {
                         let expected = specialize_projection(
                             frozen,
@@ -1997,9 +4200,90 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         if !expected.same(&actual, work)? {
                             return Err(super::invalid(actual.node));
                         }
-                        proof.clauses.push(expected);
+                        if family_index.is_some() {
+                            family_clauses.push(expected);
+                        } else {
+                            proof.clauses.push(expected);
+                        }
                     }
-                    (original.original_program(), original.original_nodes(), 2)
+                    if let Some(index) = family_index {
+                        let family = &admission.families[index];
+                        let (provided, dictionaries) = if let Some(contract) = source_contract {
+                            let provided = authenticate_family_header_with_contract(
+                                admission,
+                                family,
+                                copy,
+                                self.provider_registry(),
+                                &renaming,
+                                contract,
+                                work,
+                            )?;
+                            let dictionaries = authenticate_family_dictionaries_with_requirements(
+                                admission,
+                                family,
+                                &entries.families[index],
+                                copy,
+                                self.provider_registry(),
+                                arena,
+                                target,
+                                &nodes,
+                                &renaming,
+                                contract.requirements,
+                                work,
+                            )?;
+                            (provided, dictionaries)
+                        } else {
+                            let provided = authenticate_family_header(
+                                admission,
+                                family,
+                                copy,
+                                self.provider_registry(),
+                                &renaming,
+                                work,
+                            )?;
+                            let dictionaries = authenticate_family_dictionaries(
+                                admission,
+                                family,
+                                &entries.families[index],
+                                copy,
+                                self.provider_registry(),
+                                arena,
+                                target,
+                                &nodes,
+                                &renaming,
+                                work,
+                            )?;
+                            (provided, dictionaries)
+                        };
+                        let mut member_nodes = Vec::new();
+                        super::charge(work, copy.nodes.len())?;
+                        member_nodes
+                            .try_reserve_exact(copy.nodes.len())
+                            .map_err(|_| super::resource())?;
+                        member_nodes.extend(copy.nodes.iter().map(|(_, copied)| *copied));
+                        super::charge(work, 1)?;
+                        proof.families.push(SpecializedFamily {
+                            certificate: std::sync::Arc::new(original.contract_certificate()),
+                            header: family.clone_with_budget(work).map_err(|failure| {
+                                if failure == BuildError::TypeWorkExceeded {
+                                    super::resource()
+                                } else {
+                                    super::invalid(entries.body)
+                                }
+                            })?,
+                            provided,
+                            state: actual_state,
+                            handler: actual_handler,
+                            clauses: family_clauses,
+                            nodes: member_nodes,
+                            dictionaries,
+                        });
+                    }
+                    (
+                        original.original_program(),
+                        original.original_nodes(),
+                        family_index.map_or(2, |index| index + 3),
+                    )
                 }
             };
             let mut declarations = LocalDeclarations::default();
@@ -2016,6 +4300,9 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                         original.original_state().id(),
                         work,
                     )?;
+                    for dictionary in original.original_dictionary_parameters() {
+                        retain_identity(&mut declarations.binders, dictionary.id(), work)?;
+                    }
                     retain_identity(
                         &mut declarations.handlers,
                         original.original_handler(),
@@ -2047,10 +4334,17 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
             {
                 return Err(super::invalid(entries.body));
             }
-            if phases[phase] {
+            let phase_seen = if phase < 3 {
+                &mut phases[phase]
+            } else {
+                family_phases
+                    .get_mut(phase - 3)
+                    .ok_or_else(|| super::invalid(entries.body))?
+            };
+            if *phase_seen {
                 return Err(super::invalid(entries.body));
             }
-            phases[phase] = true;
+            *phase_seen = true;
             if originals.len() != nodes.len() {
                 return Err(super::invalid(entries.body));
             }
@@ -2105,36 +4399,59 @@ impl crate::core::CoreBuilder<crate::core::EffectOperationFamily> {
                 }
                 proof.nodes.push(expected);
             }
-            authenticate_catalog(
-                copy,
-                source,
-                catalog,
-                self.provider_projection_anchors(),
-                &nodes,
-                &renaming,
-                &mut proof,
-                work,
-            )?;
+            if source_contract.is_some() {
+                // Source forests deliberately have no final occurrence or
+                // anchor addresses. Canonical original family selection and
+                // dictionary routes were checked above from the genuine token.
+                if !copy.occurrences.is_empty() || !copy.catalog.is_empty() {
+                    return Err(super::invalid(entries.body));
+                }
+                super::charge(
+                    work,
+                    copy.original_slots
+                        .len()
+                        .checked_add(source.method_evidence.occurrences().len())
+                        .ok_or_else(super::resource)?,
+                )?;
+                if copy.original_slots.len() != source.method_evidence.occurrences().len() {
+                    return Err(super::invalid(source.root));
+                }
+                let mut slots = std::collections::HashSet::new();
+                slots
+                    .try_reserve(copy.original_slots.len())
+                    .map_err(|_| super::resource())?;
+                for pin in copy.original_slots {
+                    if !slots.insert(pin.storage_id())
+                        || source
+                            .method_evidence
+                            .occurrence(pin.storage_id())
+                            .is_none()
+                    {
+                        return Err(super::invalid(source.root));
+                    }
+                }
+            } else {
+                authenticate_catalog(
+                    copy,
+                    source,
+                    catalog,
+                    self.provider_projection_anchors(),
+                    &nodes,
+                    &renaming,
+                    &mut proof,
+                    work,
+                )?;
+            }
+            if let Some(index) = family_index {
+                transfer_native_storage_relations(
+                    admission, index, copy, arena, target, &nodes, &renaming, &mut proof, work,
+                )?;
+            }
         }
-        if !phases.into_iter().all(|phase| phase) {
+        if !phases.into_iter().all(|phase| phase) || family_phases.iter().any(|phase| !phase) {
             return Err(super::invalid(entries.body));
         }
-        let specialization = OriginalProviderSpecialization(std::sync::Arc::new(proof));
-        let descriptor = super::AdmittedProviderScope {
-            definition: std::sync::Arc::clone(&admission.definition),
-            native: std::sync::Arc::clone(&admission.native),
-            arguments: std::mem::take(&mut admission.arguments),
-            identity: admission.identity,
-            retained: std::mem::take(&mut admission.retained),
-            native_effect: crate::types::clone_effect_instance_with_budget(
-                &admission.native_effect,
-                work,
-            )
-            .map_err(|()| super::resource())?,
-            protocol: admission.protocol,
-            specialization,
-        };
-        Ok(std::sync::Arc::new(descriptor))
+        Ok(proof)
     }
 }
 /// Caller payloads are outside the copied declaration scopes. Alpha targets
@@ -2785,6 +5102,8 @@ impl OriginalProviderSpecialization {
             || proof.body != scope.handler.body()
             || proof.handler != scope.handler.id()
             || proof.clauses.len() != scope.handler.clauses().len()
+            || proof.families.len() != scope.attached.len()
+            || proof.families.len() != scope.descriptor.family_members().len()
         {
             return Err(super::invalid(scope_node));
         }
@@ -2824,6 +5143,24 @@ impl OriginalProviderSpecialization {
                 return Err(super::invalid(expected.node));
             }
         }
+        if !proof.families.is_empty() || !proof.native_storage.is_empty() {
+            authenticate_native_storage_relations::<crate::core::EffectOperationFamily>(
+                program.arena,
+                &program.nodes,
+                scope,
+                super::row::effect_operation,
+                work,
+            )?;
+            for family in &proof.families {
+                family
+                    .certificate
+                    .authenticate(scope.descriptor.definition(), true, work)?;
+                super::charge(work, family.dictionaries.len())?;
+                for dictionary in &family.dictionaries {
+                    authenticate_dictionary_binding(dictionary, program, work)?;
+                }
+            }
+        }
         for expected in &proof.occurrences {
             expected.original.authenticate_publication(work)?;
             if !expected.same(
@@ -2853,6 +5190,78 @@ impl OriginalProviderSpecialization {
             }
         }
         Ok(())
+    }
+    /// Resolves only a retained original ResourceFamily formal at an exact
+    /// copied method anchor. Ordinary Core scope checking establishes domination.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "copied occurrence and owning scope are independent coordinates"
+    )]
+    pub(crate) fn family_dictionary_binder(
+        &self,
+        program: &UnvalidatedEffectProgram,
+        scope_node: NodeId,
+        scope: &ProviderScopeNode,
+        occurrence_node: NodeId,
+        definition: crate::resolved::ResourceDefinitionId,
+        position: usize,
+        work: &mut TypeWorkBudget,
+    ) -> Result<Option<crate::resolved::BinderId>, ValidationError> {
+        let proof = &self.0;
+        if proof.definition != definition {
+            return Ok(None);
+        }
+        super::charge(
+            work,
+            proof
+                .families
+                .len()
+                .checked_add(proof.anchors.len())
+                .ok_or_else(super::resource)?,
+        )?;
+        let mut selected = None;
+        for family in &proof.families {
+            super::charge(work, family.nodes.len())?;
+            if family.nodes.contains(&occurrence_node) && selected.replace(family).is_some() {
+                return Err(super::invalid(occurrence_node));
+            }
+        }
+        let Some(family) = selected else {
+            return Ok(None);
+        };
+        let owner = crate::core::dialect::MethodEvidenceOwner::ResourceFamily(definition);
+        let mut matching = false;
+        for anchor in &proof.anchors {
+            if anchor.node != occurrence_node {
+                continue;
+            }
+            super::charge(work, proof.occurrences.len())?;
+            if anchor
+                .occurrence
+                .and_then(|slot| proof.occurrences.iter().find(|entry| entry.slot == slot))
+                .is_some_and(|occurrence| {
+                    occurrence.scope == Some(owner) && occurrence.scope_binder.is_none()
+                })
+            {
+                matching = true;
+            }
+        }
+        if !matching {
+            return Err(super::invalid(occurrence_node));
+        }
+        self.authenticate(program, scope_node, scope, work)?;
+        let dictionary = family
+            .dictionaries
+            .get(position)
+            .ok_or_else(|| super::invalid(occurrence_node))?;
+        if dictionary.requirement.owner()
+            != crate::interface::RequirementOwner::ResourceFamily(definition)
+            || dictionary.method.interface() != dictionary.producer.interface()
+        {
+            return Err(super::invalid(occurrence_node));
+        }
+        authenticate_dictionary_binding(dictionary, program, work)?;
+        Ok(Some(dictionary.binder))
     }
     pub(crate) fn authenticates_state_access(
         &self,
@@ -3037,6 +5446,124 @@ impl OriginalProviderSpecialization {
         for node in &old.state_accesses {
             accesses.push(mapped(&nodes, *node)?);
         }
+        let mut families = Vec::new();
+        super::charge(
+            work,
+            old.families
+                .len()
+                .checked_add(old.native_storage.len())
+                .ok_or_else(super::resource)?,
+        )?;
+        families
+            .try_reserve_exact(old.families.len())
+            .map_err(|_| super::resource())?;
+        for original in &old.families {
+            let count = original
+                .nodes
+                .len()
+                .checked_add(original.clauses.len())
+                .and_then(|n| n.checked_add(original.dictionaries.len()))
+                .ok_or_else(super::resource)?;
+            super::charge(work, count)?;
+            let mut member_nodes = Vec::new();
+            let mut member_clauses = Vec::new();
+            let mut dictionaries = Vec::new();
+            member_nodes
+                .try_reserve_exact(original.nodes.len())
+                .map_err(|_| super::resource())?;
+            member_clauses
+                .try_reserve_exact(original.clauses.len())
+                .map_err(|_| super::resource())?;
+            dictionaries
+                .try_reserve_exact(original.dictionaries.len())
+                .map_err(|_| super::resource())?;
+            for node in &original.nodes {
+                member_nodes.push(mapped(&nodes, *node)?);
+            }
+            for clause in &original.clauses {
+                member_clauses.push(specialize_projection(
+                    clause, &nodes, &fresh, &sigma, &renaming, work,
+                )?);
+            }
+            for dictionary in &original.dictionaries {
+                dictionaries.push(SpecializedDictionary {
+                    requirement: dictionary.requirement,
+                    method: dictionary.method,
+                    binder: dictionary.binder,
+                    producer: dictionary.producer,
+                    projection: specialize_projection(
+                        &dictionary.projection,
+                        &nodes,
+                        &fresh,
+                        &sigma,
+                        &renaming,
+                        work,
+                    )?,
+                    initializer: specialize_projection(
+                        &dictionary.initializer,
+                        &nodes,
+                        &fresh,
+                        &sigma,
+                        &renaming,
+                        work,
+                    )?,
+                });
+            }
+            families.push(SpecializedFamily {
+                certificate: std::sync::Arc::clone(&original.certificate),
+                header: original
+                    .header
+                    .clone_with_budget(work)
+                    .map_err(|_| super::resource())?,
+                provided: crate::types::clone_effect_instance_with_budget(&original.provided, work)
+                    .map_err(|()| super::resource())?,
+                state: specialize_projection(
+                    &original.state,
+                    &nodes,
+                    &fresh,
+                    &sigma,
+                    &renaming,
+                    work,
+                )?,
+                handler: original.handler,
+                clauses: member_clauses,
+                nodes: member_nodes,
+                dictionaries,
+            });
+        }
+        let mut native_storage = Vec::new();
+        native_storage
+            .try_reserve_exact(old.native_storage.len())
+            .map_err(|_| super::resource())?;
+        for original in &old.native_storage {
+            native_storage.push(AdmittedNativeStorageRelation {
+                request: mapped(&nodes, original.request)?,
+                operand: mapped(&nodes, original.operand)?,
+                request_projection: specialize_projection(
+                    &original.request_projection,
+                    &nodes,
+                    &fresh,
+                    &sigma,
+                    &renaming,
+                    work,
+                )?,
+                operand_projection: specialize_projection(
+                    &original.operand_projection,
+                    &nodes,
+                    &fresh,
+                    &sigma,
+                    &renaming,
+                    work,
+                )?,
+                operation: original.operation,
+                effect: crate::types::clone_effect_instance_with_budget(&original.effect, work)
+                    .map_err(|()| super::resource())?,
+                owner: original.owner,
+                family: original.family,
+                member: original.member,
+                result: original.result,
+            });
+        }
         let body = mapped(&nodes, old.body)?;
         Ok(Self(std::sync::Arc::new(SpecializationProof {
             arena: body.arena(),
@@ -3052,6 +5579,9 @@ impl OriginalProviderSpecialization {
             occurrences,
             anchors,
             state_accesses: accesses,
+            families,
+            native_storage,
+            native: old.native.as_ref().map(std::sync::Arc::clone),
         })))
     }
 }
@@ -3407,6 +5937,9 @@ impl ProviderOriginalTemplate<'_> {
                     original.original_state().id(),
                     work,
                 )?;
+                for dictionary in original.original_dictionary_parameters() {
+                    retain_identity(&mut declarations.binders, dictionary.id(), work)?;
+                }
                 retain_identity(
                     &mut declarations.handlers,
                     original.original_handler(),
@@ -3463,7 +5996,7 @@ mod executable_scope_tests {
         elaborate::{
             ProviderCodeAvailability, check_module_with_budget_and_provider_codes, link_modules,
         },
-        foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest},
+        foreign::{ForeignRegistrations, provider_manifest, sqlite_manifest, typed_arena_manifest},
         interface::InterfaceConstraintBudget,
         module::{ForeignRegistrationId, ModuleGraph, ModuleRoots, load_module_graph},
         pattern::UsefulnessBudget,
@@ -3726,6 +6259,25 @@ mod executable_scope_tests {
             ])
             .unwrap(),
         );
+        checked_provider_scopes_with_roots(entry, roots)
+    }
+
+    fn checked_arena_scopes(entry: PathBuf) -> (ModuleGraph, ValidatedEffectProgram) {
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+                typed_arena_manifest(ForeignRegistrationId::new(2)).unwrap(),
+            ])
+            .unwrap(),
+        );
+        checked_provider_scopes_with_roots(entry, roots)
+    }
+
+    fn checked_source_provider_scopes_with_roots(
+        entry: PathBuf,
+        roots: ModuleRoots,
+        source_capture_observer: Option<fn(&crate::core::EffectCoreBuilder)>,
+    ) -> (ModuleGraph, Vec<CheckedModule>) {
         let graph = load_module_graph(&entry, &roots).unwrap();
         let mut checked = Vec::<CheckedModule>::new();
         let mut availability = ProviderCodeAvailability::default();
@@ -3756,14 +6308,37 @@ mod executable_scope_tests {
                 &mut constraints,
             )
             .unwrap();
-            let module = check_module_with_budget_and_provider_codes(
-                resolved,
-                &availability,
-                &mut checking,
-                &mut coverage,
-                &mut constraints,
-            )
-            .unwrap();
+            let module = if loaded.id() == graph.entry() {
+                if let Some(observer) = source_capture_observer {
+                    crate::elaborate::check_effect_module_with_source_capture_for_test(
+                        resolved,
+                        &availability,
+                        &mut checking,
+                        &mut coverage,
+                        &mut constraints,
+                        observer,
+                    )
+                } else {
+                    check_module_with_budget_and_provider_codes(
+                        resolved,
+                        &availability,
+                        &mut checking,
+                        &mut coverage,
+                        &mut constraints,
+                    )
+                }
+            } else {
+                check_module_with_budget_and_provider_codes(
+                    resolved,
+                    &availability,
+                    &mut checking,
+                    &mut coverage,
+                    &mut constraints,
+                )
+            }
+            .expect(
+                "the untouched source fixture must check through the genuine provider pipeline",
+            );
             if let Some(code) = module.provider_code() {
                 availability
                     .retain(module.module(), code, &mut checking)
@@ -3771,6 +6346,14 @@ mod executable_scope_tests {
             }
             checked.push(module);
         }
+        (graph, checked)
+    }
+
+    fn checked_provider_scopes_with_roots(
+        entry: PathBuf,
+        roots: ModuleRoots,
+    ) -> (ModuleGraph, ValidatedEffectProgram) {
+        let (graph, checked) = checked_source_provider_scopes_with_roots(entry, roots, None);
         let linked = crate::evidence_validation::validate_interface_evidence(
             link_modules(checked, graph.entry()).unwrap(),
         )
@@ -3791,8 +6374,976 @@ mod executable_scope_tests {
             .iter()
             .map(|module| (module.id(), module.source().id()))
             .collect::<Vec<_>>();
-        let program = validate_effect_modules(unchecked, &sources, &relation).unwrap();
+        let program = validate_effect_modules(unchecked, &sources, &relation)
+            .expect("the untouched source fixture must compile and independently validate first");
         (graph, program)
+    }
+
+    #[test]
+    fn arena_source_capture_receipt_is_exact_budgeted_and_not_executable() {
+        fn scope_at(
+            nodes: &[crate::core::dialect::StoredNode<crate::core::EffectOperationFamily>],
+            ordinal: usize,
+        ) -> &ProviderScopeNode {
+            let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                &nodes[ordinal].kind
+            else {
+                panic!("the fixture's real source ProviderScope must remain present");
+            };
+            scope
+        }
+        fn observe(builder: &crate::core::EffectCoreBuilder) {
+            use crate::{
+                core::{EffectOperationFamily, PureComputation, TupleNode, dialect::StoredNode},
+                source::Origin,
+                types::{InferenceVariableId, Type},
+            };
+            let (arena, nodes, _) = builder.provider_projection_parts().unwrap();
+            let scope_ordinal = nodes
+                .iter()
+                .position(|node| {
+                    matches!(&node.kind,
+                EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                    if scope.member_count() > 1 && scope.descriptor.prepared_capture().is_some())
+                })
+                .expect("actual ModuleCheck must mint a genuine finite-family source receipt");
+            let scope = scope_at(nodes, scope_ordinal);
+            let proof = &scope.descriptor.prepared_capture().unwrap().0;
+            let operation = super::super::row::effect_operation;
+            let mut measured = TypeWorkBudget::unbounded();
+            let view = authenticate_prepared_provider_capture(
+                arena,
+                nodes,
+                scope,
+                operation,
+                &mut measured,
+            )
+            .expect("the untouched post-zonk copied source forest must authenticate first");
+            let cost = measured.used();
+            assert!(cost > 0);
+            assert!(view.authenticates_scope(nodes, scope));
+            assert!(
+                !view.native_storage_relations().is_empty(),
+                "the genuine fixture must retain actual Store/Load flow receipts"
+            );
+            let dictionary = proof
+                .families
+                .iter()
+                .flat_map(|family| &family.dictionaries)
+                .next()
+                .expect("the real source family has its canonical Layout initializer");
+            let initializer = dictionary.initializer.node.index().unwrap();
+            assert!(
+                view.authenticates_layout(
+                    nodes,
+                    initializer,
+                    dictionary.producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap()
+            );
+            let clone_nodes = || {
+                nodes
+                    .iter()
+                    .map(|node| StoredNode::<EffectOperationFamily> {
+                        dialect: node.dialect,
+                        ty: node.ty.clone(),
+                        effects: node.effects.clone(),
+                        origin: node.origin.clone(),
+                        kind: node.kind.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let identical = clone_nodes();
+            assert!(!view.authenticates_scope(&identical, scope_at(&identical, scope_ordinal)));
+            assert!(
+                !view
+                    .authenticates_layout(
+                        &identical,
+                        initializer,
+                        dictionary.producer,
+                        &mut TypeWorkBudget::unbounded()
+                    )
+                    .unwrap(),
+                "a cloned slice is not this view's arena"
+            );
+            let other_scope = scope.clone();
+            assert!(
+                !view.authenticates_scope(nodes, &other_scope),
+                "an identical separately allocated scope is not this view's scope"
+            );
+            let other_ordinal = (0..nodes.len())
+                .find(|index| {
+                    *index != initializer
+                        && proof
+                            .families
+                            .iter()
+                            .flat_map(|family| &family.dictionaries)
+                            .all(|dictionary| {
+                                dictionary.initializer.node.index().unwrap() != *index
+                            })
+                })
+                .unwrap();
+            assert!(
+                !view
+                    .authenticates_layout(
+                        nodes,
+                        other_ordinal,
+                        dictionary.producer,
+                        &mut TypeWorkBudget::unbounded()
+                    )
+                    .unwrap()
+            );
+            assert!(
+                !view
+                    .authenticates_layout(
+                        nodes,
+                        nodes.len(),
+                        dictionary.producer,
+                        &mut TypeWorkBudget::unbounded()
+                    )
+                    .unwrap()
+            );
+            let native = proof.native.as_ref().unwrap();
+            let layout = native.layout.as_ref().unwrap();
+            let other_payload = if dictionary.producer.payload_type() == Type::Bool {
+                Type::Int
+            } else {
+                Type::Bool
+            };
+            let other_producer = layout
+                .dictionary_for_payload(&other_payload)
+                .unwrap()
+                .producer();
+            assert_ne!(other_producer, dictionary.producer);
+            assert!(
+                !view
+                    .authenticates_layout(
+                        nodes,
+                        initializer,
+                        other_producer,
+                        &mut TypeWorkBudget::unbounded()
+                    )
+                    .unwrap(),
+                "another genuine dictionary is not this initializer's producer"
+            );
+            for prefix in [0usize, 17] {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                authenticate_prepared_provider_capture(arena, nodes, scope, operation, &mut exact)
+                    .expect("the measured source receipt charge must fit exactly");
+                assert_eq!(exact.used(), prefix + cost);
+                let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+                short.charge(prefix).unwrap();
+                let error = authenticate_prepared_provider_capture(
+                    arena, nodes, scope, operation, &mut short,
+                )
+                .err()
+                .expect("one unit short must refuse without a source authority view");
+                assert_eq!(error.reason(), crate::core::ValidationReason::Resource);
+                assert!(short.used() < prefix + cost);
+            }
+            assert!(scope.descriptor.specialization().is_none());
+            assert!(scope.descriptor.admitted_arc().is_none());
+            let failure = authenticate_native_storage_relations(
+                arena,
+                nodes,
+                scope,
+                operation,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect_err(
+                "source flow authority must not satisfy the final admitted relation consumer",
+            );
+            assert_eq!(
+                failure.reason(),
+                crate::core::ValidationReason::ResourceEscape
+            );
+            assert_eq!(failure.node(), Some(scope.handler.body()));
+
+            let mut work = TypeWorkBudget::unbounded();
+            let registry = builder.provider_registry();
+            let definition = Arc::clone(
+                scope
+                    .descriptor
+                    .prepared_definition_for_test()
+                    .expect("the source descriptor retains its genuine original definition Arc"),
+            );
+            let native = registry
+                .foreign_modules()
+                .find(|fact| std::ptr::eq(fact.as_ref(), scope.descriptor.native()))
+                .unwrap();
+            let mut families = Vec::new();
+            for family in scope.descriptor.family_members() {
+                families.push(family.clone_with_budget(&mut work).unwrap());
+            }
+            let metadata = ProviderScopeAdmission {
+                definition,
+                native: Arc::clone(native),
+                arguments: clone_kinded_arguments_with_budget(
+                    scope.descriptor.arguments().iter(),
+                    &mut work,
+                )
+                .unwrap(),
+                identity: scope.descriptor.identity(),
+                retained: scope.descriptor.retained().to_vec().into_boxed_slice(),
+                native_effect: clone_effect_instance_with_budget(
+                    scope.descriptor.native_effect(),
+                    &mut work,
+                )
+                .unwrap(),
+                protocol: scope.descriptor.protocol(),
+                families: families.into_boxed_slice(),
+            };
+            let mut metadata_only = scope.clone();
+            metadata_only.descriptor =
+                super::super::ProviderScopeAuthority::prepared(metadata, &mut work).unwrap();
+            let failure = authenticate_prepared_provider_capture(arena, nodes, &metadata_only, operation, &mut work)
+                .err().expect("matching metadata without the privately minted copied-flow receipt has no authority");
+            assert_eq!(
+                failure.reason(),
+                crate::core::ValidationReason::ResourceEscape
+            );
+            assert_eq!(failure.node(), Some(scope.handler.body()));
+
+            let operand = view
+                .native_storage_relations()
+                .iter()
+                .find_map(|relation| {
+                    matches!(
+                        relation.result(),
+                        super::super::HandlerNativeStorageResult::Store { .. }
+                    )
+                    .then_some(relation.operand)
+                })
+                .expect("the source fixture contains a real native Store operand");
+            for mutation in 0..4 {
+                let mut changed = clone_nodes();
+                authenticate_prepared_provider_capture(arena, &changed, scope_at(&changed, scope_ordinal),
+                    operation, &mut TypeWorkBudget::unbounded())
+                    .expect("each mutation begins from an independently reauthenticated identical source graph");
+                let target = if mutation == 1 {
+                    initializer
+                } else {
+                    operand.index().unwrap()
+                };
+                match mutation {
+                    0 => {
+                        let EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Tuple(tuple),
+                        )) = &changed[target].kind
+                        else {
+                            panic!("the actual native Store operand must be its source tuple");
+                        };
+                        let mut elements = tuple.elements().to_vec();
+                        assert_eq!(elements.len(), 4);
+                        assert_ne!(elements[2], elements[3]);
+                        assert_eq!(changed[elements[2].index().unwrap()].ty, Type::Int);
+                        assert_eq!(changed[elements[3].index().unwrap()].ty, Type::Int);
+                        elements.swap(2, 3);
+                        changed[target].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                            PureComputation::Tuple(TupleNode::new(elements)),
+                        ));
+                    }
+                    1 => {
+                        changed[target].kind = EffectExprKind::Pure(PureExprKind::Value(
+                            PureValue::Intrinsic(crate::core::packed::IntrinsicNode::new(
+                                crate::core::packed::Intrinsic::ForeignLayoutWitness {
+                                    producer: other_producer,
+                                },
+                                other_producer.interface().module(),
+                            )),
+                        ))
+                    }
+                    2 => {
+                        let original = changed[target].origin.take().unwrap();
+                        let span = original.primary_span();
+                        changed[target].origin = Some(Origin::Related {
+                            primary: Box::new(original),
+                            related: vec![span],
+                        });
+                    }
+                    3 => changed[target].ty = Type::Inference(InferenceVariableId::new(0)),
+                    _ => unreachable!(),
+                }
+                let error = authenticate_prepared_provider_capture(arena, &changed, scope_at(&changed, scope_ordinal),
+                    operation, &mut TypeWorkBudget::unbounded()).err()
+                    .expect("copied edge, dictionary, richer origin or inference mutation must invalidate the source receipt");
+                assert_eq!(
+                    error.reason(),
+                    crate::core::ValidationReason::ResourceEscape
+                );
+                assert_eq!(
+                    error.node(),
+                    Some(NodeId::new(arena, u32::try_from(target).unwrap()))
+                );
+            }
+        }
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash");
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+                typed_arena_manifest(ForeignRegistrationId::new(2)).unwrap(),
+            ])
+            .unwrap(),
+        );
+        let (graph, checked) =
+            checked_source_provider_scopes_with_roots(entry, roots, Some(observe));
+        assert_eq!(checked.last().unwrap().module(), graph.entry());
+        // This regression ends at genuine source checking. Independent final
+        // evidence/Core admission and actual execution remain separate gates.
+    }
+
+    #[test]
+    fn attached_arena_cleanup_rows_restore_both_caches_and_retry_exactly() {
+        fn observe(builder: &crate::core::EffectCoreBuilder) {
+            use crate::{
+                core::{BuildError, EffectCoreBuilder, EffectOperationFamily, dialect::StoredNode},
+                types::EffectRow,
+            };
+            fn rows(builder: &EffectCoreBuilder) -> Vec<(EffectRow, Option<EffectRow>)> {
+                builder
+                    .nodes
+                    .iter()
+                    .map(|node| {
+                        let output = match &node.kind {
+                            EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) => {
+                                Some(scope.handler_output.effects().clone())
+                            }
+                            _ => None,
+                        };
+                        (node.effects.clone(), output)
+                    })
+                    .collect()
+            }
+
+            let (arena, nodes, _) = builder.provider_projection_parts().unwrap();
+            let ordinal = nodes
+                .iter()
+                .position(|node| {
+                    matches!(&node.kind,
+                        EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                            if scope.member_count() > 1
+                                && scope.descriptor.prepared_capture().is_some())
+                })
+                .expect("actual source checking must prepare an attached arena group first");
+            let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                &nodes[ordinal].kind
+            else {
+                unreachable!();
+            };
+            let view = authenticate_prepared_provider_capture(
+                arena,
+                nodes,
+                scope,
+                super::super::row::effect_operation,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("the untouched genuine source group must authenticate first");
+            assert!(view.authenticates_scope(nodes, scope));
+            assert!(!view.native_storage_relations().is_empty());
+            let stale = EffectRow::singleton(scope.handler.effect().clone());
+            assert_ne!(nodes[ordinal].effects, stale);
+            assert_ne!(*scope.handler_output.effects(), stale);
+
+            // Copy genuine source nodes only for the production row replayer.
+            // This scratch builder is never finished or offered for admission;
+            // no prepared receipt is minted or reauthenticated after mutation.
+            let replay = |seed_stale: bool| {
+                let mut replay = EffectCoreBuilder::with_effect_registry(Arc::new(
+                    builder.provider_registry().clone(),
+                ));
+                replay.nodes = nodes
+                    .iter()
+                    .map(|node| StoredNode::<EffectOperationFamily> {
+                        dialect: node.dialect,
+                        ty: node.ty.clone(),
+                        effects: node.effects.clone(),
+                        origin: node.origin.clone(),
+                        kind: node.kind.clone(),
+                    })
+                    .collect();
+                replay.type_work = TypeWorkBudget::unbounded();
+                if seed_stale {
+                    replay.nodes[ordinal].effects = stale.clone();
+                    let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &mut replay.nodes[ordinal].kind
+                    else {
+                        unreachable!();
+                    };
+                    scope.handler_output.effects = stale.clone();
+                }
+                replay
+            };
+            let mut untouched = replay(false);
+            untouched
+                .finish_cleanup_effect_rows()
+                .expect("the untouched completed source forest must replay successfully first");
+            let expected = rows(&untouched);
+            assert_eq!(expected, rows(builder));
+
+            let mut measured = replay(true);
+            measured
+                .finish_cleanup_effect_rows()
+                .expect("stale attached-group row caches must recompute successfully first");
+            let work = measured.type_work.used();
+            assert!(work > 0);
+            assert_eq!(rows(&measured), expected);
+            assert_ne!(measured.nodes[ordinal].effects, stale);
+            let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                &measured.nodes[ordinal].kind
+            else {
+                unreachable!();
+            };
+            assert_ne!(*scope.handler_output.effects(), stale);
+
+            let mut retry = replay(true);
+            let previous = rows(&retry);
+            retry.type_work = TypeWorkBudget::with_limit(work - 1);
+            assert_eq!(
+                retry.finish_cleanup_effect_rows(),
+                Err(BuildError::TypeWorkExceeded)
+            );
+            assert_eq!(rows(&retry), previous, "both row caches must roll back");
+            assert!(retry.type_work.used() < work);
+
+            // Retry the same restored forest with an exact remaining allowance.
+            let prefix = 17;
+            retry.type_work = TypeWorkBudget::with_limit(prefix + work);
+            retry.type_work.charge(prefix).unwrap();
+            retry.finish_cleanup_effect_rows().unwrap();
+            assert_eq!(retry.type_work.used(), prefix + work);
+            assert_eq!(rows(&retry), expected);
+        }
+
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash");
+        let roots = ModuleRoots::empty().with_foreign_registrations(
+            ForeignRegistrations::new([
+                provider_manifest(ForeignRegistrationId::new(1)).unwrap(),
+                typed_arena_manifest(ForeignRegistrationId::new(2)).unwrap(),
+            ])
+            .unwrap(),
+        );
+        let (graph, checked) =
+            checked_source_provider_scopes_with_roots(entry, roots, Some(observe));
+        assert_eq!(checked.last().unwrap().module(), graph.entry());
+    }
+
+    #[test]
+    fn admitted_arena_source_capture_view_is_exact_and_budgeted() {
+        use crate::core::{EffectOperationFamily, PureComputation, TupleNode, dialect::StoredNode};
+        fn scope_at(
+            nodes: &[StoredNode<EffectOperationFamily>],
+            ordinal: usize,
+        ) -> &ProviderScopeNode {
+            let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                &nodes[ordinal].kind
+            else {
+                panic!("the genuine admitted arena scope must remain present");
+            };
+            scope
+        }
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash");
+        let (_, program) = checked_arena_scopes(entry);
+        // This fixture has already passed independent Core validation. The
+        // identity traversal retains its genuine relocated specialization.
+        let original = identity_effect_traversal(&program).unwrap();
+        let nodes = &original.nodes;
+        let ordinal = nodes
+            .iter()
+            .position(|node| {
+                matches!(&node.kind,
+            EffectExprKind::Operation(EffectOperation::ProviderScope(scope))
+                if scope.member_count() > 1 && scope.descriptor.admitted_arc().is_some())
+            })
+            .expect("the fixture must have a genuine admitted family group");
+        let scope = scope_at(nodes, ordinal);
+        let proof = &scope.descriptor.specialization().unwrap().0;
+        let dictionary = proof
+            .families
+            .iter()
+            .flat_map(|family| &family.dictionaries)
+            .next()
+            .unwrap();
+        let initializer = dictionary.initializer.node.index().unwrap();
+        let operand = proof
+            .native_storage
+            .iter()
+            .find_map(|receipt| {
+                matches!(
+                    receipt.result,
+                    super::super::HandlerNativeStorageResult::Store { .. }
+                )
+                .then_some(receipt.operand)
+            })
+            .expect("the fixture must retain a native Store receipt");
+        let operation = super::super::row::effect_operation;
+        let mut measured = TypeWorkBudget::unbounded();
+        let admitted = authenticate_admitted_provider_capture(
+            original.arena,
+            nodes,
+            scope,
+            operation,
+            &mut measured,
+        )
+        .expect("the untouched admitted source view must authenticate first");
+        let cost = measured.used();
+        assert!(cost > 0);
+        let view = AuthenticatedProviderSourceCapture::Admitted(admitted);
+        assert!(view.authenticates_scope(nodes, scope));
+        assert!(!view.native_storage_relations().is_empty());
+        assert!(
+            view.authenticates_layout(
+                nodes,
+                initializer,
+                dictionary.producer,
+                &mut TypeWorkBudget::unbounded()
+            )
+            .unwrap()
+        );
+        for prefix in [0, 17] {
+            let mut short = TypeWorkBudget::with_limit(prefix + cost - 1);
+            short.charge(prefix).unwrap();
+            let failure = authenticate_admitted_provider_capture(
+                original.arena,
+                nodes,
+                scope,
+                operation,
+                &mut short,
+            )
+            .err()
+            .expect("one unit short must not return an admitted source view");
+            assert_eq!(failure.reason(), crate::core::ValidationReason::Resource);
+            assert!(short.used() < prefix + cost);
+            for _ in 0..2 {
+                let mut exact = TypeWorkBudget::with_limit(prefix + cost);
+                exact.charge(prefix).unwrap();
+                authenticate_admitted_provider_capture(
+                    original.arena,
+                    nodes,
+                    scope,
+                    operation,
+                    &mut exact,
+                )
+                .expect("the same immutable arena must retry with its exact measured allowance");
+                assert_eq!(exact.used(), prefix + cost);
+            }
+        }
+        let clone_nodes = || {
+            nodes
+                .iter()
+                .map(|node| StoredNode::<EffectOperationFamily> {
+                    dialect: node.dialect,
+                    ty: node.ty.clone(),
+                    effects: node.effects.clone(),
+                    origin: node.origin.clone(),
+                    kind: node.kind.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let identical = clone_nodes();
+        assert!(!view.authenticates_scope(&identical, scope_at(&identical, ordinal)));
+        assert!(
+            !view
+                .authenticates_layout(
+                    &identical,
+                    initializer,
+                    dictionary.producer,
+                    &mut TypeWorkBudget::unbounded()
+                )
+                .unwrap(),
+            "equal copied nodes are a different slice"
+        );
+        let other_scope = scope.clone();
+        assert!(
+            !view.authenticates_scope(nodes, &other_scope),
+            "an equal separately allocated scope is not this view's scope"
+        );
+
+        for change_dictionary in [true, false] {
+            let mut changed = clone_nodes();
+            authenticate_admitted_provider_capture(
+                original.arena,
+                &changed,
+                scope_at(&changed, ordinal),
+                operation,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .expect("each copied graph must authenticate before its mutation");
+            let target = if change_dictionary {
+                initializer
+            } else {
+                operand.index().unwrap()
+            };
+            if change_dictionary {
+                assert_ne!(changed[target].ty, Type::Bool);
+                changed[target].ty = Type::Bool;
+            } else {
+                let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(tuple))) =
+                    &changed[target].kind
+                else {
+                    panic!("the native Store operand must remain a tuple");
+                };
+                let mut elements = tuple.elements().to_vec();
+                assert_eq!(elements.len(), 4);
+                assert_ne!(elements[2], elements[3]);
+                for child in &elements[2..] {
+                    assert_eq!(changed[child.index().unwrap()].ty, Type::Int);
+                    assert!(changed[child.index().unwrap()].effects.is_empty());
+                }
+                elements.swap(2, 3);
+                changed[target].kind = EffectExprKind::Pure(PureExprKind::Computation(
+                    PureComputation::Tuple(TupleNode::new(elements)),
+                ));
+            }
+            let failure = authenticate_admitted_provider_capture(
+                original.arena,
+                &changed,
+                scope_at(&changed, ordinal),
+                operation,
+                &mut TypeWorkBudget::unbounded(),
+            )
+            .err()
+            .expect("changed dictionary or same-typed native edges cannot reuse the receipt");
+            assert_eq!(
+                failure.reason(),
+                crate::core::ValidationReason::ResourceEscape
+            );
+            assert_eq!(
+                failure.node(),
+                Some(if change_dictionary {
+                    dictionary.initializer.node
+                } else {
+                    operand
+                })
+            );
+        }
+    }
+
+    fn nested_arena_dictionary_scopes() -> (ModuleGraph, ValidatedEffectProgram) {
+        static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        struct FixtureDirectory(PathBuf);
+        impl Drop for FixtureDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let sequence = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let directory = FixtureDirectory(std::env::temp_dir().join(format!(
+            "ash-arena-core-dictionary-{}-{sequence}",
+            std::process::id(),
+        )));
+        std::fs::create_dir(&directory.0).unwrap();
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed");
+        std::fs::copy(
+            fixtures.join("provider.ash"),
+            directory.0.join("provider.ash"),
+        )
+        .unwrap();
+        let arena = std::fs::read_to_string(fixtures.join("arena.ash")).unwrap();
+        let original = "(arena, layout, alignment, value) => resume (perform Native.Storage<R, Payload>.store (state, layout, alignment, value))";
+        assert_eq!(arena.matches(original).count(), 1);
+        // Exercise the real ResourceFamily dictionary formal through direct
+        // calls, value aliases, a captured Witness value and a captured method
+        // alias. The observed helper result supplies the actual native layout;
+        // an ordinary Int result also uses the witnessed metadata in its body.
+        let arena = arena.replace(
+            original,
+            r#"(arena, layout, alignment, value) => {
+let direct : Native.LayoutWitness<Payload> = Native.witness ()
+let witness : Unit -> Native.LayoutWitness<Payload> = Native.witness
+let aliased : Native.LayoutWitness<Payload> = witness ()
+let retained : Unit -> Native.LayoutWitness<Payload> = fn(unit) {
+direct
+}
+let helper : Unit -> Native.LayoutWitness<Payload> = fn(unit) {
+witness unit
+}
+let natural_alignment : Unit -> Int = fn(unit) {
+let metadata : Native.LayoutWitness<Payload> = witness unit
+0
+}
+let captured : Native.LayoutWitness<Payload> = retained ()
+let observed : Native.LayoutWitness<Payload> = helper ()
+match (aliased, captured, observed) {
+(aliased_proof, captured_proof, observed_proof) => resume (perform Native.Storage<R, Payload>.store (state, observed_proof, natural_alignment (), value))
+}
+}"#,
+        );
+        std::fs::write(directory.0.join("arena.ash"), arena).unwrap();
+        let entry = directory.0.join("entry.ash");
+        std::fs::write(
+            &entry,
+            r#"import provider as Provider
+import arena as Memory
+
+main : Unit -> Provider.Scope<Memory.ArenaInitError, Memory.ArenaFinishError, Int>
+main () = resource Memory.Arena<A> outer = (Memory.ArenaConfig (8, 1)) {
+match (Memory.allocate (outer, 41)) {
+Memory.Allocated(first) => {
+let ignored = resource Memory.Arena<B> inner = (Memory.ArenaConfig (8, 1)) {
+match (Memory.allocate (inner, 99)) {
+Memory.Allocated(second) => Memory.load (inner, second)
+Memory.AllocationRefused(error) => 0
+}
+}
+Memory.load (outer, first)
+}
+Memory.AllocationRefused(error) => 0
+}
+}
+"#,
+        )
+        .unwrap();
+        super::super::with_declared_layout_checks_for_test(|| checked_arena_scopes(entry))
+    }
+
+    fn core_reaches(program: &UnvalidatedEffectProgram, start: NodeId, target: NodeId) -> bool {
+        let mut pending = vec![start];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(node) = pending.pop() {
+            if node == target {
+                return true;
+            }
+            if seen.insert(node) {
+                let kind = &program.nodes[node.index().unwrap()].kind;
+                pending.extend((0..kind.child_count()).filter_map(|index| kind.child_at(index)));
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn arena_scope_transforms_reject_changed_forwarding_and_native_operand_edges() {
+        use crate::core::{CoreMatchArm, CorePattern, CorePatternKind, PureComputation};
+        let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/provider-experiments/arena-typed/allocation-entry.ash");
+        let (graph, program) = checked_arena_scopes(entry);
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            validate_effect_modules(transform(&program).unwrap(), &sources, &relation).expect(
+                "the real typed Arena fixture must independently validate after each transform",
+            );
+        }
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let mut forged = transform(&program).unwrap();
+            let forwarding = forged
+                .nodes
+                .iter()
+                .find_map(|stored| {
+                    let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &stored.kind
+                    else {
+                        return None;
+                    };
+                    scope
+                        .attached
+                        .iter()
+                        .flat_map(|member| member.forwardings.iter())
+                        .find_map(|forwarding| {
+                            forged.nodes.iter().find_map(|stored| {
+                                let EffectExprKind::Pure(PureExprKind::Computation(
+                                    PureComputation::Bind(binding),
+                                )) = &stored.kind
+                                else {
+                                    return None;
+                                };
+                                if binding.binder().id() != forwarding.binder {
+                                    return None;
+                                }
+                                let initializer = binding.initializer();
+                                let EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                                    function,
+                                ))) = &forged.nodes[initializer.index().unwrap()].kind
+                                else {
+                                    return None;
+                                };
+                                let Type::Tuple(elements) = function.parameter().ty() else {
+                                    return None;
+                                };
+                                (elements.len() == 4 && elements[3] == Type::Int).then(|| {
+                                    (initializer, function.parameter().clone(), function.body())
+                                })
+                            })
+                        })
+                })
+                .expect(
+                    "the admitted Int family has an ordinary allocate_checked forwarding function",
+                );
+            let (initializer, parameter, request) = forwarding;
+            let original = &forged.nodes[request.index().unwrap()];
+            let EffectExprKind::Operation(EffectOperation::Request(call)) = &original.kind else {
+                panic!("the genuine forwarding body must be its source operation request");
+            };
+            assert!(
+                matches!(&forged.nodes[call.operand().index().unwrap()].kind,
+                EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == parameter.id())
+            );
+            let repeated = NodeId::new(forged.arena, u32::try_from(forged.nodes.len()).unwrap());
+            let origin = original.origin.as_ref().unwrap().clone();
+            let pattern = CorePattern::new(
+                original.ty.clone(),
+                origin.clone(),
+                CorePatternKind::Wildcard,
+            );
+            let replacement = crate::core::dialect::StoredNode {
+                dialect: original.dialect,
+                ty: original.ty.clone(),
+                effects: original.effects.clone(),
+                origin: Some(origin.clone()),
+                kind: EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Match(
+                    crate::core::MatchNode::new(
+                        request,
+                        vec![CoreMatchArm::new(pattern, request, origin)],
+                    ),
+                ))),
+            };
+            // Both requests retain the original operand and result type. This
+            // changes execution to two allocations without introducing binders,
+            // missing children, or a different declared function effect row.
+            forged.nodes.push(replacement);
+            forged.nodes[initializer.index().unwrap()].kind =
+                EffectExprKind::Pure(PureExprKind::Value(PureValue::Function(
+                    crate::core::function::FunctionNode::new(parameter, repeated),
+                )));
+            let failure = validate_effect_modules(forged, &sources, &relation).expect_err(
+                "a well-typed repeated request cannot acquire exact forwarding authority",
+            );
+            assert_ne!(failure.reason(), crate::core::ValidationReason::Resource);
+
+            let mut forged = transform(&program).unwrap();
+            let operand = forged
+                .nodes
+                .iter()
+                .find_map(|stored| {
+                    let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) =
+                        &stored.kind
+                    else {
+                        return None;
+                    };
+                    scope
+                        .descriptor
+                        .specialization()?
+                        .0
+                        .native_storage
+                        .iter()
+                        .find_map(|receipt| {
+                            matches!(
+                                receipt.result,
+                                super::super::HandlerNativeStorageResult::Store { .. }
+                            )
+                            .then_some(receipt.operand)
+                        })
+                })
+                .expect("the admitted Int store has its original native operand receipt");
+            let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(tuple))) =
+                &forged.nodes[operand.index().unwrap()].kind
+            else {
+                panic!("native store must retain its actual operand tuple");
+            };
+            let mut elements = tuple.elements().to_vec();
+            assert_eq!(elements.len(), 4);
+            assert_ne!(elements[2], elements[3]);
+            for child in &elements[2..] {
+                assert_eq!(forged.nodes[child.index().unwrap()].ty, Type::Int);
+                assert!(forged.nodes[child.index().unwrap()].effects.is_empty());
+            }
+            // Swapping retains both live child nodes and their binder scopes,
+            // while changing the native alignment and stored payload paths.
+            elements.swap(2, 3);
+            forged.nodes[operand.index().unwrap()].kind =
+                EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Tuple(
+                    crate::core::TupleNode::new(elements),
+                )));
+            let failure = validate_effect_modules(forged, &sources, &relation).expect_err(
+                "unchanged native request and operand IDs cannot authenticate changed child edges",
+            );
+            assert_ne!(failure.reason(), crate::core::ValidationReason::Resource);
+        }
+    }
+
+    #[test]
+    fn arena_scope_transforms_reject_a_different_genuine_same_typed_family_dictionary() {
+        use crate::core::PureComputation;
+        let (graph, program) = nested_arena_dictionary_scopes();
+        let sources = graph
+            .modules()
+            .iter()
+            .map(|module| module.source())
+            .collect::<Vec<_>>();
+        let relation = graph
+            .modules()
+            .iter()
+            .map(|module| (module.id(), module.source().id()))
+            .collect::<Vec<_>>();
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            validate_effect_modules(transform(&program).unwrap(), &sources, &relation).expect(
+                "both real nested Int scopes and their copied dictionary calls must validate first",
+            );
+        }
+        for transform in [identity_effect_traversal, fold_effect_literal_primitives] {
+            let mut forged = transform(&program).unwrap();
+            let mut occurrences = Vec::new();
+            for (index, stored) in forged.nodes.iter().enumerate() {
+                let EffectExprKind::Operation(EffectOperation::ProviderScope(scope)) = &stored.kind
+                else {
+                    continue;
+                };
+                let proof = &scope.descriptor.specialization().unwrap().0;
+                for family in &proof.families {
+                    assert_eq!(family.header.payload, Type::Int);
+                    for dictionary in &family.dictionaries {
+                        for node in &family.nodes {
+                            if matches!(&forged.nodes[node.index().unwrap()].kind,
+                                EffectExprKind::Pure(PureExprKind::Variable(variable)) if variable.binder() == dictionary.binder)
+                            {
+                                occurrences.push((
+                                    NodeId::new(forged.arena, u32::try_from(index).unwrap()),
+                                    dictionary.binder,
+                                    dictionary.producer,
+                                    *node,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            let replacement = occurrences.iter().find_map(|(outer, donor, producer, _)| {
+                let binding = forged.nodes.iter().find_map(|stored| {
+                    let EffectExprKind::Pure(PureExprKind::Computation(PureComputation::Bind(binding))) = &stored.kind else { return None; };
+                    (binding.binder().id() == *donor).then_some(binding)
+                })?;
+                occurrences.iter().find_map(|(inner, original, inner_producer, node)| {
+                    if outer == inner || donor == original || producer != inner_producer
+                        || !core_reaches(&forged, binding.body(), *inner) {
+                        return None;
+                    }
+                    assert_eq!(binding.binder().ty(), &forged.nodes[node.index().unwrap()].ty);
+                    assert!(forged.nodes[node.index().unwrap()].effects.is_empty());
+                    Some((*node, *donor))
+                })
+            }).expect("a genuine outer Int Layout dictionary must dominate the inner copied family occurrence");
+            let (node, donor) = replacement;
+            forged.nodes[node.index().unwrap()].kind = EffectExprKind::Pure(
+                PureExprKind::Variable(crate::core::variable::VariableNode::new(donor)),
+            );
+            let failure = validate_effect_modules(forged, &sources, &relation)
+                .expect_err("same producer and type do not replace the copied occurrence's exact dictionary binder");
+            assert_ne!(failure.reason(), crate::core::ValidationReason::Resource);
+        }
     }
 
     #[test]
@@ -3975,6 +7526,7 @@ mod executable_scope_tests {
             native_effect: clone_effect_instance_with_budget(&original.native_effect, &mut work)
                 .unwrap(),
             protocol: original.protocol,
+            families: Box::new([]),
         };
         scope.descriptor =
             super::super::ProviderScopeAuthority::prepared(metadata, &mut work).unwrap();

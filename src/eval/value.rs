@@ -137,6 +137,8 @@ impl ObservedValue {
                 Task::Value(value) => match value {
                     Value::ResourceHandle(_) => output.push_str("<resource-handle>"),
                     Value::NativeStateView(_) => output.push_str("<native-state-view>"),
+                    Value::LayoutWitness(_) => output.push_str("<layout-witness>"),
+                    Value::Reference { .. } => output.push_str("<arena-reference>"),
                     Value::Bytes(value) => output.push_str(&format!("{value:?}")),
                     Value::String(value) => output.push_str(&format!("{value:?}")),
                     Value::Intrinsic(_) => output.push_str("<function>"),
@@ -286,6 +288,13 @@ pub enum Value {
     ResourceHandle(ActivationKey),
     /// An opaque borrowed native state view with no native ownership edge.
     NativeStateView(ActivationKey),
+    /// Complete authenticated layout metadata, with no native ownership edge.
+    LayoutWitness(crate::foreign::runtime::ForeignLayoutWitness),
+    /// Nonowning access bound to the original live activation.
+    Reference {
+        activation: ActivationKey,
+        reference: crate::foreign::runtime::ForeignReference,
+    },
     /// An arbitrary-precision mathematical integer.
     Integer(Integer),
     /// A Boolean value.
@@ -314,6 +323,8 @@ impl fmt::Display for Value {
         match self {
             Self::ResourceHandle(_) => formatter.write_str("<resource-handle>"),
             Self::NativeStateView(_) => formatter.write_str("<native-state-view>"),
+            Self::LayoutWitness(_) => formatter.write_str("<layout-witness>"),
+            Self::Reference { .. } => formatter.write_str("<arena-reference>"),
             Self::Bytes(value) => write!(formatter, "{value:?}"),
             Self::String(value) => write!(formatter, "{value:?}"),
             Self::Intrinsic(_) => formatter.write_str("<function>"),

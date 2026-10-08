@@ -30,6 +30,8 @@ pub(crate) struct HandlerFragmentDraft {
     pub template: ProviderTemplateId,
     pub handler: HandlerId,
     pub state: TypedBinder,
+    pub dictionary_parameters: Box<[TypedBinder]>,
+    pub family_requirements: Box<[crate::interface::CheckedRequirement]>,
     pub hidden: [(TypeVariableId, Kind); 2],
     pub clauses: Box<[EffectClause]>,
     pub direct_demands: EffectRow,
@@ -42,6 +44,7 @@ pub(in crate::core) struct HandlerFragmentEntry<'a> {
     pub(in crate::core) draft: &'a HandlerFragmentDraft,
     pub(in crate::core) module: &'a ResolvedModule,
     pub(in crate::core) definition: &'a ResolvedResourceDefinition,
+    family: Option<&'a crate::resolved::ResolvedResourceFamilyTemplate>,
     pub(in crate::core) canonical: std::sync::Arc<crate::resolved::ResolvedRegistry>,
     pub(in crate::core) row_recipe: Option<&'a super::HandlerRowRecipeDraft>,
     pub(in crate::core) fragment_locals: Vec<crate::types::NominalTypeId>,
@@ -65,12 +68,37 @@ impl<'a> HandlerFragmentEntry<'a> {
             .iter()
             .find(|definition| definition.id == draft.template.definition())
             .ok_or_else(|| invalid(program.root))?;
+        // The template slot only locates the source block. All allowances are
+        // reconstructed from that original block and its canonical payload ID.
+        let family = if draft.template == ProviderTemplateId::new(definition.id, 2) {
+            None
+        } else if draft.template == ProviderTemplateId::new(definition.id, 3) {
+            Some(
+                definition
+                    .family_template
+                    .as_ref()
+                    .ok_or_else(|| invalid(program.root))?,
+            )
+        } else {
+            return Err(invalid(program.root));
+        };
+        if family.is_none()
+            && (!draft.dictionary_parameters.is_empty() || !draft.family_requirements.is_empty())
+        {
+            return Err(invalid(program.root));
+        }
+        let handlers_binder = family.map_or(&definition.handlers_binder, |family| {
+            &family.handlers_binder
+        });
+        let handlers = family.map_or(definition.handlers.as_ref(), |family| {
+            family.handlers.as_ref()
+        });
+        let provided = family.map_or(&definition.provided, |family| &family.provided);
         if definition.id.module() != module.module()
-            || draft.template != ProviderTemplateId::new(definition.id, 2)
-            || draft.state.id() != definition.handlers_binder.id
+            || draft.state.id() != handlers_binder.id
             || !crate::resolved::same_origin_with_budget(
                 draft.state.origin(),
-                &definition.handlers_binder.origin,
+                &handlers_binder.origin,
                 work,
             )
             .map_err(|()| resource())?
@@ -87,7 +115,7 @@ impl<'a> HandlerFragmentEntry<'a> {
                 .hidden
                 .iter()
                 .any(|(id, _)| *id == definition.answer.id)
-            || draft.clauses.len() != definition.handlers.len()
+            || draft.clauses.len() != handlers.len()
             || draft.clauses.is_empty()
             || program.root != draft.clauses[0].body()
         {
@@ -128,7 +156,7 @@ impl<'a> HandlerFragmentEntry<'a> {
                 .ok_or_else(resource)?,
         )?;
         let declaration = canonical
-            .effect(definition.provided.instance.effect())
+            .effect(provided.instance.effect())
             .ok_or_else(|| invalid(program.root))?;
         if super::super::validate::registered_foreign_effect_with_charge(
             &canonical,
@@ -137,7 +165,7 @@ impl<'a> HandlerFragmentEntry<'a> {
         )
         .map_err(|()| resource())?
             || declaration.operations.len() != draft.clauses.len()
-            || declaration.parameters.len() != definition.provided.instance.arguments().len()
+            || declaration.parameters.len() != provided.instance.arguments().len()
         {
             return Err(invalid(program.root));
         }
@@ -180,8 +208,7 @@ impl<'a> HandlerFragmentEntry<'a> {
         roots
             .try_reserve_exact(draft.clauses.len())
             .map_err(|_| resource())?;
-        for (index, (clause, source)) in draft.clauses.iter().zip(&definition.handlers).enumerate()
-        {
+        for (index, (clause, source)) in draft.clauses.iter().zip(handlers).enumerate() {
             charge(work, 1)?;
             if clause.operation() != source.operation
                 || clause.operation().owner() != declaration.id
@@ -238,13 +265,19 @@ impl<'a> HandlerFragmentEntry<'a> {
         let parameter_count = definition
             .parameters
             .len()
+            .checked_add(usize::from(family.is_some()))
+            .ok_or_else(resource)?
             .checked_add(draft.hidden.len())
             .ok_or_else(resource)?;
         charge(work, parameter_count)?;
         type_parameters
             .try_reserve(parameter_count)
             .map_err(|_| resource())?;
-        for formal in &definition.parameters {
+        for formal in definition
+            .parameters
+            .iter()
+            .chain(family.map(|family| &family.parameter))
+        {
             let declared = canonical
                 .type_variable(formal.id)
                 .ok_or_else(|| invalid(program.root))?;
@@ -262,17 +295,19 @@ impl<'a> HandlerFragmentEntry<'a> {
             return Err(invalid(program.root));
         }
         let (imports, fragment_locals) = source_imports(
-            definition.handlers.iter().map(|clause| &clause.body),
+            handlers.iter().map(|clause| &clause.body),
             Some(crate::resolved::ProviderExternalFacts {
                 imported: module.imported_facts(),
                 defining: draft.defining_facts.as_deref(),
             }),
+            family.is_some(),
             work,
         )?;
         Ok(Self {
             draft,
             module,
             definition,
+            family,
             canonical,
             row_recipe: None,
             fragment_locals,
@@ -281,6 +316,55 @@ impl<'a> HandlerFragmentEntry<'a> {
             type_parameters,
             imports,
         })
+    }
+
+    pub(in crate::core) fn family_definition(&self) -> Option<&'a ResolvedResourceDefinition> {
+        self.family.map(|_| self.definition)
+    }
+    pub(in crate::core) fn family_requirements(&self) -> &[crate::interface::CheckedRequirement] {
+        &self.draft.family_requirements
+    }
+    pub(in crate::core) fn dictionary_parameters(&self) -> &[TypedBinder] {
+        &self.draft.dictionary_parameters
+    }
+    pub(in crate::core) fn source_methods(
+        &self,
+    ) -> impl Iterator<Item = &'a crate::resolved::ResolvedOccurrence> {
+        self.imports.values().copied().filter(|occurrence| {
+            matches!(
+                occurrence.term,
+                crate::resolved::ResolvedTermName::Method(_)
+            )
+        })
+    }
+    pub(in crate::core) fn family_identity(&self) -> Option<super::ProviderFamilyIdentity> {
+        self.family.map(|family| super::ProviderFamilyIdentity {
+            definition: self.definition.id,
+            parameter: family.parameter.id,
+        })
+    }
+
+    pub(in crate::core) fn parameters(
+        &self,
+    ) -> impl Iterator<Item = &crate::resolved::ResolvedTypeVariable> {
+        self.definition
+            .parameters
+            .iter()
+            .chain(self.family.map(|family| &family.parameter))
+    }
+
+    pub(in crate::core) fn provided(&self) -> &crate::types::EffectInstance {
+        &self
+            .family
+            .map_or(&self.definition.provided, |family| &family.provided)
+            .instance
+    }
+
+    pub(in crate::core) fn interpreted(&self) -> &crate::types::EffectInstance {
+        &self
+            .family
+            .map_or(&self.definition.interpreted, |family| &family.interpreted)
+            .instance
     }
 
     pub(in crate::core) fn roots(&self) -> &[NodeId] {
@@ -302,13 +386,14 @@ pub(super) fn source_fragment_locals(
     source: &ResolvedExpr,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<crate::types::NominalTypeId>, ValidationError> {
-    source_imports(std::iter::once(source), None, work).map(|(_, locals)| locals)
+    source_imports(std::iter::once(source), None, false, work).map(|(_, locals)| locals)
 }
 
 #[allow(clippy::type_complexity)]
 fn source_imports<'a>(
     sources: impl ExactSizeIterator<Item = &'a ResolvedExpr>,
     facts: Option<crate::resolved::ProviderExternalFacts<'_>>,
+    include_methods: bool,
     work: &mut TypeWorkBudget,
 ) -> Result<
     (
@@ -387,7 +472,12 @@ fn source_imports<'a>(
                 ResolvedExprKind::Occurrence(occurrence) => {
                     if occurrence.global_binder().is_some_and(|binder| {
                         facts.is_some_and(|facts| facts.global(binder).is_some())
-                    }) {
+                    }) || (include_methods
+                        && matches!(
+                            occurrence.term,
+                            crate::resolved::ResolvedTermName::Method(_)
+                        ))
+                    {
                         charge(work, 1)?;
                         found.try_reserve(1).map_err(|_| resource())?;
                         if found
@@ -518,7 +608,7 @@ impl<'a> HandlerAssociations<'a> {
     }
 }
 
-fn type_arguments<'a>(
+pub(super) fn type_arguments<'a>(
     ty: &'a Type,
     work: &mut TypeWorkBudget,
 ) -> Result<Vec<&'a Type>, ValidationError> {

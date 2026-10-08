@@ -998,6 +998,12 @@ struct RowBinding {
     unproved: bool,
 }
 
+// Call observations outlive one dispatch, but their construction frame does not.
+struct ObservedCall {
+    state: State,
+    delivered: Option<super::value::DeliveredCallPrefix>,
+}
+
 pub(super) struct Analysis<'a> {
     graph: &'a SummaryGraph,
     types: PreparedTypeUniverse<'a>,
@@ -1379,6 +1385,17 @@ impl<'a> ControlCodeInventory<'a> {
         let mut has_resource = false;
         let mut owner_rows = Vec::new();
         for code in &graph.code {
+            if let Control::Handler { effect, .. } | Control::Resource { effect, .. } = code {
+                charge(budget, effect.members.len())?;
+                for member in &effect.members {
+                    retain_owner_row_universe(
+                        member.provided.arguments(),
+                        &mut owner_rows,
+                        budget,
+                    )?;
+                    retain_owner_row_universe(member.native.arguments(), &mut owner_rows, budget)?;
+                }
+            }
             match code {
                 Control::Resource { effect, .. } => {
                     has_resource = true;
@@ -2371,10 +2388,6 @@ impl<'a> Analysis<'a> {
     ) -> Result<(), Failure> {
         let mut pending = VecDeque::new();
         let mut visited = HashSet::new();
-        struct ObservedCall {
-            state: State,
-            delivered: Option<super::value::DeliveredCallPrefix>,
-        }
         let mut calls: Vec<ObservedCall> = Vec::new();
         let mut observed_calls = HashMap::new();
         let mut revision = self
@@ -2419,51 +2432,13 @@ impl<'a> Analysis<'a> {
                     Control::Return => self.returned(state, &mut pending, &mut visited, budget)?,
                     Control::Unavailable => return Err(Failure::Invalid),
                     Control::Sequence(children) => {
-                        let mut ordinal = state.position.next;
-                        while children
-                            .get(ordinal)
-                            .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
-                        {
-                            charge(budget, 1)?;
-                            ordinal += 1;
-                        }
-                        if let Some(child) = children.get(ordinal).copied() {
-                            let mut next = state;
-                            // Pure trailing work has no continuation control. Keeping a
-                            // Next frame here multiplies recursive capture states.
-                            let mut following = ordinal + 1;
-                            while children.get(following).is_some_and(|child| {
-                                matches!(self.graph.code[*child], Control::Return)
-                            }) {
-                                charge(budget, 1)?;
-                                following += 1;
-                            }
-                            let position = Position {
-                                code,
-                                next: following,
-                            };
-                            if following < children.len() {
-                                next.push(
-                                    Frame::Next {
-                                        position,
-                                        context: next.context,
-                                        value_context: next.value_context,
-                                    },
-                                    budget,
-                                )?;
-                            }
-                            next.position = Position {
-                                code: child,
-                                next: 0,
-                            };
-                            if following < children.len() {
-                                Self::enqueue(next, &mut pending, &mut visited, budget)?;
-                            } else {
-                                Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
-                            }
-                        } else {
-                            self.returned(state, &mut pending, &mut visited, budget)?;
-                        }
+                        self.discover_sequence(
+                            state,
+                            children,
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?;
                     }
                     Control::Choice(children) => {
                         for child in children {
@@ -2479,68 +2454,7 @@ impl<'a> Analysis<'a> {
                     | Control::Cleanup { body, .. }
                     | Control::Resource { body, .. }
                     | Control::Registration { body, .. } => {
-                        let body = *body;
-                        let mut next = state;
-                        let frame = if matches!(self.graph.code[code], Control::Cleanup { .. }) {
-                            Frame::Cleanup {
-                                code,
-                                context: next.context,
-                                value_context: next.value_context,
-                                running: false,
-                                closing: None,
-                            }
-                        } else if matches!(self.graph.code[code], Control::Resource { .. }) {
-                            if !self.focusing {
-                                charge(budget, 1)?;
-                                self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                self.entries.push(next.copy(budget)?);
-                            }
-                            Frame::Resource {
-                                code,
-                                context: next.context,
-                                value_context: next.value_context,
-                                focused: false,
-                            }
-                        } else if matches!(self.graph.code[code], Control::Registration { .. }) {
-                            Frame::Registration {
-                                code,
-                                context: next.context,
-                                value_context: next.value_context,
-                            }
-                        } else {
-                            Frame::Handler {
-                                code,
-                                context: next.context,
-                                value_context: next.value_context,
-                                capture_context: next.value_context,
-                                owning_resource: match self.graph.code[code] {
-                                    Control::Handler {
-                                        owning_resource: Some(owner),
-                                        ..
-                                    } => {
-                                        if !matches!(
-                                            self.graph.code.get(owner),
-                                            Some(Control::Resource { .. })
-                                        ) {
-                                            return Err(Failure::Invalid);
-                                        }
-                                        Some(
-                                            enclosing_provider_resource(
-                                                &next, next.stack, owner, budget,
-                                            )?
-                                            .ok_or(Failure::Invalid)?,
-                                        )
-                                    }
-                                    _ => None,
-                                },
-                            }
-                        };
-                        next.push(frame, budget)?;
-                        next.position = Position {
-                            code: body,
-                            next: 0,
-                        };
-                        Self::enqueue(next, &mut pending, &mut visited, budget)?;
+                        self.discover_boundary(state, *body, &mut pending, &mut visited, budget)?;
                     }
                     Control::Request(_) => {
                         let label = self.label(code, state.context, budget)?;
@@ -2562,142 +2476,15 @@ impl<'a> Analysis<'a> {
                             budget,
                         )?;
                     }
-                    Control::Call { value, ty, source } => {
-                        let (successors, publication) = if let Some(data) = &mut self.data {
-                            charge(budget, state.heap.len() + 1)?;
-                            let index = if let Some(index) = observed_calls.get(&state) {
-                                *index
-                            } else {
-                                // One ordinal in the existing exact-State map and
-                                // one completed-phase field in its existing record.
-                                charge(budget, 2)?;
-                                observed_calls
-                                    .try_reserve(1)
-                                    .map_err(|_| Failure::Resource)?;
-                                let index = calls.len();
-                                observed_calls.insert(state.copy(budget)?, index);
-                                calls.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                calls.push(ObservedCall {
-                                    state: state.copy(budget)?,
-                                    delivered: None,
-                                });
-                                index
-                            };
-                            let (successors, publication) = data.calls_after(
-                                code,
-                                state.value_context,
-                                calls[index].delivered.as_ref(),
-                                budget,
-                            )?;
-                            (successors, Some((index, publication)))
-                        } else {
-                            charge(budget, value.targets.len())?;
-                            let mut targets = Vec::new();
-                            targets
-                                .try_reserve(value.targets.len())
-                                .map_err(|_| Failure::Resource)?;
-                            targets.extend(value.targets.iter().map(|target| (*target, 0)));
-                            (
-                                super::value::CallSuccessors {
-                                    targets,
-                                    unknown: value.unknown || value.targets.is_empty(),
-                                    returns: false,
-                                },
-                                None,
-                            )
-                        };
-                        let super::value::CallSuccessors {
-                            targets,
-                            unknown,
-                            returns,
-                        } = successors;
-                        let ty = *ty;
-                        let source = *source;
-                        for (target, value_context) in targets {
-                            let context = self.call_context(code, target, state.context, budget)?;
-                            let mut next = state.copy(budget)?;
-                            next.context = context;
-                            next.value_context = value_context;
-                            next.position = Position {
-                                code: self.graph.callables.get(target, budget)?.body,
-                                next: 0,
-                            };
-                            Self::enqueue_normalized(next, &mut pending, &mut visited, budget)?;
-                        }
-                        if returns || unknown {
-                            // The opaque call may return now or request again. No
-                            // uncertainty marker survives its normal return.
-                            self.returned(state.copy(budget)?, &mut pending, &mut visited, budget)?;
-                        }
-                        if unknown {
-                            let mut ty_owner = TypeArguments(Vec::new());
-                            ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
-                            ty_owner.0.push(self.substitute(
-                                &self.graph.types.0[ty],
-                                state.context,
-                                budget,
-                            )?);
-                            if let Some(effects) = ty_owner.0[0]
-                                .function_view()
-                                .and_then(|function| function.effects())
-                            {
-                                let mut labels = Vec::new();
-                                for effect in effects.known() {
-                                    let request = Request::effect(effect, source, budget)?;
-                                    let label = self.intern_label(request, budget)?;
-                                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                    labels.push(label);
-                                }
-                                if effects.tail().is_some() {
-                                    // Exact row bindings were expanded by substitute. Any
-                                    // remaining tail is unknown, not the enclosing call's row.
-                                    let mut request = Request::unknown(source);
-                                    charge(
-                                        budget,
-                                        self.contexts[state.context].bindings.len()
-                                            + self.contexts[state.context].rows.len(),
-                                    )?;
-                                    request.ambiguous_instance = self.contexts[state.context]
-                                        .bindings
-                                        .iter()
-                                        .any(|(_, ty)| *ty == usize::MAX)
-                                        || self.contexts[state.context]
-                                            .rows
-                                            .iter()
-                                            .any(|row| row.unproved);
-                                    request.opaque_row = Some(Arc::new(
-                                        clone_effect_row_with_budget(effects, budget)
-                                            .map_err(|_| Failure::Resource)?,
-                                    ));
-                                    let label = self.intern_label(request, budget)?;
-                                    charge(budget, 1)?;
-                                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
-                                    labels.push(label);
-                                }
-                                for label in labels {
-                                    let port = self
-                                        .data
-                                        .as_mut()
-                                        .map(|data| data.port(code, state.value_context, budget))
-                                        .transpose()?;
-                                    self.requested(
-                                        &state,
-                                        Event {
-                                            code,
-                                            label,
-                                            unknown: true,
-                                            port,
-                                        },
-                                        &mut pending,
-                                        &mut visited,
-                                        budget,
-                                    )?;
-                                }
-                            }
-                        }
-                        if let Some((index, publication)) = publication {
-                            calls[index].delivered = Some(publication.publish(budget)?);
-                        }
+                    Control::Call { .. } => {
+                        self.discover_call(
+                            state,
+                            &mut calls,
+                            &mut observed_calls,
+                            &mut pending,
+                            &mut visited,
+                            budget,
+                        )?;
                     }
                     Control::Resume { owner, value } => {
                         if state.position.next == 0 {
@@ -2737,6 +2524,9 @@ impl<'a> Analysis<'a> {
             };
             data.close(budget)?;
             if data.revision() == revision {
+                // Native transfers remain live during value growth. Missing
+                // operands reject only after both discovery queues stabilize.
+                data.check_native_storage(budget)?;
                 break;
             }
             revision = data.revision();
@@ -2749,6 +2539,286 @@ impl<'a> Analysis<'a> {
             for call in &calls {
                 pending.push_back(call.state.copy(budget)?);
             }
+        }
+        Ok(())
+    }
+
+    // Dispatch-specific owned temporaries must not remain live while a different
+    // control branch copies continuation graphs on a bounded thread stack.
+    #[inline(never)]
+    fn discover_sequence(
+        &mut self,
+        state: State,
+        children: &[usize],
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        let mut ordinal = state.position.next;
+        while children
+            .get(ordinal)
+            .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
+        {
+            charge(budget, 1)?;
+            ordinal += 1;
+        }
+        if let Some(child) = children.get(ordinal).copied() {
+            let mut next = state;
+            // Pure trailing work has no continuation control. Keeping a
+            // Next frame here multiplies recursive capture states.
+            let mut following = ordinal + 1;
+            while children
+                .get(following)
+                .is_some_and(|child| matches!(self.graph.code[*child], Control::Return))
+            {
+                charge(budget, 1)?;
+                following += 1;
+            }
+            let position = Position {
+                code,
+                next: following,
+            };
+            if following < children.len() {
+                next.push(
+                    Frame::Next {
+                        position,
+                        context: next.context,
+                        value_context: next.value_context,
+                    },
+                    budget,
+                )?;
+            }
+            next.position = Position {
+                code: child,
+                next: 0,
+            };
+            if following < children.len() {
+                Self::enqueue(next, pending, visited, budget)?;
+            } else {
+                Self::enqueue_normalized(next, pending, visited, budget)?;
+            }
+        } else {
+            self.returned(state, pending, visited, budget)?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn discover_boundary(
+        &mut self,
+        state: State,
+        body: usize,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        let mut next = state;
+        let frame = if matches!(self.graph.code[code], Control::Cleanup { .. }) {
+            Frame::Cleanup {
+                code,
+                context: next.context,
+                value_context: next.value_context,
+                running: false,
+                closing: None,
+            }
+        } else if matches!(self.graph.code[code], Control::Resource { .. }) {
+            if !self.focusing {
+                charge(budget, 1)?;
+                self.entries.try_reserve(1).map_err(|_| Failure::Resource)?;
+                self.entries.push(next.copy(budget)?);
+            }
+            Frame::Resource {
+                code,
+                context: next.context,
+                value_context: next.value_context,
+                focused: false,
+            }
+        } else if matches!(self.graph.code[code], Control::Registration { .. }) {
+            Frame::Registration {
+                code,
+                context: next.context,
+                value_context: next.value_context,
+            }
+        } else {
+            Frame::Handler {
+                code,
+                context: next.context,
+                value_context: next.value_context,
+                capture_context: next.value_context,
+                owning_resource: match self.graph.code[code] {
+                    Control::Handler {
+                        owning_resource: Some(owner),
+                        ..
+                    } => {
+                        if !matches!(self.graph.code.get(owner), Some(Control::Resource { .. })) {
+                            return Err(Failure::Invalid);
+                        }
+                        Some(
+                            enclosing_provider_resource(&next, next.stack, owner, budget)?
+                                .ok_or(Failure::Invalid)?,
+                        )
+                    }
+                    _ => None,
+                },
+            }
+        };
+        next.push(frame, budget)?;
+        next.position = Position {
+            code: body,
+            next: 0,
+        };
+        Self::enqueue(next, pending, visited, budget)?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn discover_call(
+        &mut self,
+        state: State,
+        calls: &mut Vec<ObservedCall>,
+        observed_calls: &mut HashMap<State, usize>,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let code = state.position.code;
+        let Control::Call { value, ty, source } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        let (successors, publication) = if let Some(data) = &mut self.data {
+            charge(budget, state.heap.len() + 1)?;
+            let index = if let Some(index) = observed_calls.get(&state) {
+                *index
+            } else {
+                // One ordinal in the existing exact-State map and
+                // one completed-phase field in its existing record.
+                charge(budget, 2)?;
+                observed_calls
+                    .try_reserve(1)
+                    .map_err(|_| Failure::Resource)?;
+                let index = calls.len();
+                observed_calls.insert(state.copy(budget)?, index);
+                calls.try_reserve(1).map_err(|_| Failure::Resource)?;
+                calls.push(ObservedCall {
+                    state: state.copy(budget)?,
+                    delivered: None,
+                });
+                index
+            };
+            let (successors, publication) = data.calls_after(
+                code,
+                state.value_context,
+                calls[index].delivered.as_ref(),
+                budget,
+            )?;
+            (successors, Some((index, publication)))
+        } else {
+            charge(budget, value.targets.len())?;
+            let mut targets = Vec::new();
+            targets
+                .try_reserve(value.targets.len())
+                .map_err(|_| Failure::Resource)?;
+            targets.extend(value.targets.iter().map(|target| (*target, 0)));
+            (
+                super::value::CallSuccessors {
+                    targets,
+                    unknown: value.unknown || value.targets.is_empty(),
+                    returns: false,
+                },
+                None,
+            )
+        };
+        let super::value::CallSuccessors {
+            targets,
+            unknown,
+            returns,
+        } = successors;
+        let ty = *ty;
+        let source = *source;
+        for (target, value_context) in targets {
+            let context = self.call_context(code, target, state.context, budget)?;
+            let mut next = state.copy(budget)?;
+            next.context = context;
+            next.value_context = value_context;
+            next.position = Position {
+                code: self.graph.callables.get(target, budget)?.body,
+                next: 0,
+            };
+            Self::enqueue_normalized(next, pending, visited, budget)?;
+        }
+        if returns || unknown {
+            // The opaque call may return now or request again. No
+            // uncertainty marker survives its normal return.
+            self.returned(state.copy(budget)?, pending, visited, budget)?;
+        }
+        if unknown {
+            let mut ty_owner = TypeArguments(Vec::new());
+            ty_owner.0.try_reserve(1).map_err(|_| Failure::Resource)?;
+            ty_owner
+                .0
+                .push(self.substitute(&self.graph.types.0[ty], state.context, budget)?);
+            if let Some(effects) = ty_owner.0[0]
+                .function_view()
+                .and_then(|function| function.effects())
+            {
+                let mut labels = Vec::new();
+                for effect in effects.known() {
+                    let request = Request::effect(effect, source, budget)?;
+                    let label = self.intern_label(request, budget)?;
+                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    labels.push(label);
+                }
+                if effects.tail().is_some() {
+                    // Exact row bindings were expanded by substitute. Any
+                    // remaining tail is unknown, not the enclosing call's row.
+                    let mut request = Request::unknown(source);
+                    charge(
+                        budget,
+                        self.contexts[state.context].bindings.len()
+                            + self.contexts[state.context].rows.len(),
+                    )?;
+                    request.ambiguous_instance = self.contexts[state.context]
+                        .bindings
+                        .iter()
+                        .any(|(_, ty)| *ty == usize::MAX)
+                        || self.contexts[state.context]
+                            .rows
+                            .iter()
+                            .any(|row| row.unproved);
+                    request.opaque_row = Some(Arc::new(
+                        clone_effect_row_with_budget(effects, budget)
+                            .map_err(|_| Failure::Resource)?,
+                    ));
+                    let label = self.intern_label(request, budget)?;
+                    charge(budget, 1)?;
+                    labels.try_reserve(1).map_err(|_| Failure::Resource)?;
+                    labels.push(label);
+                }
+                for label in labels {
+                    let port = self
+                        .data
+                        .as_mut()
+                        .map(|data| data.port(code, state.value_context, budget))
+                        .transpose()?;
+                    self.requested(
+                        &state,
+                        Event {
+                            code,
+                            label,
+                            unknown: true,
+                            port,
+                        },
+                        pending,
+                        visited,
+                        budget,
+                    )?;
+                }
+            }
+        }
+        if let Some((index, publication)) = publication {
+            calls[index].delivered = Some(publication.publish(budget)?);
         }
         Ok(())
     }
@@ -3210,6 +3280,145 @@ impl<'a> Analysis<'a> {
         Ok(())
     }
 
+    fn match_group_source(
+        &mut self,
+        code: usize,
+        context: usize,
+        label: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(bool, bool), Failure> {
+        let Control::Handler { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        if effect.members.is_empty() {
+            let target = self.label(code, context, budget)?;
+            return self.match_labels(label, target, budget);
+        }
+        let mut possible = false;
+        let mut outward = true;
+        charge(budget, effect.members.len())?;
+        for member in &effect.members {
+            let request = Request {
+                effect: Some(Arc::clone(&member.provided)),
+                ..Request::unknown(effect.source)
+            };
+            let target = self.specialize_label(&request, context, budget)?;
+            let relation = self.match_labels(label, target, budget)?;
+            possible |= relation.0;
+            outward &= relation.1;
+        }
+        Ok((possible, outward))
+    }
+
+    fn match_group_native(
+        &mut self,
+        state: &State,
+        resource: Edge,
+        label: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(bool, bool), Failure> {
+        let Frame::Resource {
+            code,
+            context,
+            value_context,
+            ..
+        } = resource.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        let Control::Resource { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        if effect.members.is_empty() {
+            let target = self.label(code, context, budget)?;
+            return self.match_labels(label, target, budget);
+        }
+        // One structural group cut chooses the current phase. Restoring the
+        // body places its Handler before the suspended Clause, removing that
+        // clause's native permission. Unrelated frames do not select a member.
+        let (cuts, absent) = selections(
+            state,
+            state.stack,
+            |frame| {
+                let handler = match frame {
+                    Frame::Handler { code, .. } | Frame::RemovedHandler { code, .. } => Some(code),
+                    Frame::Clause { handler, .. } => Some(handler),
+                    _ => None,
+                };
+                let relevant = handler.is_some_and(|handler| {
+                    matches!(
+                self.graph.code.get(handler),
+                Some(Control::Handler { owning_resource: Some(owner), effect, .. })
+                    if *owner == code && !effect.members.is_empty())
+                });
+                Ok((relevant, !relevant))
+            },
+            budget,
+        )?;
+        let mut possible = false;
+        let mut outward = false;
+        if absent {
+            // Acquire and finish execute outside the source group and retain
+            // only the original outer lifecycle interpreter.
+            let target = self.label(code, context, budget)?;
+            let relation = self.match_labels(label, target, budget)?;
+            possible |= relation.0;
+            outward |= relation.1;
+        }
+        for cut in cuts {
+            charge(budget, 1)?;
+            let Frame::Clause {
+                handler,
+                ordinal,
+                context,
+                ..
+            } = cut.boundary.frame
+            else {
+                outward = true;
+                continue;
+            };
+            let actual = enclosing_provider_resource(state, cut.boundary.next, code, budget)?;
+            if actual
+                != Some(ProviderResourceOccurrence {
+                    code,
+                    value_context,
+                })
+            {
+                outward = true;
+                continue;
+            }
+            let Control::Handler { effect, .. } = &self.graph.code[handler] else {
+                return Err(Failure::Invalid);
+            };
+            let selected = *effect.clause_members.get(ordinal).ok_or(Failure::Invalid)?;
+            let member = effect.members.get(selected).ok_or(Failure::Invalid)?;
+            let request = Request {
+                effect: Some(Arc::clone(&member.native)),
+                ..Request::unknown(effect.source)
+            };
+            let target = self.specialize_label(&request, context, budget)?;
+            let relation = self.match_labels(label, target, budget)?;
+            possible |= relation.0;
+            outward |= relation.1;
+        }
+        Ok((possible, outward))
+    }
+
+    fn boundary_match_key(&self, frame: Frame) -> (usize, usize, Option<Frame>) {
+        let (code, context) = match frame {
+            Frame::Handler { code, context, .. }
+            | Frame::RemovedHandler { code, context, .. }
+            | Frame::Resource { code, context, .. } => (code, context),
+            _ => unreachable!("only interpreter boundaries have match keys"),
+        };
+        let grouped = matches!(&self.graph.code[code],
+            Control::Handler { effect, .. } | Control::Resource { effect, .. }
+                if !effect.members.is_empty());
+        // Preserve legacy code/context cache hits. Group permissions additionally
+        // depend on the exact owner occurrence and selected active phase.
+        (code, context, grouped.then_some(frame))
+    }
+
     fn requested(
         &mut self,
         state: &State,
@@ -3218,6 +3427,18 @@ impl<'a> Analysis<'a> {
         visited: &mut HashSet<State>,
         budget: &mut TypeWorkBudget,
     ) -> Result<(), Failure> {
+        // Finish boundary specialization before reserving the continuation
+        // frame, which contains copied states and capture construction locals.
+        let boundaries = self.requested_boundaries(state, event, budget)?;
+        self.requested_continuations(state, event, boundaries, pending, visited, budget)
+    }
+
+    fn requested_boundaries(
+        &mut self,
+        state: &State,
+        event: Event,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(Vec<Selection>, bool), Failure> {
         // Resolve labels first so selection's callback does not borrow the
         // shared structural work counter a second time.
         let mut matching = HashMap::new();
@@ -3226,45 +3447,64 @@ impl<'a> Analysis<'a> {
             if let Frame::Handler { code, context, .. }
             | Frame::Resource { code, context, .. }
             | Frame::RemovedHandler { code, context, .. } = edge.frame
-                && !matching.contains_key(&(code, context))
+                && !matching.contains_key(&self.boundary_match_key(edge.frame))
             {
-                let label = self.label(code, context, budget)?;
-                let relation = self.match_labels(event.label, label, budget)?;
+                let grouped = match (&edge.frame, &self.graph.code[code]) {
+                    (Frame::Resource { .. }, Control::Resource { effect, .. })
+                    | (
+                        Frame::Handler { .. } | Frame::RemovedHandler { .. },
+                        Control::Handler { effect, .. },
+                    ) => !effect.members.is_empty(),
+                    _ => return Err(Failure::Invalid),
+                };
+                let relation = if !grouped {
+                    // Keep the legacy label path outside the grouped helpers:
+                    // their request temporaries add a live frame even when
+                    // the selected boundary has no family members.
+                    let target = self.label(code, context, budget)?;
+                    self.match_labels(event.label, target, budget)?
+                } else {
+                    match edge.frame {
+                        Frame::Resource { .. } => {
+                            self.match_group_native(state, *edge, event.label, budget)?
+                        }
+                        Frame::Handler { .. } | Frame::RemovedHandler { .. } => {
+                            self.match_group_source(code, context, event.label, budget)?
+                        }
+                        _ => return Err(Failure::Invalid),
+                    }
+                };
                 matching.try_reserve(1).map_err(|_| Failure::Resource)?;
-                matching.insert((code, context), relation);
+                matching.insert(self.boundary_match_key(edge.frame), relation);
             }
         }
-        let (selected, escaped) = selections(
+        selections(
             state,
             state.stack,
             |frame| {
                 Ok(match frame {
-                    Frame::Handler { code, context, .. }
-                    | Frame::Resource { code, context, .. }
-                    | Frame::RemovedHandler { code, context, .. } => matching[&(code, context)],
+                    Frame::Handler { .. }
+                    | Frame::Resource { .. }
+                    | Frame::RemovedHandler { .. } => matching[&self.boundary_match_key(frame)],
                     _ => (false, true),
                 })
             },
             budget,
-        )?;
+        )
+    }
+
+    fn requested_continuations(
+        &mut self,
+        state: &State,
+        event: Event,
+        boundaries: (Vec<Selection>, bool),
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (selected, escaped) = boundaries;
         if escaped {
-            if let (Some(data), Some(port)) = (&mut self.data, event.port) {
-                data.external_result(port, budget)?;
-            }
-            let (owners, _) = selections(
-                state,
-                state.stack,
-                |frame| Ok((matches!(frame, Frame::Resource { .. }), true)),
-                budget,
-            )?;
-            for owner in owners {
-                self.check_payload(state, event, &[owner.boundary], budget)?;
-            }
-            if event.unknown {
-                Self::enqueue(state.copy(budget)?, pending, visited, budget)?;
-            } else {
-                self.returned(state.copy(budget)?, pending, visited, budget)?;
-            }
+            self.requested_escape(state, event, pending, visited, budget)?;
         }
         for selected in selected {
             if let Frame::RemovedHandler { code, .. } = selected.boundary.frame {
@@ -3303,30 +3543,37 @@ impl<'a> Analysis<'a> {
                 });
             }
             if matches!(selected.boundary.frame, Frame::Resource { .. }) {
-                if let (Some(data), Some(port)) = (&mut self.data, event.port) {
-                    data.external_result(port, budget)?;
-                }
-                // The trusted interpreter completes this operation without
-                // transferring its operand outside the owning scope.
-                self.returned(state.copy(budget)?, pending, visited, budget)?;
+                self.requested_native(state, event, &selected, pending, visited, budget)?;
                 continue;
             }
             self.check_payload(state, event, &selected.prefix, budget)?;
             let Frame::Handler {
                 code: handler,
                 context,
-                value_context,
-                capture_context,
                 ..
             } = selected.boundary.frame
             else {
                 return Err(Failure::Invalid);
             };
-            let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
+            let Control::Handler {
+                clauses, effect, ..
+            } = &self.graph.code[handler]
+            else {
                 return Err(Failure::Invalid);
             };
             for (ordinal, clause) in clauses.iter().enumerate() {
                 charge(budget, 1)?;
+                if !effect.members.is_empty()
+                    && !self.requested_group_clause_matches(
+                        handler,
+                        ordinal,
+                        context,
+                        event.label,
+                        budget,
+                    )?
+                {
+                    continue;
+                }
                 if let Control::Request(request) = &self.graph.code[event.code]
                     && request.operation.is_some()
                     && clause.operation.is_some()
@@ -3334,79 +3581,258 @@ impl<'a> Analysis<'a> {
                 {
                     continue;
                 }
-                let clause_context = if let (Some(data), Some(port)) = (&mut self.data, event.port)
-                {
-                    data.dispatch(
-                        port,
-                        handler,
-                        ordinal,
-                        capture_context,
-                        value_context,
-                        budget,
-                    )?
-                } else {
-                    value_context
-                };
-                let mut next = state.copy(budget)?;
-                next.stack = selected.boundary.next;
-                let mut prefix = copy_slice(&selected.prefix, budget)?;
-                // An opaque request resumes at the same call position.
-                let root = if event.unknown {
-                    let position = Position {
-                        code: event.code,
-                        next: 0,
-                    };
-                    let address = Address::Slot {
-                        region: Region::Active,
-                        site: Site::Next(position),
-                        allocation_context: state.value_context,
-                        old: false,
-                    };
-                    prefix.try_reserve(1).map_err(|_| Failure::Resource)?;
-                    prefix.push(Edge {
-                        address,
-                        frame: Frame::Next {
-                            position,
-                            context: state.context,
-                            value_context: state.value_context,
-                        },
-                        next: state.stack,
-                    });
-                    address
-                } else {
-                    state.stack
-                };
-                let capture = next.copy_segment(
-                    root,
-                    &prefix,
-                    Some(selected.boundary),
-                    Address::End,
-                    Region::Capture(handler, event.code),
+                self.requested_clause(
+                    state,
+                    event,
+                    (&selected, ordinal),
+                    pending,
+                    visited,
                     budget,
                 )?;
-                next.push(
-                    Frame::Clause {
-                        handler,
-                        ordinal,
-                        owner: clause.owner,
-                        context,
-                        value_context,
-                        capture,
-                        capture_context,
-                        clause_context,
-                        event,
-                        consumed: false,
-                    },
-                    budget,
-                )?;
-                next.context = context;
-                next.value_context = clause_context;
-                next.position = Position {
-                    code: clause.body,
-                    next: 0,
-                };
-                Self::enqueue(next, pending, visited, budget)?;
             }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn requested_escape(
+        &mut self,
+        state: &State,
+        event: Event,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        // A sealed native relation is usable only at its selected live
+        // interpreter. Escaping it is not a scalar-result shortcut.
+        if matches!(
+            &self.graph.code[event.code],
+            Control::Request(Request {
+                native_storage: Some(_),
+                ..
+            })
+        ) {
+            return Err(Failure::Invalid);
+        }
+        if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+            data.external_result(port, budget)?;
+        }
+        let (owners, _) = selections(
+            state,
+            state.stack,
+            |frame| Ok((matches!(frame, Frame::Resource { .. }), true)),
+            budget,
+        )?;
+        for owner in owners {
+            self.check_payload(state, event, &[owner.boundary], budget)?;
+        }
+        if event.unknown {
+            Self::enqueue(state.copy(budget)?, pending, visited, budget)?;
+        } else {
+            self.returned(state.copy(budget)?, pending, visited, budget)?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn requested_native(
+        &mut self,
+        state: &State,
+        event: Event,
+        selected: &Selection,
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if matches!(
+            &self.graph.code[event.code],
+            Control::Request(Request {
+                native_storage: Some(_),
+                ..
+            })
+        ) && (self.labels[event.label].ambiguous_instance
+            || self.labels[event.label].effect.is_none())
+        {
+            return Err(Failure::Invalid);
+        }
+        if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+            if let Control::Request(Request {
+                native_storage: Some(relation),
+                ..
+            }) = &self.graph.code[event.code]
+            {
+                let Frame::Resource {
+                    code,
+                    value_context,
+                    ..
+                } = selected.boundary.frame
+                else {
+                    return Err(Failure::Invalid);
+                };
+                data.external_native_result(port, code, value_context, *relation, budget)?;
+            } else {
+                data.external_result(port, budget)?;
+            }
+        }
+        // The trusted interpreter completes this operation without
+        // transferring its operand outside the owning scope.
+        self.returned(state.copy(budget)?, pending, visited, budget)?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn requested_group_clause_matches(
+        &mut self,
+        handler: usize,
+        ordinal: usize,
+        context: usize,
+        label: usize,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let Control::Handler { effect, .. } = &self.graph.code[handler] else {
+            return Err(Failure::Invalid);
+        };
+        let member = *effect.clause_members.get(ordinal).ok_or(Failure::Invalid)?;
+        let member = effect.members.get(member).ok_or(Failure::Invalid)?;
+        let request = Request {
+            effect: Some(Arc::clone(&member.provided)),
+            ..Request::unknown(effect.source)
+        };
+        let target = self.specialize_label(&request, context, budget)?;
+        Ok(self.match_labels(label, target, budget)?.0)
+    }
+
+    #[inline(never)]
+    fn requested_clause(
+        &mut self,
+        state: &State,
+        event: Event,
+        clause: (&Selection, usize),
+        pending: &mut VecDeque<State>,
+        visited: &mut HashSet<State>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (selected, ordinal) = clause;
+        let Frame::Handler {
+            code: handler,
+            context,
+            value_context,
+            capture_context,
+            ..
+        } = selected.boundary.frame
+        else {
+            return Err(Failure::Invalid);
+        };
+        let Control::Handler { clauses, .. } = &self.graph.code[handler] else {
+            return Err(Failure::Invalid);
+        };
+        let clause = clauses.get(ordinal).ok_or(Failure::Invalid)?;
+        let clause_context = if let (Some(data), Some(port)) = (&mut self.data, event.port) {
+            data.dispatch(
+                port,
+                handler,
+                ordinal,
+                capture_context,
+                value_context,
+                budget,
+            )?
+        } else {
+            value_context
+        };
+        let mut next = state.copy(budget)?;
+        next.stack = selected.boundary.next;
+        let mut prefix = copy_slice(&selected.prefix, budget)?;
+        // An opaque request resumes at the same call position.
+        let root = if event.unknown {
+            let position = Position {
+                code: event.code,
+                next: 0,
+            };
+            let address = Address::Slot {
+                region: Region::Active,
+                site: Site::Next(position),
+                allocation_context: state.value_context,
+                old: false,
+            };
+            prefix.try_reserve(1).map_err(|_| Failure::Resource)?;
+            prefix.push(Edge {
+                address,
+                frame: Frame::Next {
+                    position,
+                    context: state.context,
+                    value_context: state.value_context,
+                },
+                next: state.stack,
+            });
+            address
+        } else {
+            state.stack
+        };
+        let capture = next.copy_segment(
+            root,
+            &prefix,
+            Some(selected.boundary),
+            Address::End,
+            Region::Capture(handler, event.code),
+            budget,
+        )?;
+        next.push(
+            Frame::Clause {
+                handler,
+                ordinal,
+                owner: clause.owner,
+                context,
+                value_context,
+                capture,
+                capture_context,
+                clause_context,
+                event,
+                consumed: false,
+            },
+            budget,
+        )?;
+        next.context = context;
+        next.value_context = clause_context;
+        next.position = Position {
+            code: clause.body,
+            next: 0,
+        };
+        Self::enqueue(next, pending, visited, budget)?;
+        Ok(())
+    }
+
+    fn retain_group_cleanup_sources(
+        &mut self,
+        code: usize,
+        context: usize,
+        retained: &mut Vec<EffectInstance>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let Control::Handler { effect, .. } = &self.graph.code[code] else {
+            return Err(Failure::Invalid);
+        };
+        if effect.members.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        // These are the source handlers of the same retained owner group.
+        // Native member permissions remain selected by the actual clause.
+        charge(budget, effect.members.len())?;
+        retained
+            .try_reserve(effect.members.len())
+            .map_err(|_| Failure::Resource)?;
+        for member in &effect.members {
+            let request = Request {
+                effect: Some(Arc::clone(&member.provided)),
+                ..Request::unknown(effect.source)
+            };
+            let label = self.specialize_label(&request, context, budget)?;
+            let Some(effect) = &self.labels[label].effect else {
+                return Err(Failure::Invalid);
+            };
+            retained.push(
+                crate::core::effect::clone_effect_instance_with_budget(effect, budget)
+                    .map_err(|_| Failure::Resource)?,
+            );
         }
         Ok(())
     }
@@ -3580,6 +4006,13 @@ impl<'a> Analysis<'a> {
             else {
                 return Err(Failure::Invalid);
             };
+            let Control::Handler { effect, .. } = &self.graph.code[code] else {
+                return Err(Failure::Invalid);
+            };
+            if !effect.members.is_empty() {
+                self.retain_group_cleanup_sources(code, context, &mut retained, budget)?;
+                continue;
+            }
             let label = self.label(code, context, budget)?;
             if let Some(effect) = &self.labels[label].effect {
                 retained.push(

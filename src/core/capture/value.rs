@@ -23,6 +23,7 @@ enum Expr {
         action: usize,
     },
     Scalar,
+    IndependentCallable,
     Slot,
     Unknown,
     Alias(usize),
@@ -126,6 +127,7 @@ impl Expr {
         charge(budget, 1)?;
         Ok(match self {
             Self::Scalar => Self::Scalar,
+            Self::IndependentCallable => Self::IndependentCallable,
             Self::Slot => Self::Slot,
             Self::Unknown => Self::Unknown,
             Self::Alias(value) => Self::Alias(value + offset),
@@ -636,7 +638,7 @@ impl Graph {
                 continue;
             }
             let children: &[usize] = match self.expressions.get(id).ok_or(Failure::Invalid)? {
-                Expr::Scalar | Expr::Constructor(_) => &[],
+                Expr::Scalar | Expr::IndependentCallable | Expr::Constructor(_) => &[],
                 Expr::Alias(value) | Expr::Project { value, .. } => std::slice::from_ref(value),
                 Expr::Merge(values) | Expr::Tuple(values) => values,
                 Expr::Function { captures, .. } => captures,
@@ -836,7 +838,8 @@ impl Graph {
                     children.push(*value);
                     children.extend(evidence.iter().map(|(_, _, argument)| *argument));
                 }
-                Expr::Scalar | Expr::Unknown | Expr::Constructor(_) => {}
+                Expr::Scalar | Expr::IndependentCallable | Expr::Unknown | Expr::Constructor(_) => {
+                }
             }
             charge(budget, children.len() + bindings.len())?;
             pending
@@ -954,6 +957,15 @@ impl Graph {
             super::MethodTarget::Binder(binder) => self.symbol(symbols, binder, source, budget),
             super::MethodTarget::Abstract(requirement) => {
                 self.evidence_slot(requirement, method, source, budget)
+            }
+            // Only the exact direct-node branch below may consume this sealed
+            // original receipt; adapter/prerequisite uses retain no authority.
+            super::MethodTarget::DeclaredLayout(_) => Err(Failure::Invalid),
+            super::MethodTarget::NativeLayout(producer) => {
+                if method != producer.method() {
+                    return Err(Failure::Invalid);
+                }
+                self.push(Expr::IndependentCallable, source, budget)
             }
             super::MethodTarget::Adapter { value, .. } => {
                 adapters.get(value).copied().ok_or(Failure::Invalid)
@@ -1260,7 +1272,7 @@ impl Graph {
         Ok(adapter_values)
     }
 
-    #[allow(clippy::too_many_arguments)] // Separate phases keep the small-stack construction boundary bounded.
+    #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid another owning environment.
     fn build_expression<F: CoreOperationFamily>(
         &mut self,
         id: usize,
@@ -1274,8 +1286,41 @@ impl Graph {
         budget: &mut TypeWorkBudget,
     ) -> Result<Expr, Failure> {
         let node = nodes.get(id).ok_or(Failure::Invalid)?;
+        match F::pure(&node.kind) {
+            Some(PureExprKind::Computation(computation)) => self.build_computation(
+                computation,
+                id,
+                nodes,
+                symbols,
+                types,
+                methods,
+                adapters,
+                headers,
+                budget,
+            ),
+            pure => self.build_non_computation(
+                pure, id, nodes, symbols, types, operation, methods, adapters, headers, budget,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // The borrowed original node and phase inputs retain their existing authority.
+    fn build_non_computation<F: CoreOperationFamily>(
+        &mut self,
+        pure: Option<&PureExprKind>,
+        id: usize,
+        nodes: &[StoredNode<F>],
+        symbols: &mut HashMap<BinderId, usize>,
+        types: &mut HashMap<crate::types::TypeVariableId, usize>,
+        operation: fn(&F::Kind) -> Option<&EffectOperation>,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        headers: &mut FunctionMetadataPreparation<'_, F>,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        let node = nodes.get(id).ok_or(Failure::Invalid)?;
         let source = self.sources[id];
-        Ok(match F::pure(&node.kind) {
+        Ok(match pure {
             Some(PureExprKind::Variable(variable)) => {
                 Expr::Alias(self.symbol(symbols, variable.binder(), source, budget)?)
             }
@@ -1324,6 +1369,15 @@ impl Graph {
             }
             Some(PureExprKind::Value(PureValue::String(_))) => Expr::Scalar,
             Some(PureExprKind::Value(PureValue::Intrinsic(intrinsic))) => {
+                // Do not inherit the legacy intrinsic wildcard's scalar proof
+                // until the composition authenticates this complete producer.
+                if let crate::core::packed::Intrinsic::ForeignLayoutWitness { producer } =
+                    intrinsic.operation()
+                {
+                    return Self::build_layout_witness(
+                        nodes, id, &node.ty, producer, methods, adapters, budget,
+                    );
+                }
                 self.targets.try_reserve(1).map_err(|_| Failure::Resource)?;
                 self.targets.insert(id, id);
                 let parameter = self.push(Expr::Slot, source, budget)?;
@@ -1367,21 +1421,75 @@ impl Graph {
             Some(PureExprKind::Value(PureValue::Constructor(constructor))) => {
                 Expr::Constructor(constructor.constructor())
             }
-            Some(PureExprKind::Computation(computation)) => self.build_computation(
-                computation,
-                id,
-                nodes,
-                symbols,
-                types,
-                methods,
-                adapters,
-                headers,
-                budget,
-            )?,
+            Some(PureExprKind::Computation(_)) => return Err(Failure::Invalid),
             _ => self.build_operation(
                 id, nodes, symbols, types, operation, methods, adapters, headers, budget,
             )?,
         })
+    }
+
+    fn build_layout_witness<F: CoreOperationFamily>(
+        nodes: &[StoredNode<F>],
+        id: usize,
+        ty: &Type,
+        producer: crate::foreign::ForeignLayoutProducer,
+        methods: &super::MethodUses<'_>,
+        adapters: &[super::MethodAdapter],
+        budget: &mut TypeWorkBudget,
+    ) -> Result<Expr, Failure> {
+        // Final admission can reuse independent validation of
+        // this exact immutable node and complete producer header.
+        let mut independently_admitted = match methods.authentic_layouts {
+            Some(layouts) => layouts
+                .authenticates(nodes, id, producer, budget)
+                .map_err(|_| Failure::Resource)?,
+            None => false,
+        };
+        if !independently_admitted && !methods.source_layouts.is_empty() {
+            for source in methods.source_layouts {
+                independently_admitted |= source
+                    .authenticates_layout(nodes, id, producer, budget)
+                    .map_err(|failure| {
+                        if failure.reason() == crate::core::ValidationReason::Resource {
+                            Failure::Resource
+                        } else {
+                            Failure::Invalid
+                        }
+                    })?;
+            }
+        }
+        if !independently_admitted && let Some(source) = methods.source_occurrences {
+            independently_admitted = source
+                .authenticates(nodes, id, producer, budget)
+                .map_err(|()| Failure::Resource)?;
+        }
+        // Source queries instead retain original selected producer
+        // evidence. Neither route accepts a name or scalar tag.
+        let mut admitted = independently_admitted;
+        if !admitted {
+            charge(budget, methods.native_layouts.len())?;
+            admitted = methods.native_layouts.contains(&producer);
+        }
+        if !admitted {
+            // Native evidence can be an implementation prerequisite,
+            // rather than a direct method occurrence at this node.
+            charge(budget, adapters.len())?;
+            for adapter in adapters {
+                charge(budget, adapter.prerequisites.len())?;
+                admitted |= adapter.prerequisites.iter().any(|(_, _, target)|
+                    matches!(target, super::MethodTarget::NativeLayout(selected) if *selected == producer));
+            }
+        }
+        if !admitted {
+            return Err(Failure::Invalid);
+        }
+        if !independently_admitted
+            && !crate::types::same_type_with_budget(ty, &producer.producer_type(), budget)
+                .map_err(|_| Failure::Resource)?
+        {
+            return Err(Failure::Invalid);
+        }
+        Ok(Expr::IndependentCallable)
     }
 
     #[allow(clippy::too_many_arguments)] // Borrowed phase inputs avoid another owning environment.
@@ -1675,24 +1783,38 @@ impl Graph {
                     EffectOperation::ProviderScope(scope) => (&scope.handler, Some(scope.as_ref())),
                     _ => return Err(Failure::Invalid),
                 };
-                charge(budget, handler.clauses().len())?;
+                let members = provider.map_or(1, |scope| scope.member_count());
+                if members > 1 {
+                    charge(budget, members)?;
+                }
                 let mut clauses = Vec::new();
-                clauses
-                    .try_reserve(handler.clauses().len())
-                    .map_err(|_| Failure::Resource)?;
-                for clause in handler.clauses() {
-                    clauses.push(self.clause_data(
-                        clause.pattern(),
-                        index(clause.body()),
-                        source,
-                        nodes,
-                        symbols,
-                        types,
-                        methods,
-                        adapters,
-                        headers,
-                        budget,
-                    )?);
+                for member in 0..members {
+                    let member_handler = if let Some(scope) = provider {
+                        scope.handler_member(member).ok_or(Failure::Invalid)?
+                    } else {
+                        handler
+                    };
+                    if member_handler.body() != handler.body() {
+                        return Err(Failure::Invalid);
+                    }
+                    charge(budget, member_handler.clauses().len())?;
+                    clauses
+                        .try_reserve(member_handler.clauses().len())
+                        .map_err(|_| Failure::Resource)?;
+                    for clause in member_handler.clauses() {
+                        clauses.push(self.clause_data(
+                            clause.pattern(),
+                            index(clause.body()),
+                            source,
+                            nodes,
+                            symbols,
+                            types,
+                            methods,
+                            adapters,
+                            headers,
+                            budget,
+                        )?);
+                    }
                 }
                 let handler = Expr::Handler {
                     body: index(handler.body()),
@@ -1703,7 +1825,13 @@ impl Graph {
                     let handle = self.symbol(symbols, scope.handle.id(), source, budget)?;
                     let identity =
                         self.symbol(types, scope.descriptor.identity(), source, budget)?;
-                    let state = self.symbol(symbols, scope.handler_state.id(), source, budget)?;
+                    // Preserve original symbol/allocation order for a legacy
+                    // single handler; only a genuine group extends the binds.
+                    let primary_state = if scope.member_count() == 1 {
+                        Some(self.symbol(symbols, scope.handler_state.id(), source, budget)?)
+                    } else {
+                        None
+                    };
                     let finish =
                         self.symbol(symbols, scope.finish.parameter.id(), source, budget)?;
                     let acquire =
@@ -1725,15 +1853,34 @@ impl Graph {
                         source,
                         budget,
                     )?;
-                    let with_state = self.push(
-                        Expr::Bind {
-                            binder: state,
-                            initializer: handle,
-                            body: with_finish,
-                        },
-                        source,
-                        budget,
-                    )?;
+                    let mut with_state = with_finish;
+                    if scope.member_count() > 1 {
+                        charge(budget, scope.member_count())?;
+                    }
+                    for member in (0..scope.member_count()).rev() {
+                        let state = if let Some(primary) = primary_state {
+                            primary
+                        } else {
+                            self.symbol(
+                                symbols,
+                                scope
+                                    .handler_state_member(member)
+                                    .ok_or(Failure::Invalid)?
+                                    .id(),
+                                source,
+                                budget,
+                            )?
+                        };
+                        with_state = self.push(
+                            Expr::Bind {
+                                binder: state,
+                                initializer: handle,
+                                body: with_state,
+                            },
+                            source,
+                            budget,
+                        )?;
+                    }
                     let acquired = self.push(
                         Expr::Bind {
                             binder: acquire,
@@ -1832,6 +1979,10 @@ impl Graph {
             capture_ports,
             conditional,
             None,
+            None,
+            &[],
+            None,
+            None,
             budget,
         )
     }
@@ -1852,9 +2003,18 @@ impl Graph {
         capture_ports: &[crate::core::NodeId],
         conditional: Option<(&[ConditionalClauseInput<'_>], &mut Option<usize>)>,
         domain: Option<&HashSet<usize>>,
+        authentic_layouts: Option<&super::AuthenticatedCaptureLayouts<'_>>,
+        source_layouts: &[super::super::provider::AuthenticatedProviderSourceCapture<'_>],
+        source_occurrences: Option<
+            &super::super::dialect::AuthenticatedSourceLayoutOccurrences<'_>,
+        >,
+        declared: Option<&super::super::provider::DeclaredLayoutMethods<'_>>,
         budget: &mut TypeWorkBudget,
     ) -> Result<Self, Failure> {
-        let methods = super::MethodUses::new(methods, budget)?;
+        let mut methods = super::MethodUses::new_for_nodes(methods, nodes, declared, budget)?;
+        methods.authentic_layouts = authentic_layouts;
+        methods.source_layouts = source_layouts;
+        methods.source_occurrences = source_occurrences;
         let mut headers = FunctionMetadataPreparation::new(nodes, operation);
         let mut graph = Self {
             expressions: Vec::new(),
@@ -1927,14 +2087,22 @@ impl Graph {
                 .iter()
                 .find(|method| method.requirement.is_none())
             {
-                let selected = graph.method_target(
-                    method.target,
-                    method.method,
-                    &adapter_values,
-                    &mut symbols,
-                    source,
-                    budget,
-                )?;
+                let selected = if let super::MethodTarget::DeclaredLayout(declared) = method.target
+                {
+                    if !declared.matches(method.node, method.method) {
+                        return Err(Failure::Invalid);
+                    }
+                    graph.push(Expr::IndependentCallable, source, budget)?
+                } else {
+                    graph.method_target(
+                        method.target,
+                        method.method,
+                        &adapter_values,
+                        &mut symbols,
+                        source,
+                        budget,
+                    )?
+                };
                 if method.arguments == 0 {
                     graph.expressions[id] = Expr::Alias(selected);
                 } else {
@@ -2029,6 +2197,18 @@ impl Graph {
         graph
             .metadata
             .extend(types.iter().map(|(variable, slot)| (*slot, *variable)));
+        if !methods.declared_payloads.is_empty() {
+            for (slot, variable) in &graph.metadata {
+                charge(budget, methods.declared_payloads.len())?;
+                if methods.declared_payloads.contains(variable) {
+                    let expression = graph.expressions.get_mut(*slot).ok_or(Failure::Invalid)?;
+                    if !matches!(expression, Expr::Slot) {
+                        return Err(Failure::Invalid);
+                    }
+                    *expression = Expr::Scalar;
+                }
+            }
+        }
         let mut retained = Vec::new();
         for (binder, summary) in imports {
             charge(budget, retained.len() + 1)?;
@@ -2175,17 +2355,16 @@ impl Graph {
             return Err(Failure::Invalid);
         };
         let mut expression = *body;
-        // These are the two hidden state bindings emitted with the real scope.
-        for _ in 0..2 {
+        // Every admitted member state and the finisher share one owner.
+        // Walk the actual finite binding chain instead of assuming two binds.
+        loop {
             charge(budget, 1)?;
-            let Expr::Bind { body, .. } =
-                self.expressions.get(expression).ok_or(Failure::Invalid)?
-            else {
-                return Err(Failure::Invalid);
-            };
-            expression = *body;
+            match self.expressions.get(expression).ok_or(Failure::Invalid)? {
+                Expr::Bind { body, .. } => expression = *body,
+                Expr::Cleanup { .. } => break,
+                _ => return Err(Failure::Invalid),
+            }
         }
-        charge(budget, 1)?;
         let Expr::Cleanup { body, .. } =
             self.expressions.get(expression).ok_or(Failure::Invalid)?
         else {
@@ -2255,11 +2434,22 @@ fn scalar(ty: &Type) -> bool {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum Atom {
     Free,
+    IndependentCallable,
     Unknown,
     Closure(usize, usize),
     Aggregate(usize, usize),
     Constructor(ConstructorId),
     Resource(usize, usize),
+    // A nonowning reference retains capture dependence but cannot be a State.
+    Reference(usize, usize),
+    // Both original result alternatives are retained as one finite descriptor.
+    // Coordinates identify the exact live owner occurrence, not a type spelling.
+    Stored {
+        allocated: ConstructorId,
+        refused: ConstructorId,
+        owner: usize,
+        creation: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -3404,6 +3594,16 @@ impl AtomStore<'_> {
     }
 }
 
+/// One admitted control selection installs a live value equation. Readiness
+/// and owner checks remain on the existing queue until joint convergence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeStorageTransfer {
+    request: usize,
+    owner: usize,
+    creation: usize,
+    result: super::NativeStorageResult,
+}
+
 pub(super) struct Analysis<'a> {
     graph: &'a Graph,
     evidence_ports: HashMap<usize, Vec<usize>>,
@@ -3431,6 +3631,8 @@ pub(super) struct Analysis<'a> {
     // Completed topology only, keyed by exact reader and every source/context
     // coordinate. No stored values or completion demand are retained here.
     specialization_transfers: HashSet<(Option<usize>, usize, usize, usize, usize, usize)>,
+    native_storage: Vec<NativeStorageTransfer>,
+    native_storage_index: HashMap<usize, usize>,
     indices: HashMap<(usize, usize), usize>,
     roots: HashMap<usize, usize>,
     revision: usize,
@@ -3748,7 +3950,7 @@ impl<'a> Analysis<'a> {
             }
             for atom in atoms {
                 let fields = match *atom {
-                    Atom::Free | Atom::Constructor(_) => None,
+                    Atom::Free | Atom::IndependentCallable | Atom::Constructor(_) => None,
                     Atom::Closure(target, context) if allow_callable => {
                         let Expr::Function { captures, .. } = &self.graph.expressions[target]
                         else {
@@ -3886,7 +4088,7 @@ impl<'a> Analysis<'a> {
                     targets.push((target, context));
                 }
                 Atom::Unknown => unknown = true,
-                Atom::Constructor(_) => returns = true,
+                Atom::Constructor(_) | Atom::IndependentCallable => returns = true,
                 _ => {}
             }
         }
@@ -3932,7 +4134,7 @@ impl<'a> Analysis<'a> {
                     targets.push((target, context));
                 }
                 Atom::Unknown => opaque |= 1,
-                Atom::Constructor(_) => opaque |= 2,
+                Atom::Constructor(_) | Atom::IndependentCallable => opaque |= 2,
                 _ => {}
             }
         }
@@ -4008,6 +4210,180 @@ impl<'a> Analysis<'a> {
             return Err(Failure::Invalid);
         };
         self.link(result, body, creation, budget)
+    }
+
+    /// Called only after selecting the exact authenticated native interpreter.
+    /// Installation demands no value convergence and publishes no result atom.
+    pub(super) fn external_native_result(
+        &mut self,
+        request: usize,
+        owner_code: usize,
+        owner_creation: usize,
+        relation: super::NativeStorageResult,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        let (expression, _) = self.slots.get(request).ok_or(Failure::Invalid)?.key;
+        if !matches!(
+            self.graph.expressions.get(expression),
+            Some(Expr::Request { .. })
+        ) {
+            return Err(Failure::Invalid);
+        }
+        let owner = *self
+            .graph
+            .positions
+            .get(&owner_code)
+            .ok_or(Failure::Invalid)?;
+        if !matches!(
+            self.graph.expressions.get(owner),
+            Some(Expr::Resource { .. })
+        ) {
+            return Err(Failure::Invalid);
+        }
+        let transfer = NativeStorageTransfer {
+            request,
+            owner,
+            creation: owner_creation,
+            result: relation,
+        };
+        charge(budget, 1)?;
+        if let Some(index) = self.native_storage_index.get(&request) {
+            if self.native_storage.get(*index) != Some(&transfer) {
+                return Err(Failure::Invalid);
+            }
+            return Ok(());
+        }
+        // Reserve the complete immutable relation before enqueue/publication.
+        // A failed enqueue leaves no admitted transfer or result atom behind.
+        charge(budget, 2)?;
+        self.native_storage
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.native_storage_index
+            .try_reserve(1)
+            .map_err(|_| Failure::Resource)?;
+        self.enqueue(request, budget)?;
+        self.native_storage_index
+            .insert(request, self.native_storage.len());
+        self.native_storage.push(transfer);
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Observe every tuple alternative and field through the current queue
+    /// reader. Empty inputs are pending; any present foreign atom is invalid.
+    fn native_operand_field(
+        &mut self,
+        operand: usize,
+        context: usize,
+        field: usize,
+        expected: Atom,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let operand = self.slot(operand, context, budget)?;
+        let mut ready = !self.slots[operand].atoms.is_empty();
+        charge(budget, self.slots[operand].atoms.len())?;
+        for ordinal in 0..self.slots[operand].atoms.len() {
+            let Atom::Aggregate(tuple, creation) = self.slots[operand].atoms[ordinal] else {
+                return Err(Failure::Invalid);
+            };
+            let Some(Expr::Tuple(fields)) = self.graph.expressions.get(tuple) else {
+                return Err(Failure::Invalid);
+            };
+            let expression = *fields.get(field).ok_or(Failure::Invalid)?;
+            let field = self.slot(expression, creation, budget)?;
+            ready &= !self.slots[field].atoms.is_empty();
+            charge(budget, self.slots[field].atoms.len())?;
+            if self.slots[field]
+                .atoms
+                .iter()
+                .any(|actual| *actual != expected)
+            {
+                return Err(Failure::Invalid);
+            }
+        }
+        Ok(ready)
+    }
+
+    fn native_storage_ready(
+        &mut self,
+        transfer: NativeStorageTransfer,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<bool, Failure> {
+        let (expression, context) = self
+            .slots
+            .get(transfer.request)
+            .ok_or(Failure::Invalid)?
+            .key;
+        let Some(Expr::Request { operand, .. }) = self.graph.expressions.get(expression) else {
+            return Err(Failure::Invalid);
+        };
+        let operand = *operand;
+        let state = self.native_operand_field(
+            operand,
+            context,
+            0,
+            Atom::Resource(transfer.owner, transfer.creation),
+            budget,
+        )?;
+        let reference = if matches!(transfer.result, super::NativeStorageResult::Load) {
+            // Observe the reference even while State is pending, so all late
+            // growth has a reader before any independent result can propagate.
+            self.native_operand_field(
+                operand,
+                context,
+                2,
+                Atom::Reference(transfer.owner, transfer.creation),
+                budget,
+            )?
+        } else {
+            true
+        };
+        Ok(state && reference)
+    }
+
+    fn evaluate_native_storage(
+        &mut self,
+        transfer: NativeStorageTransfer,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if !self.native_storage_ready(transfer, budget)? {
+            return Ok(());
+        }
+        let result = match transfer.result {
+            super::NativeStorageResult::Store { allocated, refused } => Atom::Stored {
+                allocated,
+                refused,
+                owner: transfer.owner,
+                creation: transfer.creation,
+            },
+            super::NativeStorageResult::Load => Atom::Free,
+        };
+        self.atom(transfer.request, result, budget)
+    }
+
+    /// Called only after the control and value queues reach a joint fixed
+    /// point. Re-read live fields; a permanently empty obligation cannot pass.
+    pub(super) fn check_native_storage(
+        &mut self,
+        budget: &mut TypeWorkBudget,
+    ) -> Result<(), Failure> {
+        if self.native_storage.is_empty() {
+            return Ok(());
+        }
+        if !self.pending.is_empty() || self.current.is_some() {
+            return Err(Failure::Invalid);
+        }
+        charge(budget, self.native_storage.len())?;
+        for index in 0..self.native_storage.len() {
+            if !self.native_storage_ready(self.native_storage[index], budget)? {
+                return Err(Failure::Invalid);
+            }
+        }
+        if !self.pending.is_empty() {
+            return Err(Failure::Invalid);
+        }
+        Ok(())
     }
 
     pub(super) fn external_result(
@@ -4196,6 +4572,8 @@ impl<'a> Analysis<'a> {
             dependencies: DependencyRelations::default(),
             callable_transfers: HashSet::new(),
             specialization_transfers: HashSet::new(),
+            native_storage: Vec::new(),
+            native_storage_index: HashMap::new(),
             indices: HashMap::new(),
             roots: HashMap::new(),
             revision: 0,
@@ -4440,6 +4818,15 @@ impl<'a> Analysis<'a> {
                 }
                 cursor.publish();
             }
+            // Only admitted native selections install these dynamic equations.
+            // Keep frozen/restored request ports live too: terminal ordinary
+            // setup does not authorize skipping a newly selected native check.
+            if !self.native_storage.is_empty() {
+                charge(budget, 1)?;
+                if let Some(index) = self.native_storage_index.get(&slot) {
+                    self.evaluate_native_storage(self.native_storage[*index], budget)?;
+                }
+            }
             if matches!(setup, SetupOutcome::FixedSetupReady) {
                 // The existing Slot admission already reserves this scalar
                 // field. Commit only after all original setup AND this slot's
@@ -4492,6 +4879,10 @@ impl<'a> Analysis<'a> {
             Expr::Scalar => {
                 self.atom(slot, Atom::Free, budget)?;
                 SetupOutcome::NeedsInputsOrDynamic
+            }
+            Expr::IndependentCallable => {
+                self.atom(slot, Atom::IndependentCallable, budget)?;
+                SetupOutcome::FixedSetupReady
             }
             Expr::Slot => SetupOutcome::NeedsInputsOrDynamic,
             Expr::Unknown => {
@@ -4603,6 +4994,7 @@ impl<'a> Analysis<'a> {
                             }
                             .install(budget)?;
                         }
+                        Atom::IndependentCallable => self.atom(slot, Atom::Free, budget)?,
                         Atom::Constructor(_) => self.atom(
                             slot,
                             if *type_application {
@@ -4671,6 +5063,18 @@ impl<'a> Analysis<'a> {
                                     self.atom(slot, Atom::Free, budget)?;
                                 }
                                 _ => {}
+                            }
+                        }
+                        Atom::Stored {
+                            allocated,
+                            refused,
+                            owner,
+                            creation,
+                        } if *field == 0 => {
+                            if *constructor == Some(allocated) {
+                                self.atom(slot, Atom::Reference(owner, creation), budget)?;
+                            } else if *constructor == Some(refused) {
+                                self.atom(slot, Atom::Free, budget)?;
                             }
                         }
                         Atom::Free if self.provider_closed_data => {
@@ -5085,7 +5489,15 @@ impl<'a> Analysis<'a> {
             for &atom in &self.slots[slot].atoms {
                 charge(budget, 1)?;
                 let fields = match atom {
-                    Atom::Resource(..) => {
+                    Atom::Resource(..) | Atom::Reference(..) | Atom::Stored { .. } => {
+                        let atom = match atom {
+                            Atom::Resource(owner, creation)
+                            | Atom::Reference(owner, creation)
+                            | Atom::Stored {
+                                owner, creation, ..
+                            } => Atom::Resource(owner, creation),
+                            _ => return Err(Failure::Invalid),
+                        };
                         charge(budget, resources.len())?;
                         if !resources.contains(&atom) {
                             resources.try_reserve(1).map_err(|_| Failure::Resource)?;
@@ -5293,6 +5705,260 @@ mod tests {
             evidence: Vec::new(),
             evidence_index: Vec::new(),
         }
+    }
+
+    fn native_transfer_graph() -> Graph {
+        let mut fixture = graph(vec![
+            Expr::Slot,
+            Expr::Scalar,
+            Expr::Slot,
+            Expr::Tuple(vec![0, 1, 2]),
+            Expr::Request {
+                operand: 3,
+                scalar: false,
+            },
+        ]);
+        fixture.expressions.push(Expr::Resource {
+            success: None,
+            failure: None,
+            handle: 0,
+            identity: 0,
+            initializer: 1,
+            body: 1,
+            source: fixture.sources[0],
+        });
+        fixture.sources.push(fixture.sources[0]);
+        fixture.positions.insert(900, 5);
+        fixture.positions.insert(901, 4);
+        fixture
+    }
+
+    #[test]
+    fn native_transfer_waits_for_queued_inputs_without_closing_at_installation() {
+        let fixture = native_transfer_graph();
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&fixture, &mut work).unwrap();
+        let request = analysis.port(901, 0, &mut work).unwrap();
+        analysis
+            .external_native_result(
+                request,
+                900,
+                0,
+                super::super::NativeStorageResult::Load,
+                &mut work,
+            )
+            .unwrap();
+        assert!(analysis.slots[request].atoms.is_empty());
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[request].atoms.is_empty());
+        assert!(matches!(
+            analysis.check_native_storage(&mut work),
+            Err(Failure::Invalid)
+        ));
+        let state = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(state, Atom::Resource(5, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[request].atoms.is_empty());
+        let reference = analysis.slot(2, 0, &mut work).unwrap();
+        analysis
+            .atom(reference, Atom::Reference(5, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.check_native_storage(&mut work).unwrap();
+        assert_eq!(analysis.slots[request].atoms, vec![Atom::Free]);
+        assert!(analysis.watched_pairs().contains(&(state, request)));
+        assert!(analysis.watched_pairs().contains(&(reference, request)));
+    }
+
+    #[test]
+    fn native_load_rechecks_every_late_state_reference_and_tuple_alternative() {
+        for (field, late) in [
+            (0, Atom::Unknown),
+            (0, Atom::Resource(5, 1)),
+            (2, Atom::Unknown),
+            (2, Atom::Reference(5, 1)),
+            (2, Atom::Resource(5, 0)),
+        ] {
+            let fixture = native_transfer_graph();
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&fixture, &mut work).unwrap();
+            let state = analysis.slot(0, 0, &mut work).unwrap();
+            analysis
+                .atom(state, Atom::Resource(5, 0), &mut work)
+                .unwrap();
+            let reference = analysis.slot(2, 0, &mut work).unwrap();
+            analysis
+                .atom(reference, Atom::Reference(5, 0), &mut work)
+                .unwrap();
+            let request = analysis.port(901, 0, &mut work).unwrap();
+            analysis
+                .external_native_result(
+                    request,
+                    900,
+                    0,
+                    super::super::NativeStorageResult::Load,
+                    &mut work,
+                )
+                .unwrap();
+            analysis.close(&mut work).unwrap();
+            analysis.check_native_storage(&mut work).unwrap();
+            analysis
+                .atom(if field == 0 { state } else { reference }, late, &mut work)
+                .unwrap();
+            assert!(analysis.slots[request].queued);
+            assert!(matches!(analysis.close(&mut work), Err(Failure::Invalid)));
+        }
+
+        let mut fixture = native_transfer_graph();
+        fixture
+            .expressions
+            .extend([Expr::Slot, Expr::Slot, Expr::Tuple(vec![6, 1, 7])]);
+        fixture.sources.extend([fixture.sources[0]; 3]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&fixture, &mut work).unwrap();
+        for (expression, atom) in [
+            (0, Atom::Resource(5, 0)),
+            (2, Atom::Reference(5, 0)),
+            (6, Atom::Resource(5, 0)),
+        ] {
+            let slot = analysis.slot(expression, 0, &mut work).unwrap();
+            analysis.atom(slot, atom, &mut work).unwrap();
+        }
+        let request = analysis.port(901, 0, &mut work).unwrap();
+        analysis
+            .external_native_result(
+                request,
+                900,
+                0,
+                super::super::NativeStorageResult::Load,
+                &mut work,
+            )
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.check_native_storage(&mut work).unwrap();
+        let operand = analysis.slot(3, 0, &mut work).unwrap();
+        analysis
+            .atom(operand, Atom::Aggregate(8, 0), &mut work)
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(matches!(
+            analysis.check_native_storage(&mut work),
+            Err(Failure::Invalid)
+        ));
+        let late_reference = analysis.slot(7, 0, &mut work).unwrap();
+        assert!(
+            analysis
+                .watched_pairs()
+                .contains(&(late_reference, request))
+        );
+        analysis
+            .atom(late_reference, Atom::Reference(5, 1), &mut work)
+            .unwrap();
+        assert!(matches!(analysis.close(&mut work), Err(Failure::Invalid)));
+    }
+
+    #[test]
+    fn native_store_without_call_propagates_both_result_projections_after_readiness() {
+        use crate::{module::ModuleId, types::NominalTypeId};
+        let allocated = ConstructorId::new(NominalTypeId::new(ModuleId::new(60_002), 0), 0);
+        let refused = ConstructorId::new(allocated.owner(), 1);
+        let mut fixture = native_transfer_graph();
+        fixture.expressions.extend([
+            Expr::Project {
+                value: 4,
+                field: 0,
+                constructor: Some(allocated),
+            },
+            Expr::Project {
+                value: 4,
+                field: 0,
+                constructor: Some(refused),
+            },
+        ]);
+        fixture.sources.extend([fixture.sources[0]; 2]);
+        let mut work = TypeWorkBudget::unbounded();
+        let mut analysis = Analysis::new(&fixture, &mut work).unwrap();
+        let request = analysis.port(901, 0, &mut work).unwrap();
+        let success = analysis.slot(6, 0, &mut work).unwrap();
+        let failure = analysis.slot(7, 0, &mut work).unwrap();
+        analysis
+            .external_native_result(
+                request,
+                900,
+                0,
+                super::super::NativeStorageResult::Store { allocated, refused },
+                &mut work,
+            )
+            .unwrap();
+        analysis.close(&mut work).unwrap();
+        assert!(analysis.slots[request].atoms.is_empty());
+        let state = analysis.slot(0, 0, &mut work).unwrap();
+        analysis
+            .atom(state, Atom::Resource(5, 0), &mut work)
+            .unwrap();
+        let payload = analysis.slot(2, 0, &mut work).unwrap();
+        analysis.atom(payload, Atom::Free, &mut work).unwrap();
+        analysis.close(&mut work).unwrap();
+        analysis.check_native_storage(&mut work).unwrap();
+        assert_eq!(analysis.slots[success].atoms, vec![Atom::Reference(5, 0)]);
+        assert_eq!(analysis.slots[failure].atoms, vec![Atom::Free]);
+        assert!(
+            analysis
+                .dependencies(request, &mut work)
+                .unwrap()
+                .contains(&Atom::Resource(5, 0))
+        );
+    }
+
+    #[test]
+    fn native_transfer_installation_refusal_retains_no_relation_or_result() {
+        let fixture = native_transfer_graph();
+        let setup = || {
+            let mut work = TypeWorkBudget::unbounded();
+            let mut analysis = Analysis::new(&fixture, &mut work).unwrap();
+            let request = analysis.port(901, 0, &mut work).unwrap();
+            (analysis, request)
+        };
+        let (mut measured, request) = setup();
+        let mut exact = TypeWorkBudget::unbounded();
+        measured
+            .external_native_result(
+                request,
+                900,
+                0,
+                super::super::NativeStorageResult::Load,
+                &mut exact,
+            )
+            .unwrap();
+        for available in 0..exact.used() {
+            let (mut refused, request) = setup();
+            assert!(matches!(
+                refused.external_native_result(
+                    request,
+                    900,
+                    0,
+                    super::super::NativeStorageResult::Load,
+                    &mut TypeWorkBudget::with_limit(available)
+                ),
+                Err(Failure::Resource)
+            ));
+            assert!(refused.native_storage.is_empty() && refused.native_storage_index.is_empty());
+            assert!(refused.slots[request].atoms.is_empty());
+        }
+        let (mut retried, request) = setup();
+        retried
+            .external_native_result(
+                request,
+                900,
+                0,
+                super::super::NativeStorageResult::Load,
+                &mut TypeWorkBudget::with_limit(exact.used()),
+            )
+            .unwrap();
+        assert_eq!(retried.native_storage, measured.native_storage);
+        assert!(retried.slots[request].atoms.is_empty());
     }
 
     #[test]

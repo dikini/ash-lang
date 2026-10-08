@@ -5397,6 +5397,21 @@ pub(crate) fn canonical_type_variable_kind<'a>(
         .ok_or_else(|| KindFailure::internal_cause(span, KindInternalCause::MissingCanonicalBinder))
 }
 
+fn authenticate_resource_family_parameter(
+    registry: &ResolvedRegistry,
+    parameter: &crate::resolved::ResolvedTypeVariable,
+    budget: &mut TypeWorkBudget,
+) -> Result<(), KindFailure> {
+    authenticate_owner_parameters(registry, std::slice::from_ref(parameter), budget)?;
+    if parameter.kind != Kind::Type {
+        return Err(KindFailure::internal_cause(
+            parameter.origin.primary_span(),
+            KindInternalCause::OwnerEffectRow,
+        ));
+    }
+    Ok(())
+}
+
 /// Checks every resolved type boundary before a resolved module is published.
 pub(crate) fn check_resolved_module_with_budget<'a>(
     module: &'a ResolvedModuleParts,
@@ -5435,6 +5450,9 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
     }
     for resource in &module.resources {
         authenticate_owner_parameters(&module.registry, &resource.parameters, budget)?;
+        if let Some(family) = &resource.family_template {
+            authenticate_resource_family_parameter(&module.registry, &family.parameter, budget)?;
+        }
         if resource
             .parameters
             .iter()
@@ -5527,6 +5545,26 @@ pub(crate) fn check_resolved_module_with_budget<'a>(
                         &mut environments,
                         budget,
                     )?;
+                }
+                if let Some(family) = &resource.family_template {
+                    let parameters = std::slice::from_ref(&family.parameter);
+                    environments.extend_owner_parameters(parameters, budget)?;
+                    let outcome: Result<(), KindFailure> = (|| {
+                        for effect in [&family.provided, &family.interpreted] {
+                            check_hook_target_kind(effect, &environments, budget)?;
+                        }
+                        for clause in &family.handlers {
+                            check_expression_annotations(
+                                &clause.body,
+                                &module.registry,
+                                &mut environments,
+                                budget,
+                            )?;
+                        }
+                        Ok(())
+                    })();
+                    environments.remove_owner_parameter_extension(parameters);
+                    outcome?;
                 }
                 DeclarationKindOutcome::Checked
             }
@@ -6003,6 +6041,56 @@ fn authenticate_imported_environments<'a>(
         )?;
     }
 
+    // The prior per-resource environment debit bounds this immutable scan.
+    // Family checks pay their added work; this order requires all imported
+    // resource and interface kinds to be installed before checking references.
+    for (_, resource) in imported.resource_facts() {
+        if let Some(family) = &resource.family_template {
+            crate::resolved::authenticate_resource_family_scope(
+                &family.parameter,
+                &resource.parameters,
+                &resource.answer,
+                budget,
+            )
+            .map_err(|failure| match failure {
+                crate::resolved::ResolvedBuildFailure::TypeResource => KindFailure::resource(
+                    family.parameter.origin.primary_span(),
+                    "imported resource family scope authentication exceeded its type-work budget",
+                ),
+                _ => KindFailure::internal_cause(
+                    family.parameter.origin.primary_span(),
+                    KindInternalCause::ConflictingDeclarationBinder,
+                ),
+            })?;
+            environments.install_complete_owner_parameters(&resource.parameters, budget)?;
+            let parameters = std::slice::from_ref(&family.parameter);
+            environments.extend_owner_parameters(parameters, budget)?;
+            let outcome: Result<(), KindFailure> = (|| {
+                for application in family
+                    .requirements
+                    .iter()
+                    .chain(std::iter::once(&family.provider))
+                {
+                    let checked =
+                        authenticate_interface_application(application, environments, budget)?
+                            .ok_or_else(|| {
+                                KindFailure::internal_cause(
+                                    application.span,
+                                    KindInternalCause::PreflightArityChanged,
+                                )
+                            })?;
+                    check_interface_application_kinds(checked, environments, budget)?;
+                }
+                for effect in [&family.provided, &family.interpreted] {
+                    check_hook_target_kind(effect, environments, budget)?;
+                }
+                Ok(())
+            })();
+            environments.remove_owner_parameter_extension(parameters);
+            outcome?;
+        }
+    }
+
     for imported_interface in imported.interface_imports() {
         let interface = &imported_interface.fact;
         for method in &interface.methods {
@@ -6361,6 +6449,18 @@ fn check_interface_application_kinds_in_owner_environments<'a>(
                 let resource = &module.resources[index];
                 environments.install_complete_owner_parameters(&resource.parameters, budget)?;
                 check(&resource.provider, environments, budget)?;
+                if let Some(family) = &resource.family_template {
+                    let parameters = std::slice::from_ref(&family.parameter);
+                    environments.extend_owner_parameters(parameters, budget)?;
+                    let outcome: Result<(), KindFailure> = (|| {
+                        for requirement in &family.requirements {
+                            check(requirement, environments, budget)?;
+                        }
+                        check(&family.provider, environments, budget)
+                    })();
+                    environments.remove_owner_parameter_extension(parameters);
+                    outcome?;
+                }
             }
             crate::resolved::ResolvedDeclarationIndex::Type(_)
             | crate::resolved::ResolvedDeclarationIndex::Interface(_)
@@ -6445,6 +6545,16 @@ fn visit_interface_applications(
             crate::resolved::ResolvedDeclarationIndex::Resource(index) => {
                 if !visit(&module.resources[index].provider, budget)? {
                     return Ok(false);
+                }
+                if let Some(family) = &module.resources[index].family_template {
+                    for requirement in &family.requirements {
+                        if !visit(requirement, budget)? {
+                            return Ok(false);
+                        }
+                    }
+                    if !visit(&family.provider, budget)? {
+                        return Ok(false);
+                    }
                 }
             }
             crate::resolved::ResolvedDeclarationIndex::Type(_)

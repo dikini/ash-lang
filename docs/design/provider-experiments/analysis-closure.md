@@ -56,6 +56,6 @@ The frozen calibration references are its README at lines 3 and 341,
 contains the corresponding source and authenticated evidence. No frozen report,
 manifest, model or archive is rewritten to make this disposition appear earlier.
 
-The [execution record](execution.md#current-checkpoint) identifies integrated
+The [execution record](execution.md#current-consolidation-checkpoint) identifies integrated
 verification separately from historical candidate checks. This document adds
 no new compiler run or combined verification claim.

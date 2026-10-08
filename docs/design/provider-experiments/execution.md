@@ -1,12 +1,45 @@
 # Provider experiment execution record
 
-> Active experiment tracking for [the plan](plan.md), governed by
-> [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
+> Informative retained evidence and disposition record for [the plan](plan.md),
+> governed by [DN-0036](../DN-0036-foreign-library-and-memory-provider-experiments.md).
 > Candidate P-1 is specified in [semantics](semantics.md#selected-first-execution-contract).
-> This record assigns work and evidence. It has no independent semantic or
-> architectural authority and leaves the current tree when this work finishes.
+> This record preserves results, limitations and source-checkpoint provenance.
+> It is not an execution plan and has no independent semantic or architectural
+> authority. Earlier receipts retain their original scope and status.
+
+## Current consolidation checkpoint
+
+The unsigned Common source merge `c49d4bdc6004168a161c8d51d90b43cf3afddbd6` preserves the previously
+integrated SQLite and calibrated admission together with Arena source delivery
+`ffa1d8ef4178cb1e5651411162ff09c117b725f7`. Independent source review retains
+all fourteen SQLite operations, nine handlers, String/TEXT contracts, dynamic
+Core limits and exact caller-prefix accounting alongside Arena authority and
+capture checks. Source review alone does not establish combined execution.
+
+The [selected Arena receipts](arena-selected-2026-10-08/README.md) distinguish
+its frozen 1,674-library/seven-public functional checkpoint from the final
+mechanical-source checks: two affected architecture tests, strict workspace
+lint, 41 adapter unit and ten backing cases, native41 and formatting all pass.
+Actual native execution returns `Completed(41, Closed)` with source/final/Core
+charges 88,793 / 27,096 / 82,277. These are attributable Arena results; fresh
+combined SQLite/arena costs and the complete integrated gate remain pending.
+
+The delivery uses the existing Common checkout, followed by a preserving merge
+into the original experimental branch and its complete workspace gate. The
+separately authorized Common-to-main merge follows successful combined
+verification. Retention does not adopt experimental language semantics or
+production architecture. Paused Lean and Core one-shot work, unrelated design
+drafts and the rejected compound analysis candidate remain outside this delivery.
+
+Earlier receipts below retain their original checkpoint scope. Final integrated
+commits, full-gate attribution and cleanup disposition are recorded only after
+those actions complete.
 
 ## Current SQLite checkpoint
+
+Historical source checkpoint: the following SQLite delivery predates the final
+combined consolidation gate. Its pending statements describe that checkpoint;
+they are not a claim about later integration status.
 
 SQLite imports the corrected calibrated Common delivery through unsigned merge
 `817f3828ab8c738cd6233b9f4386d9df4c5083a6`, preserving Original
@@ -643,6 +676,10 @@ validation and cost repairs must pass before its delivery integrates; no
 unchanged-limit or complete-program claim is inferred from the lookup repair.
 
 ## Current checkpoint
+
+Historical common source checkpoint: this section retains the original receipt
+and its integration status. Consult the consolidation checkpoint above for later
+combined results.
 
 Latest completed integrated common code checkpoint is
 `50011566356eb130afbfa191aa22f1f05d6aa40f`, merging Common commit
