@@ -92,6 +92,15 @@ cursor state; no partial reference is published. Negative variant: use access
 produced by a failed reservation or an incompatible typed layout. Reject forged
 access; native validation guards dynamic layout facts. Covers MEM-01.
 
+The A-0 [allocation suite](../../../tests/provider_arena_allocation.rs) makes
+this source milestone concrete: store/load Int 41 to an independent result
+after completion; admit Int and Bool in one arena; preserve an earlier object
+after byte/slot, alignment and signed-64 conversion refusals; distinguish
+zero-extent Unit records from alignment padding. The selected seven-case public
+suite now passes, including actual native storage and ordinary source overrides;
+[scalar results](arena-results.md#actual-storage-and-control) retain the receipt
+boundary. This does not admit the wider stored-payload and graph cases below.
+
 ### M-02: immutable sharing and captured values
 
 Allocate an immutable node containing `41`; alias it twice, build a persistent
@@ -114,6 +123,14 @@ completes, while A remains live.
 Positive expectation: the projection depends on A only. Negative variants:
 return the whole tuple, project its B reference, or store a B-dependent closure
 in surviving A storage. Reject the B dependency. Covers MEM-03.
+
+The later A-0 [source-refusal counterexample](../../../tests/fixtures/provider-experiments/arena-typed/inner-owner-source-refusal.ash)
+intercepts the exact A storage instance inside B and retains nothing in A.
+Its allocation clause always refuses; its load clause returns the live B Ref.
+It must not inherit an unselected native-store obligation. Placement of an
+exact generated fallback whose payload mentions B remains unresolved in the
+[remaining obligations](arena-results.md#costs-and-assumptions).
+The fixture is unexecuted; no useful-case admission is claimed.
 
 ### M-04: independent copying
 
